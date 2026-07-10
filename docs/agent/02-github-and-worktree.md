@@ -6,15 +6,24 @@ GitHub writes use the local `gh` or git credential identity by default. Pin a sp
 
 - Set repo-local commit identity to the intended author before the first commit in a worktree.
 - Keep `origin` on the intended GitHub repository.
-- Prefer repo-local `.git/akra-github-credentials` or `.git/github-credentials`; linked worktrees should read this through
-  `git rev-parse --git-common-dir`, not only their worktree-specific git dir. The legacy `.git/refinedstone-credentials` name remains supported for existing checkouts.
-- Configure repo-local Git credentials to use the selected file for push-capable commands when needed:
+- Prefer an explicit token environment variable or `gh auth token` for Akra's GitHub API helper.
+  Akra does not scan repo-local credential files, `$HOME/.git-credentials`, or WSL Windows profiles,
+  and it does not invoke a source repository's credential helper for token discovery.
+- Configure repo-local Git credentials to use a selected file through Git's helper boundary when needed:
   `git config credential.helper ""`,
   `git config credential.username <github-login>`, and
   `git config --add credential.helper "store --file=$(git rev-parse --path-format=absolute --git-common-dir)/akra-github-credentials"`.
+- Repository-scoped Git credentials remain a `git push` transport concern only. The removed
+  `AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN` variable is unsupported and any presence fails closed.
 - If another `credential.helper` is inherited, override it in this repo's local `.git/config` only.
-- Before the first push in an environment, verify `gh api user --jq .login` or `git credential fill` for the current `origin` resolves the intended GitHub login.
-- Use `bash scripts/gh-akra.sh` for `pr create`, `pr view`, and review replies. Add `AKRA_GITHUB_LOGIN=<login>` or `--github-login <login>` when the operation must use a specific account.
+- Before the first write in an environment, set `AKRA_GITHUB_LOGIN=<login>` or repo-local
+  `git config akra.githubLogin <login>`, use an HTTPS push remote, and run
+  `bash scripts/gh-akra.sh auth write-status`. GitHub helper writes fail unless the API token
+  identity matches the configured login and repository target. Verify `git push` credentials through
+  Git's credential boundary separately when a repository-scoped helper is configured.
+- Use `bash scripts/gh-akra.sh` for PR reads and writes. Read-only inspection may run without an
+  identity pin; `pr create`, close/merge, review replies, and git pushes require the write identity
+  contract above.
 - Do not use GitHub MCP tools for PR or review-thread writes unless their authenticated identity has been verified for the intended account.
 - If a commit is created under the wrong author or committer identity, rewrite the branch history to the intended identity before any push or further review activity.
 - If the intended identity cannot be verified, do not push, open PRs, or leave GitHub comments from that environment.
@@ -38,7 +47,8 @@ GitHub writes use the local `gh` or git credential identity by default. Pin a sp
 - Apply feedback only when it is logically correct and aligned with the chosen architecture and product direction.
 - Fix correctness and low-cost maintainability issues that fit the current design.
 - If a comment is wrong, stale, or pushes in the wrong direction, reply with a concise rationale instead of changing code.
-- Reply on each review thread only when `bash scripts/gh-akra.sh auth status` can authenticate as the intended account; set `AKRA_GITHUB_LOGIN=<login>` when the identity must be pinned.
+- Reply on each review thread only after `bash scripts/gh-akra.sh auth write-status` verifies the
+  pinned intended account.
 - Commit and push the review response separately from the original milestone commit when practical.
 - Rebase the feature branch onto the latest target base branch before merge.
 

@@ -1,3 +1,6 @@
+use super::super::{
+    remote_tracking_branch_ref, try_parallel_mode_integration_branch_for_repo, try_push_remote_name,
+};
 use super::*;
 
 /*
@@ -47,18 +50,31 @@ fn stable_short_hash(value: &str) -> String {
     format!("{hash:016x}")[..12].to_string()
 }
 
+pub(in crate::application::service::parallel_mode) fn derive_integration_worktree_path(
+    pool_root: &Path,
+    push_remote: &str,
+    github_repository: &str,
+    integration_branch: &str,
+) -> PathBuf {
+    let target_key = format!("{push_remote}\n{github_repository}\n{integration_branch}");
+    pool_root
+        .join(".integration")
+        .join(stable_short_hash(&target_key))
+}
+
 /*
-pool baseline head는 표준 remote branch를 먼저 보고, read-only inspection에서만 local branch를
-fallback으로 쓴다. mutating reconcile은 별도 guard에서 missing remote 표준 branch를 현재 HEAD로
-seed하거나 remote 기준으로 local branch를 맞춘다.
+pool baseline head는 configured remote branch를 먼저 보고, read-only inspection에서만 같은 이름의
+local branch를 fallback으로 쓴다. mutating reconcile은 원격 branch를 fetch하고 local/remote SHA가
+일치할 때만 진행하며 원격 branch를 암묵적으로 만들지 않는다.
 */
 pub(super) fn resolve_pool_baseline_head(repo_root: &str) -> Option<String> {
-    let push_remote = push_remote_name(repo_root);
+    let push_remote = try_push_remote_name(repo_root).ok()?;
+    let baseline_branch = try_parallel_mode_integration_branch_for_repo(repo_root).ok()?;
     resolve_branch_head(
         repo_root,
-        &remote_tracking_branch_ref(push_remote.as_str(), pool_baseline_branch()),
+        &remote_tracking_branch_ref(push_remote.as_str(), &baseline_branch),
     )
-    .or_else(|| resolve_branch_head(repo_root, pool_baseline_branch()))
+    .or_else(|| resolve_branch_head(repo_root, &baseline_branch))
 }
 
 pub(super) fn resolve_branch_head(repo_root: &str, branch_name: &str) -> Option<String> {
@@ -145,7 +161,15 @@ git dir 안의 MERGE_HEAD/rebase-merge/rebase-apply/CHERRY_PICK_HEAD 같은 meta
 */
 pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
     slot_path: &Path,
-) -> Option<SlotGitStatus> {
+) -> Result<SlotGitStatus, SlotGitStatusInspectionError> {
+    crate::git_execution_guard::ensure_host_git_execution_config_safe(slot_path).map_err(
+        |error| {
+            SlotGitStatusInspectionError(format!(
+                "Git status inspection is blocked for `{}`: {error}",
+                slot_path.display()
+            ))
+        },
+    )?;
     let slot_path_string = slot_path.display().to_string();
     let status_output = run_command(
         "git",
@@ -156,16 +180,27 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
             "--porcelain=v1",
             "--branch",
             "--untracked-files=all",
+            "--ignored=matching",
         ],
         None,
-    )?;
+    )
+    .ok_or_else(|| {
+        SlotGitStatusInspectionError(format!(
+            "Git status command failed for `{}`",
+            slot_path.display()
+        ))
+    })?;
 
     let mut status = SlotGitStatus::default();
     for line in status_output.lines().skip(1) {
-        // porcelain v1에서 `??`는 index/worktree column 의미가 없는 untracked
-        // marker라 staged/unstaged 판정으로 흘리지 않고 별도 flag만 세운다.
+        // porcelain v1에서 `??`와 `!!`는 index/worktree column 의미가 없는
+        // nonignored-untracked/ignored marker라 각각 별도 flag로 보존한다.
         if line.starts_with("??") {
             status.has_untracked = true;
+            continue;
+        }
+        if line.starts_with("!!") {
+            status.has_ignored = true;
             continue;
         }
 
@@ -183,7 +218,12 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
 
     // status output에는 merge/rebase 진행 중 metadata가 항상 직접 드러나지 않으므로
     // git dir을 별도로 찾아 자동 조작을 막아야 하는 pending 상태까지 합산한다.
-    let git_dir = resolve_git_dir(slot_path)?;
+    let git_dir = resolve_git_dir(slot_path).ok_or_else(|| {
+        SlotGitStatusInspectionError(format!(
+            "Git directory could not be resolved for `{}`",
+            slot_path.display()
+        ))
+    })?;
     status.has_pending_operation = [
         "MERGE_HEAD",
         "rebase-merge",
@@ -193,8 +233,19 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
     .into_iter()
     .any(|path| git_dir.join(path).exists());
 
-    Some(status)
+    Ok(status)
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::application::service::parallel_mode) struct SlotGitStatusInspectionError(String);
+
+impl std::fmt::Display for SlotGitStatusInspectionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SlotGitStatusInspectionError {}
 
 pub(super) fn resolve_git_dir(slot_path: &Path) -> Option<PathBuf> {
     /*

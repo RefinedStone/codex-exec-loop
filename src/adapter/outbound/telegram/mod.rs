@@ -7,32 +7,74 @@ application DTO로 다시 매핑한다. HTTP client crate를 추가하지 않고
 token이 argv/process listing에 직접 노출되는 면을 줄이고, 기존 운영 환경의 curl 의존성만 사용하기 위해서다.
 */
 use crate::application::port::outbound::telegram_bot_port::{
-    TelegramBotPort, TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest,
-    TelegramUpdate,
+    TELEGRAM_LONG_POLL_TRANSPORT_MARGIN_SECONDS, TelegramBotIdentity, TelegramBotPort,
+    TelegramInboundMessage, TelegramPollRequest, TelegramSendMessageRequest, TelegramUpdate,
 };
 use crate::subprocess;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde::Serialize;
-use std::io::Write;
-use std::process::{Command, Stdio};
+#[cfg(test)]
+use std::ffi::OsStr;
+use std::path::PathBuf;
+use std::process::Command;
 const TELEGRAM_API_BASE_URL: &str = "https://api.telegram.org";
 const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
 const DEFAULT_ALLOWED_UPDATES: [&str; 1] = ["message"];
+const MAX_TELEGRAM_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TELEGRAM_ERROR_BYTES: usize = 64 * 1024;
 
 pub struct CurlTelegramBotAdapter {
     // 테스트와 production이 같은 request path를 쓰되, curl binary와 API base URL은 adapter 상태로 둔다.
     curl_path: String,
+    curl_resolution_error: Option<String>,
     api_base_url: String,
     token: String,
+    request_wait_timeout_override: Option<std::time::Duration>,
 }
 
 impl CurlTelegramBotAdapter {
     pub fn new(token: impl Into<String>) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::new_for_workspace(token, &cwd)
+    }
+
+    fn new_for_workspace(token: impl Into<String>, workspace: &std::path::Path) -> Self {
+        Self::new_for_workspace_with_curl_resolution(
+            token,
+            crate::trusted_executable::resolve_native_from_current_path("curl", workspace),
+        )
+    }
+
+    #[cfg(test)]
+    fn new_for_workspace_with_path(
+        token: impl Into<String>,
+        workspace: &std::path::Path,
+        path: &OsStr,
+    ) -> Self {
+        Self::new_for_workspace_with_curl_resolution(
+            token,
+            crate::trusted_executable::resolve_native_from_path("curl", path, workspace),
+        )
+    }
+
+    fn new_for_workspace_with_curl_resolution(
+        token: impl Into<String>,
+        resolution: Result<PathBuf>,
+    ) -> Self {
+        let (curl_path, curl_resolution_error) = match resolution {
+            Ok(path) => (path.display().to_string(), None),
+            Err(error) => (
+                unresolved_curl_executable_path().display().to_string(),
+                Some(error.to_string()),
+            ),
+        };
         Self {
-            curl_path: "curl".to_string(),
+            curl_path,
+            curl_resolution_error,
             api_base_url: TELEGRAM_API_BASE_URL.to_string(),
             token: token.into(),
+            request_wait_timeout_override: None,
         }
     }
     fn execute_json_request<TRequest, TResponse>(
@@ -52,41 +94,43 @@ impl CurlTelegramBotAdapter {
         envelope 검증, result payload 추출을 모두 처리한다. polling timeout보다 curl max-time을 15초
         길게 잡아 Telegram long polling 자체의 timeout과 네트워크 여유 시간을 분리한다.
         */
+        if let Some(error) = &self.curl_resolution_error {
+            bail!("trusted curl executable could not be pinned for Telegram: {error}")
+        }
         let url = format!("{}/bot{}/{}", self.api_base_url, self.token, method_name);
         let json_body = serde_json::to_string(body).context("failed to serialize request body")?;
-        let max_time_seconds = u32::from(timeout_seconds).saturating_add(15);
-        let wait_timeout =
-            std::time::Duration::from_secs(u64::from(max_time_seconds).saturating_add(1));
+        let max_time_seconds = u32::from(timeout_seconds).saturating_add(
+            u32::try_from(TELEGRAM_LONG_POLL_TRANSPORT_MARGIN_SECONDS)
+                .expect("Telegram transport margin must fit u32"),
+        );
+        let wait_timeout = self.request_wait_timeout_override.unwrap_or_else(|| {
+            std::time::Duration::from_secs(u64::from(max_time_seconds).saturating_add(1))
+        });
 
-        let mut child = Command::new(&self.curl_path)
-            .args(["--config", "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("failed to invoke curl for Telegram {method_name}"))?;
+        let mut command = Command::new(&self.curl_path);
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        crate::trusted_executable::configure_credential_command_environment(
+            &mut command,
+            &cwd,
+            false,
+        )?;
+        command
+            // `-q` must be argv[1]. Otherwise curl loads ~/.curlrc first, where
+            // trace/proxy/output directives could disclose the token-bearing URL.
+            .args(["-q", "--config", "-"]);
         let config = build_curl_config(url.as_str(), json_body.as_str(), max_time_seconds);
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("failed to open curl stdin for Telegram {method_name}"))?;
-        stdin
-            .write_all(config.as_bytes())
-            .with_context(|| format!("failed to write curl config for Telegram {method_name}"))?;
-        drop(stdin);
-        // stdin을 닫아야 curl이 `--config -` 입력 종료를 감지하고 실제 요청을 시작한다.
-        let output = subprocess::wait_with_output_timeout(
-            child,
-            &format!("curl --config - Telegram {method_name}"),
+        let output = subprocess::command_output_with_input_timeout_and_limits(
+            &mut command,
+            &format!("curl -q --config - Telegram {method_name}"),
+            config.as_bytes(),
             wait_timeout,
+            MAX_TELEGRAM_RESPONSE_BYTES,
+            MAX_TELEGRAM_ERROR_BYTES,
         )
         .with_context(|| format!("failed to wait for curl during Telegram {method_name}"))?;
 
         if !output.status.success() {
-            bail!(
-                "telegram {method_name} request failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            bail!("telegram {method_name} request failed ({})", output.status);
         }
         let body = String::from_utf8(output.stdout)
             .with_context(|| format!("telegram {method_name} response was not valid utf-8"))?;
@@ -95,10 +139,7 @@ impl CurlTelegramBotAdapter {
         if !envelope.ok {
             // Telegram은 HTTP 200에서도 ok=false를 반환할 수 있으므로 envelope 레벨 오류를 별도로 올린다.
             return Err(anyhow!(
-                "telegram {method_name} rejected the request: {}",
-                envelope
-                    .description
-                    .unwrap_or_else(|| "unknown telegram api error".to_string())
+                "telegram {method_name} rejected the request (response description redacted)"
             ));
         }
         envelope.result.ok_or_else(|| {
@@ -107,7 +148,28 @@ impl CurlTelegramBotAdapter {
     }
 }
 
+#[cfg(unix)]
+fn unresolved_curl_executable_path() -> PathBuf {
+    PathBuf::from("/__akra_unresolved_telegram_curl_executable__")
+}
+
+#[cfg(windows)]
+fn unresolved_curl_executable_path() -> PathBuf {
+    PathBuf::from(r"C:\__akra_unresolved_telegram_curl_executable__.exe")
+}
+
 impl TelegramBotPort for CurlTelegramBotAdapter {
+    fn get_me(&self) -> Result<TelegramBotIdentity> {
+        let response: TelegramGetMeResponse =
+            self.execute_json_request("getMe", &serde_json::json!({}), 15)?;
+        if response.id == 0 {
+            bail!("telegram getMe returned a non-positive bot id");
+        }
+        Ok(TelegramBotIdentity {
+            bot_id: response.id,
+        })
+    }
+
     fn get_updates(&self, request: &TelegramPollRequest) -> Result<Vec<TelegramUpdate>> {
         // message update만 요청해 bot command 처리 경로가 다루지 않는 callback/query update를 upstream에서 걸러낸다.
         let response = self.execute_json_request::<_, Vec<TelegramUpdateResponse>>(
@@ -147,7 +209,6 @@ Telegram API envelope와 payload DTO들이다.
 struct TelegramApiEnvelope<T> {
     ok: bool,
     result: Option<T>,
-    description: Option<String>,
 }
 #[derive(Debug, Serialize)]
 struct TelegramGetUpdatesPayload<'a> {
@@ -184,10 +245,12 @@ struct TelegramMessageResponse {
 }
 impl From<TelegramMessageResponse> for TelegramInboundMessage {
     fn from(value: TelegramMessageResponse) -> Self {
+        let sender_user_id = value.from.as_ref().map(|user| user.id);
         Self {
             message_id: value.message_id,
             chat_id: value.chat.id,
             text: value.text,
+            sender_user_id,
             // operator-facing sender label은 username을 우선하고, 없으면 Telegram profile 이름으로 fallback한다.
             sender_display_name: value.from.and_then(sender_display_name),
         }
@@ -199,6 +262,7 @@ struct TelegramChatResponse {
 }
 #[derive(Debug, Deserialize)]
 struct TelegramUserResponse {
+    id: i64,
     username: Option<String>,
     first_name: Option<String>,
     last_name: Option<String>,
@@ -213,6 +277,11 @@ fn sender_display_name(user: TelegramUserResponse) -> Option<String> {
 struct TelegramSendMessageResponse {
     #[serde(rename = "message_id")]
     _message_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramGetMeResponse {
+    id: u64,
 }
 fn build_curl_config(url: &str, body: &str, max_time_seconds: u32) -> String {
     // curl config file format을 stdin으로 전달하면 JSON body와 token URL을 shell quoting 없이 안전하게 넘길 수 있다.
@@ -234,16 +303,22 @@ fn escape_curl_config_value(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::CurlTelegramBotAdapter;
     use super::{
-        CurlTelegramBotAdapter, TelegramApiEnvelope, TelegramChatResponse, TelegramMessageResponse,
+        TelegramApiEnvelope, TelegramChatResponse, TelegramGetMeResponse, TelegramMessageResponse,
         TelegramSendMessageResponse, TelegramUpdateResponse, TelegramUserResponse,
         build_curl_config, escape_curl_config_value,
     };
-    use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
+    #[cfg(unix)]
+    use std::time::Duration;
+    #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -266,10 +341,7 @@ mod tests {
         .expect("telegram error envelope should parse");
 
         assert!(!envelope.ok);
-        assert_eq!(
-            envelope.description.expect("description should exist"),
-            "Bad Request: chat not found"
-        );
+        assert!(envelope.result.is_none());
     }
     #[test]
     fn send_message_response_maps_message_id_field() {
@@ -281,6 +353,19 @@ mod tests {
 
         assert!(envelope.ok);
         assert!(envelope.result.is_some());
+    }
+
+    #[test]
+    fn get_me_response_requires_a_numeric_bot_identity() {
+        let envelope = serde_json::from_str::<TelegramApiEnvelope<TelegramGetMeResponse>>(
+            r#"{"ok":true,"result":{"id":123456}}"#,
+        )
+        .expect("Telegram getMe response should parse");
+
+        assert_eq!(
+            envelope.result.expect("getMe result should exist").id,
+            123_456
+        );
     }
     #[test]
     fn build_curl_config_supports_stdin_delivery() {
@@ -322,6 +407,7 @@ mod tests {
                 chat: TelegramChatResponse { id: -100 },
                 text: Some("/status".to_string()),
                 from: Some(TelegramUserResponse {
+                    id: 9001,
                     username: Some("   ".to_string()),
                     first_name: Some("Akra".to_string()),
                     last_name: Some("Operator".to_string()),
@@ -336,6 +422,7 @@ mod tests {
         assert_eq!(mapped.update_id, 7);
         assert_eq!(message.message_id, 42);
         assert_eq!(message.chat_id, -100);
+        assert_eq!(message.sender_user_id, Some(9001));
         assert_eq!(message.text.as_deref(), Some("/status"));
         assert_eq!(message.sender_display_name.as_deref(), Some("Akra"));
     }
@@ -354,11 +441,9 @@ mod tests {
         assert!(mapped.message.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_json_request_times_out_hung_curl_process() {
-        let _guard = env_lock()
-            .lock()
-            .expect("environment fixture lock should not be poisoned");
         let root = unique_temp_dir("telegram-curl-timeout");
         fs::create_dir_all(&root).expect("fixture root should be created");
         let script = write_executable_script(
@@ -367,14 +452,15 @@ mod tests {
             r#"#!/bin/sh
 set -eu
 cat >/dev/null
-sleep 17
+sleep 2
 "#,
         );
-        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
         let adapter = CurlTelegramBotAdapter {
             curl_path: script.display().to_string(),
+            curl_resolution_error: None,
             api_base_url: "https://api.test".to_string(),
             token: "secret-token".to_string(),
+            request_wait_timeout_override: Some(Duration::from_millis(50)),
         };
 
         let error = adapter
@@ -394,6 +480,145 @@ sleep 17
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn execute_json_request_redacts_token_from_curl_and_api_failures() {
+        let root = unique_temp_dir("telegram-redacted-failures");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        let secret = "123456:private-token";
+        let script = write_executable_script(
+            &root,
+            "fake-curl-failure",
+            &format!(
+                r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf 'curl failed for https://api.test/bot{secret}/getUpdates' >&2
+exit 22
+"#
+            ),
+        );
+        let mut adapter = CurlTelegramBotAdapter {
+            curl_path: script.display().to_string(),
+            curl_resolution_error: None,
+            api_base_url: "https://api.test".to_string(),
+            token: secret.to_string(),
+            request_wait_timeout_override: Some(Duration::from_secs(1)),
+        };
+
+        let curl_error = adapter
+            .execute_json_request::<_, serde_json::Value>(
+                "getUpdates",
+                &serde_json::json!({"offset": 1}),
+                0,
+            )
+            .expect_err("curl failure should surface");
+        assert!(curl_error.to_string().contains("exit status: 22"));
+        assert!(!curl_error.to_string().contains(secret));
+        assert!(!curl_error.to_string().contains("/bot"));
+
+        let api_script = write_executable_script(
+            &root,
+            "fake-curl-api-error",
+            &format!(
+                r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf '{{"ok":false,"description":"bad token {secret}"}}'
+"#
+            ),
+        );
+        adapter.curl_path = api_script.display().to_string();
+        let api_error = adapter
+            .execute_json_request::<_, serde_json::Value>(
+                "getUpdates",
+                &serde_json::json!({"offset": 1}),
+                0,
+            )
+            .expect_err("API rejection should surface");
+        assert!(api_error.to_string().contains("description redacted"));
+        assert!(!api_error.to_string().contains(secret));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_json_request_disables_the_user_curl_config_before_stdin_config() {
+        let root = unique_temp_dir("telegram-curl-argv");
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        let argv_path = root.join("argv.txt");
+        let script = write_executable_script(
+            &root,
+            "fake-curl-argv",
+            &format!(
+                r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" > '{}'
+cat >/dev/null
+printf '{{"ok":true,"result":{{}}}}'
+"#,
+                argv_path.display()
+            ),
+        );
+        let adapter = CurlTelegramBotAdapter {
+            curl_path: script.display().to_string(),
+            curl_resolution_error: None,
+            api_base_url: "https://api.test".to_string(),
+            token: "secret-token".to_string(),
+            request_wait_timeout_override: Some(Duration::from_secs(1)),
+        };
+
+        let _: serde_json::Value = adapter
+            .execute_json_request("getUpdates", &serde_json::json!({"offset": 1}), 0)
+            .expect("fake curl should return a valid envelope");
+
+        assert_eq!(
+            fs::read_to_string(&argv_path).expect("curl argv should be captured"),
+            "-q\n--config\n-\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_path_cannot_replace_telegram_curl() {
+        let repo_root = unique_temp_dir("telegram-hostile-path-repo");
+        let repo_bin = repo_root.join("bin");
+        fs::create_dir_all(repo_root.join(".git")).expect("repository marker should be created");
+        fs::create_dir_all(&repo_bin).expect("repository bin should be created");
+        let marker_path = repo_root.join("hostile-curl-ran");
+        write_executable_script(
+            &repo_bin,
+            "curl",
+            &format!(
+                "#!/bin/sh\nset -eu\n: > '{}'\nprintf '{{\"ok\":true,\"result\":{{}}}}'\n",
+                marker_path.display()
+            ),
+        );
+        let original_path = std::env::var_os("PATH").expect("PATH should be available");
+        let hostile_path = std::env::join_paths(
+            std::iter::once(repo_bin).chain(std::env::split_paths(&original_path)),
+        )
+        .expect("hostile PATH should join");
+        let adapter = CurlTelegramBotAdapter::new_for_workspace_with_path(
+            "secret-token",
+            &repo_root,
+            &hostile_path,
+        );
+        let error = adapter
+            .execute_json_request::<_, serde_json::Value>(
+                "getUpdates",
+                &serde_json::json!({"offset": 1}),
+                0,
+            )
+            .expect_err("repository curl must make Telegram requests fail closed");
+
+        assert!(error.to_string().contains("trusted curl executable"));
+        assert!(!marker_path.exists(), "repository curl was executed");
+        let _ = fs::remove_dir_all(&repo_root);
+    }
+
+    #[cfg(unix)]
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -402,6 +627,7 @@ sleep 17
         std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"))
     }
 
+    #[cfg(unix)]
     fn write_executable_script(root: &Path, name: &str, body: &str) -> PathBuf {
         let script_path = root.join(name);
         fs::write(&script_path, body).expect("script fixture should be written");
@@ -412,45 +638,5 @@ sleep 17
         fs::set_permissions(&script_path, permissions)
             .expect("script fixture should be executable");
         script_path
-    }
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        &LOCK
-    }
-
-    struct EnvVarGuard {
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    }
-
-    impl EnvVarGuard {
-        fn apply(updates: &[(&'static str, Option<&str>)]) -> Self {
-            let saved = updates
-                .iter()
-                .map(|(key, _)| (*key, std::env::var_os(key)))
-                .collect::<Vec<_>>();
-            unsafe {
-                for (key, value) in updates {
-                    match value {
-                        Some(value) => std::env::set_var(key, value),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-            Self { saved }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                for (key, value) in &self.saved {
-                    match value {
-                        Some(value) => std::env::set_var(key, value),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-        }
     }
 }

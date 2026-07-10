@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthoritySnapshot, PlanningTaskAuthoritySnapshot,
@@ -48,6 +48,7 @@ authority store가 필요로 하는 전체 schema를 idempotent하게 보장한�
 - `authority_metadata`: schema version, 저장 mode, canonical repo root, 최근 갱신 시각 같은 store 전체 정보이다.
 - `shadow_documents`: 파일시스템 workspace에서 읽은 planning 파일의 mirror이다.
 - `staged_drafts` / `staged_draft_files`: repo-scoped draft staging 영역이다.
+- `planning_file_sync_baselines`: 외부 편집 후보가 관찰한 authority revision이다.
 - `active_documents`: commit된 planning workspace snapshot이다.
 - `planning_direction_*`: direction authority 문서와 방향별 JSON 원문이다.
 - `planning_tasks` / `planning_task_edges` / `planning_queue_projection`: task authority와 queue projection이다.
@@ -56,8 +57,14 @@ authority store가 필요로 하는 전체 schema를 idempotent하게 보장한�
 schema가 한 함수에 모여 있는 이유는 projection 모듈들이 서로 다른 테이블을 만져도 migration 기준은
 하나여야 하기 때문이다. 분산된 `CREATE TABLE`은 버전 추적과 테스트 초기화를 어렵게 만든다.
 */
-pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
-    connection
+pub(super) fn ensure_schema(
+    connection: &mut Connection,
+    location: &PlanningAuthorityLocation,
+) -> Result<()> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .context("failed to open authority-store schema migration transaction")?;
+    transaction
         .execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS authority_metadata (
@@ -81,6 +88,12 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 content TEXT NOT NULL,
                 PRIMARY KEY (draft_name, active_path),
                 FOREIGN KEY (draft_name) REFERENCES staged_drafts(draft_name) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS planning_file_sync_baselines (
+                relative_path TEXT PRIMARY KEY,
+                observed_planning_revision INTEGER,
+                exported_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS active_documents (
@@ -121,6 +134,12 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 parent_thread_id TEXT,
                 parent_turn_id TEXT,
                 content_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS retired_planning_tasks (
+                task_id TEXT PRIMARY KEY,
+                retired_at TEXT NOT NULL,
+                reason TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS planning_task_edges (
@@ -184,6 +203,32 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
                 ON review_center_inbox(workspace_root, requested_at DESC, review_id ASC);
             CREATE INDEX IF NOT EXISTS idx_review_center_history_workspace_recorded
                 ON review_center_history(workspace_root, recorded_at DESC, sequence DESC);
+
+            CREATE TABLE IF NOT EXISTS telegram_update_streams (
+                stream_key TEXT PRIMARY KEY,
+                next_offset INTEGER NOT NULL CHECK (next_offset >= 0),
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS telegram_update_runner_leases (
+                stream_key TEXT PRIMARY KEY,
+                owner_token TEXT NOT NULL,
+                lease_expires_at_epoch_millis INTEGER NOT NULL
+                    CHECK (lease_expires_at_epoch_millis >= 0),
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS telegram_update_inbox (
+                stream_key TEXT NOT NULL,
+                update_id INTEGER NOT NULL CHECK (update_id >= 0),
+                update_state TEXT NOT NULL CHECK (update_state IN ('executing', 'completed')),
+                received_at TEXT NOT NULL,
+                completed_at TEXT,
+                PRIMARY KEY (stream_key, update_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_telegram_update_inbox_stream_state_id
+                ON telegram_update_inbox(stream_key, update_state, update_id DESC);
 
             CREATE INDEX IF NOT EXISTS idx_planning_tasks_status_priority_updated
                 ON planning_tasks(status, combined_priority, updated_at);
@@ -285,7 +330,32 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             "#,
         )
         .context("failed to initialize authority-store schema")?;
-    ensure_planning_task_provenance_columns(connection)?;
+    ensure_planning_task_provenance_columns(&transaction)?;
+    upsert_metadata(
+        &transaction,
+        "schema_version",
+        &AUTHORITY_STORE_SCHEMA_VERSION.to_string(),
+    )?;
+    // A newly-created database must be reopenable immediately, before any
+    // projection write happens to call `upsert_authority_metadata`. Keep the
+    // schema marker and repository binding in the same migration transaction;
+    // otherwise a version-only file is indistinguishable from an incomplete or
+    // foreign SQLite database on the next strict open.
+    upsert_metadata(&transaction, "mode", AUTHORITY_STORE_MODE)?;
+    upsert_metadata(
+        &transaction,
+        "canonical_repo_root",
+        &location.canonical_repo_root,
+    )?;
+    upsert_metadata(
+        &transaction,
+        "repository_identity",
+        &location.repository_identity,
+    )?;
+    upsert_metadata(&transaction, "workspace_root", &location.workspace_root)?;
+    transaction
+        .commit()
+        .context("failed to commit authority-store schema migration")?;
     Ok(())
 }
 
@@ -386,6 +456,11 @@ pub(super) fn upsert_authority_metadata(
         transaction,
         "canonical_repo_root",
         &location.canonical_repo_root,
+    )?;
+    upsert_metadata(
+        transaction,
+        "repository_identity",
+        &location.repository_identity,
     )?;
     upsert_metadata(transaction, "workspace_root", &location.workspace_root)?;
     upsert_metadata(transaction, timestamp_key, &Utc::now().to_rfc3339())?;

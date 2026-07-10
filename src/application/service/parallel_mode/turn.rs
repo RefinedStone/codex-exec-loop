@@ -1,9 +1,10 @@
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWorkerCommitOutcome;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_mode::{
     ParallelModeOfficialCompletionReport, ParallelModeOrchestratorTrigger, ParallelModeService,
 };
-use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
-use crate::domain::planning::ParallelTurnHandoff;
+use crate::domain::parallel_mode::{ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot};
+use crate::domain::planning::{ParallelTurnHandoff, PostTurnContinuationPermit};
 
 pub type ParallelTurnSlotLeaseHandoff = ParallelTurnHandoff;
 
@@ -38,6 +39,7 @@ launch outcome은 실제 스트림 실행에 사용할 요청을 다시 돌려�
 */
 pub struct ParallelTurnStreamLaunchOutcome {
     pub request: ParallelTurnStreamLaunchRequest,
+    pub expected_lease: Option<ParallelModeSlotLeaseSnapshot>,
     pub launch_notice: Option<String>,
     pub invalidate_supervisor_snapshot: bool,
 }
@@ -77,6 +79,7 @@ map outcomes to UI messages; they do not own the lease state flags.
 pub struct ParallelTurnStreamLifecycle {
     turn_service: ParallelModeTurnService,
     workspace_directory: String,
+    expected_lease: Option<ParallelModeSlotLeaseSnapshot>,
     saw_turn_started: bool,
     saw_failed_before_turn_started: bool,
     saw_failed_event: bool,
@@ -96,10 +99,15 @@ impl std::fmt::Debug for ParallelTurnStreamLifecycle {
     }
 }
 impl ParallelTurnStreamLifecycle {
-    fn new(turn_service: ParallelModeTurnService, workspace_directory: impl Into<String>) -> Self {
+    fn new(
+        turn_service: ParallelModeTurnService,
+        workspace_directory: impl Into<String>,
+        expected_lease: Option<ParallelModeSlotLeaseSnapshot>,
+    ) -> Self {
         Self {
             turn_service,
             workspace_directory: workspace_directory.into(),
+            expected_lease,
             saw_turn_started: false,
             saw_failed_before_turn_started: false,
             saw_failed_event: false,
@@ -110,9 +118,11 @@ impl ParallelTurnStreamLifecycle {
         &mut self,
         event: &ConversationStreamEvent,
     ) -> ParallelTurnStreamLifecycleEventOutcome {
-        let outcome = self
-            .turn_service
-            .sync_stream_event(&self.workspace_directory, event);
+        let outcome = self.turn_service.sync_stream_event_inner(
+            &self.workspace_directory,
+            self.expected_lease.as_ref(),
+            event,
+        );
         self.saw_turn_started |= outcome.turn_started_observed;
 
         let should_stop_stream_forwarding = matches!(
@@ -137,8 +147,9 @@ impl ParallelTurnStreamLifecycle {
         &self,
         terminal_failure_observed: bool,
     ) -> ParallelTurnStreamCompletionOutcome {
-        self.turn_service.finalize_stream_completion(
+        self.turn_service.finalize_stream_completion_inner(
             &self.workspace_directory,
+            self.expected_lease.as_ref(),
             self.saw_turn_started,
             self.saw_failed_before_turn_started,
             self.saw_failed_event,
@@ -155,6 +166,12 @@ impl ParallelTurnStreamLifecycle {
 */
 pub struct ParallelModeTurnService {
     parallel_mode_service: ParallelModeService,
+    automation_guard: Option<super::ParallelModeAutomationGuard>,
+}
+
+pub(crate) struct ParallelOfficialCompletionSuccessPreparation {
+    pub(crate) notices: Vec<String>,
+    pub(crate) should_run_delivery_tick: bool,
 }
 impl std::fmt::Debug for ParallelModeTurnService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -167,14 +184,54 @@ impl ParallelModeTurnService {
     pub fn new(parallel_mode_service: ParallelModeService) -> Self {
         Self {
             parallel_mode_service,
+            automation_guard: None,
         }
+    }
+
+    pub(crate) fn with_automation_guard(
+        mut self,
+        automation_guard: super::ParallelModeAutomationGuard,
+    ) -> Self {
+        self.automation_guard = Some(automation_guard);
+        self
+    }
+
+    pub(crate) fn automation_epoch_is_active(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> bool {
+        self.automation_guard
+            .as_ref()
+            .is_none_or(|guard| guard.is_active(workspace_directory, epoch_id))
+    }
+
+    pub(crate) fn automation_permit(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> Option<super::ParallelModeAutomationPermit> {
+        self.automation_guard
+            .as_ref()
+            .map(|guard| guard.permit(workspace_directory, epoch_id))
     }
 
     pub fn stream_lifecycle(
         &self,
         workspace_directory: impl Into<String>,
     ) -> ParallelTurnStreamLifecycle {
-        ParallelTurnStreamLifecycle::new(self.clone(), workspace_directory)
+        ParallelTurnStreamLifecycle::new(self.clone(), workspace_directory, None)
+    }
+
+    pub(crate) fn stream_lifecycle_for_lease(
+        &self,
+        expected_lease: ParallelModeSlotLeaseSnapshot,
+    ) -> ParallelTurnStreamLifecycle {
+        ParallelTurnStreamLifecycle::new(
+            self.clone(),
+            expected_lease.worktree_path.clone(),
+            Some(expected_lease),
+        )
     }
 
     /*
@@ -198,6 +255,7 @@ impl ParallelModeTurnService {
         else {
             return Ok(ParallelTurnStreamLaunchOutcome {
                 request,
+                expected_lease: None,
                 launch_notice: None,
                 invalidate_supervisor_snapshot: false,
             });
@@ -212,6 +270,7 @@ impl ParallelModeTurnService {
                 prompt: request.prompt,
                 slot_lease_handoff: None,
             },
+            expected_lease: Some(lease.clone()),
             launch_notice: Some(format!(
                 "slot lease acquired before stream launch / slot: {} / agent: {} / task: {}",
                 lease.slot_id, lease.agent_id, lease.task_id
@@ -235,16 +294,38 @@ impl ParallelModeTurnService {
         workspace_directory: &str,
         event: &ConversationStreamEvent,
     ) -> ParallelTurnStreamEventOutcome {
+        self.sync_stream_event_inner(workspace_directory, None, event)
+    }
+
+    pub(crate) fn sync_stream_event_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        event: &ConversationStreamEvent,
+    ) -> ParallelTurnStreamEventOutcome {
+        self.sync_stream_event_inner(&expected_lease.worktree_path, Some(expected_lease), event)
+    }
+
+    fn sync_stream_event_inner(
+        &self,
+        workspace_directory: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        event: &ConversationStreamEvent,
+    ) -> ParallelTurnStreamEventOutcome {
         if let ConversationStreamEvent::ThreadPrepared { thread_id, .. } = event {
             /*
             ThreadPrepared는 lease가 아직 Running이 되기 전의 식별자 결합 단계다.
             같은 workspace가 slot worktree가 아니면 service가 Ok(None)을 돌려주므로,
             root conversation 이벤트가 병렬 슬롯 상태를 건드리지 않는다.
             */
-            return match self
-                .parallel_mode_service
-                .record_workspace_slot_thread_prepared(workspace_directory, thread_id)
-            {
+            let transition = match expected_lease {
+                Some(expected) => self
+                    .parallel_mode_service
+                    .record_workspace_slot_thread_prepared_for_lease(expected, thread_id),
+                None => self
+                    .parallel_mode_service
+                    .record_workspace_slot_thread_prepared(workspace_directory, thread_id),
+            };
+            return match transition {
                 Ok(Some(_)) => ParallelTurnStreamEventOutcome {
                     runtime_notice: None,
                     invalidate_supervisor_snapshot: true,
@@ -276,10 +357,15 @@ impl ParallelModeTurnService {
                 turn_started_observed: false,
             };
         }
-        match self
-            .parallel_mode_service
-            .mark_workspace_slot_running(workspace_directory)
-        {
+        let transition = match expected_lease {
+            Some(expected) => self
+                .parallel_mode_service
+                .mark_workspace_slot_running_for_lease(expected),
+            None => self
+                .parallel_mode_service
+                .mark_workspace_slot_running(workspace_directory),
+        };
+        match transition {
             /*
             Ok(None) still returns turn_started_observed=true. The conversation
             runtime did see a turn begin, even if this workspace has no matching
@@ -320,6 +406,43 @@ impl ParallelModeTurnService {
         saw_failed_event: bool,
         terminal_failure_observed: bool,
     ) -> ParallelTurnStreamCompletionOutcome {
+        self.finalize_stream_completion_inner(
+            workspace_directory,
+            None,
+            saw_turn_started,
+            saw_failed_before_turn_started,
+            saw_failed_event,
+            terminal_failure_observed,
+        )
+    }
+
+    pub(crate) fn finalize_stream_completion_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        saw_turn_started: bool,
+        saw_failed_before_turn_started: bool,
+        saw_failed_event: bool,
+        terminal_failure_observed: bool,
+    ) -> ParallelTurnStreamCompletionOutcome {
+        self.finalize_stream_completion_inner(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+            saw_turn_started,
+            saw_failed_before_turn_started,
+            saw_failed_event,
+            terminal_failure_observed,
+        )
+    }
+
+    fn finalize_stream_completion_inner(
+        &self,
+        workspace_directory: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        saw_turn_started: bool,
+        saw_failed_before_turn_started: bool,
+        saw_failed_event: bool,
+        terminal_failure_observed: bool,
+    ) -> ParallelTurnStreamCompletionOutcome {
         if should_release_unstarted_slot_lease(
             saw_turn_started,
             saw_failed_before_turn_started,
@@ -330,10 +453,15 @@ impl ParallelModeTurnService {
             TurnStarted because after that point the slot worktree may contain
             meaningful user-visible changes or failure evidence for inspection.
             */
-            return match self
-                .parallel_mode_service
-                .release_workspace_slot_lease_after_failed_start(workspace_directory)
-            {
+            let transition = match expected_lease {
+                Some(expected) => self
+                    .parallel_mode_service
+                    .release_workspace_slot_lease_after_failed_start_for_lease(expected),
+                None => self
+                    .parallel_mode_service
+                    .release_workspace_slot_lease_after_failed_start(workspace_directory),
+            };
+            return match transition {
                 Ok(Some(lease)) => ParallelTurnStreamCompletionOutcome {
                     runtime_notice: Some(format!(
                         "slot lease released after startup failure / slot: {} / agent: {}",
@@ -371,10 +499,15 @@ impl ParallelModeTurnService {
             saw_failed_event,
             terminal_failure_observed,
         ) {
-            return match self
-                .parallel_mode_service
-                .mark_workspace_slot_running(workspace_directory)
-            {
+            let transition = match expected_lease {
+                Some(expected) => self
+                    .parallel_mode_service
+                    .mark_workspace_slot_running_for_lease(expected),
+                None => self
+                    .parallel_mode_service
+                    .mark_workspace_slot_running(workspace_directory),
+            };
+            return match transition {
                 Ok(Some(lease)) => ParallelTurnStreamCompletionOutcome {
                     runtime_notice: Some(format!(
                         "slot lease running transition inferred from terminal completion / slot: {} / agent: {}",
@@ -425,6 +558,25 @@ impl ParallelModeTurnService {
                 None,
             )
     }
+
+    pub(crate) fn begin_official_completion_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        completed_turn_id: &str,
+        refresh_order: Option<u64>,
+        latest_main_reply: Option<&str>,
+        validation_summary: Option<&str>,
+    ) -> Result<Option<ParallelModeOfficialCompletionReport>, String> {
+        self.parallel_mode_service
+            .begin_workspace_official_completion_for_lease(
+                expected_lease,
+                completed_turn_id,
+                refresh_order,
+                latest_main_reply,
+                validation_summary,
+                None,
+            )
+    }
     pub fn reserve_official_completion_refresh_order(
         &self,
         workspace_directory: &str,
@@ -432,15 +584,54 @@ impl ParallelModeTurnService {
         self.parallel_mode_service
             .reserve_workspace_official_completion_refresh_order(workspace_directory)
     }
+
+    pub(crate) fn reserve_official_completion_refresh_order_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<Option<u64>, String> {
+        self.parallel_mode_service
+            .reserve_workspace_official_completion_refresh_order_for_lease(expected_lease)
+    }
+    pub(crate) fn prepare_host_owned_worker_commit(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<ParallelWorkerCommitOutcome, String> {
+        self.parallel_mode_service
+            .prepare_workspace_worker_commit(expected_lease)
+    }
     pub fn mark_official_completion_failed(&self, workspace_directory: &str, failure_detail: &str) {
         let _ = self
             .parallel_mode_service
             .mark_workspace_official_completion_failed(workspace_directory, failure_detail);
     }
+    pub(crate) fn mark_official_completion_failed_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        failure_detail: &str,
+    ) {
+        let _ = self
+            .parallel_mode_service
+            .mark_workspace_official_completion_failed_for_lease(expected_lease, failure_detail);
+    }
     pub fn mark_official_completion_refreshing(&self, workspace_directory: &str) -> Option<String> {
         match self
             .parallel_mode_service
             .mark_workspace_official_completion_refreshing(workspace_directory)
+        {
+            Ok(_) => None,
+            Err(error) => Some(format!(
+                "official completion refreshing state could not be recorded: {error}"
+            )),
+        }
+    }
+
+    pub(crate) fn mark_official_completion_refreshing_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Option<String> {
+        match self
+            .parallel_mode_service
+            .mark_workspace_official_completion_refreshing_for_lease(expected_lease)
         {
             Ok(_) => None,
             Err(error) => Some(format!(
@@ -464,25 +655,193 @@ impl ParallelModeTurnService {
         workspace_directory: &str,
         authority_refresh_outcome: &str,
     ) -> Vec<String> {
+        self.finalize_official_completion_success_inner(
+            workspace_directory,
+            None,
+            authority_refresh_outcome,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finalize_official_completion_success_for_epoch(
+        &self,
+        workspace_directory: &str,
+        planning_workspace_directory: &str,
+        epoch_id: u64,
+        authority_refresh_outcome: &str,
+    ) -> Vec<String> {
+        self.finalize_official_completion_success_inner(
+            workspace_directory,
+            None,
+            authority_refresh_outcome,
+            Some((planning_workspace_directory, epoch_id)),
+        )
+    }
+
+    pub(crate) fn finalize_official_completion_success_for_epoch_and_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        planning_workspace_directory: &str,
+        epoch_id: u64,
+        authority_refresh_outcome: &str,
+    ) -> Vec<String> {
+        self.finalize_official_completion_success_inner(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+            authority_refresh_outcome,
+            Some((planning_workspace_directory, epoch_id)),
+        )
+    }
+
+    fn finalize_official_completion_success_inner(
+        &self,
+        workspace_directory: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        authority_refresh_outcome: &str,
+        automation_epoch: Option<(&str, u64)>,
+    ) -> Vec<String> {
+        let preparation = self.prepare_official_completion_success_inner(
+            workspace_directory,
+            expected_lease,
+            authority_refresh_outcome,
+            automation_epoch,
+        );
+        let mut notices = preparation.notices;
+        if preparation.should_run_delivery_tick {
+            notices.extend(self.run_official_completion_delivery_tick_inner(
+                workspace_directory,
+                automation_epoch,
+            ));
+        }
+        notices
+    }
+
+    pub(crate) fn mark_official_completion_success_for_post_turn(
+        &self,
+        workspace_directory: &str,
+        authority_refresh_outcome: &str,
+    ) -> Vec<String> {
+        self.parallel_mode_service
+            .mark_workspace_commit_ready(workspace_directory, authority_refresh_outcome)
+            .err()
+            .map(|error| {
+                format!("commit-ready state could not be recorded after official refresh: {error}")
+            })
+            .into_iter()
+            .collect()
+    }
+
+    pub(crate) fn run_official_completion_delivery_tick_for_post_turn(
+        &self,
+        workspace_directory: &str,
+        planning_workspace_directory: &str,
+        epoch_id: u64,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> Vec<String> {
+        let Some(permit) = self
+            .automation_permit(planning_workspace_directory, epoch_id)
+            .map(|permit| permit.with_continuation_permit(continuation_permit.clone()))
+        else {
+            return vec![
+                "parallel result remains queued because no guarded automation epoch is available"
+                    .to_string(),
+            ];
+        };
+        let mut notices = match self
+            .parallel_mode_service
+            .enqueue_workspace_commit_ready_result_guarded(workspace_directory, &permit)
+        {
+            Ok(Some(item)) => vec![format!(
+                "commit-ready result entered the distributor queue / agent: {} / task: {} / state: {}",
+                item.source_agent,
+                item.task_title,
+                item.queue_state.label()
+            )],
+            Ok(None) if !permit.is_active() => {
+                return vec![
+                    "parallel result was not enqueued because its automation epoch was closed"
+                        .to_string(),
+                ];
+            }
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                return vec![format!(
+                    "distributor enqueue failed after official refresh: {error}"
+                )];
+            }
+        };
+        if !permit.is_active() {
+            notices.push(
+                "parallel result remains queued because its automation epoch was closed"
+                    .to_string(),
+            );
+            return notices;
+        }
+        match self.parallel_mode_service.run_orchestrator_tick_guarded(
+            workspace_directory,
+            ParallelModeOrchestratorTrigger::PlanningRefreshCompleted,
+            &permit,
+        ) {
+            Ok(tick_result) => notices.extend(tick_result.notices),
+            Err(error) => notices.push(format!(
+                "orchestrator tick failed after official refresh: {error}"
+            )),
+        }
+        notices
+    }
+
+    fn prepare_official_completion_success_inner(
+        &self,
+        workspace_directory: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        authority_refresh_outcome: &str,
+        automation_epoch: Option<(&str, u64)>,
+    ) -> ParallelOfficialCompletionSuccessPreparation {
         let mut notices = Vec::new();
+        let automation_is_active = || {
+            automation_epoch.is_none_or(|(planning_workspace_directory, epoch_id)| {
+                self.automation_epoch_is_active(planning_workspace_directory, epoch_id)
+            })
+        };
         /*
         mark_workspace_commit_ready updates the session ledger before enqueue.
         Even if this write fails, enqueue is still attempted because the queue
         record may be recoverable from the lease/session state and should surface
         its own failure separately.
         */
-        if let Err(error) = self
-            .parallel_mode_service
-            .mark_workspace_commit_ready(workspace_directory, authority_refresh_outcome)
-        {
+        let commit_ready = match expected_lease {
+            Some(expected) => self
+                .parallel_mode_service
+                .mark_workspace_commit_ready_for_lease(expected, authority_refresh_outcome),
+            None => self
+                .parallel_mode_service
+                .mark_workspace_commit_ready(workspace_directory, authority_refresh_outcome),
+        };
+        if let Err(error) = commit_ready {
             notices.push(format!(
                 "commit-ready state could not be recorded after official refresh: {error}"
             ));
         }
-        match self
-            .parallel_mode_service
-            .enqueue_workspace_commit_ready_result(workspace_directory)
-        {
+        if !automation_is_active() {
+            notices.push(
+                "parallel result was durably marked commit-ready and awaits a new automation epoch"
+                    .to_string(),
+            );
+            return ParallelOfficialCompletionSuccessPreparation {
+                notices,
+                should_run_delivery_tick: false,
+            };
+        }
+        let enqueue = match expected_lease {
+            Some(expected) => self
+                .parallel_mode_service
+                .enqueue_workspace_commit_ready_result_for_lease(expected),
+            None => self
+                .parallel_mode_service
+                .enqueue_workspace_commit_ready_result(workspace_directory),
+        };
+        match enqueue {
             Ok(Some(item)) => notices.push(format!(
                 "commit-ready result entered the distributor queue / agent: {} / task: {} / state: {}",
                 item.source_agent,
@@ -499,19 +858,60 @@ impl ParallelModeTurnService {
                 notices.push(format!(
                     "distributor enqueue failed after official refresh: {error}"
                 ));
-                return notices;
+                return ParallelOfficialCompletionSuccessPreparation {
+                    notices,
+                    should_run_delivery_tick: false,
+                };
             }
         }
-        match self.parallel_mode_service.run_orchestrator_tick(
-            workspace_directory,
-            ParallelModeOrchestratorTrigger::PlanningRefreshCompleted,
-        ) {
+        if !automation_is_active() {
+            notices.push(
+                "parallel result remains queued because its automation epoch was closed"
+                    .to_string(),
+            );
+            return ParallelOfficialCompletionSuccessPreparation {
+                notices,
+                should_run_delivery_tick: false,
+            };
+        }
+        ParallelOfficialCompletionSuccessPreparation {
+            notices,
+            should_run_delivery_tick: true,
+        }
+    }
+
+    fn run_official_completion_delivery_tick_inner(
+        &self,
+        workspace_directory: &str,
+        automation_epoch: Option<(&str, u64)>,
+    ) -> Vec<String> {
+        let mut notices = Vec::new();
+        let tick_result = match automation_epoch {
+            None => self.parallel_mode_service.run_orchestrator_tick(
+                workspace_directory,
+                ParallelModeOrchestratorTrigger::PlanningRefreshCompleted,
+            ),
+            Some((planning_workspace_directory, epoch_id)) => {
+                let Some(permit) = self.automation_permit(planning_workspace_directory, epoch_id)
+                else {
+                    return vec![
+                        "parallel result remains queued because no guarded automation epoch is available"
+                            .to_string(),
+                    ];
+                };
+                self.parallel_mode_service.run_orchestrator_tick_guarded(
+                    workspace_directory,
+                    ParallelModeOrchestratorTrigger::PlanningRefreshCompleted,
+                    &permit,
+                )
+            }
+        };
+        match tick_result {
             Ok(tick_result) => notices.extend(tick_result.notices),
             Err(error) => notices.push(format!(
                 "orchestrator tick failed after official refresh: {error}"
             )),
         }
-
         notices
     }
 }
@@ -562,16 +962,25 @@ mod tests {
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
-    use crate::adapter::outbound::github::GithubAutomationAdapter;
+    use crate::application::port::outbound::github_automation_port::{
+        GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+        GithubRepositoryVisibility,
+    };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::application::service::parallel_mode::ParallelModeService;
-    use crate::domain::parallel_mode::ParallelModeSlotLeaseRequest;
+    use crate::application::service::parallel_mode::{
+        ParallelModeAutomationGuard, ParallelModeService,
+    };
+    use crate::domain::parallel_mode::{
+        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+        ParallelModeSlotLeaseRequest,
+    };
     use std::fs;
     use std::process::Command;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     struct TempGitWorkspace {
         root: String,
+        origin_root: String,
     }
     impl TempGitWorkspace {
         fn new(prefix: &str) -> Self {
@@ -590,19 +999,24 @@ mod tests {
             run_git(&root, &["commit", "-m", "Initial commit"]);
             run_git(&root, &["branch", "akra"]);
             run_git(&root, &["branch", "prerelease"]);
-            run_git(
-                &root,
-                &["update-ref", "refs/remotes/origin/prerelease", "prerelease"],
-            );
+            let origin = root.with_extension("origin.git");
+            let origin_path = origin
+                .to_str()
+                .expect("temp origin path should be valid utf-8");
+            run_git(&root, &["init", "--bare", "-q", origin_path]);
+            run_git(&root, &["remote", "add", "origin", origin_path]);
+            run_git(&root, &["push", "-q", "-u", "origin", "prerelease"]);
 
             Self {
                 root: root.display().to_string(),
+                origin_root: origin.display().to_string(),
             }
         }
     }
     impl Drop for TempGitWorkspace {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+            let _ = fs::remove_dir_all(&self.origin_root);
         }
     }
     fn create_temp_directory(prefix: &str) -> String {
@@ -626,12 +1040,207 @@ mod tests {
             args.join(" ")
         );
     }
+    #[derive(Debug)]
+    struct LocalGithubAutomationPort;
+    impl GithubAutomationPort for LocalGithubAutomationPort {
+        fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+            let ready = |key| {
+                ParallelModeCapabilitySnapshot::new(
+                    key,
+                    ParallelModeCapabilityState::Ready,
+                    "test capability ready",
+                    None,
+                )
+            };
+            GithubAutomationCapabilities::new(
+                ready(ParallelModeCapabilityKey::PushRemote),
+                ready(ParallelModeCapabilityKey::GhBinary),
+                ready(ParallelModeCapabilityKey::GhAuth),
+            )
+        }
+        fn repository_identity(&self, _repo_root: &str) -> anyhow::Result<String> {
+            Ok("RefinedStone/codex-exec-loop".to_string())
+        }
+        fn repository_visibility(
+            &self,
+            _repo_root: &str,
+        ) -> anyhow::Result<GithubRepositoryVisibility> {
+            Ok(GithubRepositoryVisibility::Private)
+        }
+        fn repository_identity_for_push_url(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            _credential_redacted_push_url: &str,
+        ) -> anyhow::Result<String> {
+            self.repository_identity(repo_root)
+        }
+        fn repository_visibility_for_push_url(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            _credential_redacted_push_url: &str,
+        ) -> anyhow::Result<GithubRepositoryVisibility> {
+            self.repository_visibility(repo_root)
+        }
+        fn credential_redacted_push_url_for_remote(
+            &self,
+            repo_root: &str,
+            push_remote: &str,
+        ) -> anyhow::Result<String> {
+            let output = Command::new("git")
+                .current_dir(repo_root)
+                .args(["remote", "get-url", "--push", push_remote])
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "test push remote URL is unavailable"
+            );
+            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+        }
+        fn fetch_branch_to_tracking_ref_for_delivery_target(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            credential_redacted_push_url: &str,
+            branch_name: &str,
+            tracking_ref: &str,
+        ) -> anyhow::Result<String> {
+            let refspec = format!("+refs/heads/{branch_name}:{tracking_ref}");
+            let status = Command::new("git")
+                .current_dir(repo_root)
+                .args(["fetch", "--quiet", credential_redacted_push_url, &refspec])
+                .status()?;
+            anyhow::ensure!(status.success(), "test frozen-target fetch failed");
+            let output = Command::new("git")
+                .current_dir(repo_root)
+                .args(["rev-parse", tracking_ref])
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "test tracking ref could not be resolved"
+            );
+            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+        }
+        fn push_branch(
+            &self,
+            _repo_root: &str,
+            _branch_name: &str,
+            _force_with_lease: bool,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn ensure_pull_request(
+            &self,
+            _repo_root: &str,
+            base_branch: &str,
+            head_branch: &str,
+            _title: &str,
+            _body: &str,
+        ) -> anyhow::Result<GithubAutomationPullRequest> {
+            Ok(GithubAutomationPullRequest::new(
+                1,
+                "https://example.invalid/pr/1",
+                "OPEN",
+                base_branch,
+                head_branch,
+                false,
+            ))
+        }
+        fn inspect_pull_request(
+            &self,
+            _repo_root: &str,
+            pr_number: u64,
+        ) -> anyhow::Result<GithubAutomationPullRequest> {
+            Ok(GithubAutomationPullRequest::new(
+                pr_number,
+                "https://example.invalid/pr/1",
+                "OPEN",
+                "prerelease",
+                "akra-agent/test",
+                false,
+            ))
+        }
+        fn push_integration_branch(
+            &self,
+            _repo_root: &str,
+            _branch_name: &str,
+            _expected_old_commit_sha: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn close_pull_request(&self, _repo_root: &str, _pr_number: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
     fn test_parallel_mode_service() -> ParallelModeService {
         ParallelModeService::new(
             Arc::new(SqlitePlanningAuthorityAdapter::new()),
-            Arc::new(GithubAutomationAdapter::new()),
+            Arc::new(LocalGithubAutomationPort),
             Arc::new(GitParallelModeRuntimeAdapter::new()),
         )
+    }
+    #[test]
+    fn guarded_turn_service_tracks_active_epoch_and_cancellation() {
+        let guard = ParallelModeAutomationGuard::default();
+        let service = ParallelModeTurnService::new(test_parallel_mode_service())
+            .with_automation_guard(guard.clone());
+
+        assert!(!service.automation_epoch_is_active("/workspace", 7));
+        guard.activate("/workspace", 7);
+        assert!(service.automation_epoch_is_active("/workspace", 7));
+        guard.cancel("/workspace");
+        assert!(!service.automation_epoch_is_active("/workspace", 7));
+    }
+    #[test]
+    fn closed_epoch_still_persists_successful_official_refresh_as_commit_ready() {
+        let workspace = TempGitWorkspace::new("parallel-closed-epoch-commit-ready");
+        let parallel_service = test_parallel_mode_service();
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(&workspace.root)
+            .expect("pool should initialize");
+        let lease = parallel_service
+            .acquire_slot_lease(
+                &workspace.root,
+                ParallelModeSlotLeaseRequest::from_task_identity(
+                    "task-closed-epoch",
+                    "Preserve completed result",
+                ),
+            )
+            .expect("slot should lease");
+        parallel_service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should become running");
+        parallel_service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("official refresh state should persist");
+
+        let guard = ParallelModeAutomationGuard::default();
+        guard.activate(workspace.root.clone(), 7);
+        let turn_service = ParallelModeTurnService::new(parallel_service.clone())
+            .with_automation_guard(guard.clone());
+        guard.cancel(&workspace.root);
+
+        let notices = turn_service.finalize_official_completion_success_for_epoch(
+            &lease.worktree_path,
+            &workspace.root,
+            7,
+            "official ledger refresh succeeded",
+        );
+
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("durably marked commit-ready"))
+        );
+        let snapshot = parallel_service.build_passive_supervisor_snapshot(&workspace.root, None);
+        let detail = snapshot
+            .detail
+            .session
+            .as_ref()
+            .expect("commit-ready session detail should remain durable");
+        assert_eq!(detail.state_label, "commit_ready");
+        assert_eq!(snapshot.distributor.queue_depth(), 0);
     }
     #[test]
     fn startup_failure_requests_unstarted_slot_release() {

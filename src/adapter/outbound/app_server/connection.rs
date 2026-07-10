@@ -3,36 +3,172 @@
  * 위 계층은 typed method(start_thread, start_turn 등)를 호출하지만, 이 파일은 stdin에 JSON line을 쓰고
  * stdout/stderr reader thread에서 notification/response line을 받아 request id와 매칭한다.
  */
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Arc;
+#[cfg(test)]
+use std::cell::RefCell;
+use std::ffi::{OsStr, OsString};
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::domain::conversation::{
+    ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalResolution,
+};
+use crate::subprocess::{self, ManagedChild};
 
+use super::approval::{
+    AppServerApprovalBroker, AppServerApprovalSpec, EXPLICITLY_DECLINED_APPROVAL_METHODS,
+    INTERACTIVE_APPROVAL_METHODS, UNINSPECTABLE_APPROVAL_METHODS, parse_interactive_approval,
+};
 use super::protocol::{
     AccountReadResponse, AppServerNotification, InitializeResponse, ThreadListParams,
     ThreadListResponse, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
     ThreadStartParams, ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse,
     TurnNotificationHandling, TurnStartParams, TurnStartResponse, handle_turn_notification,
 };
+use super::{AppServerEventSender, AppServerEventTrySendError};
 
 const RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
 const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_RESPONSE_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const DEFAULT_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+// A stop request is a safety boundary, not a normal control-plane request. Keep
+// the complete interrupt exchange short even when the general JSON-RPC response
+// timeout is raised for a slow app-server installation.
+const DEFAULT_INTERRUPT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
+const DEFAULT_INTERRUPT_RETRY_BACKOFF: Duration = Duration::from_millis(100);
+const DEFAULT_INTERRUPT_RETRY_LIMIT: usize = 3;
+// Keep at most one fully materialized raw line between the pipe readers and the
+// JSON consumer. A larger count-only queue would multiply the 128 MiB history
+// allowance before parsed notification byte accounting can take effect.
+const APP_SERVER_LINE_CHANNEL_CAPACITY: usize = 1;
+const APP_SERVER_WRITE_CHANNEL_CAPACITY: usize = 1;
+const MAX_APP_SERVER_WRITE_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+const APP_SERVER_WRITER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(100);
+const MAX_APP_SERVER_WRITE_FRAME_BYTES: usize = 16 * 1024 * 1024;
+// `thread/read` and `thread/resume` return the complete thread as one JSON-RPC
+// line. Keep a hard transport bound, but leave enough room for long-lived
+// conversations and their tool output instead of treating a normal history as
+// a poisoned connection.
+const MAX_STDOUT_LINE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_STDERR_LINE_BYTES: usize = 64 * 1024;
+const SHELL_ENVIRONMENT_INHERIT_ENV_VAR: &str = "AKRA_APP_SERVER_SHELL_ENVIRONMENT_INHERIT";
+const PROCESS_ENVIRONMENT_ENV_VAR: &str = "AKRA_APP_SERVER_PROCESS_ENVIRONMENT";
+const API_KEY_AUTH_ENV_VAR: &str = "AKRA_APP_SERVER_API_KEY_AUTH";
+const SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE: &str =
+    "shell_environment_policy.ignore_default_excludes=false";
+const DISABLE_LOGIN_SHELL_OVERRIDE: &str = "allow_login_shell=false";
+const APP_SERVER_API_KEY_ENV_VARS: &[&str] = &["OPENAI_API_KEY", "CODEX_API_KEY"];
+const APP_SERVER_PROCESS_ENVIRONMENT_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "TERM",
+    "COLORTERM",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CURL_CA_BUNDLE",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "CODEX_HOME",
+    "OPENAI_BASE_URL",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT",
+    "OPENAI_PROJECT_ID",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "WSLENV",
+    "WSL_DISTRO_NAME",
+    "WSL_INTEROP",
+];
+
+#[cfg(test)]
+pub(crate) const CANCELLED_SERVER_REQUEST_METHODS: &[&str] = &[
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+];
+#[cfg(test)]
+pub(crate) const METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS: &[&str] = &[
+    "item/tool/call",
+    "account/chatgptAuthTokens/refresh",
+    "attestation/generate",
+];
+#[cfg(test)]
+pub(crate) const UNINSPECTABLE_SERVER_REQUEST_METHODS: &[&str] = UNINSPECTABLE_APPROVAL_METHODS;
+#[cfg(test)]
+pub(crate) const LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS: &[&str] = &["currentTime/read"];
 
 mod diagnostics;
 
-use self::diagnostics::{ConnectionDiagnostics, PendingNotifications};
+use self::diagnostics::{
+    ConnectionDiagnostics, MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS,
+    PendingNotifications,
+};
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_APPROVAL_DECISION_RECEIVED_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+fn install_after_approval_decision_received_hook(hook: impl FnOnce() + 'static) {
+    AFTER_APPROVAL_DECISION_RECEIVED_HOOK.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(hook));
+        assert!(
+            previous.is_none(),
+            "approval decision test hook already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn run_after_approval_decision_received_hook() {
+    AFTER_APPROVAL_DECISION_RECEIVED_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_after_approval_decision_received_hook() {}
 
 #[derive(Clone, Default)]
 pub(super) struct AppServerTurnInterruptSignal {
@@ -61,19 +197,41 @@ impl AppServerTurnInterruptSignal {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AppServerConnectionConfig {
+    executable: PathBuf,
+    executable_prefix_args: Vec<OsString>,
+    executable_resolution_error: Option<String>,
+    command_environment: Vec<(OsString, OsString)>,
+    shell_environment_inherit: ShellEnvironmentInherit,
+    process_environment_policy: ProcessEnvironmentPolicy,
+    api_key_auth: bool,
     response_timeout: Duration,
     poll_interval: Duration,
     drain_timeout: Duration,
     drain_poll_interval: Duration,
+    approval_timeout: Duration,
+    interrupt_total_timeout: Duration,
+    interrupt_retry_backoff: Duration,
+    interrupt_retry_limit: usize,
 }
 
 impl Default for AppServerConnectionConfig {
     fn default() -> Self {
         Self {
+            executable: PathBuf::from("codex"),
+            executable_prefix_args: Vec::new(),
+            executable_resolution_error: None,
+            command_environment: Vec::new(),
+            shell_environment_inherit: ShellEnvironmentInherit::Core,
+            process_environment_policy: ProcessEnvironmentPolicy::Scrubbed,
+            api_key_auth: false,
             response_timeout: DEFAULT_RESPONSE_TIMEOUT,
             poll_interval: DEFAULT_POLL_INTERVAL,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
             drain_poll_interval: DEFAULT_DRAIN_POLL_INTERVAL,
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
+            interrupt_total_timeout: DEFAULT_INTERRUPT_TOTAL_TIMEOUT,
+            interrupt_retry_backoff: DEFAULT_INTERRUPT_RETRY_BACKOFF,
+            interrupt_retry_limit: DEFAULT_INTERRUPT_RETRY_LIMIT,
         }
     }
 }
@@ -81,9 +239,23 @@ impl Default for AppServerConnectionConfig {
 impl AppServerConnectionConfig {
     pub(super) fn from_environment() -> Self {
         // 운영 override는 response timeout만 열어두고, poll/drain 간격은 stream responsiveness 기준으로 고정한다.
-        Self::from_response_timeout_secs_value(
+        let mut config = Self::from_response_timeout_secs_value(
             std::env::var(RESPONSE_TIMEOUT_ENV_VAR).ok().as_deref(),
-        )
+        );
+        config.shell_environment_inherit = configured_shell_environment_inherit();
+        config.process_environment_policy = configured_process_environment_policy();
+        config.api_key_auth = configured_api_key_auth();
+        match crate::trusted_executable::pinned_codex_command() {
+            Ok(command) => {
+                config.executable = command.program;
+                config.executable_prefix_args = command.prefix_args;
+            }
+            Err(error) => {
+                config.executable = unresolved_codex_executable_path();
+                config.executable_resolution_error = Some(error.to_string());
+            }
+        }
+        config
     }
 
     fn from_response_timeout_secs_value(value: Option<&str>) -> Self {
@@ -100,8 +272,640 @@ impl AppServerConnectionConfig {
             return config;
         }
 
-        config.response_timeout = Duration::from_secs(seconds);
+        config.response_timeout = Duration::from_secs(seconds.min(MAX_RESPONSE_TIMEOUT_SECS));
         config
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_process(
+        mut self,
+        executable: impl Into<PathBuf>,
+        command_environment: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> Self {
+        self.executable = executable.into();
+        self.executable_prefix_args.clear();
+        self.executable_resolution_error = None;
+        self.command_environment = command_environment.into_iter().collect();
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_elevated_environment(mut self) -> Self {
+        self.shell_environment_inherit = ShellEnvironmentInherit::All;
+        self.process_environment_policy = ProcessEnvironmentPolicy::All;
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_api_key_auth(mut self) -> Self {
+        self.api_key_auth = true;
+        self
+    }
+
+    pub(super) fn environment_policy_summary(&self) -> String {
+        format!(
+            "process-env={}, api-key-auth={}, shell-env={}",
+            self.process_environment_policy.label(),
+            if self.api_key_auth {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            self.shell_environment_inherit.label()
+        )
+    }
+
+    pub(super) fn uses_full_process_environment(&self) -> bool {
+        self.process_environment_policy == ProcessEnvironmentPolicy::All
+    }
+
+    pub(super) fn uses_api_key_auth(&self) -> bool {
+        self.api_key_auth
+    }
+
+    fn ensure_executable_is_pinned(&self) -> Result<()> {
+        if let Some(error) = &self.executable_resolution_error {
+            bail!("Codex executable could not be pinned safely at startup: {error}")
+        }
+        if !self.executable.is_absolute() && !cfg!(test) {
+            bail!("Codex executable pin is not an absolute path")
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn unresolved_codex_executable_path() -> PathBuf {
+    PathBuf::from("/__akra_unresolved_codex_executable__")
+}
+
+#[cfg(windows)]
+fn unresolved_codex_executable_path() -> PathBuf {
+    PathBuf::from(r"C:\__akra_unresolved_codex_executable__.exe")
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ShellEnvironmentInherit {
+    None,
+    #[default]
+    Core,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ProcessEnvironmentPolicy {
+    #[default]
+    Scrubbed,
+    All,
+}
+
+impl ProcessEnvironmentPolicy {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Scrubbed => "scrubbed",
+            Self::All => "all",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProcessEnvironmentResolution {
+    policy: ProcessEnvironmentPolicy,
+    warning: Option<String>,
+}
+
+fn resolve_process_environment(value: Option<&str>) -> ProcessEnvironmentResolution {
+    match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        None | Some("scrubbed") => ProcessEnvironmentResolution {
+            policy: ProcessEnvironmentPolicy::Scrubbed,
+            warning: None,
+        },
+        Some("all") => ProcessEnvironmentResolution {
+            policy: ProcessEnvironmentPolicy::All,
+            warning: Some(format!(
+                "{PROCESS_ENVIRONMENT_ENV_VAR}=all explicitly exposes the complete parent environment, including credentials, to the app-server process"
+            )),
+        },
+        Some(_) => ProcessEnvironmentResolution {
+            policy: ProcessEnvironmentPolicy::Scrubbed,
+            warning: Some(format!(
+                "invalid {PROCESS_ENVIRONMENT_ENV_VAR}; expected scrubbed or all; using scrubbed"
+            )),
+        },
+    }
+}
+
+fn configured_process_environment_policy() -> ProcessEnvironmentPolicy {
+    let resolution =
+        resolve_process_environment(std::env::var(PROCESS_ENVIRONMENT_ENV_VAR).ok().as_deref());
+    if let Some(warning) = resolution.warning {
+        eprintln!("warning: {warning}");
+        tracing::warn!(warning = %warning, "invalid app-server process environment policy");
+    }
+    resolution.policy
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ApiKeyAuthResolution {
+    enabled: bool,
+    warning: Option<String>,
+}
+
+fn resolve_api_key_auth(value: Option<&OsStr>) -> ApiKeyAuthResolution {
+    match value {
+        None => ApiKeyAuthResolution {
+            enabled: false,
+            warning: None,
+        },
+        Some(value) if value == "1" => ApiKeyAuthResolution {
+            enabled: true,
+            warning: None,
+        },
+        Some(_) => ApiKeyAuthResolution {
+            enabled: false,
+            warning: Some(format!(
+                "invalid {API_KEY_AUTH_ENV_VAR}; expected exact value 1; API-key forwarding remains disabled"
+            )),
+        },
+    }
+}
+
+fn configured_api_key_auth() -> bool {
+    let value = std::env::var_os(API_KEY_AUTH_ENV_VAR);
+    let resolution = resolve_api_key_auth(value.as_deref());
+    if let Some(warning) = resolution.warning {
+        eprintln!("warning: {warning}");
+        tracing::warn!(warning = %warning, "invalid app-server API-key auth policy");
+    }
+    resolution.enabled
+}
+
+fn app_server_process_environment_variable_allowed(key: &OsString) -> bool {
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    app_server_process_environment_key_allowed(key, cfg!(windows))
+}
+
+fn app_server_api_key_environment_variable_allowed(key: &OsString) -> bool {
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    if cfg!(windows) {
+        APP_SERVER_API_KEY_ENV_VARS
+            .iter()
+            .any(|allowed| key.eq_ignore_ascii_case(allowed))
+    } else {
+        APP_SERVER_API_KEY_ENV_VARS.contains(&key)
+    }
+}
+
+fn app_server_process_environment_key_allowed(key: &str, ascii_case_insensitive: bool) -> bool {
+    if ascii_case_insensitive {
+        key.eq_ignore_ascii_case("LANG")
+            || key
+                .get(..3)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("LC_"))
+            || APP_SERVER_PROCESS_ENVIRONMENT_ALLOWLIST
+                .iter()
+                .any(|allowed| key.eq_ignore_ascii_case(allowed))
+    } else {
+        key == "LANG"
+            || key.starts_with("LC_")
+            || APP_SERVER_PROCESS_ENVIRONMENT_ALLOWLIST.contains(&key)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct FilteredProcessEnvironment {
+    variables: Vec<(OsString, OsString)>,
+    dropped_credential_variables: Vec<&'static str>,
+}
+
+fn filtered_app_server_process_environment(
+    environment: impl IntoIterator<Item = (OsString, OsString)>,
+    api_key_auth: bool,
+) -> FilteredProcessEnvironment {
+    let mut variables = Vec::new();
+    let mut dropped_credential_variables = Vec::new();
+    for (key, value) in environment {
+        if !(app_server_process_environment_variable_allowed(&key)
+            || api_key_auth && app_server_api_key_environment_variable_allowed(&key))
+        {
+            continue;
+        }
+        if let Some(proxy_variable) = canonical_proxy_environment_key(&key)
+            && proxy_environment_value_is_unsafe(&value)
+        {
+            if !dropped_credential_variables.contains(&proxy_variable) {
+                dropped_credential_variables.push(proxy_variable);
+            }
+            continue;
+        }
+        if key
+            .to_str()
+            .is_some_and(|key| key.eq_ignore_ascii_case("OPENAI_BASE_URL"))
+            && openai_base_url_is_unsafe(&value)
+        {
+            if !dropped_credential_variables.contains(&"OPENAI_BASE_URL") {
+                dropped_credential_variables.push("OPENAI_BASE_URL");
+            }
+            continue;
+        }
+        variables.push((key, value));
+    }
+    FilteredProcessEnvironment {
+        variables,
+        dropped_credential_variables,
+    }
+}
+
+fn canonical_proxy_environment_key(key: &OsString) -> Option<&'static str> {
+    let key = key.to_str()?;
+    ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]
+        .into_iter()
+        .find(|candidate| key.eq_ignore_ascii_case(candidate))
+}
+
+fn proxy_environment_value_is_unsafe(value: &OsString) -> bool {
+    value
+        .to_str()
+        .is_none_or(|value| proxy_url_has_userinfo(value).unwrap_or(true))
+}
+
+fn openai_base_url_is_unsafe(value: &OsString) -> bool {
+    value.to_str().is_none_or(|value| {
+        let Some((scheme, _)) = value.split_once("://") else {
+            return true;
+        };
+        !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+            || value.contains(['?', '#'])
+            || proxy_url_has_userinfo(value).unwrap_or(true)
+    })
+}
+
+fn proxy_url_has_userinfo(value: &str) -> std::result::Result<bool, ()> {
+    if value.is_empty()
+        || value.trim() != value
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte == b'\\')
+    {
+        return Err(());
+    }
+
+    let authority_and_suffix = if let Some((scheme, remainder)) = value.split_once("://") {
+        let mut scheme_bytes = scheme.bytes();
+        if !scheme_bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic())
+            || !scheme_bytes
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+        {
+            return Err(());
+        }
+        remainder
+    } else if let Some(remainder) = value.strip_prefix("//") {
+        remainder
+    } else {
+        value
+    };
+    let authority = authority_and_suffix
+        .split(['/', '?', '#'])
+        .next()
+        .ok_or(())?;
+    if authority.is_empty() {
+        return Err(());
+    }
+
+    let bytes = authority.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'@' => return Ok(true),
+            // Percent-encoded `@` is not RFC userinfo without a raw delimiter, but
+            // rejecting it avoids disagreement with permissive downstream parsers.
+            b'%' => {
+                let encoded = bytes.get(index + 1..index + 3).ok_or(())?;
+                if !encoded.iter().all(u8::is_ascii_hexdigit) {
+                    return Err(());
+                }
+                let decoded = u8::from_str_radix(std::str::from_utf8(encoded).map_err(|_| ())?, 16)
+                    .map_err(|_| ())?;
+                if decoded == b'@' {
+                    return Ok(true);
+                }
+                index += 2;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, suffix) = bracketed.split_once(']').ok_or(())?;
+        if host.is_empty()
+            || host.contains(['[', ']'])
+            || (!suffix.is_empty()
+                && (!suffix.starts_with(':')
+                    || suffix[1..].is_empty()
+                    || !suffix[1..].bytes().all(|byte| byte.is_ascii_digit())))
+        {
+            return Err(());
+        }
+    } else {
+        if authority.contains(['[', ']']) {
+            return Err(());
+        }
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        if host.is_empty()
+            || host.contains(':')
+            || port.is_some_and(|port| {
+                port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        {
+            return Err(());
+        }
+    }
+    Ok(false)
+}
+
+impl ShellEnvironmentInherit {
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Core => "core",
+            Self::All => "all",
+        }
+    }
+
+    fn codex_override(self) -> String {
+        format!("shell_environment_policy.inherit=\"{}\"", self.label())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ShellEnvironmentInheritResolution {
+    inherit: ShellEnvironmentInherit,
+    warning: Option<String>,
+}
+
+fn resolve_shell_environment_inherit(value: Option<&str>) -> ShellEnvironmentInheritResolution {
+    let normalized = value.map(str::trim).map(str::to_ascii_lowercase);
+    let inherit = match normalized.as_deref() {
+        None => ShellEnvironmentInherit::Core,
+        Some("none") => ShellEnvironmentInherit::None,
+        Some("core") => ShellEnvironmentInherit::Core,
+        Some("all") => ShellEnvironmentInherit::All,
+        Some(_) => {
+            return ShellEnvironmentInheritResolution {
+                inherit: ShellEnvironmentInherit::Core,
+                warning: Some(format!(
+                    "invalid {SHELL_ENVIRONMENT_INHERIT_ENV_VAR}; expected none, core, or all; using core"
+                )),
+            };
+        }
+    };
+
+    ShellEnvironmentInheritResolution {
+        inherit,
+        warning: None,
+    }
+}
+
+fn configured_shell_environment_inherit() -> ShellEnvironmentInherit {
+    let resolution = resolve_shell_environment_inherit(
+        std::env::var(SHELL_ENVIRONMENT_INHERIT_ENV_VAR)
+            .ok()
+            .as_deref(),
+    );
+    if let Some(warning) = resolution.warning {
+        // This runs before the TUI is fully attached, so stderr keeps configuration errors visible.
+        eprintln!("warning: {warning}");
+        tracing::warn!(warning = %warning, "invalid app-server shell environment policy");
+    }
+    resolution.inherit
+}
+
+fn app_server_command(config: &AppServerConnectionConfig) -> Command {
+    app_server_command_with_environment(
+        config,
+        config.shell_environment_inherit,
+        config.process_environment_policy,
+        std::env::vars_os(),
+    )
+}
+
+fn app_server_command_with_environment(
+    config: &AppServerConnectionConfig,
+    inherit: ShellEnvironmentInherit,
+    process_environment_policy: ProcessEnvironmentPolicy,
+    process_environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Command {
+    /*
+     * The app-server process uses the existing Codex login stored under HOME/CODEX_HOME by
+     * default. An exact API-key-auth opt-in copies only the two supported auth keys into this
+     * child process. Pin the upstream shell policy to the platform's core variables and keep
+     * Codex's default KEY/SECRET/TOKEN exclusions active so those credentials are not projected
+     * into generated tools. Login shells stay disabled because profile scripts can reintroduce
+     * variables after that policy has built the initial tool environment.
+     */
+    let mut command = Command::new(&config.executable);
+    command.args(&config.executable_prefix_args);
+    if process_environment_policy == ProcessEnvironmentPolicy::Scrubbed {
+        let filtered =
+            filtered_app_server_process_environment(process_environment, config.api_key_auth);
+        for environment_variable in filtered.dropped_credential_variables {
+            let warning = format!(
+                "scrubbed app-server process environment dropped unsafe or credential-bearing {environment_variable}; URL details were redacted"
+            );
+            eprintln!("warning: {warning}");
+            tracing::warn!(
+                environment_variable,
+                "unsafe app-server URL environment was dropped"
+            );
+        }
+        command.env_clear().envs(filtered.variables);
+    }
+    command
+        .arg("app-server")
+        .arg("-c")
+        .arg(inherit.codex_override())
+        .arg("-c")
+        .arg(SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE)
+        .arg("-c")
+        .arg(DISABLE_LOGIN_SHELL_OVERRIDE)
+        .envs(config.command_environment.iter().cloned());
+    command
+}
+
+fn approval_denied_notice(method: &str, reason: &str) -> String {
+    format!("app-server approval request `{method}` declined ({reason})")
+}
+
+fn declined_approval_result(method: &str) -> Value {
+    if method == "item/permissions/requestApproval" {
+        json!({ "permissions": {}, "scope": "turn" })
+    } else {
+        json!({ "decision": "decline" })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AppServerApprovalMode {
+    Interactive,
+    Unattended,
+}
+
+#[derive(Clone, Copy)]
+struct ApprovalInterruptContext<'a> {
+    signal: &'a AppServerTurnInterruptSignal,
+    observed_generation: u64,
+}
+
+#[derive(Clone, Copy)]
+struct RequestInterruptContext<'a> {
+    signal: &'a AppServerTurnInterruptSignal,
+    observed_generation: u64,
+    method: &'a str,
+}
+
+#[derive(Clone, Copy)]
+struct BoundApprovalContext<'a> {
+    thread_id: &'a str,
+    turn_id: &'a str,
+    interrupt: ApprovalInterruptContext<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponseWaitFailureKind {
+    // A matching JSON-RPC error proves that the peer consumed this exact request,
+    // so a bounded retry cannot be confused with a late response from the prior id.
+    ExplicitRemoteError,
+    // Timeout, transport, framing, and local serialization failures leave request
+    // consumption ambiguous. The connection must not be reused for cancellation.
+    CorrelationUnknown,
+}
+
+#[derive(Debug)]
+struct ResponseWaitFailure {
+    kind: ResponseWaitFailureKind,
+    error: anyhow::Error,
+}
+
+impl ResponseWaitFailure {
+    fn correlation_unknown(error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            kind: ResponseWaitFailureKind::CorrelationUnknown,
+            error: error.into(),
+        }
+    }
+
+    fn explicit_remote_error(error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            kind: ResponseWaitFailureKind::ExplicitRemoteError,
+            error: error.into(),
+        }
+    }
+
+    fn into_error(self) -> anyhow::Error {
+        self.error
+    }
+}
+
+#[derive(Default)]
+struct TransportFailure {
+    message: Mutex<Option<String>>,
+}
+
+struct AppServerWriteRequest {
+    frame: Vec<u8>,
+    acknowledgement: SyncSender<std::result::Result<(), String>>,
+}
+
+struct AppServerStdinWriter {
+    sender: Option<SyncSender<AppServerWriteRequest>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl AppServerStdinWriter {
+    fn spawn(mut stdin: ChildStdin, transport_failure: Arc<TransportFailure>) -> Self {
+        let (sender, receiver) =
+            mpsc::sync_channel::<AppServerWriteRequest>(APP_SERVER_WRITE_CHANNEL_CAPACITY);
+        let worker = thread::spawn(move || {
+            while let Ok(request) = receiver.recv() {
+                let result = stdin
+                    .write_all(&request.frame)
+                    .and_then(|()| stdin.flush())
+                    .map_err(|error| {
+                        format!(
+                            "failed to write a bounded JSON-RPC frame to app-server stdin: {error}"
+                        )
+                    });
+                if let Err(message) = &result {
+                    transport_failure.record(message.clone());
+                }
+                let failed = result.is_err();
+                let _ = request.acknowledgement.send(result);
+                if failed {
+                    return;
+                }
+            }
+        });
+        Self {
+            sender: Some(sender),
+            worker: Some(worker),
+        }
+    }
+
+    fn try_send(
+        &self,
+        request: AppServerWriteRequest,
+    ) -> std::result::Result<(), TrySendError<AppServerWriteRequest>> {
+        let Some(sender) = self.sender.as_ref() else {
+            return Err(TrySendError::Disconnected(request));
+        };
+        sender.try_send(request)
+    }
+
+    fn shutdown(&mut self) {
+        self.sender.take();
+        if let Some(worker) = self.worker.take() {
+            let deadline = Instant::now() + APP_SERVER_WRITER_SHUTDOWN_TIMEOUT;
+            while !worker.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            if worker.is_finished() {
+                let _ = worker.join();
+            } else {
+                tracing::warn!(
+                    timeout_ms = APP_SERVER_WRITER_SHUTDOWN_TIMEOUT.as_millis(),
+                    "detaching an app-server stdin writer that did not exit after process termination"
+                );
+            }
+        }
+    }
+}
+
+impl TransportFailure {
+    fn record(&self, message: impl Into<String>) {
+        let mut stored = self
+            .message
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if stored.is_none() {
+            *stored = Some(message.into());
+        }
+    }
+
+    fn current(&self) -> Option<String> {
+        self.message
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -111,9 +915,10 @@ pub(super) struct AppServerConnection {
      * threads. The mpsc receiver is therefore the single place where response lines, stream notifications, and
      * stderr diagnostics are serialized back into request/stream control flow.
      */
-    child: Child,
-    stdin: ChildStdin,
+    child: ManagedChild,
+    stdin_writer: AppServerStdinWriter,
     rx: Receiver<AppServerLine>,
+    transport_failure: Arc<TransportFailure>,
     diagnostics: ConnectionDiagnostics,
     // Notifications observed while waiting for a normal response are buffered until the active turn stream can consume them.
     pending_notifications: PendingNotifications,
@@ -122,6 +927,9 @@ pub(super) struct AppServerConnection {
     client_version: String,
     initialized: bool,
     config: AppServerConnectionConfig,
+    approval_broker: Arc<AppServerApprovalBroker>,
+    approval_mode: AppServerApprovalMode,
+    interrupt_signal: AppServerTurnInterruptSignal,
 }
 
 impl AppServerConnection {
@@ -129,41 +937,61 @@ impl AppServerConnection {
         client_name: String,
         client_version: String,
         config: AppServerConnectionConfig,
+        approval_broker: Arc<AppServerApprovalBroker>,
+        approval_mode: AppServerApprovalMode,
+        interrupt_signal: AppServerTurnInterruptSignal,
     ) -> Result<Self> {
         /*
          * stdin/stdout/stderr를 모두 piped로 열어야 app-server와 line protocol을 주고받을 수 있다.
          * stdout/stderr는 blocking read가 필요하므로 reader thread가 mpsc sender로 AppServerLine을 넘기고,
          * 이 connection object는 request id matching과 stream notification reduction만 수행한다.
          */
-        let mut child = Command::new("codex")
-            .arg("app-server")
+        config.ensure_executable_is_pinned()?;
+        let mut command = app_server_command(&config);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("failed to spawn `codex app-server`")?;
+            .stderr(Stdio::piped());
+        let mut child = subprocess::spawn(&mut command).with_context(|| {
+            format!(
+                "failed to spawn `{} app-server`",
+                config.executable.display()
+            )
+        })?;
 
         let stdin = child
-            .stdin
-            .take()
+            .take_stdin()
             .context("failed to take app-server stdin")?;
         let stdout = child
-            .stdout
-            .take()
+            .take_stdout()
             .context("failed to take app-server stdout")?;
         let stderr = child
-            .stderr
-            .take()
+            .take_stderr()
             .context("failed to take app-server stderr")?;
 
-        let (tx, rx) = mpsc::channel();
-        spawn_pipe_reader(stdout, tx.clone(), false);
-        spawn_pipe_reader(stderr, tx, true);
+        let transport_failure = Arc::new(TransportFailure::default());
+        let stdin_writer = AppServerStdinWriter::spawn(stdin, transport_failure.clone());
+        let (tx, rx) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        spawn_pipe_reader(
+            stdout,
+            tx.clone(),
+            false,
+            MAX_STDOUT_LINE_BYTES,
+            transport_failure.clone(),
+        );
+        spawn_pipe_reader(
+            stderr,
+            tx,
+            true,
+            MAX_STDERR_LINE_BYTES,
+            transport_failure.clone(),
+        );
 
         Ok(Self {
             child,
-            stdin,
+            stdin_writer,
             rx,
+            transport_failure,
             diagnostics: ConnectionDiagnostics::default(),
             pending_notifications: PendingNotifications::default(),
             next_request_id: 1,
@@ -171,10 +999,14 @@ impl AppServerConnection {
             client_version,
             initialized: false,
             config,
+            approval_broker,
+            approval_mode,
+            interrupt_signal,
         })
     }
 
     pub(super) fn is_alive(&mut self) -> Result<bool> {
+        self.ensure_transport_healthy()?;
         Ok(self.child.try_wait()?.is_none())
     }
 
@@ -207,13 +1039,27 @@ impl AppServerConnection {
         self.send_request("account/read", json!({}))
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, params),
+        fields(
+            limit = ?params.limit,
+            archived = ?params.archived,
+            has_cwd = params.cwd.is_some(),
+            has_search_term = params.search_term.is_some(),
+            source_kind_count = params.source_kinds.as_ref().map_or(0, Vec::len),
+        )
+    )]
     pub(super) fn list_threads(&mut self, params: ThreadListParams) -> Result<ThreadListResponse> {
         self.ensure_initialized()?;
         self.send_request("thread/list", serde_json::to_value(params)?)
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, thread_id),
+        fields(include_turns = include_turns)
+    )]
     pub(super) fn read_thread(
         &mut self,
         thread_id: &str,
@@ -229,7 +1075,7 @@ impl AppServerConnection {
         )
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, params))]
     pub(super) fn start_thread(
         &mut self,
         params: ThreadStartParams,
@@ -238,7 +1084,15 @@ impl AppServerConnection {
         self.send_request("thread/start", serde_json::to_value(params)?)
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, params),
+        fields(
+            has_approval_policy = params.approval_policy.is_some(),
+            has_reviewer = params.approvals_reviewer.is_some(),
+            has_sandbox = params.sandbox.is_some(),
+        )
+    )]
     pub(super) fn resume_thread(
         &mut self,
         params: ThreadResumeParams,
@@ -247,7 +1101,7 @@ impl AppServerConnection {
         self.send_request("thread/resume", serde_json::to_value(params)?)
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, thread_id))]
     pub(super) fn archive_thread(&mut self, thread_id: &str) -> Result<()> {
         self.ensure_initialized()?;
         let _: Value = self.send_request(
@@ -259,13 +1113,35 @@ impl AppServerConnection {
         Ok(())
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, params))]
+    #[cfg(test)]
     pub(super) fn start_turn(&mut self, params: TurnStartParams) -> Result<TurnStartResponse> {
         self.ensure_initialized()?;
         self.send_request("turn/start", serde_json::to_value(params)?)
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, params, event_sender, interrupt_signal))]
+    pub(super) fn start_turn_with_event_sender(
+        &mut self,
+        params: TurnStartParams,
+        event_sender: &dyn AppServerEventSender,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+    ) -> Result<TurnStartResponse> {
+        self.ensure_initialized()?;
+        self.send_request_with_event_sender_and_interrupt(
+            "turn/start",
+            serde_json::to_value(params)?,
+            event_sender,
+            ApprovalInterruptContext {
+                signal: interrupt_signal,
+                observed_generation: observed_interrupt_generation,
+            },
+        )
+    }
+
+    #[tracing::instrument(level = "trace", skip(self, params))]
+    #[cfg(test)]
     pub(super) fn interrupt_turn(
         &mut self,
         params: TurnInterruptParams,
@@ -274,13 +1150,32 @@ impl AppServerConnection {
         self.send_request("turn/interrupt", serde_json::to_value(params)?)
     }
 
+    fn interrupt_turn_with_event_sender_classified(
+        &mut self,
+        params: TurnInterruptParams,
+        event_sender: &dyn AppServerEventSender,
+        approval_context: BoundApprovalContext<'_>,
+        response_timeout: Duration,
+    ) -> std::result::Result<TurnInterruptResponse, ResponseWaitFailure> {
+        self.ensure_initialized()
+            .map_err(ResponseWaitFailure::correlation_unknown)?;
+        self.send_request_with_approval_context_classified(
+            "turn/interrupt",
+            serde_json::to_value(params).map_err(ResponseWaitFailure::correlation_unknown)?,
+            Some(event_sender),
+            Some(approval_context),
+            None,
+            response_timeout,
+        )
+    }
+
     pub(super) fn wait_for_turn_stream(
         &mut self,
         thread_id: &str,
         turn_id: &str,
         interrupt_signal: &AppServerTurnInterruptSignal,
         observed_interrupt_generation: u64,
-        event_sender: &Sender<ConversationStreamEvent>,
+        event_sender: &dyn AppServerEventSender,
     ) -> Result<()> {
         /*
          * Turn streaming interleaves three input sources: child process exit, global interrupt generation, and
@@ -289,22 +1184,36 @@ impl AppServerConnection {
          */
         let mut changed_planning_file_paths = Vec::new();
         let mut interrupt_sent = false;
+        let mut interrupt_completion_deadline = None;
+        let mut last_interrupt_generation_attempted = observed_interrupt_generation;
 
         loop {
+            self.ensure_transport_healthy()?;
             if let Some(status) = self.child.try_wait()? {
                 return Err(self.error_with_diagnostics(format!(
                     "app-server exited before the turn completed: {status}"
                 )));
             }
 
-            if !interrupt_sent && interrupt_signal.requested_after(observed_interrupt_generation) {
+            let interrupt_generation = interrupt_signal.current_generation();
+            if !interrupt_sent
+                && interrupt_generation > observed_interrupt_generation
+                && interrupt_generation > last_interrupt_generation_attempted
+            {
                 /*
                  * The interrupt signal is process-wide, while this loop owns exactly one
                  * active turn. After translating the first newer generation into
                  * `turn/interrupt`, later increments are left as UI intent instead of
                  * repeatedly sending the same app-server method for this turn id.
                  */
-                self.interrupt_active_turn(thread_id, turn_id, event_sender);
+                last_interrupt_generation_attempted = interrupt_generation;
+                interrupt_completion_deadline = Some(self.interrupt_active_turn(
+                    thread_id,
+                    turn_id,
+                    event_sender,
+                    interrupt_signal,
+                    observed_interrupt_generation,
+                )?);
                 interrupt_sent = true;
             }
 
@@ -317,10 +1226,39 @@ impl AppServerConnection {
                 return Ok(());
             }
 
-            match self.rx.recv_timeout(self.config.poll_interval) {
+            if interrupt_completion_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let message = "app-server acknowledged the stop request but did not terminate the active turn within the bounded interrupt deadline; terminating the active app-server process tree";
+                return Err(self.fail_closed_interrupt(event_sender, message));
+            }
+
+            let receive_timeout = interrupt_completion_deadline
+                .map(|deadline| {
+                    self.config
+                        .poll_interval
+                        .min(deadline.saturating_duration_since(Instant::now()))
+                })
+                .unwrap_or(self.config.poll_interval);
+            let received = self.rx.recv_timeout(receive_timeout);
+            self.ensure_transport_healthy()?;
+            match received {
                 Ok(AppServerLine::Stderr(line)) => self.diagnostics.record_stderr(line),
                 Ok(AppServerLine::Stdout(line)) => {
                     let value = self.parse_json_line(&line)?;
+
+                    if self.handle_server_request(
+                        &value,
+                        Some(event_sender),
+                        Some(BoundApprovalContext {
+                            thread_id,
+                            turn_id,
+                            interrupt: ApprovalInterruptContext {
+                                signal: interrupt_signal,
+                                observed_generation: observed_interrupt_generation,
+                            },
+                        }),
+                    )? {
+                        continue;
+                    }
 
                     if let Some(notification) = AppServerNotification::from_value(value) {
                         if self.handle_turn_stream_notification(
@@ -353,26 +1291,79 @@ impl AppServerConnection {
         &mut self,
         thread_id: &str,
         turn_id: &str,
-        event_sender: &Sender<ConversationStreamEvent>,
-    ) {
+        event_sender: &dyn AppServerEventSender,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+    ) -> Result<Instant> {
         /*
-         * Interrupt failure is warning-level because the stream is still authoritative.
-         * app-server may complete, fail, or close the turn naturally after the UI asks
-         * for stop, so this method reports status without taking over stream outcome.
+         * An explicit stop is authoritative. A matching remote error may be retried
+         * inside one short total deadline, but timeout/framing/transport failures make
+         * JSON-RPC correlation ambiguous and therefore close the whole connection.
          */
-        match self.interrupt_turn(TurnInterruptParams {
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
-        }) {
-            Ok(_) => {
-                let _ = event_sender.send(ConversationStreamEvent::StatusUpdated {
-                    text: "stop requested / app-server interrupt sent".to_string(),
-                });
+        let retry_limit = self.config.interrupt_retry_limit.max(1);
+        let interrupt_deadline = Instant::now() + self.config.interrupt_total_timeout;
+        for attempt in 1..=retry_limit {
+            let now = Instant::now();
+            if now >= interrupt_deadline {
+                break;
             }
-            Err(error) => self.diagnostics.record_warning(format!(
-                "stop requested but app-server interrupt failed for turn `{turn_id}`: {error}"
-            )),
+            let remaining_timeout = interrupt_deadline.saturating_duration_since(now);
+            match self.interrupt_turn_with_event_sender_classified(
+                TurnInterruptParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                },
+                event_sender,
+                BoundApprovalContext {
+                    thread_id,
+                    turn_id,
+                    interrupt: ApprovalInterruptContext {
+                        signal: interrupt_signal,
+                        observed_generation: observed_interrupt_generation,
+                    },
+                },
+                remaining_timeout,
+            ) {
+                Ok(_) => {
+                    let _ = event_sender.send(ConversationStreamEvent::StatusUpdated {
+                        text: "stop requested / app-server interrupt sent".to_string(),
+                    });
+                    return Ok(interrupt_deadline);
+                }
+                Err(failure) => {
+                    self.diagnostics.record_warning(format!(
+                        "app-server interrupt attempt {attempt}/{retry_limit} failed for active turn (error_chars={}, chain_depth={})",
+                        failure.error.to_string().chars().count(),
+                        failure.error.chain().count()
+                    ));
+                    if failure.kind == ResponseWaitFailureKind::CorrelationUnknown {
+                        break;
+                    }
+                    if attempt < retry_limit && Instant::now() < interrupt_deadline {
+                        let multiplier = u32::try_from(attempt).unwrap_or(u32::MAX);
+                        let retry_delay = self
+                            .config
+                            .interrupt_retry_backoff
+                            .saturating_mul(multiplier)
+                            .min(interrupt_deadline.saturating_duration_since(Instant::now()));
+                        thread::sleep(retry_delay);
+                    }
+                }
+            }
         }
+        let message = "stop request failed within the bounded app-server interrupt deadline; terminating the active app-server process tree";
+        Err(self.fail_closed_interrupt(event_sender, message))
+    }
+
+    fn fail_closed_interrupt(
+        &mut self,
+        event_sender: &dyn AppServerEventSender,
+        message: &str,
+    ) -> anyhow::Error {
+        let _ = event_sender.send(ConversationStreamEvent::TurnInterruptRequestFailed {
+            message: message.to_string(),
+        });
+        self.fail_transport(message)
     }
 
     pub(super) fn take_warnings(&mut self) -> Vec<String> {
@@ -400,6 +1391,87 @@ impl AppServerConnection {
     where
         T: DeserializeOwned,
     {
+        self.send_request_with_event_sender(method, params, None)
+    }
+
+    fn send_request_with_event_sender<T>(
+        &mut self,
+        method: &str,
+        params: Value,
+        event_sender: Option<&dyn AppServerEventSender>,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        self.send_request_with_approval_context(method, params, event_sender, None)
+    }
+
+    fn send_request_with_event_sender_and_interrupt<T>(
+        &mut self,
+        method: &str,
+        params: Value,
+        event_sender: &dyn AppServerEventSender,
+        interrupt_context: ApprovalInterruptContext<'_>,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let response_timeout = self.config.response_timeout;
+        self.send_request_with_approval_context_classified(
+            method,
+            params,
+            Some(event_sender),
+            None,
+            Some(RequestInterruptContext {
+                signal: interrupt_context.signal,
+                observed_generation: interrupt_context.observed_generation,
+                method,
+            }),
+            response_timeout,
+        )
+        .map_err(ResponseWaitFailure::into_error)
+    }
+
+    fn send_request_with_approval_context<T>(
+        &mut self,
+        method: &str,
+        params: Value,
+        event_sender: Option<&dyn AppServerEventSender>,
+        approval_context: Option<BoundApprovalContext<'_>>,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let response_timeout = self.config.response_timeout;
+        let interrupt_signal = self.interrupt_signal.clone();
+        let observed_generation = interrupt_signal.current_generation();
+        self.send_request_with_approval_context_classified(
+            method,
+            params,
+            event_sender,
+            approval_context,
+            Some(RequestInterruptContext {
+                signal: &interrupt_signal,
+                observed_generation,
+                method,
+            }),
+            response_timeout,
+        )
+        .map_err(ResponseWaitFailure::into_error)
+    }
+
+    fn send_request_with_approval_context_classified<T>(
+        &mut self,
+        method: &str,
+        params: Value,
+        event_sender: Option<&dyn AppServerEventSender>,
+        approval_context: Option<BoundApprovalContext<'_>>,
+        response_interrupt_context: Option<RequestInterruptContext<'_>>,
+        response_timeout: Duration,
+    ) -> std::result::Result<T, ResponseWaitFailure>
+    where
+        T: DeserializeOwned,
+    {
         /*
          * Request ids are connection-local because one child process owns one JSON-RPC
          * sequence. Keeping them monotonic lets response wait detect stale or
@@ -409,15 +1481,28 @@ impl AppServerConnection {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
 
-        self.send_json_line(json!({
-            "id": request_id,
-            "method": method,
-            "params": params,
-        }))?;
+        self.send_json_line_with_timeout(
+            json!({
+                "id": request_id,
+                "method": method,
+                "params": params,
+            }),
+            response_timeout,
+            response_interrupt_context,
+            event_sender,
+        )
+        .map_err(ResponseWaitFailure::correlation_unknown)?;
 
-        let response_value = self.wait_for_response(request_id)?;
+        let response_value = self.wait_for_response_with_event_sender_classified(
+            request_id,
+            event_sender,
+            approval_context,
+            response_interrupt_context,
+            response_timeout,
+        )?;
         serde_json::from_value(response_value)
             .with_context(|| format!("failed to deserialize app-server response for `{method}`"))
+            .map_err(ResponseWaitFailure::correlation_unknown)
     }
 
     fn send_notification(&mut self, method: &str, params: Value) -> Result<()> {
@@ -428,42 +1513,195 @@ impl AppServerConnection {
     }
 
     fn send_json_line(&mut self, value: Value) -> Result<()> {
-        /*
-         * app-server speaks newline-delimited JSON over stdio, not a framed socket.
-         * The explicit flush is part of the transport contract: without it, a request
-         * can sit in the parent process buffer while the caller waits for a response
-         * that the child has not been allowed to observe.
-         */
-        writeln!(self.stdin, "{}", serde_json::to_string(&value)?)?;
-        self.stdin.flush()?;
-        Ok(())
+        self.send_json_line_with_timeout(value, self.config.response_timeout, None, None)
     }
 
+    fn send_json_line_with_timeout(
+        &mut self,
+        value: Value,
+        timeout: Duration,
+        interrupt_context: Option<RequestInterruptContext<'_>>,
+        event_sender: Option<&dyn AppServerEventSender>,
+    ) -> Result<()> {
+        /*
+         * app-server speaks newline-delimited JSON over stdio, not a framed socket.
+         * A dedicated writer owns ChildStdin so a peer that stops reading cannot pin
+         * the control thread inside a blocking OS write. Every frame has one bounded
+         * acknowledgement; timeout, stop, queue saturation, or writer failure poisons
+         * the connection and terminates the child before returning.
+         */
+        self.ensure_transport_healthy()?;
+        let mut frame = serde_json::to_vec(&value)?;
+        frame.push(b'\n');
+        if frame.len() > MAX_APP_SERVER_WRITE_FRAME_BYTES {
+            return Err(self.fail_transport(format!(
+                "app-server JSON-RPC write frame exceeded the {MAX_APP_SERVER_WRITE_FRAME_BYTES}-byte limit"
+            )));
+        }
+        let (acknowledgement, receiver) = mpsc::sync_channel(1);
+        match self.stdin_writer.try_send(AppServerWriteRequest {
+            frame,
+            acknowledgement,
+        }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                return Err(self.fail_transport(
+                    "app-server stdin writer queue remained occupied by an unacknowledged frame",
+                ));
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err(self.fail_transport("app-server stdin writer disconnected"));
+            }
+        }
+
+        let timeout = timeout.min(MAX_APP_SERVER_WRITE_ACK_TIMEOUT);
+        let started_at = Instant::now();
+        loop {
+            self.ensure_transport_healthy()?;
+            if interrupt_context
+                .is_some_and(|context| context.signal.requested_after(context.observed_generation))
+            {
+                let method = interrupt_context
+                    .map(|context| context.method)
+                    .unwrap_or("JSON-RPC request");
+                let message = format!(
+                    "stop requested while app-server was accepting `{method}`; terminating the active app-server process tree"
+                );
+                if let Some(event_sender) = event_sender {
+                    let _ =
+                        event_sender.send(ConversationStreamEvent::TurnInterruptRequestFailed {
+                            message: message.clone(),
+                        });
+                }
+                return Err(self.fail_transport(message));
+            }
+            let elapsed = started_at.elapsed();
+            if elapsed >= timeout {
+                return Err(self.fail_transport(format!(
+                    "timed out writing an app-server JSON-RPC frame after {}s",
+                    timeout.as_secs_f64()
+                )));
+            }
+            let wait = self
+                .config
+                .poll_interval
+                .min(timeout.saturating_sub(elapsed));
+            match receiver.recv_timeout(wait) {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(message)) => return Err(self.fail_transport(message)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(self.fail_transport(
+                        "app-server stdin writer closed without acknowledging the frame",
+                    ));
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn wait_for_response(&mut self, request_id: i64) -> Result<Value> {
+        self.wait_for_response_with_event_sender(request_id, None, None)
+    }
+
+    #[cfg(test)]
+    fn wait_for_response_with_event_sender(
+        &mut self,
+        request_id: i64,
+        event_sender: Option<&dyn AppServerEventSender>,
+        approval_context: Option<BoundApprovalContext<'_>>,
+    ) -> Result<Value> {
+        let response_timeout = self.config.response_timeout;
+        self.wait_for_response_with_event_sender_classified(
+            request_id,
+            event_sender,
+            approval_context,
+            None,
+            response_timeout,
+        )
+        .map_err(ResponseWaitFailure::into_error)
+    }
+
+    fn wait_for_response_with_event_sender_classified(
+        &mut self,
+        request_id: i64,
+        event_sender: Option<&dyn AppServerEventSender>,
+        approval_context: Option<BoundApprovalContext<'_>>,
+        response_interrupt_context: Option<RequestInterruptContext<'_>>,
+        response_timeout: Duration,
+    ) -> std::result::Result<Value, ResponseWaitFailure> {
         /*
          * Normal requests wait for exactly one matching response id. Notifications that arrive during this wait are
          * either downgraded to diagnostics or buffered for the turn stream if they are stream-owned methods.
          */
-        let deadline = Instant::now() + self.config.response_timeout;
+        let deadline = Instant::now() + response_timeout;
 
         loop {
+            self.ensure_transport_healthy()
+                .map_err(ResponseWaitFailure::correlation_unknown)?;
+            if response_interrupt_context
+                .is_some_and(|context| context.signal.requested_after(context.observed_generation))
+            {
+                let method = response_interrupt_context
+                    .map(|context| context.method)
+                    .unwrap_or("JSON-RPC request");
+                let message = format!(
+                    "stop requested before app-server acknowledged `{method}`; terminating the active app-server process tree"
+                );
+                if let Some(event_sender) = event_sender {
+                    let _ =
+                        event_sender.send(ConversationStreamEvent::TurnInterruptRequestFailed {
+                            message: message.clone(),
+                        });
+                }
+                return Err(ResponseWaitFailure::correlation_unknown(
+                    self.fail_transport(message),
+                ));
+            }
             if Instant::now() > deadline {
-                return Err(self.error_with_diagnostics(format!(
-                    "timed out waiting for app-server response id={request_id} after {}s",
-                    self.config.response_timeout.as_secs()
-                )));
+                return Err(ResponseWaitFailure::correlation_unknown(
+                    self.error_with_diagnostics(format!(
+                        "timed out waiting for app-server response id={request_id} after {}s",
+                        response_timeout.as_secs_f64()
+                    )),
+                ));
             }
 
-            if let Some(status) = self.child.try_wait()? {
-                return Err(self.error_with_diagnostics(format!(
-                    "app-server exited early with status {status}"
-                )));
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .map_err(ResponseWaitFailure::correlation_unknown)?
+            {
+                return Err(ResponseWaitFailure::correlation_unknown(
+                    self.error_with_diagnostics(format!(
+                        "app-server exited early with status {status}"
+                    )),
+                ));
             }
 
-            match self.rx.recv_timeout(self.config.poll_interval) {
+            let received = self.rx.recv_timeout(
+                self.config
+                    .poll_interval
+                    .min(deadline.saturating_duration_since(Instant::now())),
+            );
+            self.ensure_transport_healthy()
+                .map_err(ResponseWaitFailure::correlation_unknown)?;
+            match received {
                 Ok(AppServerLine::Stderr(line)) => self.diagnostics.record_stderr(line),
                 Ok(AppServerLine::Stdout(line)) => {
-                    let value = self.parse_json_line(&line)?;
+                    let value = self
+                        .parse_json_line(&line)
+                        .map_err(ResponseWaitFailure::correlation_unknown)?;
+
+                    if self
+                        .handle_server_request(&value, event_sender, approval_context)
+                        .map_err(ResponseWaitFailure::correlation_unknown)?
+                    {
+                        // Response waits never own interactive approvals. Rejected or
+                        // locally handled server requests therefore cannot extend the
+                        // enclosing request deadline indefinitely.
+                        continue;
+                    }
 
                     if let Some(response_id) = value.get("id").and_then(Value::as_i64) {
                         if response_id != request_id {
@@ -474,22 +1712,27 @@ impl AppServerConnection {
                         }
 
                         if let Some(error) = value.get("error") {
-                            return Err(self.error_with_diagnostics(format!(
-                                "app-server returned error for id {request_id}: {error}"
-                            )));
+                            return Err(ResponseWaitFailure::explicit_remote_error(
+                                self.error_with_diagnostics(format!(
+                                    "app-server returned error for id {request_id}: {error}"
+                                )),
+                            ));
                         }
 
                         if let Some(result) = value.get("result") {
                             return Ok(result.clone());
                         }
 
-                        return Err(self.error_with_diagnostics(format!(
-                            "app-server returned response id {request_id} without a result payload"
-                        )));
+                        return Err(ResponseWaitFailure::correlation_unknown(
+                            self.error_with_diagnostics(format!(
+                                "app-server returned response id {request_id} without a result payload"
+                            )),
+                        ));
                     }
 
                     if let Some(notification) = AppServerNotification::from_value(value) {
-                        self.handle_response_wait_notification(request_id, notification);
+                        self.handle_response_wait_notification(request_id, notification)
+                            .map_err(ResponseWaitFailure::correlation_unknown)?;
                         continue;
                     }
 
@@ -499,9 +1742,11 @@ impl AppServerConnection {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(self.error_with_diagnostics(format!(
-                        "app-server pipe closed while waiting for response id={request_id}"
-                    )));
+                    return Err(ResponseWaitFailure::correlation_unknown(
+                        self.error_with_diagnostics(format!(
+                            "app-server pipe closed while waiting for response id={request_id}"
+                        )),
+                    ));
                 }
             }
         }
@@ -511,20 +1756,502 @@ impl AppServerConnection {
         &mut self,
         request_id: i64,
         notification: AppServerNotification,
-    ) {
+    ) -> Result<()> {
         /*
          * Stream-owned notifications can legitimately race ahead of the `turn/start`
          * response. Buffering them preserves app-server arrival order across the
          * response-to-stream handoff instead of converting early deltas into warnings.
          */
         if notification.should_defer_to_turn_stream() {
-            self.pending_notifications.push(notification);
-            return;
+            return self.defer_turn_notification(notification);
         }
 
         self.diagnostics.record_warning(
             notification.warning_text(&format!("while waiting for response id={request_id}")),
         );
+        Ok(())
+    }
+
+    fn defer_turn_notification(&mut self, notification: AppServerNotification) -> Result<()> {
+        if self.pending_notifications.try_push(notification) {
+            return Ok(());
+        }
+
+        Err(self.fail_transport(format!(
+            "app-server exceeded the bounded pending turn-notification queue before the active stream could consume it (entries={MAX_PENDING_NOTIFICATIONS}, bytes={MAX_PENDING_NOTIFICATION_BYTES})"
+        )))
+    }
+
+    fn handle_server_request(
+        &mut self,
+        value: &Value,
+        event_sender: Option<&dyn AppServerEventSender>,
+        approval_context: Option<BoundApprovalContext<'_>>,
+    ) -> Result<bool> {
+        /*
+         * app-server is a bidirectional JSON-RPC peer. A message with both `id` and
+         * `method` is a request from the server, not a response to one of Akra's ids.
+         * Stable approval methods are routed through a one-shot broker. All other
+         * server requests remain explicit decline/error paths so a new upstream
+         * method can never inherit approval behavior accidentally.
+         */
+        let Some(request_id) = value.get("id").filter(|id| !id.is_null()) else {
+            return Ok(false);
+        };
+        let Some(method) = value.get("method").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+
+        match method {
+            method if INTERACTIVE_APPROVAL_METHODS.contains(&method) => {
+                self.handle_interactive_approval_request(
+                    request_id,
+                    method,
+                    value.get("params"),
+                    event_sender,
+                    approval_context,
+                )?;
+            }
+            method if UNINSPECTABLE_APPROVAL_METHODS.contains(&method) => {
+                self.send_rejected_server_request(
+                    json!({
+                        "id": request_id,
+                        "result": { "decision": "decline" },
+                    }),
+                    approval_denied_notice(
+                        method,
+                        "requested file changes and grant scope cannot be reviewed completely",
+                    ),
+                    event_sender,
+                )?;
+            }
+            method if EXPLICITLY_DECLINED_APPROVAL_METHODS.contains(&method) => {
+                self.send_rejected_server_request(
+                    json!({
+                    "id": request_id,
+                    "result": { "decision": "denied" },
+                    }),
+                    approval_denied_notice(method, "legacy approval protocol"),
+                    event_sender,
+                )?;
+            }
+            "item/tool/requestUserInput" => {
+                self.send_rejected_server_request(
+                    json!({ "id": request_id, "result": { "answers": {} } }),
+                    "app-server user-input request cancelled because Akra has no typed input form"
+                        .to_string(),
+                    event_sender,
+                )?;
+            }
+            "mcpServer/elicitation/request" => {
+                self.send_rejected_server_request(
+                    json!({ "id": request_id, "result": { "action": "decline" } }),
+                    "app-server MCP elicitation declined because Akra has no typed elicitation form"
+                        .to_string(),
+                    event_sender,
+                )?;
+            }
+            "currentTime/read" => {
+                let valid_thread_id = value
+                    .get("params")
+                    .and_then(Value::as_object)
+                    .and_then(|params| params.get("threadId"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|thread_id| {
+                        !thread_id.is_empty() && thread_id.chars().count() <= 256
+                    });
+                if valid_thread_id {
+                    let current_time_at = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |duration| {
+                            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+                        });
+                    self.send_json_line(json!({
+                        "id": request_id,
+                        "result": { "currentTimeAt": current_time_at },
+                    }))?;
+                } else {
+                    self.send_rejected_server_request(
+                        json!({
+                            "id": request_id,
+                            "error": {
+                                "code": -32602,
+                                "message": "currentTime/read requires a bounded threadId",
+                            }
+                        }),
+                        "app-server current-time request rejected because its params were invalid"
+                            .to_string(),
+                        event_sender,
+                    )?;
+                }
+            }
+            "item/tool/call" => {
+                self.send_method_specific_unsupported(
+                    request_id,
+                    method,
+                    "dynamic tool calls are not implemented by this client",
+                    event_sender,
+                )?;
+            }
+            "account/chatgptAuthTokens/refresh" => {
+                self.send_method_specific_unsupported(
+                    request_id,
+                    method,
+                    "ChatGPT auth-token refresh is owned by the Codex runtime",
+                    event_sender,
+                )?;
+            }
+            "attestation/generate" => {
+                self.send_method_specific_unsupported(
+                    request_id,
+                    method,
+                    "client attestation generation is not configured",
+                    event_sender,
+                )?;
+            }
+            _ => {
+                self.send_rejected_server_request(
+                    json!({
+                    "id": request_id,
+                    "error": {
+                        "code": -32601,
+                        "message": "server request is not supported by the Akra app-server client",
+                    },
+                    }),
+                    format!(
+                        "app-server server request `{method}` rejected because Akra does not support it"
+                    ),
+                    event_sender,
+                )?;
+            }
+        }
+        Ok(true)
+    }
+
+    fn send_method_specific_unsupported(
+        &mut self,
+        request_id: &Value,
+        method: &str,
+        message: &str,
+        event_sender: Option<&dyn AppServerEventSender>,
+    ) -> Result<()> {
+        self.send_rejected_server_request(
+            json!({
+                "id": request_id,
+                "error": { "code": -32601, "message": message },
+            }),
+            format!("app-server server request `{method}` rejected: {message}"),
+            event_sender,
+        )
+    }
+
+    fn handle_interactive_approval_request(
+        &mut self,
+        request_id: &Value,
+        method: &str,
+        params: Option<&Value>,
+        event_sender: Option<&dyn AppServerEventSender>,
+        approval_context: Option<BoundApprovalContext<'_>>,
+    ) -> Result<()> {
+        // The operator's review budget starts at protocol receipt, not after a
+        // potentially contended UI delivery.
+        let deadline = Instant::now() + self.config.approval_timeout;
+        let spec = match parse_interactive_approval(method, request_id, params) {
+            Ok(spec) => spec,
+            Err(error) => {
+                let notice = approval_denied_notice(method, "invalid or unsupported request shape");
+                self.diagnostics.record_warning(format!(
+                    "{notice}; validation error chars={}",
+                    error.to_string().chars().count()
+                ));
+                self.send_json_line(json!({
+                    "id": request_id,
+                    "result": declined_approval_result(method),
+                }))?;
+                if let Some(event_sender) = event_sender {
+                    let _ = event_sender
+                        .try_send(ConversationStreamEvent::StatusUpdated { text: notice });
+                }
+                return Ok(());
+            }
+        };
+
+        if self.approval_mode != AppServerApprovalMode::Interactive {
+            return self.send_unattended_approval_decline(request_id, spec);
+        }
+        let Some(approval_context) = approval_context else {
+            return self.send_unbound_approval_decline(
+                request_id,
+                spec,
+                "no active turn binding",
+                event_sender,
+            );
+        };
+        if spec.thread_id != approval_context.thread_id || spec.turn_id != approval_context.turn_id
+        {
+            return self.send_unbound_approval_decline(
+                request_id,
+                spec,
+                "request did not match the active thread and turn",
+                event_sender,
+            );
+        }
+        let Some(event_sender) = event_sender else {
+            return self.send_unbound_approval_decline(
+                request_id,
+                spec,
+                "interactive UI was unavailable",
+                None,
+            );
+        };
+        let interrupt_context = approval_context.interrupt;
+        if interrupt_context
+            .signal
+            .requested_after(interrupt_context.observed_generation)
+        {
+            return self.send_pre_ui_approval_decline(
+                request_id,
+                spec,
+                "the active turn was already interrupted",
+            );
+        }
+        if Instant::now() >= deadline {
+            return self.send_pre_ui_approval_decline(
+                request_id,
+                spec,
+                "the operator review deadline elapsed before UI delivery",
+            );
+        }
+
+        let (approval_id, decision_receiver) = self.approval_broker.register()?;
+        let request = ConversationApprovalRequest {
+            approval_id: approval_id.clone(),
+            server_request_id: spec.server_request_id.clone(),
+            method: spec.method.clone(),
+            kind: spec.kind,
+            summary: spec.summary.clone(),
+            details: spec.details.clone(),
+        };
+        if interrupt_context
+            .signal
+            .requested_after(interrupt_context.observed_generation)
+            || Instant::now() >= deadline
+        {
+            self.approval_broker.cancel(&approval_id);
+            return self.send_pre_ui_approval_decline(
+                request_id,
+                spec,
+                "the approval became stale before UI delivery",
+            );
+        }
+        match event_sender.try_send(ConversationStreamEvent::ApprovalRequested { request }) {
+            Ok(()) => {}
+            Err(AppServerEventTrySendError::Full) => {
+                self.approval_broker.cancel(&approval_id);
+                return self.send_pre_ui_approval_decline(
+                    request_id,
+                    spec,
+                    "the interactive UI event queue was full",
+                );
+            }
+            Err(AppServerEventTrySendError::Disconnected) => {
+                self.approval_broker.cancel(&approval_id);
+                return self.send_pre_ui_approval_decline(
+                    request_id,
+                    spec,
+                    "the interactive UI event queue was disconnected",
+                );
+            }
+        }
+
+        let (result, resolution) = loop {
+            if let Err(error) = self.ensure_transport_healthy() {
+                self.approval_broker.cancel(&approval_id);
+                let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
+                    approval_id,
+                    resolution: ConversationApprovalResolution::Disconnected,
+                });
+                return Err(error);
+            }
+            if interrupt_context
+                .signal
+                .requested_after(interrupt_context.observed_generation)
+            {
+                self.approval_broker.cancel(&approval_id);
+                break (
+                    spec.declined_result.clone(),
+                    ConversationApprovalResolution::Interrupted,
+                );
+            }
+            match self.child.try_wait() {
+                Ok(Some(_)) => {
+                    self.approval_broker.cancel(&approval_id);
+                    let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
+                        approval_id,
+                        resolution: ConversationApprovalResolution::Disconnected,
+                    });
+                    return Ok(());
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.approval_broker.cancel(&approval_id);
+                    let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
+                        approval_id,
+                        resolution: ConversationApprovalResolution::Disconnected,
+                    });
+                    return Err(error.into());
+                }
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                self.approval_broker.cancel(&approval_id);
+                break (
+                    spec.declined_result.clone(),
+                    ConversationApprovalResolution::TimedOut,
+                );
+            }
+            let wait = self
+                .config
+                .poll_interval
+                .min(deadline.saturating_duration_since(now));
+            match decision_receiver.recv_timeout(wait) {
+                Ok(ConversationApprovalDecision::Accept) => {
+                    run_after_approval_decision_received_hook();
+                    if interrupt_context
+                        .signal
+                        .requested_after(interrupt_context.observed_generation)
+                    {
+                        self.approval_broker.cancel(&approval_id);
+                        break (
+                            spec.declined_result.clone(),
+                            ConversationApprovalResolution::Interrupted,
+                        );
+                    }
+                    if Instant::now() >= deadline {
+                        self.approval_broker.cancel(&approval_id);
+                        break (
+                            spec.declined_result.clone(),
+                            ConversationApprovalResolution::TimedOut,
+                        );
+                    }
+                    break (
+                        spec.accepted_result.clone(),
+                        ConversationApprovalResolution::Accepted,
+                    );
+                }
+                Ok(ConversationApprovalDecision::Decline) => {
+                    break (
+                        spec.declined_result.clone(),
+                        ConversationApprovalResolution::Declined,
+                    );
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.approval_broker.cancel(&approval_id);
+                    break (
+                        spec.declined_result.clone(),
+                        ConversationApprovalResolution::Disconnected,
+                    );
+                }
+            }
+        };
+        self.send_approval_response(request_id, &approval_id, result, resolution, event_sender)
+    }
+
+    fn send_pre_ui_approval_decline(
+        &mut self,
+        request_id: &Value,
+        spec: AppServerApprovalSpec,
+        reason: &str,
+    ) -> Result<()> {
+        self.send_json_line(json!({
+            "id": request_id,
+            "result": spec.declined_result,
+        }))?;
+        let notice = approval_denied_notice(&spec.method, reason);
+        self.diagnostics.record_warning(notice.clone());
+        tracing::warn!(
+            server_request_method = spec.method,
+            approval_item_id_chars = spec.item_id.chars().count(),
+            notice = %notice,
+            "app-server approval request declined before UI delivery"
+        );
+        Ok(())
+    }
+
+    fn send_unattended_approval_decline(
+        &mut self,
+        request_id: &Value,
+        spec: AppServerApprovalSpec,
+    ) -> Result<()> {
+        self.send_json_line(json!({
+            "id": request_id,
+            "result": spec.declined_result,
+        }))?;
+        let notice = approval_denied_notice(&spec.method, "unattended runtime");
+        self.diagnostics.record_warning(notice.clone());
+        tracing::warn!(
+            server_request_method = spec.method,
+            notice = %notice,
+            "app-server approval request declined"
+        );
+        Ok(())
+    }
+
+    fn send_unbound_approval_decline(
+        &mut self,
+        request_id: &Value,
+        spec: AppServerApprovalSpec,
+        reason: &str,
+        event_sender: Option<&dyn AppServerEventSender>,
+    ) -> Result<()> {
+        self.send_json_line(json!({
+            "id": request_id,
+            "result": spec.declined_result,
+        }))?;
+        let notice = approval_denied_notice(&spec.method, reason);
+        self.diagnostics.record_warning(notice.clone());
+        tracing::warn!(
+            server_request_method = spec.method,
+            approval_item_id_chars = spec.item_id.chars().count(),
+            notice = %notice,
+            "app-server approval request failed active-turn binding"
+        );
+        if let Some(event_sender) = event_sender {
+            let _ = event_sender.try_send(ConversationStreamEvent::StatusUpdated { text: notice });
+        }
+        Ok(())
+    }
+
+    fn send_approval_response(
+        &mut self,
+        request_id: &Value,
+        approval_id: &str,
+        result: Value,
+        resolution: ConversationApprovalResolution,
+        event_sender: &dyn AppServerEventSender,
+    ) -> Result<()> {
+        self.send_json_line(json!({ "id": request_id, "result": result }))?;
+        let _ = event_sender.try_send(ConversationStreamEvent::ApprovalResolved {
+            approval_id: approval_id.to_string(),
+            resolution,
+        });
+        Ok(())
+    }
+
+    fn send_rejected_server_request(
+        &mut self,
+        response: Value,
+        notice: String,
+        event_sender: Option<&dyn AppServerEventSender>,
+    ) -> Result<()> {
+        self.send_json_line(response)?;
+        self.diagnostics.record_warning(notice.clone());
+        tracing::warn!(notice = %notice, "app-server server request rejected");
+        if let Some(event_sender) = event_sender {
+            let _ = event_sender.try_send(ConversationStreamEvent::StatusUpdated { text: notice });
+        }
+        Ok(())
     }
 
     fn process_pending_turn_notification(
@@ -532,7 +2259,7 @@ impl AppServerConnection {
         thread_id: &str,
         turn_id: &str,
         changed_planning_file_paths: &mut Vec<String>,
-        event_sender: &Sender<ConversationStreamEvent>,
+        event_sender: &dyn AppServerEventSender,
     ) -> Result<bool> {
         /*
          * Pending notifications are consumed before blocking on the reader channel so
@@ -559,7 +2286,7 @@ impl AppServerConnection {
         thread_id: &str,
         turn_id: &str,
         changed_planning_file_paths: &mut Vec<String>,
-        event_sender: &Sender<ConversationStreamEvent>,
+        event_sender: &dyn AppServerEventSender,
     ) -> Result<bool> {
         /*
          * protocol::handle_turn_notification owns payload translation into domain
@@ -591,7 +2318,14 @@ impl AppServerConnection {
 
     fn parse_json_line(&self, line: &str) -> Result<Value> {
         serde_json::from_str(line).map_err(|error| {
-            self.error_with_diagnostics(format!("invalid JSON from app-server: {line} ({error})"))
+            self.error_with_diagnostics(format!(
+                "invalid JSON from app-server (bytes={}, chars={}, category={:?}, line={}, column={})",
+                line.len(),
+                line.chars().count(),
+                error.classify(),
+                error.line(),
+                error.column(),
+            ))
         })
     }
 
@@ -603,22 +2337,52 @@ impl AppServerConnection {
          */
         let drain_deadline = Instant::now() + self.config.drain_timeout;
         while Instant::now() < drain_deadline {
+            if let Some(message) = self.transport_failure.current() {
+                self.diagnostics.record_warning(format!(
+                    "app-server connection terminated after bounded transport failure: {message}"
+                ));
+                self.terminate_child();
+                break;
+            }
             if let Ok(Some(_)) = self.child.try_wait() {
                 break;
             }
 
-            match self.rx.recv_timeout(self.config.drain_poll_interval) {
+            let received = self.rx.recv_timeout(self.config.drain_poll_interval);
+            if let Some(message) = self.transport_failure.current() {
+                self.diagnostics.record_warning(format!(
+                    "app-server connection terminated after bounded transport failure: {message}"
+                ));
+                self.terminate_child();
+                break;
+            }
+            match received {
                 Ok(AppServerLine::Stderr(line)) => self.diagnostics.record_stderr(line),
                 Ok(AppServerLine::Stdout(line)) => {
-                    if let Ok(value) = serde_json::from_str::<Value>(&line)
-                        && let Some(notification) = AppServerNotification::from_value(value)
-                    {
-                        if notification.should_defer_to_turn_stream() {
-                            self.pending_notifications.push(notification);
-                        } else {
-                            self.diagnostics.record_warning(
-                                notification.warning_text("while draining app-server notices"),
-                            );
+                    if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                        match self.handle_server_request(&value, None, None) {
+                            Ok(true) => {}
+                            Err(error) => self.diagnostics.record_warning(format!(
+                                "failed to reject app-server server request while draining notices: {error}"
+                            )),
+                            Ok(false) => {
+                                if let Some(notification) =
+                                    AppServerNotification::from_value(value)
+                                {
+                                    if notification.should_defer_to_turn_stream() {
+                                        if let Err(error) =
+                                            self.defer_turn_notification(notification)
+                                        {
+                                            self.diagnostics.record_warning(error.to_string());
+                                            break;
+                                        }
+                                    } else {
+                                        self.diagnostics.record_warning(notification.warning_text(
+                                            "while draining app-server notices",
+                                        ));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -631,10 +2395,31 @@ impl AppServerConnection {
         self.diagnostics.error(message)
     }
 
+    fn ensure_transport_healthy(&mut self) -> Result<()> {
+        let Some(message) = self.transport_failure.current() else {
+            return Ok(());
+        };
+        self.terminate_child();
+        Err(self.error_with_diagnostics(format!("app-server transport failed: {message}")))
+    }
+
+    fn fail_transport(&mut self, message: impl Into<String>) -> anyhow::Error {
+        self.transport_failure.record(message);
+        let message = self
+            .transport_failure
+            .current()
+            .unwrap_or_else(|| "unknown bounded transport failure".to_string());
+        self.terminate_child();
+        self.error_with_diagnostics(format!("app-server transport failed: {message}"))
+    }
+
     fn terminate_child(&mut self) {
-        // Drop is best-effort cleanup; errors are ignored because callers already have request/stream diagnostics.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Err(error) = self.child.terminate_and_wait() {
+            tracing::warn!(error = %error, "app-server process containment cleanup failed");
+        }
+        // Killing the child closes the stdin read end, which releases a writer blocked
+        // in WriteFile/write before we join it and discard the queue sender.
+        self.stdin_writer.shutdown();
     }
 }
 
@@ -652,50 +2437,198 @@ enum AppServerLine {
     Stderr(String),
 }
 
+enum BoundedLineRead {
+    Line(String),
+    EndOfFile,
+    LimitExceeded,
+}
+
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    maximum_bytes: usize,
+) -> io::Result<BoundedLineRead> {
+    let mut line = Vec::with_capacity(8 * 1024);
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if line.is_empty() {
+                return Ok(BoundedLineRead::EndOfFile);
+            }
+            return String::from_utf8(line)
+                .map(BoundedLineRead::Line)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+        }
+
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let payload_bytes = newline.unwrap_or(available.len());
+        if line.len().saturating_add(payload_bytes) > maximum_bytes {
+            return Ok(BoundedLineRead::LimitExceeded);
+        }
+        line.extend_from_slice(&available[..payload_bytes]);
+        let consumed = newline.map_or(payload_bytes, |index| index + 1);
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            return String::from_utf8(line)
+                .map(BoundedLineRead::Line)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+        }
+    }
+}
+
 fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
     pipe: T,
-    tx: mpsc::Sender<AppServerLine>,
+    tx: mpsc::SyncSender<AppServerLine>,
     is_stderr: bool,
+    maximum_bytes: usize,
+    transport_failure: Arc<TransportFailure>,
 ) {
-    // One reader thread per pipe converts blocking line reads into nonblocking channel messages for the connection loop.
+    // One reader thread per pipe converts bounded blocking reads into a bounded connection backlog.
+    // A blocking send is intentional backpressure: a short, valid notification burst must not be
+    // reclassified as a transport failure merely because the consumer lost one scheduler timeslice.
     thread::spawn(move || {
-        let reader = BufReader::new(pipe);
-        for line in reader.lines().map_while(|value| value.ok()) {
+        let source = if is_stderr { "stderr" } else { "stdout" };
+        let mut reader = BufReader::new(pipe);
+        loop {
+            let line = match read_bounded_line(&mut reader, maximum_bytes) {
+                Ok(BoundedLineRead::Line(line)) => line,
+                Ok(BoundedLineRead::EndOfFile) => return,
+                Ok(BoundedLineRead::LimitExceeded) => {
+                    transport_failure.record(format!(
+                        "app-server {source} line exceeded the {maximum_bytes}-byte limit"
+                    ));
+                    return;
+                }
+                Err(error) => {
+                    transport_failure.record(format!(
+                        "failed to read app-server {source} safely: {error}"
+                    ));
+                    return;
+                }
+            };
             let payload = if is_stderr {
                 AppServerLine::Stderr(line)
             } else {
                 AppServerLine::Stdout(line)
             };
-            let _ = tx.send(payload);
+            if tx.send(payload).is_err() {
+                return;
+            }
         }
     });
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::fmt::Debug;
     use std::fs;
-    use std::io::Cursor;
+    use std::io::{BufReader, Cursor};
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
-    use std::sync::mpsc::{self, Sender};
+    use std::sync::Arc;
+    use std::sync::mpsc::{self, SyncSender};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use anyhow::Result;
     use serde_json::{Value, json};
 
+    #[cfg(windows)]
+    use super::app_server_process_environment_variable_allowed;
     use super::diagnostics::{ConnectionDiagnostics, PendingNotifications};
     use super::{
-        AppServerConnection, AppServerConnectionConfig, AppServerLine,
-        AppServerTurnInterruptSignal, RESPONSE_TIMEOUT_ENV_VAR, spawn_pipe_reader,
+        API_KEY_AUTH_ENV_VAR, APP_SERVER_LINE_CHANNEL_CAPACITY, AppServerApprovalMode,
+        AppServerConnection, AppServerConnectionConfig, AppServerLine, AppServerStdinWriter,
+        AppServerTurnInterruptSignal, AppServerWriteRequest, ApprovalInterruptContext,
+        BoundApprovalContext, BoundedLineRead, CANCELLED_SERVER_REQUEST_METHODS,
+        DISABLE_LOGIN_SHELL_OVERRIDE, LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS,
+        MAX_PENDING_NOTIFICATIONS, MAX_RESPONSE_TIMEOUT_SECS, MAX_STDERR_LINE_BYTES,
+        MAX_STDOUT_LINE_BYTES, METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS,
+        PROCESS_ENVIRONMENT_ENV_VAR, ProcessEnvironmentPolicy, RESPONSE_TIMEOUT_ENV_VAR,
+        SHELL_ENVIRONMENT_INHERIT_ENV_VAR, SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE,
+        ShellEnvironmentInherit, TransportFailure, UNINSPECTABLE_SERVER_REQUEST_METHODS,
+        app_server_api_key_environment_variable_allowed, app_server_command_with_environment,
+        app_server_process_environment_key_allowed, canonical_proxy_environment_key,
+        filtered_app_server_process_environment, install_after_approval_decision_received_hook,
+        openai_base_url_is_unsafe, proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
+        resolve_process_environment, resolve_shell_environment_inherit, spawn_pipe_reader,
+    };
+    use crate::adapter::outbound::app_server::approval::{
+        AppServerApprovalBroker, EXPLICITLY_DECLINED_APPROVAL_METHODS, INTERACTIVE_APPROVAL_METHODS,
     };
     use crate::adapter::outbound::app_server::protocol::{
         AppServerNotification, ReasoningEffortValue, ThreadListParams, ThreadResumeParams,
         ThreadStartParams, TurnInputItem, TurnInterruptParams, TurnStartParams,
     };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::application::service::conversation_runtime_event::{
+        CONVERSATION_STREAM_CHANNEL_CAPACITY, ConversationStreamEvent, conversation_stream_channel,
+    };
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use crate::domain::conversation::{
+        ConversationApprovalDecision, ConversationApprovalResolution,
+    };
+    use crate::subprocess;
+
+    fn bound_approval_context<'a>(
+        signal: &'a AppServerTurnInterruptSignal,
+        thread_id: &'a str,
+        turn_id: &'a str,
+    ) -> BoundApprovalContext<'a> {
+        BoundApprovalContext {
+            thread_id,
+            turn_id,
+            interrupt: ApprovalInterruptContext {
+                signal,
+                observed_generation: signal.current_generation(),
+            },
+        }
+    }
+
+    #[test]
+    fn server_request_method_classification_is_complete_and_disjoint() {
+        let groups = [
+            INTERACTIVE_APPROVAL_METHODS,
+            UNINSPECTABLE_SERVER_REQUEST_METHODS,
+            EXPLICITLY_DECLINED_APPROVAL_METHODS,
+            CANCELLED_SERVER_REQUEST_METHODS,
+            METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS,
+            LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS,
+        ];
+        let classified = groups
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let schema: Value = serde_json::from_str(include_str!(
+            "../../../../schema/codex_app_server_protocol.server_request.schema.json"
+        ))
+        .expect("pinned ServerRequest schema should parse");
+        let schema_methods = schema
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("ServerRequest schema should expose oneOf")
+            .iter()
+            .map(|request| {
+                request
+                    .pointer("/properties/method/enum/0")
+                    .and_then(Value::as_str)
+                    .expect("ServerRequest variant should expose one method")
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            classified.len(),
+            groups.iter().map(|group| group.len()).sum::<usize>()
+        );
+        assert_eq!(
+            classified, schema_methods,
+            "every pinned ServerRequest method must have one explicit client behavior"
+        );
+    }
 
     #[test]
     fn response_timeout_defaults_to_fifteen_seconds() {
@@ -725,6 +2658,506 @@ mod tests {
                 Duration::from_secs(15)
             );
         }
+        assert_eq!(
+            AppServerConnectionConfig::from_response_timeout_secs_value(Some(
+                "18446744073709551615"
+            ))
+            .response_timeout,
+            Duration::from_secs(MAX_RESPONSE_TIMEOUT_SECS)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_command_keeps_the_canonical_codex_pin_after_path_changes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should follow Unix epoch")
+            .as_nanos();
+        let install = PathBuf::from(std::env::var_os("HOME").expect("HOME should exist"))
+            .join(".cache")
+            .join(format!("akra-codex-pin-{}-{now}", std::process::id()));
+        fs::create_dir_all(&install).expect("safe install directory should be created");
+        let mut directory_permissions = fs::metadata(&install)
+            .expect("install metadata should exist")
+            .permissions();
+        directory_permissions.set_mode(0o755);
+        fs::set_permissions(&install, directory_permissions)
+            .expect("install directory should be private from other writers");
+        let codex = install.join("codex");
+        fs::write(&codex, "#!/bin/sh\nexit 0\n").expect("codex fixture should write");
+        let mut permissions = fs::metadata(&codex)
+            .expect("codex fixture metadata should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&codex, permissions).expect("codex fixture should be executable");
+        let cwd = std::env::current_dir().expect("test cwd should exist");
+        let pinned =
+            crate::trusted_executable::resolve_from_path("codex", install.as_os_str(), &cwd)
+                .expect("safe user-local Codex should resolve");
+        let config = AppServerConnectionConfig::default()
+            .with_test_process(pinned.clone(), std::iter::empty::<(OsString, OsString)>());
+
+        let command = super::app_server_command(&config);
+        assert_eq!(command.get_program(), pinned.as_os_str());
+        assert!(Path::new(command.get_program()).is_absolute());
+        let _ = fs::remove_dir_all(install);
+    }
+
+    #[test]
+    fn unsafe_codex_resolution_is_reported_before_spawn() {
+        let config = AppServerConnectionConfig {
+            executable: super::unresolved_codex_executable_path(),
+            executable_resolution_error: Some(
+                "PATH selected a repository-controlled codex".to_string(),
+            ),
+            ..AppServerConnectionConfig::default()
+        };
+        let error = config
+            .ensure_executable_is_pinned()
+            .expect_err("unsafe Codex resolution must fail before process creation");
+        assert!(error.to_string().contains("could not be pinned safely"));
+        assert!(error.to_string().contains("repository-controlled"));
+    }
+
+    #[test]
+    fn app_server_command_restricts_model_shell_environment_by_default() {
+        let command = app_server_command_with_environment(
+            &AppServerConnectionConfig::default(),
+            ShellEnvironmentInherit::Core,
+            ProcessEnvironmentPolicy::Scrubbed,
+            [],
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "codex");
+        assert_eq!(
+            args,
+            [
+                "app-server",
+                "-c",
+                "shell_environment_policy.inherit=\"core\"",
+                "-c",
+                SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE,
+                "-c",
+                DISABLE_LOGIN_SHELL_OVERRIDE,
+            ]
+        );
+    }
+
+    #[test]
+    fn shell_environment_inherit_accepts_only_supported_values() {
+        for (value, expected) in [
+            ("none", ShellEnvironmentInherit::None),
+            (" CORE ", ShellEnvironmentInherit::Core),
+            ("ALL", ShellEnvironmentInherit::All),
+        ] {
+            assert_eq!(
+                resolve_shell_environment_inherit(Some(value)),
+                super::ShellEnvironmentInheritResolution {
+                    inherit: expected,
+                    warning: None,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn shell_environment_inherit_defaults_and_invalid_values_fail_closed_to_core() {
+        assert_eq!(
+            resolve_shell_environment_inherit(None),
+            super::ShellEnvironmentInheritResolution {
+                inherit: ShellEnvironmentInherit::Core,
+                warning: None,
+            }
+        );
+
+        for value in ["", "everything", "inherit-all"] {
+            let resolution = resolve_shell_environment_inherit(Some(value));
+            assert_eq!(resolution.inherit, ShellEnvironmentInherit::Core);
+            assert!(
+                resolution
+                    .warning
+                    .as_deref()
+                    .is_some_and(|warning| warning.contains("expected none, core, or all"))
+            );
+        }
+
+        let raw_value = "private-shell-policy-value";
+        let warning = resolve_shell_environment_inherit(Some(raw_value))
+            .warning
+            .expect("invalid shell policy should warn");
+        assert!(!warning.contains(raw_value));
+    }
+
+    #[test]
+    fn shell_environment_inherit_override_preserves_default_secret_exclusions() {
+        for inherit in [
+            ShellEnvironmentInherit::None,
+            ShellEnvironmentInherit::Core,
+            ShellEnvironmentInherit::All,
+        ] {
+            let command = app_server_command_with_environment(
+                &AppServerConnectionConfig::default(),
+                inherit,
+                ProcessEnvironmentPolicy::Scrubbed,
+                [],
+            );
+            let args = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+
+            assert!(args.contains(&inherit.codex_override()));
+            assert!(args.contains(&SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE.to_string()));
+        }
+    }
+
+    #[test]
+    fn app_server_process_environment_is_scrubbed_unless_all_is_explicit() {
+        assert_eq!(
+            resolve_process_environment(None).policy,
+            ProcessEnvironmentPolicy::Scrubbed
+        );
+        assert_eq!(
+            resolve_process_environment(Some("scrubbed")).policy,
+            ProcessEnvironmentPolicy::Scrubbed
+        );
+        let all = resolve_process_environment(Some(" ALL "));
+        assert_eq!(all.policy, ProcessEnvironmentPolicy::All);
+        assert!(
+            all.warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("complete parent environment"))
+        );
+
+        for value in ["", "inherit", "true"] {
+            let resolution = resolve_process_environment(Some(value));
+            assert_eq!(resolution.policy, ProcessEnvironmentPolicy::Scrubbed);
+            assert!(
+                resolution
+                    .warning
+                    .as_deref()
+                    .is_some_and(|warning| warning.contains("expected scrubbed or all"))
+            );
+        }
+
+        let raw_value = "private-process-policy-value";
+        let warning = resolve_process_environment(Some(raw_value))
+            .warning
+            .expect("invalid process policy should warn");
+        assert!(!warning.contains(raw_value));
+    }
+
+    #[test]
+    fn app_server_api_key_auth_requires_exact_explicit_opt_in() {
+        assert_eq!(
+            resolve_api_key_auth(None),
+            super::ApiKeyAuthResolution {
+                enabled: false,
+                warning: None,
+            }
+        );
+        assert_eq!(
+            resolve_api_key_auth(Some(std::ffi::OsStr::new("1"))),
+            super::ApiKeyAuthResolution {
+                enabled: true,
+                warning: None,
+            }
+        );
+
+        for value in ["", " 1", "1 ", "true", "01"] {
+            let resolution = resolve_api_key_auth(Some(std::ffi::OsStr::new(value)));
+            assert!(!resolution.enabled);
+            let warning = resolution
+                .warning
+                .expect("invalid API-key auth value should warn");
+            assert!(warning.contains("expected exact value 1"));
+        }
+        let private_value = "private-api-key-auth-value";
+        let warning = resolve_api_key_auth(Some(std::ffi::OsStr::new(private_value)))
+            .warning
+            .expect("invalid API-key auth value should warn");
+        assert!(!warning.contains(private_value));
+    }
+
+    #[test]
+    fn scrubbed_app_server_process_environment_excludes_unlisted_secrets() {
+        let config = AppServerConnectionConfig::default().with_test_process(
+            "codex-fixture",
+            [("AKRA_FAKE_CHILD_ONLY".into(), "fixture".into())],
+        );
+        let command = app_server_command_with_environment(
+            &config,
+            ShellEnvironmentInherit::Core,
+            ProcessEnvironmentPolicy::Scrubbed,
+            [
+                ("PATH".into(), "/usr/bin".into()),
+                ("HOME".into(), "/home/operator".into()),
+                ("LC_ALL".into(), "C.UTF-8".into()),
+                ("OPENAI_API_KEY".into(), "required-auth".into()),
+                ("CODEX_API_KEY".into(), "alternate-auth".into()),
+                ("HTTPS_PROXY".into(), "http://corporate-proxy".into()),
+                ("SSH_AUTH_SOCK".into(), "/tmp/private-agent.sock".into()),
+                ("AWS_SECRET_ACCESS_KEY".into(), "aws-secret".into()),
+                ("DATABASE_URL".into(), "postgres://secret".into()),
+                ("GH_TOKEN".into(), "github-secret".into()),
+                ("ARBITRARY_TOKEN".into(), "other-secret".into()),
+            ],
+        );
+        let environment = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(command.get_program(), "codex-fixture");
+        assert_eq!(
+            environment.get("PATH").map(String::as_str),
+            Some("/usr/bin")
+        );
+        assert_eq!(
+            environment.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://corporate-proxy")
+        );
+        assert_eq!(
+            environment.get("AKRA_FAKE_CHILD_ONLY").map(String::as_str),
+            Some("fixture")
+        );
+        for secret in [
+            "SSH_AUTH_SOCK",
+            "AWS_SECRET_ACCESS_KEY",
+            "DATABASE_URL",
+            "GH_TOKEN",
+            "ARBITRARY_TOKEN",
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
+        ] {
+            assert!(!environment.contains_key(secret));
+        }
+    }
+
+    #[test]
+    fn explicit_api_key_auth_forwards_only_supported_keys_to_app_server() {
+        let config = AppServerConnectionConfig::default().with_test_api_key_auth();
+        let command = app_server_command_with_environment(
+            &config,
+            ShellEnvironmentInherit::Core,
+            ProcessEnvironmentPolicy::Scrubbed,
+            [
+                ("PATH".into(), "/usr/bin".into()),
+                ("OPENAI_API_KEY".into(), "openai-auth-value".into()),
+                ("CODEX_API_KEY".into(), "codex-auth-value".into()),
+                (API_KEY_AUTH_ENV_VAR.into(), "1".into()),
+                ("GH_TOKEN".into(), "github-secret".into()),
+                ("ARBITRARY_KEY".into(), "other-secret".into()),
+            ],
+        );
+        let environment = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            environment.get("OPENAI_API_KEY").map(String::as_str),
+            Some("openai-auth-value")
+        );
+        assert_eq!(
+            environment.get("CODEX_API_KEY").map(String::as_str),
+            Some("codex-auth-value")
+        );
+        assert!(!environment.contains_key("GH_TOKEN"));
+        assert!(!environment.contains_key("ARBITRARY_KEY"));
+        assert!(!environment.contains_key(API_KEY_AUTH_ENV_VAR));
+        assert!(args.contains(&SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE.to_string()));
+        assert!(args.contains(&DISABLE_LOGIN_SHELL_OVERRIDE.to_string()));
+    }
+
+    #[test]
+    fn scrubbed_process_environment_drops_credentialed_and_ambiguous_proxy_urls() {
+        let secret = "proxy-password-must-not-appear";
+        let filtered = filtered_app_server_process_environment(
+            [
+                (
+                    "HTTPS_PROXY".into(),
+                    format!("http://operator:{secret}@proxy.example:8443").into(),
+                ),
+                (
+                    "http_proxy".into(),
+                    "http://user:p%40ss@[2001:db8::1]:8080".into(),
+                ),
+                (
+                    "ALL_PROXY".into(),
+                    "socks5://user%40name@proxy.example:1080".into(),
+                ),
+                ("all_proxy".into(), "http://[2001:db8::1".into()),
+                (
+                    "HTTP_PROXY".into(),
+                    "http://user%40proxy.example:8080".into(),
+                ),
+                ("NO_PROXY".into(), "localhost,user@example.test".into()),
+                ("PATH".into(), "/usr/bin".into()),
+            ],
+            false,
+        );
+
+        assert_eq!(
+            filtered.dropped_credential_variables,
+            ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]
+        );
+        let environment = filtered
+            .variables
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            environment.get("PATH").map(String::as_str),
+            Some("/usr/bin")
+        );
+        assert_eq!(
+            environment.get("NO_PROXY").map(String::as_str),
+            Some("localhost,user@example.test")
+        );
+        assert!(!format!("{environment:?}").contains(secret));
+    }
+
+    #[test]
+    fn proxy_userinfo_parser_handles_ipv6_percent_encoding_and_scheme_authority() {
+        for safe in [
+            "http://proxy.example:8080",
+            "https://[2001:db8::1]:8443",
+            "socks5h://[fe80::1%25eth0]:1080",
+            "proxy.example:3128",
+        ] {
+            assert_eq!(proxy_url_has_userinfo(safe), Ok(false), "safe: {safe}");
+        }
+        for credentialed in [
+            "http://user:password@proxy.example:8080",
+            "http://user:p%40ss@[2001:db8::1]:8080",
+            "socks5://user%40name@proxy.example:1080",
+            "http://user%40proxy.example:8080",
+            "user:password@proxy.example:8080",
+        ] {
+            assert_eq!(
+                proxy_url_has_userinfo(credentialed),
+                Ok(true),
+                "credentialed: {credentialed}"
+            );
+        }
+        for ambiguous in [
+            " http://proxy.example:8080",
+            "http://[2001:db8::1",
+            "http://2001:db8::1",
+            "http://proxy.example:not-a-port",
+            "1http://proxy.example",
+        ] {
+            assert!(
+                proxy_url_has_userinfo(ambiguous).is_err(),
+                "ambiguous: {ambiguous}"
+            );
+        }
+    }
+
+    #[test]
+    fn scrubbed_process_environment_rejects_credentialed_or_ambiguous_openai_base_urls() {
+        for unsafe_url in [
+            "https://user:secret@api.example.test/v1",
+            "https://api.example.test/v1?token=secret",
+            "https://api.example.test/v1#secret",
+            "api.example.test/v1",
+        ] {
+            assert!(openai_base_url_is_unsafe(&OsString::from(unsafe_url)));
+            let filtered = filtered_app_server_process_environment(
+                [
+                    ("OPENAI_BASE_URL".into(), unsafe_url.into()),
+                    ("PATH".into(), "/usr/bin".into()),
+                ],
+                false,
+            );
+            assert_eq!(filtered.dropped_credential_variables, ["OPENAI_BASE_URL"]);
+            assert!(
+                filtered
+                    .variables
+                    .iter()
+                    .all(|(key, _)| key != "OPENAI_BASE_URL")
+            );
+        }
+
+        for safe_url in ["https://api.openai.com/v1", "http://127.0.0.1:11434/v1"] {
+            assert!(!openai_base_url_is_unsafe(&OsString::from(safe_url)));
+        }
+    }
+
+    #[test]
+    fn proxy_variable_names_are_classified_without_case_leaks() {
+        for (raw, expected) in [
+            ("http_proxy", "HTTP_PROXY"),
+            ("HtTpS_pRoXy", "HTTPS_PROXY"),
+            ("all_proxy", "ALL_PROXY"),
+        ] {
+            assert_eq!(
+                canonical_proxy_environment_key(&std::ffi::OsString::from(raw)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            canonical_proxy_environment_key(&std::ffi::OsString::from("NO_PROXY")),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_process_environment_allowlist_is_ascii_case_insensitive() {
+        for key in ["Path", "uSeRpRoFiLe", "lC_aLl", "https_PrOxY"] {
+            assert!(app_server_process_environment_key_allowed(key, true));
+        }
+        assert!(!app_server_process_environment_key_allowed(
+            "OpenAI_Api_Key",
+            true
+        ));
+        assert!(!app_server_process_environment_key_allowed("Path", false));
+        assert_eq!(
+            app_server_api_key_environment_variable_allowed(&OsString::from("OpenAI_Api_Key")),
+            cfg!(windows)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn actual_windows_environment_filter_accepts_mixed_case_allowlisted_keys() {
+        assert!(app_server_process_environment_variable_allowed(
+            &OsString::from("Path")
+        ));
+        assert!(app_server_process_environment_variable_allowed(
+            &OsString::from("userProfile")
+        ));
     }
 
     #[test]
@@ -733,6 +3166,15 @@ mod tests {
             RESPONSE_TIMEOUT_ENV_VAR,
             "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS"
         );
+        assert_eq!(
+            SHELL_ENVIRONMENT_INHERIT_ENV_VAR,
+            "AKRA_APP_SERVER_SHELL_ENVIRONMENT_INHERIT"
+        );
+        assert_eq!(
+            PROCESS_ENVIRONMENT_ENV_VAR,
+            "AKRA_APP_SERVER_PROCESS_ENVIRONMENT"
+        );
+        assert_eq!(API_KEY_AUTH_ENV_VAR, "AKRA_APP_SERVER_API_KEY_AUTH");
     }
 
     #[test]
@@ -1042,6 +3484,842 @@ mod tests {
     }
 
     #[test]
+    fn turn_start_response_wait_declines_interleaved_approval_before_turn_binding() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "id": "approval-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test --lib",
+                "cwd": "/workspace",
+                "reason": "run focused tests",
+                "availableDecisions": ["accept", "decline", "acceptForSession"]
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": { "ok": true }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+        let response: Value = harness
+            .connection
+            .send_request_with_event_sender(
+                "turn/start",
+                json!({ "threadId": "thread-1" }),
+                Some(&event_sender),
+            )
+            .expect("declining an unbound approval should not block the matching response");
+
+        assert_eq!(response, json!({ "ok": true }));
+        let logged = harness.logged_json_lines(2);
+        assert_eq!(logged[0]["method"], "turn/start");
+        assert_eq!(logged[1]["id"], "approval-1");
+        assert_eq!(logged[1]["result"]["decision"], "decline");
+        assert!(matches!(
+            event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("operator warning should be emitted"),
+            ConversationStreamEvent::StatusUpdated { text }
+                if text.contains("no active turn binding")
+        ));
+        assert!(event_receiver.try_recv().is_err());
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn active_turn_exact_approval_is_visible_and_can_be_accepted_once() {
+        let mut harness = TestConnection::new(true);
+        let request = json!({
+            "id": "approval-exact",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-active",
+                "turnId": "turn-active",
+                "itemId": "command-active",
+                "startedAtMs": 1,
+                "command": "cargo test --lib",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let signal = AppServerTurnInterruptSignal::default();
+        let (event_sender, event_receiver) = mpsc::channel();
+        let approval_broker = harness.connection.approval_broker.clone();
+        let resolver = thread::spawn(move || {
+            let event = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("exact approval request should reach the UI channel");
+            let ConversationStreamEvent::ApprovalRequested { request } = event else {
+                panic!("expected exact approval request, got {event:?}");
+            };
+            for expected in [
+                "Thread: thread-active",
+                "Turn: turn-active",
+                "Item: command-active",
+            ] {
+                assert!(request.details.iter().any(|detail| detail == expected));
+            }
+            approval_broker
+                .resolve(&request.approval_id, ConversationApprovalDecision::Accept)
+                .expect("exact approval should resolve once");
+            assert!(
+                approval_broker
+                    .resolve(&request.approval_id, ConversationApprovalDecision::Accept)
+                    .is_err()
+            );
+            event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("approval resolution should reach the UI channel")
+        });
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(bound_approval_context(
+                        &signal,
+                        "thread-active",
+                        "turn-active",
+                    )),
+                )
+                .expect("exact active approval should be handled")
+        );
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["result"]["decision"], "accept");
+        assert!(matches!(
+            resolver.join().expect("resolver thread should finish"),
+            ConversationStreamEvent::ApprovalResolved {
+                resolution: ConversationApprovalResolution::Accepted,
+                ..
+            }
+        ));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn stale_other_thread_and_old_turn_approvals_are_declined_before_broker_registration() {
+        let mut harness = TestConnection::new(true);
+        let requests = [
+            json!({
+                "id": "approval-other-thread",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thread-other",
+                    "turnId": "turn-active",
+                    "itemId": "command-other",
+                    "startedAtMs": 1,
+                    "command": "cargo test",
+                    "availableDecisions": ["accept", "decline"]
+                }
+            }),
+            json!({
+                "id": "approval-old-turn",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thread-active",
+                    "turnId": "turn-old",
+                    "itemId": "command-old",
+                    "startedAtMs": 1,
+                    "command": "cargo test",
+                    "availableDecisions": ["accept", "decline"]
+                }
+            }),
+        ];
+        let signal = AppServerTurnInterruptSignal::default();
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        for request in &requests {
+            assert!(
+                harness
+                    .connection
+                    .handle_server_request(
+                        request,
+                        Some(&event_sender),
+                        Some(bound_approval_context(
+                            &signal,
+                            "thread-active",
+                            "turn-active",
+                        )),
+                    )
+                    .expect("stale approval should be declined")
+            );
+        }
+
+        let logged = harness.logged_json_lines(requests.len());
+        assert!(
+            logged
+                .iter()
+                .all(|response| response["result"]["decision"] == "decline")
+        );
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(events.len(), requests.len());
+        assert!(events.iter().all(|event| matches!(
+            event,
+            ConversationStreamEvent::StatusUpdated { text }
+                if text.contains("did not match the active thread and turn")
+        )));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn file_change_approval_is_declined_without_reaching_the_ui() {
+        let mut harness = TestConnection::new(true);
+        let request = json!({
+            "id": "file-decline",
+            "method": "item/fileChange/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "file-1",
+                "startedAtMs": 1,
+                "reason": "update generated output",
+                "grantRoot": "/workspace"
+            }
+        });
+        let (event_sender, event_receiver) = mpsc::channel();
+        let signal = AppServerTurnInterruptSignal::default();
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(bound_approval_context(&signal, "thread-1", "turn-1")),
+                )
+                .expect("file approval should be handled")
+        );
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["result"], json!({ "decision": "decline" }));
+        assert!(matches!(
+            event_receiver.try_recv(),
+            Ok(ConversationStreamEvent::StatusUpdated { text })
+                if text.contains("cannot be reviewed completely")
+        ));
+        assert!(event_receiver.try_recv().is_err());
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn disconnected_approval_ui_declines_without_leaking_a_broker_entry() {
+        let mut harness = TestConnection::new(true);
+        let request = json!({
+            "id": "approval-disconnected",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let (event_sender, event_receiver) = conversation_stream_channel();
+        drop(event_receiver);
+        let signal = AppServerTurnInterruptSignal::default();
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(bound_approval_context(&signal, "thread-1", "turn-1")),
+                )
+                .expect("disconnected UI should receive a fail-closed response")
+        );
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["result"], json!({ "decision": "decline" }));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+        assert!(
+            harness
+                .connection
+                .approval_broker
+                .resolve("approval-1", ConversationApprovalDecision::Accept)
+                .is_err(),
+            "a disconnected delivery must remove the exact broker entry once"
+        );
+    }
+
+    #[test]
+    fn full_live_approval_ui_queue_declines_without_waiting_or_leaking() {
+        let mut harness = TestConnection::new(true);
+        let request = json!({
+            "id": "approval-full",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let (event_sender, event_receiver) = conversation_stream_channel();
+        for sequence in 0..CONVERSATION_STREAM_CHANNEL_CAPACITY {
+            event_sender
+                .try_send(ConversationStreamEvent::StatusUpdated {
+                    text: format!("queued-{sequence}"),
+                })
+                .expect("fixture should fill the live bounded queue exactly");
+        }
+        let signal = AppServerTurnInterruptSignal::default();
+        let started = Instant::now();
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(bound_approval_context(&signal, "thread-1", "turn-1")),
+                )
+                .expect("a full UI queue should fail closed")
+        );
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "approval delivery must not wait for capacity in a live bounded queue"
+        );
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["result"], json!({ "decision": "decline" }));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+        assert!(
+            harness
+                .connection
+                .approval_broker
+                .resolve("approval-1", ConversationApprovalDecision::Accept)
+                .is_err()
+        );
+        let queued = event_receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(queued.len(), CONVERSATION_STREAM_CHANNEL_CAPACITY);
+        assert!(queued.iter().all(|event| matches!(
+            event,
+            ConversationStreamEvent::StatusUpdated { text } if text.starts_with("queued-")
+        )));
+    }
+
+    #[test]
+    fn expired_approval_deadline_declines_before_ui_registration() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.approval_timeout = Duration::ZERO;
+        let request = json!({
+            "id": "approval-expired",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let signal = AppServerTurnInterruptSignal::default();
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(bound_approval_context(&signal, "thread-1", "turn-1")),
+                )
+                .expect("an already expired approval should fail closed")
+        );
+
+        assert_eq!(
+            harness.logged_json_lines(1)[0]["result"],
+            json!({ "decision": "decline" })
+        );
+        assert!(event_receiver.try_recv().is_err());
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn newer_turn_interrupt_declines_before_approval_reaches_the_ui() {
+        let mut harness = TestConnection::new(true);
+        let request = json!({
+            "id": "approval-interrupted",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        signal.request_stop_all_sessions();
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(BoundApprovalContext {
+                        thread_id: "thread-1",
+                        turn_id: "turn-1",
+                        interrupt: ApprovalInterruptContext {
+                            signal: &signal,
+                            observed_generation,
+                        },
+                    }),
+                )
+                .expect("newer interrupt should fail-close the approval")
+        );
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["result"], json!({ "decision": "decline" }));
+        assert!(event_receiver.try_recv().is_err());
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn interrupt_after_ui_delivery_declines_and_cleans_the_exact_broker_entry() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.approval_timeout = Duration::from_secs(1);
+        let request = json!({
+            "id": "approval-interrupted-after-delivery",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        let signal_for_operator = signal.clone();
+        let (event_sender, event_receiver) = mpsc::channel();
+        let operator = thread::spawn(move || {
+            let requested = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("approval should reach the UI before the interrupt");
+            let ConversationStreamEvent::ApprovalRequested { request } = requested else {
+                panic!("expected approval request, got {requested:?}");
+            };
+            signal_for_operator.request_stop_all_sessions();
+            let resolved = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("interrupted approval should emit a resolution");
+            (request.approval_id, resolved)
+        });
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(BoundApprovalContext {
+                        thread_id: "thread-1",
+                        turn_id: "turn-1",
+                        interrupt: ApprovalInterruptContext {
+                            signal: &signal,
+                            observed_generation,
+                        },
+                    }),
+                )
+                .expect("an interrupt after delivery should fail-close the approval")
+        );
+
+        let (approval_id, resolved) = operator.join().expect("operator thread should finish");
+        assert!(matches!(
+            resolved,
+            ConversationStreamEvent::ApprovalResolved {
+                resolution: ConversationApprovalResolution::Interrupted,
+                ..
+            }
+        ));
+        assert_eq!(
+            harness.logged_json_lines(1)[0]["result"],
+            json!({ "decision": "decline" })
+        );
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+        assert!(
+            harness
+                .connection
+                .approval_broker
+                .resolve(&approval_id, ConversationApprovalDecision::Accept)
+                .is_err(),
+            "the interrupted broker entry must be removed exactly once"
+        );
+    }
+
+    #[test]
+    fn interrupt_racing_with_received_accept_is_rechecked_before_response() {
+        let mut harness = TestConnection::new(true);
+        let request = json!({
+            "id": "approval-accept-interrupt-race",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        let signal_during_accept = signal.clone();
+        install_after_approval_decision_received_hook(move || {
+            signal_during_accept.request_stop_all_sessions();
+        });
+        let (event_sender, event_receiver) = mpsc::channel();
+        let approval_broker = harness.connection.approval_broker.clone();
+        let operator = thread::spawn(move || {
+            let requested = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("approval should reach the UI before the decision race");
+            let ConversationStreamEvent::ApprovalRequested { request } = requested else {
+                panic!("expected approval request, got {requested:?}");
+            };
+            approval_broker
+                .resolve(&request.approval_id, ConversationApprovalDecision::Accept)
+                .expect("operator accept should reach the connection");
+            event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("raced approval should emit a resolution")
+        });
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(BoundApprovalContext {
+                        thread_id: "thread-1",
+                        turn_id: "turn-1",
+                        interrupt: ApprovalInterruptContext {
+                            signal: &signal,
+                            observed_generation,
+                        },
+                    }),
+                )
+                .expect("an interrupt observed after accept receipt should fail closed")
+        );
+
+        assert_eq!(
+            harness.logged_json_lines(1)[0]["result"],
+            json!({ "decision": "decline" })
+        );
+        assert!(matches!(
+            operator.join().expect("operator thread should finish"),
+            ConversationStreamEvent::ApprovalResolved {
+                resolution: ConversationApprovalResolution::Interrupted,
+                ..
+            }
+        ));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn deadline_expiring_after_accept_receipt_is_rechecked_before_response() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.approval_timeout = Duration::from_millis(200);
+        let request = json!({
+            "id": "approval-accept-deadline-race",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        install_after_approval_decision_received_hook(|| {
+            thread::sleep(Duration::from_millis(500));
+        });
+        let signal = AppServerTurnInterruptSignal::default();
+        let (event_sender, event_receiver) = mpsc::channel();
+        let approval_broker = harness.connection.approval_broker.clone();
+        let operator = thread::spawn(move || {
+            let requested = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("approval should reach the UI before its deadline");
+            let ConversationStreamEvent::ApprovalRequested { request } = requested else {
+                panic!("expected approval request, got {requested:?}");
+            };
+            approval_broker
+                .resolve(&request.approval_id, ConversationApprovalDecision::Accept)
+                .expect("operator accept should reach the connection before the deadline");
+            event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("expired approval should emit a resolution")
+        });
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(bound_approval_context(&signal, "thread-1", "turn-1")),
+                )
+                .expect("a deadline elapsed after accept receipt should fail closed")
+        );
+
+        assert_eq!(
+            harness.logged_json_lines(1)[0]["result"],
+            json!({ "decision": "decline" })
+        );
+        assert!(matches!(
+            operator.join().expect("operator thread should finish"),
+            ConversationStreamEvent::ApprovalResolved {
+                resolution: ConversationApprovalResolution::TimedOut,
+                ..
+            }
+        ));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn server_request_handler_uses_codex_0_144_schema_shaped_fail_closed_responses() {
+        let mut harness = TestConnection::new(true);
+        let (event_sender, event_receiver) = mpsc::channel();
+        let requests = [
+            json!({
+                "id": "command",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "itemId": "command-1",
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "startedAtMs": 1,
+                    "command": "cat config",
+                    "availableDecisions": ["accept", "decline"],
+                    "additionalPermissions": {
+                        "fileSystem": { "read": ["relative/path"] }
+                    }
+                }
+            }),
+            json!({
+                "id": "file",
+                "method": "item/fileChange/requestApproval",
+                "params": {}
+            }),
+            json!({
+                "id": "legacy-command",
+                "method": "execCommandApproval",
+                "params": {}
+            }),
+            json!({
+                "id": "legacy-file",
+                "method": "applyPatchApproval",
+                "params": {}
+            }),
+            json!({
+                "id": "permissions",
+                "method": "item/permissions/requestApproval",
+                "params": {}
+            }),
+            json!({
+                "id": "input",
+                "method": "item/tool/requestUserInput",
+                "params": {}
+            }),
+            json!({
+                "id": "mcp",
+                "method": "mcpServer/elicitation/request",
+                "params": {}
+            }),
+            json!({
+                "id": "tool",
+                "method": "item/tool/call",
+                "params": {}
+            }),
+            json!({
+                "id": "auth",
+                "method": "account/chatgptAuthTokens/refresh",
+                "params": {}
+            }),
+            json!({
+                "id": "attestation",
+                "method": "attestation/generate",
+                "params": {}
+            }),
+            json!({
+                "id": "time",
+                "method": "currentTime/read",
+                "params": { "threadId": "thread-1" }
+            }),
+            json!({
+                "id": "unknown",
+                "method": "future/unknown",
+                "params": {}
+            }),
+        ];
+
+        for request in &requests {
+            assert!(
+                harness
+                    .connection
+                    .handle_server_request(request, Some(&event_sender), None)
+                    .expect("server request should receive a fail-closed response")
+            );
+        }
+
+        let logged = harness.logged_json_lines(requests.len());
+        assert_eq!(logged[0]["result"]["decision"], "decline");
+        assert_eq!(logged[1]["result"]["decision"], "decline");
+        assert_eq!(logged[2]["result"]["decision"], "denied");
+        assert_eq!(logged[3]["result"]["decision"], "denied");
+        assert_eq!(logged[4]["result"]["permissions"], json!({}));
+        assert_eq!(logged[4]["result"]["scope"], "turn");
+        assert_eq!(logged[5]["result"]["answers"], json!({}));
+        assert_eq!(logged[6]["result"]["action"], "decline");
+        assert_eq!(logged[7]["error"]["code"], -32601);
+        assert_eq!(logged[8]["error"]["code"], -32601);
+        assert_eq!(logged[9]["error"]["code"], -32601);
+        assert!(logged[10]["result"]["currentTimeAt"].as_i64().is_some());
+        assert_eq!(logged[11]["error"]["code"], -32601);
+        assert!(logged.iter().all(|response| {
+            !matches!(
+                response.pointer("/result/decision").and_then(Value::as_str),
+                Some("accept")
+                    | Some("acceptForSession")
+                    | Some("approved")
+                    | Some("approved_for_session")
+            )
+        }));
+        assert_eq!(event_receiver.try_iter().count(), requests.len() - 1);
+    }
+
+    #[test]
+    fn oversized_approval_detail_is_declined_without_reaching_the_ui() {
+        let mut harness = TestConnection::new(true);
+        let (event_sender, event_receiver) = mpsc::channel();
+        let signal = AppServerTurnInterruptSignal::default();
+        let request = json!({
+            "id": "oversized-command",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "itemId": "command-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "startedAtMs": 1,
+                "command": format!("echo safe {}", "x".repeat(480)),
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+
+        assert!(
+            harness
+                .connection
+                .handle_server_request(
+                    &request,
+                    Some(&event_sender),
+                    Some(bound_approval_context(&signal, "thread-1", "turn-1")),
+                )
+                .expect("oversized approval should receive a fail-closed response")
+        );
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["result"]["decision"], "decline");
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert!(
+            events.iter().all(|event| {
+                !matches!(event, ConversationStreamEvent::ApprovalRequested { .. })
+            })
+        );
+        assert!(events.iter().any(|event| {
+            matches!(event, ConversationStreamEvent::StatusUpdated { text } if text.contains("declined"))
+        }));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn blank_or_incomplete_command_approvals_are_declined_before_ui_delivery() {
+        let mut harness = TestConnection::new(true);
+        let (event_sender, event_receiver) = mpsc::channel();
+        let signal = AppServerTurnInterruptSignal::default();
+        let invalid_fields = [
+            json!({ "command": null }),
+            json!({ "command": "" }),
+            json!({ "command": " \t\n" }),
+            json!({ "command": "cargo test", "commandActions": null }),
+            json!({
+                "command": "cargo test",
+                "commandActions": [{ "type": "unknown" }]
+            }),
+        ];
+
+        for (index, invalid) in invalid_fields.iter().cloned().enumerate() {
+            let mut params = json!({
+                "itemId": format!("command-{index}"),
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "startedAtMs": 1,
+                "availableDecisions": ["accept", "decline"]
+            });
+            params
+                .as_object_mut()
+                .expect("approval params should be an object")
+                .extend(
+                    invalid
+                        .as_object()
+                        .expect("invalid fixture should be an object")
+                        .clone(),
+                );
+            let request = json!({
+                "id": format!("invalid-command-{index}"),
+                "method": "item/commandExecution/requestApproval",
+                "params": params
+            });
+
+            assert!(
+                harness
+                    .connection
+                    .handle_server_request(
+                        &request,
+                        Some(&event_sender),
+                        Some(bound_approval_context(&signal, "thread-1", "turn-1")),
+                    )
+                    .expect("invalid command approval should fail closed")
+            );
+        }
+
+        let logged = harness.logged_json_lines(invalid_fields.len());
+        assert!(
+            logged
+                .iter()
+                .all(|response| response["result"] == json!({ "decision": "decline" }))
+        );
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(events.len(), invalid_fields.len());
+        assert!(events.iter().all(|event| matches!(
+            event,
+            ConversationStreamEvent::StatusUpdated { text } if text.contains("declined")
+        )));
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
     fn wait_for_response_reports_protocol_errors_with_diagnostics() {
         let mut harness = TestConnection::new(true);
         harness.send_stderr("fatal: child transport crashed");
@@ -1072,15 +4350,20 @@ mod tests {
         assert!(error.to_string().contains("without a result payload"));
 
         let mut invalid_json = TestConnection::new(true);
+        let malformed_secret = "private-prompt-secret";
         invalid_json
             .tx
-            .send(AppServerLine::Stdout("not-json".to_string()))
+            .send(AppServerLine::Stdout(format!(
+                "{{\"prompt\":\"{malformed_secret}\""
+            )))
             .expect("test channel should accept stdout line");
         let error = invalid_json
             .connection
             .wait_for_response(1)
             .expect_err("invalid JSON line should fail the request");
         assert!(error.to_string().contains("invalid JSON from app-server"));
+        assert!(error.to_string().contains("category=Eof"));
+        assert!(!error.to_string().contains(malformed_secret));
 
         let mut timeout = TestConnection::new(true);
         let error = timeout
@@ -1165,12 +4448,114 @@ mod tests {
     }
 
     #[test]
-    fn turn_stream_consumes_deferred_notifications_before_blocking_for_more_lines() {
+    fn turn_stream_declines_file_change_without_prompt_and_continues() {
         let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "id": "approval-stream",
+            "method": "item/fileChange/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "file-change-1",
+                "startedAtMs": 1
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-1"
+                }
+            }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+
         harness
             .connection
-            .pending_notifications
-            .push(notification(json!({
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("file-change decline should not block turn completion");
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["id"], "approval-stream");
+        assert_eq!(logged[0]["result"]["decision"], "decline");
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![
+                ConversationStreamEvent::StatusUpdated {
+                    text: "app-server approval request `item/fileChange/requestApproval` declined (requested file changes and grant scope cannot be reviewed completely)"
+                        .to_string(),
+                },
+                ConversationStreamEvent::TurnCompleted {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: Vec::new(),
+                },
+            ]
+        );
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn unattended_stream_declines_approval_without_emitting_a_prompt() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.approval_mode = AppServerApprovalMode::Unattended;
+        harness.send_stdout(json!({
+            "id": "hidden-approval",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-hidden",
+                "turnId": "turn-hidden",
+                "itemId": "command-hidden",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-hidden",
+                "turn": { "id": "turn-hidden" }
+            }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-hidden",
+                "turn-hidden",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("unattended approval decline should not block completion");
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["result"]["decision"], "decline");
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-hidden".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn turn_stream_consumes_deferred_notifications_before_blocking_for_more_lines() {
+        let mut harness = TestConnection::new(true);
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
                 "method": "item/completed",
                 "params": {
                     "threadId": "thread-1",
@@ -1194,11 +4579,13 @@ mod tests {
                         ]
                     }
                 }
-            })));
-        harness
-            .connection
-            .pending_notifications
-            .push(notification(json!({
+                })))
+        );
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
                 "method": "turn/completed",
                 "params": {
                     "threadId": "thread-1",
@@ -1206,7 +4593,8 @@ mod tests {
                         "id": "turn-1"
                     }
                 }
-            })));
+                })))
+        );
         let (event_sender, event_receiver) = mpsc::channel();
 
         harness
@@ -1286,32 +4674,80 @@ mod tests {
                 },
             ]
         );
+
+        harness.send_stdout(json!({
+            "id": 2,
+            "result": { "connection": "reused" }
+        }));
+        assert_eq!(
+            harness
+                .connection
+                .send_request::<Value>("test/after-interrupt", json!({}))
+                .expect("a normally terminated interrupt must preserve the connection"),
+            json!({ "connection": "reused" })
+        );
     }
 
     #[test]
-    fn turn_stream_keeps_reading_when_interrupt_request_fails() {
+    fn acknowledged_interrupt_without_terminal_event_fails_closed() {
         let mut harness = TestConnection::new(true);
         harness.send_stdout(json!({
             "id": 1,
-            "error": {
-                "message": "interrupt rejected"
-            }
-        }));
-        harness.send_stdout(json!({
-            "method": "turn/completed",
-            "params": {
-                "threadId": "thread-1",
-                "turn": {
-                    "id": "turn-1"
-                }
-            }
+            "result": {}
         }));
         let (event_sender, event_receiver) = mpsc::channel();
         let signal = AppServerTurnInterruptSignal::default();
         let observed_generation = signal.current_generation();
         signal.request_stop_all_sessions();
 
-        harness
+        let error = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-ack-only",
+                "turn-ack-only",
+                &signal,
+                observed_generation,
+                &event_sender,
+            )
+            .expect_err("an interrupt acknowledgement cannot replace a terminal turn event");
+        assert!(error.to_string().contains("acknowledged the stop request"));
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![
+                ConversationStreamEvent::StatusUpdated {
+                    text: "stop requested / app-server interrupt sent".to_string(),
+                },
+                ConversationStreamEvent::TurnInterruptRequestFailed {
+                    message: "app-server acknowledged the stop request but did not terminate the active turn within the bounded interrupt deadline; terminating the active app-server process tree"
+                        .to_string(),
+                },
+            ]
+        );
+        let follow_up_error = harness
+            .connection
+            .send_request::<Value>("test/after-ack-timeout", json!({}))
+            .expect_err("an ack-only connection must remain poisoned");
+        assert!(follow_up_error.to_string().contains("transport failed"));
+    }
+
+    #[test]
+    fn turn_stream_closes_connection_after_correlated_interrupt_retries_fail() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.interrupt_total_timeout = Duration::from_secs(1);
+        for request_id in 1..=3 {
+            harness.send_stdout(json!({
+                "id": request_id,
+                "error": {
+                    "message": "interrupt rejected"
+                }
+            }));
+        }
+        let (event_sender, event_receiver) = mpsc::channel();
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        signal.request_stop_all_sessions();
+
+        let error = harness
             .connection
             .wait_for_turn_stream(
                 "thread-1",
@@ -1320,19 +4756,276 @@ mod tests {
                 observed_generation,
                 &event_sender,
             )
-            .expect("turn stream should remain authoritative after interrupt failure");
+            .expect_err("exhausted interrupt retries must close the active connection");
+        assert!(
+            error
+                .to_string()
+                .contains("terminating the active app-server")
+        );
 
         assert_eq!(
             event_receiver.try_iter().collect::<Vec<_>>(),
-            vec![ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-1".to_string(),
-                changed_planning_file_paths: Vec::new(),
+            vec![ConversationStreamEvent::TurnInterruptRequestFailed {
+                message: "stop request failed within the bounded app-server interrupt deadline; terminating the active app-server process tree"
+                    .to_string(),
             }]
         );
 
+        assert_eq!(harness.connection.next_request_id, 4);
+
         let warnings = harness.connection.take_warnings();
-        assert_contains_warning(&warnings, "interrupt failed");
-        assert_contains_warning(&warnings, "interrupt rejected");
+        assert_contains_warning(&warnings, "interrupt attempt 1/3 failed");
+        assert_contains_warning(&warnings, "interrupt attempt 3/3 failed");
+
+        let follow_up_error = harness
+            .connection
+            .send_request::<Value>("account/read", json!({}))
+            .expect_err("a fail-closed connection must reject every follow-up request");
+        assert!(follow_up_error.to_string().contains("transport failed"));
+
+        let mut replacement = TestConnection::new(true);
+        replacement.send_stdout(json!({
+            "id": 1,
+            "result": { "recovered": true }
+        }));
+        assert_eq!(
+            replacement
+                .connection
+                .send_request::<Value>("test/recovery", json!({}))
+                .expect("a new connection should recover independently"),
+            json!({ "recovered": true })
+        );
+    }
+
+    #[test]
+    fn production_interrupt_deadline_is_short_and_independent_from_response_timeout() {
+        let config = AppServerConnectionConfig::default();
+        assert_eq!(config.interrupt_total_timeout, Duration::from_secs(3));
+        assert!(config.interrupt_total_timeout < config.response_timeout);
+        assert_eq!(config.interrupt_retry_limit, 3);
+    }
+
+    #[test]
+    fn stop_during_silent_turn_start_terminates_transport_within_deadline() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.response_timeout = Duration::from_secs(30);
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        let stop_signal = signal.clone();
+        let stop_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            stop_signal.request_stop_all_sessions();
+        });
+        let (event_sender, event_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let error = harness
+            .connection
+            .start_turn_with_event_sender(
+                TurnStartParams {
+                    thread_id: "thread-1".to_string(),
+                    input: vec![TurnInputItem::text("prompt")],
+                    approval_policy: None,
+                    approvals_reviewer: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                },
+                &event_sender,
+                &signal,
+                observed_generation,
+            )
+            .expect_err("stop must abort a turn/start peer that never responds");
+        stop_thread.join().expect("stop thread should finish");
+
+        assert!(
+            error.to_string().contains("before app-server acknowledged"),
+            "unexpected turn/start stop error: {error:#}"
+        );
+        assert!(
+            started_at.elapsed() < Duration::from_secs(3),
+            "turn/start stop must not inherit the normal response timeout"
+        );
+        assert!(matches!(
+            event_receiver.try_recv(),
+            Ok(ConversationStreamEvent::TurnInterruptRequestFailed { message })
+                if message.contains("before app-server acknowledged")
+        ));
+        assert!(
+            harness
+                .connection
+                .child
+                .try_wait()
+                .expect("terminated child status should be observable")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn shared_stop_interrupts_unattended_pre_stream_response_waits() {
+        for method in ["initialize", "thread/start", "thread/resume"] {
+            let signal = AppServerTurnInterruptSignal::default();
+            let mut harness = TestConnection::new_with_interrupt_signal(
+                true,
+                AppServerApprovalMode::Unattended,
+                signal.clone(),
+            );
+            harness.connection.config.response_timeout = Duration::from_secs(30);
+            let stop_signal = signal.clone();
+            let stop_thread = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(20));
+                stop_signal.request_stop_all_sessions();
+            });
+            let started_at = Instant::now();
+
+            let error = harness
+                .connection
+                .send_request::<Value>(method, json!({}))
+                .expect_err("shared stop must abort every silent pre-stream request");
+            stop_thread.join().expect("stop thread should finish");
+
+            assert!(
+                error.to_string().contains(method),
+                "pre-stream stop error should identify {method}: {error:#}"
+            );
+            assert!(
+                started_at.elapsed() < Duration::from_secs(3),
+                "unattended {method} must observe the shared stop generation"
+            );
+            assert!(
+                harness
+                    .connection
+                    .child
+                    .try_wait()
+                    .expect("terminated hidden-worker child should be observable")
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn stale_shared_stop_does_not_cancel_a_new_request() {
+        let signal = AppServerTurnInterruptSignal::default();
+        signal.request_stop_all_sessions();
+        let mut harness = TestConnection::new_with_interrupt_signal(
+            true,
+            AppServerApprovalMode::Unattended,
+            signal,
+        );
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": { "ok": true }
+        }));
+
+        assert_eq!(
+            harness
+                .connection
+                .send_request::<Value>("thread/read", json!({}))
+                .expect("a stop predating the request must be treated as stale"),
+            json!({ "ok": true })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn full_app_server_stdin_is_bounded_by_write_ack_timeout() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child =
+            subprocess::spawn(&mut command).expect("non-reading app-server child should spawn");
+        let stdin = child
+            .take_stdin()
+            .expect("non-reading app-server stdin should be piped");
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let transport_failure = Arc::new(TransportFailure::default());
+        let mut config = test_config();
+        config.response_timeout = Duration::from_millis(50);
+        let mut connection = AppServerConnection {
+            child,
+            stdin_writer: AppServerStdinWriter::spawn(stdin, transport_failure.clone()),
+            rx,
+            transport_failure,
+            diagnostics: ConnectionDiagnostics::default(),
+            pending_notifications: PendingNotifications::default(),
+            next_request_id: 1,
+            client_name: "test-client".to_string(),
+            client_version: "test-version".to_string(),
+            initialized: true,
+            config,
+            approval_broker: Arc::new(AppServerApprovalBroker::default()),
+            approval_mode: AppServerApprovalMode::Interactive,
+            interrupt_signal: AppServerTurnInterruptSignal::default(),
+        };
+        let started_at = Instant::now();
+
+        let error = connection
+            .send_json_line(json!({ "payload": "x".repeat(1024 * 1024) }))
+            .expect_err("a peer that does not read stdin must time out");
+
+        assert!(
+            error.to_string().contains("timed out writing"),
+            "unexpected blocked-write error: {error:#}"
+        );
+        assert!(
+            started_at.elapsed() < Duration::from_secs(1),
+            "blocked stdin must not pin the control thread"
+        );
+        assert!(
+            connection
+                .child
+                .try_wait()
+                .expect("terminated child status should be observable")
+                .is_some()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writer_shutdown_detaches_when_a_live_reader_keeps_write_blocked() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child =
+            subprocess::spawn(&mut command).expect("non-reading app-server child should spawn");
+        let stdin = child
+            .take_stdin()
+            .expect("non-reading app-server stdin should be piped");
+        let transport_failure = Arc::new(TransportFailure::default());
+        let mut writer = AppServerStdinWriter::spawn(stdin, transport_failure);
+        let (acknowledgement, acknowledgement_receiver) = mpsc::sync_channel(1);
+        writer
+            .try_send(AppServerWriteRequest {
+                frame: vec![b'x'; 4 * 1024 * 1024],
+                acknowledgement,
+            })
+            .expect("writer should accept one bounded request");
+        thread::sleep(Duration::from_millis(20));
+        assert!(
+            writer
+                .worker
+                .as_ref()
+                .is_some_and(|worker| !worker.is_finished()),
+            "non-reading peer should keep the writer blocked"
+        );
+        let started_at = Instant::now();
+
+        writer.shutdown();
+
+        assert!(
+            started_at.elapsed() < Duration::from_millis(500),
+            "writer shutdown must not join an indefinitely blocked write"
+        );
+        assert!(acknowledgement_receiver.try_recv().is_err());
+        child
+            .terminate_and_wait()
+            .expect("non-reading fixture should terminate");
     }
 
     #[test]
@@ -1349,13 +5042,8 @@ mod tests {
         harness
             .connection
             .child
-            .kill()
-            .expect("fake child should be killable");
-        harness
-            .connection
-            .child
-            .wait()
-            .expect("fake child should exit after kill");
+            .terminate_and_wait()
+            .expect("test app-server containment cleanup should succeed");
 
         assert!(
             !harness
@@ -1365,16 +5053,184 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn dropping_connection_terminates_long_lived_app_server_descendants() {
+        let pid_path = unique_log_path().with_extension("descendant-pid");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "sleep 30 & descendant=$!; printf '%s' \"$descendant\" > \"$1\"; while IFS= read -r _; do :; done",
+                "fake-app-server-with-descendant",
+            ])
+            .arg(&pid_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child =
+            subprocess::spawn(&mut command).expect("fake app-server process tree should spawn");
+        let stdin = child
+            .take_stdin()
+            .expect("fake app-server stdin should be piped");
+        let (tx, rx) = mpsc::sync_channel(1);
+        let transport_failure = Arc::new(TransportFailure::default());
+        let connection = AppServerConnection {
+            child,
+            stdin_writer: AppServerStdinWriter::spawn(stdin, transport_failure.clone()),
+            rx,
+            transport_failure,
+            diagnostics: ConnectionDiagnostics::default(),
+            pending_notifications: PendingNotifications::default(),
+            next_request_id: 1,
+            client_name: "test-client".to_string(),
+            client_version: "test-version".to_string(),
+            initialized: true,
+            config: test_config(),
+            approval_broker: Arc::new(AppServerApprovalBroker::default()),
+            approval_mode: AppServerApprovalMode::Interactive,
+            interrupt_signal: AppServerTurnInterruptSignal::default(),
+        };
+        let published_deadline = Instant::now() + Duration::from_secs(2);
+        while !pid_path.exists() && Instant::now() < published_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let descendant_pid = fs::read_to_string(&pid_path)
+            .expect("app-server descendant PID should be published")
+            .parse::<u32>()
+            .expect("app-server descendant PID should be numeric");
+
+        drop(connection);
+        drop(tx);
+        let gone_deadline = Instant::now() + Duration::from_secs(2);
+        while crate::process_liveness::process_is_alive(descendant_pid)
+            .expect("descendant liveness should be inspectable")
+            && Instant::now() < gone_deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = fs::remove_file(&pid_path);
+        assert!(
+            !crate::process_liveness::process_is_alive(descendant_pid)
+                .expect("descendant liveness should remain inspectable"),
+            "dropping app-server connection must terminate descendant {descendant_pid}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn silent_interrupt_fail_close_terminates_descendants_inside_test_deadline() {
+        let pid_path = unique_log_path().with_extension("silent-interrupt-descendant-pid");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "sleep 30 & descendant=$!; printf '%s' \"$descendant\" > \"$1\"; while IFS= read -r _; do :; done",
+                "silent-fake-app-server-with-descendant",
+            ])
+            .arg(&pid_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child =
+            subprocess::spawn(&mut command).expect("silent fake app-server tree should spawn");
+        let stdin = child
+            .take_stdin()
+            .expect("silent fake app-server stdin should be piped");
+        let (tx, rx) = mpsc::sync_channel(1);
+        let transport_failure = Arc::new(TransportFailure::default());
+        let mut config = test_config();
+        config.interrupt_total_timeout = Duration::from_millis(50);
+        let mut connection = AppServerConnection {
+            child,
+            stdin_writer: AppServerStdinWriter::spawn(stdin, transport_failure.clone()),
+            rx,
+            transport_failure,
+            diagnostics: ConnectionDiagnostics::default(),
+            pending_notifications: PendingNotifications::default(),
+            next_request_id: 1,
+            client_name: "test-client".to_string(),
+            client_version: "test-version".to_string(),
+            initialized: true,
+            config,
+            approval_broker: Arc::new(AppServerApprovalBroker::default()),
+            approval_mode: AppServerApprovalMode::Interactive,
+            interrupt_signal: AppServerTurnInterruptSignal::default(),
+        };
+        let published_deadline = Instant::now() + Duration::from_secs(2);
+        while !pid_path.exists() && Instant::now() < published_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let descendant_pid = fs::read_to_string(&pid_path)
+            .expect("silent app-server descendant PID should be published")
+            .parse::<u32>()
+            .expect("silent app-server descendant PID should be numeric");
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        signal.request_stop_all_sessions();
+        let (event_sender, _event_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let error = connection
+            .wait_for_turn_stream(
+                "thread-silent",
+                "turn-silent",
+                &signal,
+                observed_generation,
+                &event_sender,
+            )
+            .expect_err("a silent interrupt peer must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("terminating the active app-server")
+        );
+        assert!(
+            started_at.elapsed() < Duration::from_secs(1),
+            "test interrupt deadline must bound process-tree termination"
+        );
+
+        let gone_deadline = Instant::now() + Duration::from_secs(2);
+        while crate::process_liveness::process_is_alive(descendant_pid)
+            .expect("silent descendant liveness should be inspectable")
+            && Instant::now() < gone_deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = fs::remove_file(&pid_path);
+        assert!(
+            !crate::process_liveness::process_is_alive(descendant_pid)
+                .expect("silent descendant liveness should remain inspectable"),
+            "failed interrupt must terminate descendant {descendant_pid}"
+        );
+        let follow_up_error = connection
+            .send_request::<Value>("test/after-stop", json!({}))
+            .expect_err("terminated connection must remain poisoned");
+        assert!(follow_up_error.to_string().contains("transport failed"));
+        connection.terminate_child();
+        connection.terminate_child();
+        drop(tx);
+    }
+
     #[test]
     fn pipe_reader_classifies_stdout_and_stderr_lines() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        let transport_failure = Arc::new(TransportFailure::default());
 
         spawn_pipe_reader(
             Cursor::new(b"out-one\nout-two\n".to_vec()),
             tx.clone(),
             false,
+            MAX_STDOUT_LINE_BYTES,
+            transport_failure.clone(),
         );
-        spawn_pipe_reader(Cursor::new(b"err-one\n".to_vec()), tx, true);
+        spawn_pipe_reader(
+            Cursor::new(b"err-one\n".to_vec()),
+            tx,
+            true,
+            MAX_STDERR_LINE_BYTES,
+            transport_failure.clone(),
+        );
 
         let mut stdout_lines = Vec::new();
         let mut stderr_lines = Vec::new();
@@ -1395,6 +5251,142 @@ mod tests {
         stdout_lines.sort();
         assert_eq!(stdout_lines, vec!["out-one", "out-two"]);
         assert_eq!(stderr_lines, vec!["err-one"]);
+        assert!(transport_failure.current().is_none());
+    }
+
+    #[test]
+    fn bounded_line_reader_accepts_the_limit_and_rejects_limit_plus_one() {
+        const TEST_LINE_LIMIT: usize = 8 * 1024;
+        let mut exact = vec![b'a'; TEST_LINE_LIMIT];
+        exact.push(b'\n');
+        let mut exact_reader = BufReader::new(Cursor::new(exact));
+        let BoundedLineRead::Line(line) = read_bounded_line(&mut exact_reader, TEST_LINE_LIMIT)
+            .expect("the exact line limit should be readable")
+        else {
+            panic!("the exact line limit should produce one line");
+        };
+        assert_eq!(line.len(), TEST_LINE_LIMIT);
+
+        let mut oversized_reader = BufReader::new(Cursor::new(vec![b'b'; TEST_LINE_LIMIT + 1]));
+        assert!(matches!(
+            read_bounded_line(&mut oversized_reader, TEST_LINE_LIMIT)
+                .expect("line overflow is a protocol state, not an I/O error"),
+            BoundedLineRead::LimitExceeded
+        ));
+    }
+
+    #[test]
+    fn stdout_limit_supports_complete_long_lived_thread_responses() {
+        let payload = vec![b'a'; 2 * 1024 * 1024 + 1];
+        let mut reader = BufReader::new(Cursor::new(payload));
+        let BoundedLineRead::Line(line) = read_bounded_line(&mut reader, MAX_STDOUT_LINE_BYTES)
+            .expect("a multi-megabyte thread response should remain readable")
+        else {
+            panic!("a normal long thread response must not poison the transport");
+        };
+        assert_eq!(line.len(), 2 * 1024 * 1024 + 1);
+    }
+
+    #[test]
+    fn pipe_reader_applies_backpressure_without_dropping_a_valid_burst() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let transport_failure = Arc::new(TransportFailure::default());
+        spawn_pipe_reader(
+            Cursor::new(b"first\nsecond\nthird\n".to_vec()),
+            tx,
+            false,
+            MAX_STDOUT_LINE_BYTES,
+            transport_failure.clone(),
+        );
+
+        for expected in ["first", "second", "third"] {
+            assert!(matches!(
+                rx.recv_timeout(Duration::from_secs(1)),
+                Ok(AppServerLine::Stdout(line)) if line == expected
+            ));
+        }
+        assert!(transport_failure.current().is_none());
+    }
+
+    #[test]
+    fn oversized_pipe_line_poisoning_terminates_the_connection() {
+        const TEST_LINE_LIMIT: usize = 8 * 1024;
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let transport_failure = Arc::new(TransportFailure::default());
+        spawn_pipe_reader(
+            Cursor::new(vec![b'x'; TEST_LINE_LIMIT + 1]),
+            tx,
+            false,
+            TEST_LINE_LIMIT,
+            transport_failure.clone(),
+        );
+        let failure = wait_for_transport_failure(&transport_failure);
+        assert!(failure.contains("line exceeded"));
+
+        let mut harness = TestConnection::new(true);
+        harness.connection.transport_failure.record(failure);
+        let error = harness
+            .connection
+            .wait_for_response(1)
+            .expect_err("a poisoned reader must fail the connection");
+        assert!(error.to_string().contains("app-server transport failed"));
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{TEST_LINE_LIMIT}-byte limit"))
+        );
+        assert!(
+            harness
+                .connection
+                .child
+                .try_wait()
+                .expect("terminated child status should be readable")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn pending_notification_overflow_fails_closed_and_terminates_the_connection() {
+        let mut harness = TestConnection::new(true);
+        let error = (0..=MAX_PENDING_NOTIFICATIONS)
+            .find_map(|index| {
+                harness
+                    .connection
+                    .defer_turn_notification(notification(json!({
+                        "method": "item/agentMessage/delta",
+                        "params": { "turnId": "turn-1", "delta": index.to_string() }
+                    })))
+                    .err()
+            })
+            .expect("the bounded pending queue should reject overflow");
+
+        assert!(
+            error
+                .to_string()
+                .contains("pending turn-notification queue")
+        );
+        assert!(
+            harness
+                .connection
+                .child
+                .try_wait()
+                .expect("terminated child status should be readable")
+                .is_some()
+        );
+    }
+
+    fn wait_for_transport_failure(transport_failure: &TransportFailure) -> String {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Some(failure) = transport_failure.current() {
+                return failure;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "pipe reader did not report its bounded transport failure"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     fn assert_not_initialized<T>(result: Result<T>)
@@ -1442,34 +5434,51 @@ mod tests {
 
     struct TestConnection {
         connection: AppServerConnection,
-        tx: Sender<AppServerLine>,
+        tx: SyncSender<AppServerLine>,
         log_path: PathBuf,
     }
 
     impl TestConnection {
         fn new(initialized: bool) -> Self {
+            Self::new_with_interrupt_signal(
+                initialized,
+                AppServerApprovalMode::Interactive,
+                AppServerTurnInterruptSignal::default(),
+            )
+        }
+
+        fn new_with_interrupt_signal(
+            initialized: bool,
+            approval_mode: AppServerApprovalMode,
+            interrupt_signal: AppServerTurnInterruptSignal,
+        ) -> Self {
             let log_path = unique_log_path();
-            let mut child = Command::new("sh")
+            let mut command = Command::new("sh");
+            command
                 .arg("-c")
                 .arg("while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$1\"; done")
                 .arg("fake-app-server-stdin-log")
                 .arg(&log_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("fake app-server child should spawn");
+                .stderr(Stdio::null());
+            let mut child =
+                subprocess::spawn(&mut command).expect("fake app-server child should spawn");
             let stdin = child
-                .stdin
-                .take()
+                .take_stdin()
                 .expect("fake app-server stdin should be piped");
-            let (tx, rx) = mpsc::channel();
+            // Unit tests enqueue scripted peer messages before entering the consumer
+            // loop. Production pipe readers use the one-line backpressure channel.
+            let (tx, rx) = mpsc::sync_channel(128);
+            let transport_failure = Arc::new(TransportFailure::default());
+            let stdin_writer = AppServerStdinWriter::spawn(stdin, transport_failure.clone());
 
             Self {
                 connection: AppServerConnection {
                     child,
-                    stdin,
+                    stdin_writer,
                     rx,
+                    transport_failure,
                     diagnostics: ConnectionDiagnostics::default(),
                     pending_notifications: PendingNotifications::default(),
                     next_request_id: 1,
@@ -1477,6 +5486,9 @@ mod tests {
                     client_version: "test-version".to_string(),
                     initialized,
                     config: test_config(),
+                    approval_broker: Arc::new(AppServerApprovalBroker::default()),
+                    approval_mode,
+                    interrupt_signal,
                 },
                 tx,
                 log_path,
@@ -1502,10 +5514,21 @@ mod tests {
 
     fn test_config() -> AppServerConnectionConfig {
         AppServerConnectionConfig {
+            executable: PathBuf::from("codex"),
+            executable_prefix_args: Vec::new(),
+            executable_resolution_error: None,
+            command_environment: Vec::new(),
+            shell_environment_inherit: ShellEnvironmentInherit::Core,
+            process_environment_policy: ProcessEnvironmentPolicy::Scrubbed,
+            api_key_auth: false,
             response_timeout: Duration::from_millis(10),
             poll_interval: Duration::from_millis(1),
             drain_timeout: Duration::from_millis(2),
             drain_poll_interval: Duration::from_millis(1),
+            approval_timeout: Duration::from_millis(10),
+            interrupt_total_timeout: Duration::from_millis(25),
+            interrupt_retry_backoff: Duration::from_millis(1),
+            interrupt_retry_limit: 3,
         }
     }
 

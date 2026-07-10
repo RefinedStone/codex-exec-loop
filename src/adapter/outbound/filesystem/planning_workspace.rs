@@ -1,18 +1,34 @@
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+#[cfg(not(windows))]
+use serde::{Deserialize, Serialize};
 
+#[cfg(not(windows))]
+use crate::application::port::outbound::planning_workspace_port::PlanningFileSyncBaselineRecord;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
-    PlanningDraftStageRecord, PlanningStagedFileRecord, PlanningWorkspaceLoadRecord,
-    PlanningWorkspacePort, RepoScopedPlanningWorkspacePort,
+    PlanningDraftStageRecord, PlanningFileSyncCandidateRecord, PlanningStagedFileRecord,
+    PlanningWorkspaceLoadRecord, PlanningWorkspacePort, RepoScopedPlanningWorkspacePort,
 };
 use crate::application::service::planning::{
     ACTIVE_PLANNING_FILE_PATHS, PLANNING_DRAFTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
     RESULT_OUTPUT_FILE_PATH, canonical_active_planning_file_path, validate_planning_draft_name,
 };
+
+use super::secure_fs;
+
+#[cfg(not(windows))]
+const FILE_SYNC_MANIFEST_PATH: &str =
+    ".codex-exec-loop/planning/.akra-file-sync-result-output.json";
+
+#[cfg(not(windows))]
+#[derive(Debug, Serialize, Deserialize)]
+struct PlanningFileSyncManifest {
+    relative_path: String,
+    observed_planning_revision: Option<i64>,
+}
 
 /*
  * FilesystemPlanningWorkspaceAdapter는 planning workspace file을 로컬 filesystem에 매핑하는 outbound adapter다.
@@ -22,11 +38,13 @@ use crate::application::service::planning::{
  *
  * application layer는 PlanningWorkspacePort만 본다.
  * 이 구현이 active workspace, candidate workspace, staged draft, rejected archive의 물리 위치 차이를 숨겨야
- * service가 "무엇을 읽고 쓰는가"에 집중하고 "어느 checkout에 있는가"를 알 필요가 없어진다.
+ * service가 "무엇을 읽고 쓰는가"에 집중하고 "어느 checkout에 있는가"를 알 필요가 없어진다. Windows는
+ * plain directory도 private SQLite authority로 보내 junction-safe direct filesystem 구현 부재를 기능 중단으로
+ * 전파하지 않는다.
  */
 #[derive(Default)]
 pub struct FilesystemPlanningWorkspaceAdapter {
-    // None은 direct-filesystem mode이고, Some은 git-backed workspace에서 active authority root를 resolve할 수 있다는 뜻이다.
+    // None은 direct-filesystem mode다. Some은 Unix Git workspace 또는 모든 Windows workspace에서 private authority를 제공한다.
     repo_scoped_store: Option<Arc<dyn RepoScopedPlanningWorkspacePort>>,
 }
 
@@ -47,10 +65,24 @@ impl FilesystemPlanningWorkspaceAdapter {
         &self,
         workspace_dir: &str,
     ) -> Option<&dyn RepoScopedPlanningWorkspacePort> {
-        // repo-scoped store는 git-backed workspace에서만 의미가 있으므로 temp fixture나 plain directory는 direct path로 남긴다.
-        self.repo_scoped_store
-            .as_deref()
-            .filter(|store| store.is_git_backed_workspace(workspace_dir))
+        let store = self.repo_scoped_store.as_deref()?;
+        #[cfg(windows)]
+        {
+            // Windows direct filesystem mutation is intentionally unavailable: a
+            // full-path implementation cannot close junction/reparse replacement
+            // races. The production composition always supplies this private,
+            // workspace-keyed SQLite boundary, including for plain directories.
+            let _ = workspace_dir;
+            Some(store)
+        }
+        #[cfg(not(windows))]
+        {
+            // Unix plain directories retain the reviewable file-backed workflow;
+            // Git worktrees share the repo-scoped authority store.
+            store
+                .is_git_backed_workspace(workspace_dir)
+                .then_some(store)
+        }
     }
 
     fn draft_directory(workspace_dir: &str, draft_name: &str) -> Result<PathBuf> {
@@ -61,11 +93,9 @@ impl FilesystemPlanningWorkspaceAdapter {
             .join(draft_name))
     }
 
-    fn rejected_directory(&self, workspace_dir: &str, archive_name: &str) -> PathBuf {
-        // rejected archive는 candidate worktree가 아니라 active workspace root 쪽에 남겨 authority history와 같은 위치에 둔다.
-        self.active_workspace_root(workspace_dir)
-            .join(PLANNING_REJECTED_DIRECTORY)
-            .join(archive_name)
+    fn draft_directory_relative(draft_name: &str) -> Result<PathBuf> {
+        validate_draft_name(draft_name)?;
+        Ok(Path::new(PLANNING_DRAFTS_DIRECTORY).join(draft_name))
     }
 
     fn active_workspace_root(&self, workspace_dir: &str) -> PathBuf {
@@ -76,44 +106,20 @@ impl FilesystemPlanningWorkspaceAdapter {
             .unwrap_or_else(|| Path::new(workspace_dir).to_path_buf())
     }
 
-    fn active_workspace_path(&self, workspace_dir: &str, relative_path: &str) -> PathBuf {
-        // active path는 result output 같은 committed planning state를 읽고 쓸 때 사용한다.
-        self.active_workspace_root(workspace_dir)
-            .join(relative_path)
-    }
-
-    fn candidate_workspace_path(workspace_dir: &str, relative_path: &str) -> PathBuf {
-        // candidate path는 repo-scoped authority를 보지 않고 현재 slot/worktree copy 자체를 검사할 때 사용한다.
-        Path::new(workspace_dir).join(relative_path)
-    }
-
     fn read_optional_workspace_file(
         &self,
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
-        let path = self.active_workspace_path(workspace_dir, relative_path);
-        if !path.is_file() {
-            return Ok(None);
-        }
-
-        fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))
-            .map(Some)
+        let root = self.active_workspace_root(workspace_dir);
+        secure_fs::read_optional_file(&root, Path::new(relative_path))
     }
 
     fn read_optional_candidate_workspace_file(
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
-        let path = Self::candidate_workspace_path(workspace_dir, relative_path);
-        if !path.is_file() {
-            return Ok(None);
-        }
-
-        fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))
-            .map(Some)
+        secure_fs::read_optional_file(Path::new(workspace_dir), Path::new(relative_path))
     }
 
     fn load_workspace_record_from(
@@ -180,48 +186,6 @@ impl FilesystemPlanningWorkspaceAdapter {
         ))
     }
 
-    fn read_all_draft_files(
-        directory: &Path,
-        root_directory: &Path,
-        records: &mut Vec<PlanningDraftLoadFileRecord>,
-    ) -> Result<()> {
-        // recursive draft load는 staged file 위치에서 active path를 재구성해 review/promotion UI가 원래 planning file을 표시하게 한다.
-        for entry in fs::read_dir(directory)
-            .with_context(|| format!("failed to read {}", directory.display()))?
-        {
-            let entry =
-                entry.with_context(|| format!("failed to inspect {}", directory.display()))?;
-            let path = entry.path();
-            if path.is_dir() {
-                Self::read_all_draft_files(&path, root_directory, records)?;
-                continue;
-            }
-
-            let relative_path = path
-                .strip_prefix(root_directory)
-                .with_context(|| format!("failed to strip {}", root_directory.display()))?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let active_path = format!(".codex-exec-loop/planning/{relative_path}");
-            let body = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            records.push(PlanningDraftLoadFileRecord {
-                active_path,
-                staged_path: path.display().to_string(),
-                body,
-            });
-        }
-
-        Ok(())
-    }
-
-    fn ensure_parent_directory(path: &Path) -> Result<()> {
-        let Some(parent) = path.parent() else {
-            return Ok(());
-        };
-        fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))
-    }
-
     fn draft_sort_order(active_path: &str) -> (usize, &str) {
         // 알려진 planning file은 semantic order로 먼저 보이고, extra file은 그 뒤에서 path 기준으로 안정 정렬된다.
         let order = ACTIVE_PLANNING_FILE_PATHS
@@ -277,6 +241,121 @@ fn validate_draft_name(draft_name: &str) -> Result<()> {
 }
 
 impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
+    fn uses_repo_scoped_authority(&self, workspace_dir: &str) -> bool {
+        self.repo_scoped_store(workspace_dir).is_some()
+    }
+
+    fn export_planning_file_sync_candidate(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+        body: &str,
+        observed_planning_revision: Option<i64>,
+    ) -> Result<String> {
+        #[cfg(windows)]
+        {
+            let _ = (
+                workspace_dir,
+                relative_path,
+                body,
+                observed_planning_revision,
+            );
+            bail!(
+                "external planning file sync is unavailable on Windows; use the repo-scoped admin draft editor"
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            let relative_path = normalize_workspace_relative_path(
+                relative_path,
+                &format!("invalid planning file-sync path: {relative_path}"),
+            )?;
+            if relative_path != RESULT_OUTPUT_FILE_PATH {
+                bail!("unsupported planning file-sync path: {relative_path}");
+            }
+            let root = Path::new(workspace_dir);
+            secure_fs::write_file_atomic(root, Path::new(&relative_path), body.as_bytes())?;
+            if let Some(store) = self.repo_scoped_store(workspace_dir) {
+                store.store_repo_scoped_file_sync_baseline(
+                    workspace_dir,
+                    &PlanningFileSyncBaselineRecord {
+                        relative_path: relative_path.clone(),
+                        observed_planning_revision,
+                    },
+                )?;
+            } else {
+                let manifest = serde_json::to_vec_pretty(&PlanningFileSyncManifest {
+                    relative_path: relative_path.clone(),
+                    observed_planning_revision,
+                })?;
+                secure_fs::write_file_atomic(root, Path::new(FILE_SYNC_MANIFEST_PATH), &manifest)?;
+            }
+            Ok(root.join(relative_path).display().to_string())
+        }
+    }
+
+    fn load_planning_file_sync_candidate(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<PlanningFileSyncCandidateRecord>> {
+        #[cfg(windows)]
+        {
+            let _ = (workspace_dir, relative_path);
+            bail!(
+                "external planning file sync is unavailable on Windows; use the repo-scoped admin draft editor"
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            let relative_path = normalize_workspace_relative_path(
+                relative_path,
+                &format!("invalid planning file-sync path: {relative_path}"),
+            )?;
+            if relative_path != RESULT_OUTPUT_FILE_PATH {
+                bail!("unsupported planning file-sync path: {relative_path}");
+            }
+            let root = Path::new(workspace_dir);
+            let Some(body) = secure_fs::read_optional_file(root, Path::new(&relative_path))? else {
+                return Ok(None);
+            };
+            let observed_planning_revision = if let Some(store) =
+                self.repo_scoped_store(workspace_dir)
+            {
+                store
+                    .load_repo_scoped_file_sync_baseline(workspace_dir, &relative_path)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "planning file-sync baseline is missing; export again before applying"
+                        )
+                    })?
+                    .observed_planning_revision
+            } else {
+                let manifest = secure_fs::read_optional_file(
+                    root,
+                    Path::new(FILE_SYNC_MANIFEST_PATH),
+                )?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "planning file-sync manifest is missing; export again before applying"
+                    )
+                })?;
+                let manifest: PlanningFileSyncManifest = serde_json::from_str(&manifest)
+                    .context("failed to decode planning file-sync manifest; export again")?;
+                if manifest.relative_path != relative_path {
+                    bail!(
+                        "planning file-sync manifest does not match the exported path; export again"
+                    );
+                }
+                manifest.observed_planning_revision
+            };
+            Ok(Some(PlanningFileSyncCandidateRecord {
+                body,
+                observed_planning_revision,
+            }))
+        }
+    }
+
     fn stage_planning_draft_files(
         &self,
         workspace_dir: &str,
@@ -311,17 +390,22 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         }
 
         let draft_directory = Self::draft_directory(workspace_dir, draft_name)?;
-        fs::create_dir_all(&draft_directory)
-            .with_context(|| format!("failed to create {}", draft_directory.display()))?;
+        let draft_relative = Self::draft_directory_relative(draft_name)?;
+        secure_fs::ensure_directory(Path::new(workspace_dir), &draft_relative)?;
 
         let staged_files = canonical_files
             .iter()
             .map(|file| {
                 let staged_path =
                     Self::staged_draft_file_path(workspace_dir, draft_name, &file.active_path)?;
-                Self::ensure_parent_directory(&staged_path)?;
-                fs::write(&staged_path, &file.body)
-                    .with_context(|| format!("failed to write {}", staged_path.display()))?;
+                let staged_relative = staged_path
+                    .strip_prefix(workspace_dir)
+                    .context("draft path escaped its workspace root")?;
+                secure_fs::write_file_atomic(
+                    Path::new(workspace_dir),
+                    staged_relative,
+                    file.body.as_bytes(),
+                )?;
 
                 Ok(PlanningStagedFileRecord {
                     active_path: file.active_path.clone(),
@@ -358,8 +442,15 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         }
 
         let draft_directory = Self::draft_directory(workspace_dir, draft_name)?;
-        let mut staged_files = Vec::new();
-        Self::read_all_draft_files(&draft_directory, &draft_directory, &mut staged_files)?;
+        let draft_relative = Self::draft_directory_relative(draft_name)?;
+        let mut staged_files = secure_fs::read_tree(Path::new(workspace_dir), &draft_relative)?
+            .into_iter()
+            .map(|(relative_path, body)| PlanningDraftLoadFileRecord {
+                active_path: format!(".codex-exec-loop/planning/{relative_path}"),
+                staged_path: draft_directory.join(&relative_path).display().to_string(),
+                body,
+            })
+            .collect::<Vec<_>>();
         staged_files.sort_by(|left, right| {
             Self::draft_sort_order(&left.active_path)
                 .cmp(&Self::draft_sort_order(&right.active_path))
@@ -396,9 +487,10 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         }
 
         let staged_path = Self::staged_draft_file_path(workspace_dir, draft_name, &active_path)?;
-        Self::ensure_parent_directory(&staged_path)?;
-        fs::write(&staged_path, body)
-            .with_context(|| format!("failed to write {}", staged_path.display()))?;
+        let staged_relative = staged_path
+            .strip_prefix(workspace_dir)
+            .context("draft path escaped its workspace root")?;
+        secure_fs::write_file_atomic(Path::new(workspace_dir), staged_relative, body.as_bytes())?;
         Ok(staged_path.display().to_string())
     }
 
@@ -428,6 +520,13 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
          * comparison/review code가 "현재 slot worktree에는 무엇이 있는가"를 봐야 할 때 active authority로 fallback하면
          * candidate와 active의 차이를 잃는다.
          */
+        #[cfg(windows)]
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            // On Windows the private DB is also the candidate boundary. Reading
+            // arbitrary full paths here would reintroduce the same junction race
+            // that the active workspace routing avoids.
+            return store.load_active_workspace_files(workspace_dir);
+        }
         Self::load_workspace_record_from(
             workspace_dir,
             Self::read_optional_candidate_workspace_file,
@@ -451,6 +550,27 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         Self::commit_workspace_record_to_filesystem(Path::new(workspace_dir), record)
     }
 
+    fn compare_and_swap_planning_workspace_files(
+        &self,
+        workspace_dir: &str,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            return store.compare_and_swap_active_workspace_files(
+                workspace_dir,
+                observed,
+                replacement,
+            );
+        }
+        secure_fs::compare_and_swap_optional_file(
+            &self.active_workspace_root(workspace_dir),
+            Path::new(RESULT_OUTPUT_FILE_PATH),
+            observed.result_output_markdown.as_deref(),
+            replacement.result_output_markdown.as_deref(),
+        )
+    }
+
     fn load_optional_planning_file(
         &self,
         workspace_dir: &str,
@@ -470,6 +590,13 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
             if active_body.is_some() || Self::authority_managed_path(&relative_path) {
                 return Ok(active_body);
             }
+            #[cfg(windows)]
+            {
+                // A DB miss is authoritative on Windows. Falling through to a
+                // full-path filesystem read would reintroduce junction races.
+                return Ok(None);
+            }
+            #[cfg(not(windows))]
             return self.read_optional_workspace_file(workspace_dir, &relative_path);
         }
         self.read_optional_workspace_file(workspace_dir, &relative_path)
@@ -480,11 +607,26 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         workspace_dir: &str,
         relative_path: &str,
     ) -> Result<Option<String>> {
+        #[cfg(windows)]
+        {
+            let relative_path = normalize_workspace_relative_path(
+                relative_path,
+                &format!("invalid planning relative path: {relative_path}"),
+            )?;
+            if let Some(store) = self.repo_scoped_store(workspace_dir) {
+                return store.load_active_planning_file(workspace_dir, &relative_path);
+            }
+            bail!(
+                "planning candidate reads on Windows require the private workspace authority store"
+            );
+        }
+        #[cfg(not(windows))]
         // candidate optional read는 repo-scoped authority를 보지 않고 현재 workspace copy의 내용을 그대로 답한다.
         let relative_path = normalize_workspace_relative_path(
             relative_path,
             &format!("invalid planning relative path: {relative_path}"),
         )?;
+        #[cfg(not(windows))]
         Self::read_optional_candidate_workspace_file(workspace_dir, &relative_path)
     }
 
@@ -506,19 +648,12 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             return store.replace_active_planning_file(workspace_dir, &relative_path, body);
         }
-        let path = self.active_workspace_path(workspace_dir, &relative_path);
+        let root = self.active_workspace_root(workspace_dir);
         match body {
             Some(body) => {
-                Self::ensure_parent_directory(&path)?;
-                fs::write(&path, body)
-                    .with_context(|| format!("failed to write {}", path.display()))?;
+                secure_fs::write_file_atomic(&root, Path::new(&relative_path), body.as_bytes())?
             }
-            None => {
-                if path.exists() {
-                    fs::remove_file(&path)
-                        .with_context(|| format!("failed to remove {}", path.display()))?;
-                }
-            }
+            None => secure_fs::remove_entry(&root, Path::new(&relative_path))?,
         }
 
         Ok(())
@@ -542,20 +677,10 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
         if let Some(store) = self.repo_scoped_store(workspace_dir) {
             return store.remove_active_planning_entry(workspace_dir, &relative_path);
         }
-        let path = self.active_workspace_path(workspace_dir, &relative_path);
-        if !path.exists() {
-            return Ok(());
-        }
-
-        if path.is_dir() {
-            fs::remove_dir_all(&path)
-                .with_context(|| format!("failed to remove {}", path.display()))?;
-        } else {
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to remove {}", path.display()))?;
-        }
-
-        Ok(())
+        secure_fs::remove_entry(
+            &self.active_workspace_root(workspace_dir),
+            Path::new(&relative_path),
+        )
     }
 
     fn archive_rejected_planning_file(
@@ -570,16 +695,35 @@ impl PlanningWorkspacePort for FilesystemPlanningWorkspaceAdapter {
          * archive root는 active workspace root 기준이다. candidate slot이 사라져도 rejection record는 authority 쪽에 남아야 한다.
          * active_path 전체를 보존하지 않고 file name만 쓰는 이유는 rejected archive가 proposal snapshot의 leaf file 모음이기 때문이다.
          */
-        let archive_directory = self.rejected_directory(workspace_dir, archive_name);
-        fs::create_dir_all(&archive_directory)
-            .with_context(|| format!("failed to create {}", archive_directory.display()))?;
-
-        let file_name = Path::new(active_path)
+        validate_planning_draft_name(archive_name).map_err(|error| {
+            anyhow::anyhow!("invalid planning archive name `{archive_name}`: {error}")
+        })?;
+        let active_path = normalize_workspace_relative_path(
+            active_path,
+            &format!("invalid planning archive source path: {active_path}"),
+        )?;
+        let file_name = Path::new(&active_path)
             .file_name()
             .with_context(|| format!("planning file has no file name: {active_path}"))?;
+        let archive_relative = normalize_workspace_relative_path(
+            &format!("{PLANNING_REJECTED_DIRECTORY}/{archive_name}"),
+            &format!("invalid planning archive name: {archive_name}"),
+        )?;
+        let archived_relative = Path::new(&archive_relative).join(file_name);
+        let archived_relative_string = archived_relative.to_string_lossy().replace('\\', "/");
+        if let Some(store) = self.repo_scoped_store(workspace_dir) {
+            store.replace_active_planning_file(
+                workspace_dir,
+                &archived_relative_string,
+                Some(body),
+            )?;
+            return Ok(archived_relative_string);
+        }
+        let archive_relative = Path::new(&archive_relative);
+        let root = self.active_workspace_root(workspace_dir);
+        let archive_directory = secure_fs::ensure_directory(&root, archive_relative)?;
+        secure_fs::write_file_atomic(&root, &archived_relative, body.as_bytes())?;
         let archived_path = archive_directory.join(file_name);
-        fs::write(&archived_path, body)
-            .with_context(|| format!("failed to write {}", archived_path.display()))?;
 
         Ok(archived_path.display().to_string())
     }
@@ -595,22 +739,10 @@ fn write_optional_workspace_file(
      * PlanningWorkspaceLoadRecord의 Option field 의미를 filesystem operation으로 옮긴다.
      * Some은 parent directory를 만든 뒤 body를 쓰고, None은 이전 round-trip에서 남은 stale file을 제거한다.
      */
-    let path = workspace_root.join(relative_path);
+    let relative_path = Path::new(relative_path);
     match body {
-        Some(body) => {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create {}", parent.display()))?;
-            }
-            fs::write(&path, body)
-                .with_context(|| format!("failed to write {}", path.display()))?;
-        }
-        None => {
-            if path.exists() {
-                fs::remove_file(&path)
-                    .with_context(|| format!("failed to remove {}", path.display()))?;
-            }
-        }
+        Some(body) => secure_fs::write_file_atomic(workspace_root, relative_path, body.as_bytes())?,
+        None => secure_fs::remove_entry(workspace_root, relative_path)?,
     }
     Ok(())
 }
@@ -618,12 +750,17 @@ fn write_optional_workspace_file(
 #[cfg(test)]
 mod tests {
     use super::FilesystemPlanningWorkspaceAdapter;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
     use crate::application::port::outbound::planning_workspace_port::{
-        PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+        PlanningDraftFileRecord, PlanningWorkspacePort, RepoScopedPlanningWorkspacePort,
     };
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+    use std::process::Command;
+    use std::sync::{Arc, Barrier};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(not(windows))]
     #[test]
     fn workspace_load_record_excludes_task_authority_artifacts() {
         /*
@@ -634,6 +771,7 @@ mod tests {
         let workspace =
             std::env::temp_dir().join(format!("codex-exec-loop-fs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
         let adapter = FilesystemPlanningWorkspaceAdapter::new();
 
         adapter
@@ -654,6 +792,57 @@ mod tests {
         assert_eq!(
             loaded.result_output_markdown.as_deref(),
             Some("# Result Output Prompt")
+        );
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn direct_workspace_compare_and_swap_preserves_drifted_content() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-cas-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
+        let workspace_dir = workspace.to_str().expect("workspace path should be utf8");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+        let worker_candidate = PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("worker candidate".to_string()),
+        };
+        let snapshot = PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("pre-turn snapshot".to_string()),
+        };
+        adapter
+            .commit_planning_workspace_files(workspace_dir, &worker_candidate)
+            .expect("worker candidate should commit");
+
+        assert!(
+            adapter
+                .compare_and_swap_planning_workspace_files(
+                    workspace_dir,
+                    &worker_candidate,
+                    &snapshot,
+                )
+                .expect("matching candidate should restore")
+        );
+        assert!(
+            !adapter
+                .compare_and_swap_planning_workspace_files(
+                    workspace_dir,
+                    &worker_candidate,
+                    &PlanningWorkspaceLoadRecord::default(),
+                )
+                .expect("stale candidate should miss")
+        );
+        assert_eq!(
+            adapter
+                .load_planning_workspace_files(workspace_dir)
+                .expect("restored workspace should load"),
+            snapshot
         );
         let _ = std::fs::remove_dir_all(&workspace);
     }
@@ -716,6 +905,546 @@ mod tests {
                 .contains("invalid planning draft name `bad:name`")
         );
 
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planning_write_rejects_symlink_and_hardlink_victims_without_touching_them() {
+        use std::os::unix::fs::symlink;
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-link-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let workspace = root.join("workspace");
+        let planning = workspace.join(".codex-exec-loop/planning");
+        std::fs::create_dir_all(&planning).expect("planning fixture should be created");
+        let victim = root.join("victim.txt");
+        std::fs::write(&victim, "do not touch").expect("victim should be seeded");
+        let target = workspace.join(RESULT_OUTPUT_FILE_PATH);
+        symlink(&victim, &target).expect("malicious symlink should be created");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        let symlink_error = adapter
+            .replace_planning_workspace_file(
+                workspace.to_str().expect("workspace should be utf8"),
+                RESULT_OUTPUT_FILE_PATH,
+                Some("replacement"),
+            )
+            .expect_err("symlink destination must fail closed");
+        assert!(
+            symlink_error.to_string().contains("planning file")
+                || symlink_error
+                    .to_string()
+                    .contains("without following links")
+        );
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "do not touch");
+
+        std::fs::remove_file(&target).expect("symlink should be removable by fixture");
+        std::fs::hard_link(&victim, &target).expect("malicious hardlink should be created");
+        adapter
+            .replace_planning_workspace_file(
+                workspace.to_str().expect("workspace should be utf8"),
+                RESULT_OUTPUT_FILE_PATH,
+                Some("replacement"),
+            )
+            .expect_err("hardlink destination must fail closed");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "do not touch");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "do not touch");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planning_tree_remove_rejects_nested_symlink_without_traversing_victim() {
+        use std::os::unix::fs::symlink;
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-remove-link-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let workspace = root.join("workspace");
+        let drafts = workspace.join(".codex-exec-loop/planning/drafts");
+        let victim = root.join("victim");
+        std::fs::create_dir_all(&drafts).expect("draft fixture should be created");
+        std::fs::create_dir_all(&victim).expect("victim directory should be created");
+        std::fs::write(victim.join("preserved.txt"), "preserved")
+            .expect("victim file should be seeded");
+        symlink(&victim, drafts.join("outside"))
+            .expect("nested malicious symlink should be created");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        adapter
+            .remove_planning_workspace_entry(
+                workspace.to_str().expect("workspace should be utf8"),
+                ".codex-exec-loop/planning/drafts",
+            )
+            .expect_err("tree removal must reject nested symlinks");
+
+        assert_eq!(
+            std::fs::read_to_string(victim.join("preserved.txt")).unwrap(),
+            "preserved"
+        );
+        assert!(drafts.join("outside").symlink_metadata().is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planning_tree_remove_atomically_preserves_contents_in_private_quarantine() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-quarantine-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let draft = workspace.join(".codex-exec-loop/planning/drafts/review");
+        std::fs::create_dir_all(draft.join("nested")).expect("draft fixture should be created");
+        std::fs::write(draft.join("prompt.md"), "preserved prompt")
+            .expect("prompt fixture should be seeded");
+        std::fs::write(draft.join("nested/result.md"), "preserved result")
+            .expect("result fixture should be seeded");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        adapter
+            .remove_planning_workspace_entry(
+                workspace.to_str().expect("workspace should be utf8"),
+                ".codex-exec-loop/planning/drafts/review",
+            )
+            .expect("valid planning tree should move into quarantine");
+
+        assert!(!draft.exists(), "logical planning path should be removed");
+        let quarantine = workspace.join(".codex-exec-loop/runtime/planning-quarantine");
+        let retained = std::fs::read_dir(&quarantine)
+            .expect("quarantine should exist")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("quarantine should enumerate");
+        assert_eq!(retained.len(), 1);
+        let retained = retained[0].path();
+        assert_eq!(
+            std::fs::read_to_string(retained.join("prompt.md")).unwrap(),
+            "preserved prompt"
+        );
+        assert_eq!(
+            std::fs::read_to_string(retained.join("nested/result.md")).unwrap(),
+            "preserved result"
+        );
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planning_remove_fails_without_mutation_when_quarantine_is_full() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-quarantine-limit-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let planning = workspace.join(".codex-exec-loop/planning");
+        std::fs::create_dir_all(&planning).expect("planning fixture should be created");
+        let workspace_dir = workspace.to_str().expect("workspace should be utf8");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        for index in 0..16 {
+            let relative = format!(".codex-exec-loop/planning/stale-{index}.md");
+            std::fs::write(workspace.join(&relative), format!("stale {index}"))
+                .expect("stale planning file should be seeded");
+            adapter
+                .remove_planning_workspace_entry(workspace_dir, &relative)
+                .expect("retention below the entry limit should succeed");
+        }
+
+        let final_relative = ".codex-exec-loop/planning/must-remain.md";
+        let final_path = workspace.join(final_relative);
+        std::fs::write(&final_path, "must remain").expect("final planning file should be seeded");
+        let error = adapter
+            .remove_planning_workspace_entry(workspace_dir, final_relative)
+            .expect_err("full quarantine must reject a new removal");
+        assert!(error.to_string().contains("operator cleanup is required"));
+        assert_eq!(std::fs::read_to_string(&final_path).unwrap(), "must remain");
+        assert_eq!(
+            std::fs::read_dir(workspace.join(".codex-exec-loop/runtime/planning-quarantine"))
+                .unwrap()
+                .count(),
+            16
+        );
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn git_backed_supporting_documents_and_rejected_archives_stay_in_repo_db() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-repo-artifact-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
+        let output = Command::new("git")
+            .args(["init", "-q", workspace.to_str().unwrap()])
+            .output()
+            .expect("git init should run");
+        assert!(output.status.success());
+        let workspace_dir = workspace.to_str().expect("workspace should be utf8");
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let adapter = FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone());
+
+        let archived = adapter
+            .archive_rejected_planning_file(
+                workspace_dir,
+                "rejected-1",
+                RESULT_OUTPUT_FILE_PATH,
+                "rejected body",
+            )
+            .expect("rejected file should archive in the repo DB");
+        let archived_relative = ".codex-exec-loop/planning/rejected/rejected-1/result-output.md";
+        assert_eq!(archived, archived_relative);
+        assert_eq!(
+            sqlite
+                .load_active_planning_file(workspace_dir, archived_relative)
+                .expect("archived DB document should load")
+                .as_deref(),
+            Some("rejected body")
+        );
+        assert!(!workspace.join(archived_relative).exists());
+
+        sqlite
+            .replace_active_planning_file(
+                workspace_dir,
+                ".codex-exec-loop/planning/supporting.md",
+                Some("supporting body"),
+            )
+            .expect("supporting DB document should persist");
+        assert_eq!(
+            adapter
+                .load_optional_planning_file(
+                    workspace_dir,
+                    ".codex-exec-loop/planning/supporting.md",
+                )
+                .expect("supporting DB document should load")
+                .as_deref(),
+            Some("supporting body")
+        );
+
+        let invalid = adapter
+            .archive_rejected_planning_file(
+                workspace_dir,
+                "../escaped",
+                RESULT_OUTPUT_FILE_PATH,
+                "must not persist",
+            )
+            .expect_err("archive name must be a single normalized segment");
+        assert!(
+            invalid
+                .to_string()
+                .contains("invalid planning archive name")
+        );
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn git_backed_workspace_compare_and_swap_uses_repo_authority_transaction() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-repo-cas-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
+        let output = Command::new("git")
+            .args(["init", "-q", workspace.to_str().unwrap()])
+            .output()
+            .expect("git init should run");
+        assert!(output.status.success());
+        let workspace_dir = workspace.to_str().expect("workspace should be utf8");
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let adapter = FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone());
+        let worker_candidate = PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("worker candidate".to_string()),
+        };
+        let snapshot = PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("pre-turn snapshot".to_string()),
+        };
+        adapter
+            .commit_planning_workspace_files(workspace_dir, &worker_candidate)
+            .expect("worker candidate should commit to repo authority");
+
+        assert!(
+            adapter
+                .compare_and_swap_planning_workspace_files(
+                    workspace_dir,
+                    &worker_candidate,
+                    &snapshot,
+                )
+                .expect("repo authority CAS should succeed")
+        );
+        assert!(
+            !adapter
+                .compare_and_swap_planning_workspace_files(
+                    workspace_dir,
+                    &worker_candidate,
+                    &PlanningWorkspaceLoadRecord::default(),
+                )
+                .expect("stale repo authority CAS should miss")
+        );
+        assert_eq!(
+            sqlite
+                .load_active_workspace_files(workspace_dir)
+                .expect("repo authority snapshot should load"),
+            snapshot
+        );
+        assert!(!workspace.join(RESULT_OUTPUT_FILE_PATH).exists());
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn concurrent_repo_authority_compare_and_swap_has_one_winner() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-repo-cas-race-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
+        let output = Command::new("git")
+            .args(["init", "-q", workspace.to_str().unwrap()])
+            .output()
+            .expect("git init should run");
+        assert!(output.status.success());
+        let workspace_dir = workspace.to_str().expect("workspace should be utf8");
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let adapter = Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
+            sqlite,
+        ));
+        let observed = PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("worker candidate".to_string()),
+        };
+        adapter
+            .commit_planning_workspace_files(workspace_dir, &observed)
+            .expect("worker candidate should commit to repo authority");
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for body in ["operator one", "operator two"] {
+            let adapter = adapter.clone();
+            let barrier = barrier.clone();
+            let workspace_dir = workspace_dir.to_string();
+            let observed = observed.clone();
+            let replacement = PlanningWorkspaceLoadRecord {
+                result_output_markdown: Some(body.to_string()),
+            };
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                adapter.compare_and_swap_planning_workspace_files(
+                    &workspace_dir,
+                    &observed,
+                    &replacement,
+                )
+            }));
+        }
+        barrier.wait();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .expect("repo CAS worker should join")
+                    .expect("repo CAS worker should complete")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(outcomes.iter().filter(|outcome| **outcome).count(), 1);
+        let final_record = adapter
+            .load_planning_workspace_files(workspace_dir)
+            .expect("winning repo authority snapshot should load");
+        assert!(matches!(
+            final_record.result_output_markdown.as_deref(),
+            Some("operator one" | "operator two")
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_plain_workspace_uses_private_authority_for_active_and_draft_flows() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-windows-authority-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
+        let workspace_dir = workspace.to_str().expect("workspace should be utf8");
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let adapter = FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite);
+
+        assert!(adapter.uses_repo_scoped_authority(workspace_dir));
+        let record = PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("# Windows authority\n".to_string()),
+        };
+        adapter
+            .commit_planning_workspace_files(workspace_dir, &record)
+            .expect("plain Windows workspace should commit through SQLite");
+        assert_eq!(
+            adapter
+                .load_planning_workspace_candidate_files(workspace_dir)
+                .expect("Windows candidate view should use the private authority"),
+            record
+        );
+        assert_eq!(
+            adapter
+                .load_optional_planning_candidate_file(workspace_dir, RESULT_OUTPUT_FILE_PATH)
+                .expect("Windows candidate file should load from private authority")
+                .as_deref(),
+            Some("# Windows authority\n")
+        );
+
+        adapter
+            .stage_planning_draft_files(
+                workspace_dir,
+                "review",
+                &[PlanningDraftFileRecord {
+                    active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                    body: "# Draft\n".to_string(),
+                }],
+            )
+            .expect("plain Windows draft should stage through SQLite");
+        let draft = adapter
+            .load_planning_draft_files(workspace_dir, "review")
+            .expect("plain Windows draft should load through SQLite");
+        assert_eq!(draft.staged_files.len(), 1);
+        assert_eq!(draft.staged_files[0].body, "# Draft\n");
+
+        adapter
+            .replace_planning_workspace_file(workspace_dir, RESULT_OUTPUT_FILE_PATH, None)
+            .expect("plain Windows active file removal should use SQLite");
+        assert!(
+            adapter
+                .load_optional_planning_file(workspace_dir, RESULT_OUTPUT_FILE_PATH)
+                .expect("removed Windows authority file should inspect")
+                .is_none()
+        );
+        assert!(
+            !workspace.join(RESULT_OUTPUT_FILE_PATH).exists(),
+            "the Windows private authority route must not fall back to full-path file mutation"
+        );
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn direct_planning_filesystem_fails_closed_without_mutating_windows_workspace() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-windows-closed-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let planning = workspace.join(".codex-exec-loop/planning");
+        std::fs::create_dir_all(&planning).expect("planning fixture should be created");
+        let target = workspace.join(RESULT_OUTPUT_FILE_PATH);
+        std::fs::write(&target, "unchanged").expect("target should be seeded");
+        let workspace_dir = workspace.to_str().expect("workspace should be utf8");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        let candidate_error = adapter
+            .export_planning_file_sync_candidate(
+                workspace_dir,
+                RESULT_OUTPUT_FILE_PATH,
+                "replacement",
+                Some(1),
+            )
+            .expect_err("external Windows file sync must be capability-gated");
+        assert!(candidate_error.to_string().contains("admin draft editor"));
+        let write_error = adapter
+            .replace_planning_workspace_file(
+                workspace_dir,
+                RESULT_OUTPUT_FILE_PATH,
+                Some("replacement"),
+            )
+            .expect_err("direct Windows planning write must fail closed");
+        assert!(write_error.to_string().contains("unsupported on Windows"));
+        let remove_error = adapter
+            .remove_planning_workspace_entry(workspace_dir, RESULT_OUTPUT_FILE_PATH)
+            .expect_err("direct Windows planning removal must fail closed");
+        assert!(remove_error.to_string().contains("unsupported on Windows"));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "unchanged");
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn planning_file_admission_accepts_boundary_and_rejects_oversize_without_data_loss() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-size-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace fixture should be created");
+        let workspace_dir = workspace.to_str().expect("workspace path should be utf8");
+        let adapter = FilesystemPlanningWorkspaceAdapter::new();
+
+        adapter
+            .replace_planning_workspace_file(workspace_dir, RESULT_OUTPUT_FILE_PATH, Some("small"))
+            .expect("small planning file should be admitted");
+        let boundary = "x".repeat(super::secure_fs::MAX_FILE_BYTES);
+        adapter
+            .replace_planning_workspace_file(
+                workspace_dir,
+                RESULT_OUTPUT_FILE_PATH,
+                Some(&boundary),
+            )
+            .expect("boundary-sized planning file should be admitted");
+        assert_eq!(
+            adapter
+                .load_optional_planning_file(workspace_dir, RESULT_OUTPUT_FILE_PATH)
+                .expect("boundary file should load")
+                .expect("boundary file should exist")
+                .len(),
+            super::secure_fs::MAX_FILE_BYTES
+        );
+
+        let oversize = format!("{boundary}x");
+        let error = adapter
+            .replace_planning_workspace_file(
+                workspace_dir,
+                RESULT_OUTPUT_FILE_PATH,
+                Some(&oversize),
+            )
+            .expect_err("oversized planning file must be rejected");
+        assert!(error.to_string().contains("exceeds"));
+        assert_eq!(
+            std::fs::metadata(workspace.join(RESULT_OUTPUT_FILE_PATH))
+                .expect("accepted boundary file should remain")
+                .len(),
+            super::secure_fs::MAX_FILE_BYTES as u64
+        );
         let _ = std::fs::remove_dir_all(&workspace);
     }
 }

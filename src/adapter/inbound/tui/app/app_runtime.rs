@@ -22,10 +22,12 @@ use crate::composition::core_effect_runner::CoreEffectRunner;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
 use crate::core::app::{
-    AppCommand, AppEvent, ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome,
-    CoreInput, SessionCatalogSnapshot, StartupSnapshot, TurnStreamEvent,
+    AppCommand, AppEvent, ConversationLoadCorrelation,
+    ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome, CoreInput,
+    SessionCatalogSnapshot, StartupCheckCorrelation, StartupSnapshot, TurnStreamEvent,
 };
-use crate::core::runtime::CoreRuntime;
+use crate::core::runtime::{CoreRuntime, core_input_channel};
+#[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
@@ -42,6 +44,14 @@ use super::{
     reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
     reduce_conversation_runtime, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
+
+// Background control-plane and poll results are lower volume than token events,
+// but still cross thread boundaries. A fixed queue keeps a stalled terminal from
+// retaining unbounded notices while leaving room for one full render batch and
+// a short producer burst. Capacity must stay above the shell's 128-message drain
+// budget so the event loop can observe backlog and yield without a same-thread
+// producer deadlock.
+pub(super) const TUI_BACKGROUND_CHANNEL_CAPACITY: usize = 256;
 
 /* NativeTuiApp is assembled as reducer-owned state plus outbound service handles.
  * Runtime files keep pure reducers away from threads and ports: reducers return
@@ -72,7 +82,7 @@ pub(super) enum BackgroundMessage {
 
 #[derive(Clone)]
 pub(super) struct TuiParallelModeControlPlaneEventSink {
-    tx: mpsc::Sender<BackgroundMessage>,
+    tx: mpsc::SyncSender<BackgroundMessage>,
 }
 
 impl ParallelModeControlPlaneEventSink for TuiParallelModeControlPlaneEventSink {
@@ -84,13 +94,13 @@ impl ParallelModeControlPlaneEventSink for TuiParallelModeControlPlaneEventSink 
 }
 
 pub(super) struct NativeTuiAppRuntimeChannels {
-    tx: mpsc::Sender<BackgroundMessage>,
+    tx: mpsc::SyncSender<BackgroundMessage>,
     rx: mpsc::Receiver<BackgroundMessage>,
 }
 
 impl NativeTuiAppRuntimeChannels {
     pub(super) fn new() -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(TUI_BACKGROUND_CHANNEL_CAPACITY);
         Self { tx, rx }
     }
 
@@ -145,6 +155,19 @@ pub(super) fn core_turn_stream_event_from_application(
         ConversationStreamEvent::ApprovalReviewUpdated { review } => {
             TurnStreamEvent::ApprovalReviewUpdated { review }
         }
+        ConversationStreamEvent::ApprovalRequested { request } => {
+            TurnStreamEvent::ApprovalRequested { request }
+        }
+        ConversationStreamEvent::ApprovalResolved {
+            approval_id,
+            resolution,
+        } => TurnStreamEvent::ApprovalResolved {
+            approval_id,
+            resolution,
+        },
+        ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
+            TurnStreamEvent::TurnInterruptRequestFailed { message }
+        }
         ConversationStreamEvent::TurnCompleted {
             turn_id,
             changed_planning_file_paths,
@@ -178,7 +201,11 @@ mod tests {
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
     };
+    use crate::domain::parallel_mode::{
+        ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
+    };
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
+    use crate::domain::session_summary::SessionSummary;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     use anyhow::Result;
     use std::sync::{Arc, Mutex};
@@ -301,19 +328,67 @@ mod tests {
     fn parallel_mode_event_sink_routes_background_events_to_runtime_channel() {
         let channels = NativeTuiAppRuntimeChannels::new();
         let sink = channels.parallel_mode_event_sink();
+        let effect_id =
+            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEffectId {
+                sequence: 7,
+                kind: crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEffectKind::RunOrchestrator,
+            };
 
         sink.send_control_plane_event(
-            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(
-                "parallel notice".to_string(),
-            ),
+            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 3,
+                effect_id,
+                notice: "parallel notice".to_string(),
+            },
         );
 
         match channels.rx.try_recv().expect("event should be queued") {
             BackgroundMessage::ParallelModeControlPlaneEvent(
-                ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(message),
-            ) => assert_eq!(message, "parallel notice"),
+                ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+                    workspace_directory,
+                    epoch_id,
+                    effect_id: received_effect_id,
+                    notice,
+                },
+            ) => {
+                assert_eq!(workspace_directory, "/repo");
+                assert_eq!(epoch_id, 3);
+                assert_eq!(received_effect_id, effect_id);
+                assert_eq!(notice, "parallel notice");
+            }
             other => panic!("unexpected background message: {other:?}"),
         }
+    }
+
+    #[test]
+    fn tui_background_channel_is_bounded_and_disconnects_producers() {
+        let channels = NativeTuiAppRuntimeChannels::new();
+        for sequence in 0..TUI_BACKGROUND_CHANNEL_CAPACITY {
+            channels
+                .tx
+                .try_send(BackgroundMessage::ConversationRuntimeNotice(
+                    sequence.to_string(),
+                ))
+                .expect("messages within the fixed capacity should be admitted");
+        }
+        assert!(matches!(
+            channels
+                .tx
+                .try_send(BackgroundMessage::ConversationRuntimeNotice(
+                    "overflow".to_string(),
+                )),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+
+        let NativeTuiAppRuntimeChannels { tx, rx } = channels;
+        drop(rx);
+        assert!(
+            tx.send(BackgroundMessage::ConversationRuntimeNotice(
+                "disconnected".to_string(),
+            ))
+            .is_err()
+        );
     }
 
     #[derive(Default)]
@@ -449,7 +524,7 @@ mod tests {
             _cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }
@@ -459,7 +534,7 @@ mod tests {
             _thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }
@@ -483,6 +558,43 @@ mod tests {
             conversation_service,
             parallel_mode_binding,
         )
+    }
+
+    #[test]
+    fn tui_parallel_binding_shares_one_automation_guard_with_post_turn_delivery() {
+        let planning = test_helpers::test_planning_services(Arc::new(
+            FilesystemPlanningWorkspaceAdapter::new(),
+        ));
+        let binding = NativeTuiParallelModeBinding::from_composition(
+            test_helpers::test_parallel_mode_control_plane_composition(planning),
+        );
+        let workspace = "/tmp/shared-automation-guard".to_string();
+
+        let _ = binding.parallel_mode_control_plane.handle_command(
+            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneCommand::OpenEpoch {
+                workspace_directory: workspace.clone(),
+            },
+        );
+        let epoch_id = binding
+            .parallel_mode_control_plane
+            .current_epoch_id_for_workspace(&workspace)
+            .expect("open epoch should expose its id");
+        assert!(
+            binding
+                .parallel_turns
+                .automation_epoch_is_active(&workspace, epoch_id)
+        );
+
+        let _ = binding.parallel_mode_control_plane.handle_command(
+            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneCommand::Disable {
+                workspace_directory: workspace.clone(),
+            },
+        );
+        assert!(
+            !binding
+                .parallel_turns
+                .automation_epoch_is_active(&workspace, epoch_id)
+        );
     }
 
     #[test]
@@ -556,6 +668,344 @@ mod tests {
             "manual_handoff_human_review_requested"
         );
     }
+
+    #[test]
+    fn auto_follow_operator_controls_supersede_prior_continuation_permits() {
+        let mut app = test_helpers::test_native_tui_app();
+
+        let paused_permit = app.post_turn_continuation_gate.capture();
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
+        assert!(!paused_permit.is_current());
+
+        let rearmed_permit = app.post_turn_continuation_gate.capture();
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
+            value: "3".to_string(),
+        });
+        assert!(!rearmed_permit.is_current());
+
+        let invalid_edit_permit = app.post_turn_continuation_gate.capture();
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
+            value: "invalid".to_string(),
+        });
+        assert!(invalid_edit_permit.is_current());
+
+        let disabled_permit = app.post_turn_continuation_gate.capture();
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
+            value: "off".to_string(),
+        });
+        assert!(!disabled_permit.is_current());
+    }
+
+    #[test]
+    fn workspace_and_conversation_supersession_invalidate_continuation_permits() {
+        let mut app = test_helpers::test_native_tui_app();
+
+        let unchanged_workspace_permit = app.post_turn_continuation_gate.capture();
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+        assert!(unchanged_workspace_permit.is_current());
+
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
+            workspace_directory: "/tmp/other".to_string(),
+        });
+        assert!(!unchanged_workspace_permit.is_current());
+
+        let new_draft_permit = app.post_turn_continuation_gate.capture();
+        let new_draft_generation =
+            arm_pending_manual_prompt_for_identity_test(&mut app, "new draft prompt");
+        app.pending_conversation_load = Some(ConversationLoadCorrelation::new(9, "thread-stale"));
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+        assert!(!new_draft_permit.is_current());
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.manual_prompt_preparation_generation > new_draft_generation);
+        assert!(app.pending_conversation_load.is_none());
+        assert!(matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation) if conversation.cwd == "/tmp/root"
+        ));
+        assert!(app.active_session.is_none());
+
+        let session_permit = app.post_turn_continuation_gate.capture();
+        let session_generation =
+            arm_pending_manual_prompt_for_identity_test(&mut app, "session prompt");
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+            session: SessionSummary {
+                id: "thread-2".to_string(),
+                name: Some("Thread 2".to_string()),
+                preview: "preview".to_string(),
+                cwd: "/tmp/root".to_string(),
+                source: "test".to_string(),
+                model_provider: "test".to_string(),
+                updated_at_epoch: 1,
+                status_type: "idle".to_string(),
+                path: "/tmp/root/thread-2".to_string(),
+                git_branch: None,
+            },
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        });
+        assert!(!session_permit.is_current());
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.manual_prompt_preparation_generation > session_generation);
+        assert!(matches!(app.conversation_state, ConversationState::Loading));
+        assert_eq!(
+            app.active_session
+                .as_ref()
+                .map(|session| session.id.as_str()),
+            Some("thread-2")
+        );
+        assert_eq!(
+            app.pending_conversation_load
+                .as_ref()
+                .map(|pending| pending.requested_thread_id.as_str()),
+            Some("thread-2")
+        );
+    }
+
+    #[test]
+    fn conversation_lifecycle_closes_only_epochs_owned_by_the_workspace_being_left() {
+        let mut app = test_helpers::test_native_tui_app();
+        app.parallel_mode_control_plane
+            .force_epoch_for_test("/tmp/worker-b", 1);
+        assert!(
+            app.parallel_mode_control_plane
+                .automation_epoch_is_active("/tmp/worker-b", 1)
+        );
+
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+
+        assert_eq!(
+            app.parallel_mode_control_plane.epoch_snapshot(),
+            crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
+                workspace_directory: None,
+                current_epoch_id: None,
+            }
+        );
+        assert!(
+            !app.parallel_mode_control_plane
+                .automation_epoch_is_active("/tmp/worker-b", 1)
+        );
+
+        let draft_projection = app.planning_runtime_projection_snapshot();
+        app.apply_parallel_mode_control_plane_background_event(
+            ParallelModeControlPlaneBackgroundEvent::WorkerEvent {
+                event: ParallelModeControlPlaneWorkerEvent::new(
+                    "/tmp/worker-b",
+                    1,
+                    "task-b",
+                    "Worker B",
+                    ParallelModeControlPlaneWorkerEventKind::Completed,
+                    vec!["worker B completed".to_string()],
+                ),
+                has_actionable_queue_head: false,
+            },
+        );
+        assert_eq!(app.planning_runtime_projection_snapshot(), draft_projection);
+
+        app.parallel_mode_control_plane
+            .force_epoch_for_test("/tmp/root", 2);
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+        assert_eq!(
+            app.parallel_mode_control_plane
+                .current_epoch_id_for_workspace("/tmp/root"),
+            Some(2)
+        );
+
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+            session: SessionSummary {
+                id: "thread-b".to_string(),
+                name: Some("Thread B".to_string()),
+                preview: "preview".to_string(),
+                cwd: "/tmp/worker-b".to_string(),
+                source: "test".to_string(),
+                model_provider: "test".to_string(),
+                updated_at_epoch: 1,
+                status_type: "idle".to_string(),
+                path: "/tmp/worker-b/thread-b".to_string(),
+                git_branch: None,
+            },
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        });
+        assert!(
+            app.parallel_mode_control_plane
+                .epoch_snapshot()
+                .current_epoch_id
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn tui_startup_projection_rejects_stale_success_and_failure() {
+        let mut app = test_helpers::test_native_tui_app();
+        let latest = StartupCheckCorrelation::new(2);
+        app.pending_startup_check = Some(latest);
+        app.startup_state = StartupState::Loading;
+        app.session_state = SessionState::Idle;
+
+        app.apply_correlated_startup_snapshot(
+            StartupCheckCorrelation::new(1),
+            StartupSnapshot::Ready(test_startup_ready_snapshot("/tmp/stale")),
+        );
+        assert!(matches!(app.startup_state, StartupState::Loading));
+        assert!(matches!(app.session_state, SessionState::Idle));
+
+        app.apply_correlated_startup_snapshot(
+            latest,
+            StartupSnapshot::Ready(test_startup_ready_snapshot("/tmp/latest")),
+        );
+        assert!(matches!(
+            &app.startup_state,
+            StartupState::Ready(ready) if ready.workspace_path == "/tmp/latest"
+        ));
+        let latest_state = app.startup_state.clone();
+
+        app.apply_correlated_startup_snapshot(
+            StartupCheckCorrelation::new(1),
+            StartupSnapshot::Failed {
+                message: "stale failure".to_string(),
+            },
+        );
+        assert!(matches!(
+            (&app.startup_state, &latest_state),
+            (StartupState::Ready(current), StartupState::Ready(expected))
+                if current.workspace_path == expected.workspace_path
+        ));
+    }
+
+    #[test]
+    fn tui_conversation_projection_rejects_stale_result_without_changing_active_session() {
+        let mut app = test_helpers::test_native_tui_app();
+        let latest = ConversationLoadCorrelation::new(2, "thread-b");
+        app.pending_conversation_load = Some(latest.clone());
+        app.conversation_state = ConversationState::Loading;
+        app.active_session = Some(test_session("thread-b"));
+
+        app.apply_correlated_conversation_snapshot(
+            Some(ConversationLoadCorrelation::new(1, "thread-a")),
+            test_core_conversation_snapshot("thread-a"),
+        );
+        assert!(matches!(app.conversation_state, ConversationState::Loading));
+        assert_eq!(
+            app.active_session
+                .as_ref()
+                .map(|session| session.id.as_str()),
+            Some("thread-b")
+        );
+
+        app.apply_correlated_conversation_snapshot(
+            Some(latest),
+            test_core_conversation_snapshot("thread-b"),
+        );
+        assert!(matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation) if conversation.thread_id == "thread-b"
+        ));
+
+        app.apply_correlated_conversation_snapshot(
+            Some(ConversationLoadCorrelation::new(1, "thread-a")),
+            CoreConversationSnapshot::Failed {
+                message: "stale A failure".to_string(),
+            },
+        );
+        assert!(matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation) if conversation.thread_id == "thread-b"
+        ));
+        assert_eq!(
+            app.active_session
+                .as_ref()
+                .map(|session| session.id.as_str()),
+            Some("thread-b")
+        );
+    }
+
+    fn test_startup_ready_snapshot(workspace_path: &str) -> Box<StartupReadySnapshot> {
+        Box::new(StartupReadySnapshot {
+            cwd: workspace_path.to_string(),
+            workspace_path: workspace_path.to_string(),
+            can_continue: true,
+            codex_binary: crate::core::app::StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "/usr/bin/codex".to_string(),
+            },
+            workspace: crate::core::app::StartupDiagnosticSnapshot {
+                ok: true,
+                detail: workspace_path.to_string(),
+            },
+            app_server_initialize: crate::core::app::StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "initialized".to_string(),
+            },
+            account: crate::core::app::StartupDiagnosticSnapshot {
+                ok: true,
+                detail: "authenticated".to_string(),
+            },
+            attachment: crate::core::app::StartupAttachmentSnapshot {
+                mode_label: "provider-launched".to_string(),
+                recovery_anchor_label: "provider-thread-id".to_string(),
+            },
+            warnings: Vec::new(),
+            schema_snapshot: "embedded schema".to_string(),
+        })
+    }
+
+    fn test_core_conversation_snapshot(thread_id: &str) -> CoreConversationSnapshot {
+        CoreConversationSnapshot::Ready(Box::new(
+            crate::core::app::ConversationReadySnapshot::from(ConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: thread_id.to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            }),
+        ))
+    }
+
+    fn test_session(thread_id: &str) -> SessionSummary {
+        SessionSummary {
+            id: thread_id.to_string(),
+            name: Some(thread_id.to_string()),
+            preview: "preview".to_string(),
+            cwd: "/tmp/root".to_string(),
+            source: "test".to_string(),
+            model_provider: "test".to_string(),
+            updated_at_epoch: 1,
+            status_type: "idle".to_string(),
+            path: format!("/tmp/root/{thread_id}"),
+            git_branch: None,
+        }
+    }
+
+    fn arm_pending_manual_prompt_for_identity_test(
+        app: &mut NativeTuiApp,
+        transcript_text: &str,
+    ) -> u64 {
+        let generation = app
+            .manual_prompt_preparation_generation
+            .wrapping_add(1)
+            .max(1);
+        let workspace_directory = app.planning_workspace_directory();
+        app.manual_prompt_preparation_generation = generation;
+        app.pending_manual_prompt_preparation = Some(
+            crate::adapter::inbound::tui::app::PendingManualPromptPreparation {
+                correlation: crate::domain::planning::ManualPromptCorrelation {
+                    request_id: generation,
+                    generation,
+                    workspace_directory,
+                },
+                transcript_text: transcript_text.to_string(),
+                parallel_mode_enabled_at_submission: false,
+            },
+        );
+        generation
+    }
 }
 
 #[derive(Clone)]
@@ -584,11 +1034,13 @@ impl NativeTuiApplicationHandle {
         self.conversations.request_stop_all_sessions()
     }
 
-    pub(super) fn load_conversation_snapshot(
+    pub(super) fn resolve_approval_request(
         &self,
-        thread_id: &str,
-    ) -> Result<ConversationSnapshot, String> {
-        self.conversations.load_snapshot(thread_id)
+        approval_id: &str,
+        decision: crate::domain::conversation::ConversationApprovalDecision,
+    ) -> Result<(), String> {
+        self.conversations
+            .resolve_approval_request(approval_id, decision)
     }
 
 
@@ -649,9 +1101,13 @@ impl NativeTuiConversationHandle {
             .map_err(|error| error.to_string())
     }
 
-    pub(super) fn load_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot, String> {
+    pub(super) fn resolve_approval_request(
+        &self,
+        approval_id: &str,
+        decision: crate::domain::conversation::ConversationApprovalDecision,
+    ) -> Result<(), String> {
         self.service
-            .load_snapshot(thread_id)
+            .resolve_approval_request(approval_id, decision)
             .map_err(|error| error.to_string())
     }
 
@@ -757,7 +1213,7 @@ impl NativeTuiApp {
             parallel_mode_control_plane,
             runtime_channels,
         } = parallel_mode_binding;
-        let (core_input_sender, core_input_receiver) = mpsc::channel();
+        let (core_input_sender, core_input_receiver) = core_input_channel();
         let core_effect_runner = CoreEffectRunner::new(
             startup_service.clone(),
             session_service.clone(),
@@ -790,13 +1246,17 @@ impl NativeTuiApp {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
+            pending_startup_check: None,
             session_state: SessionState::Idle,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
             parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,
+            next_manual_prompt_preparation_request_id: 0,
+            manual_prompt_preparation_generation: 0,
             parallel_mode_control_plane,
             conversation_state: ConversationState::ready(initial_conversation),
+            pending_conversation_load: None,
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             tui_language: super::TuiLanguage::default(),
@@ -815,6 +1275,8 @@ impl NativeTuiApp {
             turn_options: Default::default(),
             conversation_view_mode: super::ConversationViewMode::default(),
             planning_worker_panel_state: super::PlanningWorkerPanelState::default(),
+            post_turn_continuation_gate: crate::domain::planning::PostTurnContinuationGate::default(
+            ),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
             github_review_poller_service: None,
             github_review_polling_state: super::GithubReviewPollingState::Disabled,
@@ -873,28 +1335,10 @@ impl NativeTuiApp {
 
     fn apply_core_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::StartupChanged(StartupSnapshot::Idle) => {
-                self.startup_state = StartupState::Idle;
-            }
-            AppEvent::StartupChanged(StartupSnapshot::Loading) => {
-                self.startup_state = StartupState::Loading;
-            }
-            AppEvent::StartupChanged(StartupSnapshot::Ready(ready)) => {
-                let workspace_directory = ready.workspace_path.clone();
-                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                    result: Ok(ready),
-                    session_page_size: SESSION_PAGE_SIZE,
-                });
-                self.sync_draft_shell_workspace(&workspace_directory);
-                self.resolve_startup_submit_queue();
-            }
-            AppEvent::StartupChanged(StartupSnapshot::Failed { message }) => {
-                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
-                    result: Err(message),
-                    session_page_size: SESSION_PAGE_SIZE,
-                });
-                self.resolve_startup_submit_queue();
-            }
+            AppEvent::StartupChanged {
+                correlation,
+                snapshot,
+            } => self.apply_correlated_startup_snapshot(correlation, snapshot),
             AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Idle) => {
                 self.session_state = SessionState::Idle;
             }
@@ -909,8 +1353,16 @@ impl NativeTuiApp {
                 self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Err(message)));
                 self.session_overlay_ui_state.reset();
             }
-            AppEvent::ConversationChanged(snapshot) => {
-                self.apply_core_conversation_snapshot(snapshot);
+            AppEvent::ConversationChanged {
+                correlation,
+                snapshot,
+            } => self.apply_correlated_conversation_snapshot(correlation, snapshot),
+            AppEvent::ParallelPeekConversationLoaded {
+                request_id,
+                thread_id,
+                result,
+            } => {
+                self.apply_parallel_peek_conversation_load(request_id, thread_id, result);
             }
             AppEvent::TurnStreamSnapshotChanged(stream_snapshot) => {
                 self.dispatch_conversation_runtime(
@@ -933,6 +1385,93 @@ impl NativeTuiApp {
             }
             AppEvent::SnapshotChanged(_) => {}
         }
+    }
+
+    fn apply_correlated_startup_snapshot(
+        &mut self,
+        correlation: StartupCheckCorrelation,
+        snapshot: StartupSnapshot,
+    ) {
+        match snapshot {
+            StartupSnapshot::Loading => {
+                if self
+                    .pending_startup_check
+                    .is_some_and(|pending| pending.generation > correlation.generation)
+                {
+                    return;
+                }
+                self.pending_startup_check = Some(correlation);
+                self.startup_state = StartupState::Loading;
+            }
+            StartupSnapshot::Idle => {
+                if self.pending_startup_check == Some(correlation) {
+                    self.pending_startup_check = None;
+                    self.startup_state = StartupState::Idle;
+                }
+            }
+            StartupSnapshot::Ready(ready) => {
+                if self.pending_startup_check != Some(correlation) {
+                    return;
+                }
+                self.pending_startup_check = None;
+                let workspace_directory = ready.workspace_path.clone();
+                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
+                    result: Ok(ready),
+                    session_page_size: SESSION_PAGE_SIZE,
+                });
+                self.sync_draft_shell_workspace(&workspace_directory);
+                self.resolve_startup_submit_queue();
+            }
+            StartupSnapshot::Failed { message } => {
+                if self.pending_startup_check != Some(correlation) {
+                    return;
+                }
+                self.pending_startup_check = None;
+                self.dispatch_shell_chrome(ShellChromeEvent::StartupLoaded {
+                    result: Err(message),
+                    session_page_size: SESSION_PAGE_SIZE,
+                });
+                self.resolve_startup_submit_queue();
+            }
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_correlated_conversation_snapshot(
+        &mut self,
+        correlation: Option<ConversationLoadCorrelation>,
+        snapshot: CoreConversationSnapshot,
+    ) {
+        match (&correlation, &snapshot) {
+            (Some(correlation), CoreConversationSnapshot::Loading) => {
+                if self
+                    .pending_conversation_load
+                    .as_ref()
+                    .is_some_and(|pending| pending.generation > correlation.generation)
+                {
+                    return;
+                }
+                self.pending_conversation_load = Some(correlation.clone());
+            }
+            (Some(correlation), CoreConversationSnapshot::Ready(ready)) => {
+                if self.pending_conversation_load.as_ref() != Some(correlation)
+                    || ready.conversation.thread_id != correlation.requested_thread_id
+                {
+                    return;
+                }
+                self.pending_conversation_load = None;
+            }
+            (Some(correlation), CoreConversationSnapshot::Failed { .. }) => {
+                if self.pending_conversation_load.as_ref() != Some(correlation) {
+                    return;
+                }
+                self.pending_conversation_load = None;
+            }
+            (None, CoreConversationSnapshot::Idle) => {
+                self.pending_conversation_load = None;
+            }
+            _ => return,
+        }
+        self.apply_core_conversation_snapshot(snapshot);
     }
 
     pub(super) fn dispatch_core_command(&mut self, command: AppCommand) {
@@ -1019,6 +1558,42 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_conversation_lifecycle(&mut self, event: ConversationLifecycleEvent) {
+        let target_workspace_directory = match &event {
+            ConversationLifecycleEvent::NewDraftOpened {
+                workspace_directory,
+            } => Some(workspace_directory.as_str()),
+            ConversationLifecycleEvent::SessionChosen {
+                session,
+                fallback_workspace_directory,
+            } => Some(if session.cwd.trim().is_empty() {
+                fallback_workspace_directory.as_str()
+            } else {
+                session.cwd.as_str()
+            }),
+            ConversationLifecycleEvent::CoreConversationSnapshotApplied {
+                snapshot: CoreConversationSnapshot::Ready(ready),
+                draft_workspace_directory,
+            } => Some(if ready.workspace_directory.trim().is_empty() {
+                draft_workspace_directory.as_str()
+            } else {
+                ready.workspace_directory.as_str()
+            }),
+            ConversationLifecycleEvent::CoreConversationSnapshotApplied { .. } => None,
+        }
+        .map(str::to_string);
+        if let Some(target_workspace_directory) = target_workspace_directory.as_deref() {
+            self.close_parallel_mode_epoch_before_workspace_transition(target_workspace_directory);
+        }
+        let changes_conversation_identity = matches!(
+            &event,
+            ConversationLifecycleEvent::NewDraftOpened { .. }
+                | ConversationLifecycleEvent::SessionChosen { .. }
+        );
+        if changes_conversation_identity {
+            self.post_turn_continuation_gate.advance();
+            self.cancel_manual_prompt_preparation_for_identity_transition();
+            self.dispatch_core_command(AppCommand::InvalidateConversationLoad);
+        }
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
         self.apply_conversation_lifecycle_state(reduction.state);
@@ -1083,6 +1658,16 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_conversation_input(&mut self, event: ConversationInputEvent) {
+        let event =
+            if self.pending_manual_prompt_preparation.is_some() && event.mutates_input_buffer() {
+                ConversationInputEvent::StatusMessageShown {
+                    status_text:
+                        "turn preparation in progress; prompt editing is locked until it finishes"
+                            .to_string(),
+                }
+            } else {
+                event
+            };
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };
@@ -1163,6 +1748,34 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_auto_follow_controls(&mut self, event: AutoFollowControlEvent) {
+        let invalidates_prior_requests = match &event {
+            AutoFollowControlEvent::AutoFollowPaused => true,
+            AutoFollowControlEvent::MaxAutoTurnsUpdated { value } => {
+                super::AutoFollowState::normalize_max_auto_turns_candidate(value).is_some()
+            }
+            AutoFollowControlEvent::DraftWorkspaceSynced {
+                workspace_directory,
+            } => matches!(
+                &self.conversation_state,
+                ConversationState::Ready(conversation)
+                    if conversation.draft_workspace_directory() != workspace_directory
+            ),
+        };
+        if invalidates_prior_requests {
+            self.post_turn_continuation_gate.advance();
+        }
+        if matches!(
+            &event,
+            AutoFollowControlEvent::DraftWorkspaceSynced {
+                workspace_directory,
+            } if matches!(
+                &self.conversation_state,
+                ConversationState::Ready(conversation)
+                    if conversation.draft_workspace_directory() != workspace_directory
+            )
+        ) {
+            self.cancel_manual_prompt_preparation_for_identity_transition();
+        }
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };

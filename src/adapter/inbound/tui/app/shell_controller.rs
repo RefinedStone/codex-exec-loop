@@ -62,6 +62,17 @@ impl NativeTuiApp {
             ConversationState::Ready(conversation) if conversation.has_running_turn()
         )
     }
+    fn mark_active_turn_interrupt_requested_once(&mut self) -> bool {
+        match &mut self.conversation_state {
+            ConversationState::Ready(conversation) => conversation.mark_interrupt_requested_once(),
+            ConversationState::Loading | ConversationState::Failed(_) => false,
+        }
+    }
+    pub(super) fn clear_active_turn_interrupt_request(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.clear_interrupt_request();
+        }
+    }
     pub(super) fn show_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayShown);
     }
@@ -295,12 +306,25 @@ impl NativeTuiApp {
         // Stop is both a local mode transition and an app-server control request:
         // disable future automation immediately, then ask the service to
         // interrupt any running native sessions.
+        let has_running_turn = self.conversation_has_running_turn();
+        if has_running_turn && !self.mark_active_turn_interrupt_requested_once() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "stop already requested / waiting for the active app-server turn / auto-follow remains disarmed until :turns re-enables it"
+                    .to_string(),
+            });
+            return;
+        }
         let status_text = match self.application.request_stop_all_sessions() {
-            Ok(()) if self.conversation_has_running_turn() => {
-                "stop requested / active app-server sessions will be interrupted".to_string()
+            Ok(()) if has_running_turn => {
+                "stop requested / active app-server sessions will be interrupted / auto-follow disarmed until :turns re-enables it".to_string()
             }
-            Ok(()) => "stop requested / no active turn is running".to_string(),
-            Err(error) => format!("stop request failed: {error}"),
+            Ok(()) => "stop requested / no active turn is running / auto-follow disarmed until :turns re-enables it".to_string(),
+            Err(error) => {
+                self.clear_active_turn_interrupt_request();
+                format!(
+                    "stop request failed: {error} / auto-follow remains disarmed until :turns re-enables it"
+                )
+            }
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
@@ -396,6 +420,9 @@ impl NativeTuiApp {
     pub(super) fn is_shell_overlay_visible(&self) -> bool {
         self.shell_overlay != ShellOverlay::Hidden
     }
+    pub(super) fn approval_overlay_active(&self) -> bool {
+        self.shell_overlay == ShellOverlay::Approval
+    }
     pub(super) fn is_exit_confirmation_visible(&self) -> bool {
         self.exit_confirmation_state == ExitConfirmationState::Visible
     }
@@ -423,6 +450,9 @@ impl NativeTuiApp {
     pub(super) fn handle_shell_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         if self.shell_overlay == ShellOverlay::Hidden {
             return false;
+        }
+        if self.shell_overlay == ShellOverlay::Approval {
+            return self.handle_approval_overlay_key(key);
         }
         let is_startup_overlay = self.shell_overlay == ShellOverlay::Startup;
         // Text-field handlers get first refusal because their shortcuts must not
@@ -498,10 +528,110 @@ impl NativeTuiApp {
         self.handle_session_overlay_key(key);
         true
     }
+    fn handle_approval_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        match (key.code, key.modifiers) {
+            (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                self.move_pending_approval_detail_scroll(-1);
+                return true;
+            }
+            (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                self.move_pending_approval_detail_scroll(1);
+                return true;
+            }
+            (KeyCode::PageUp, KeyModifiers::NONE) => {
+                self.move_pending_approval_detail_scroll(-5);
+                return true;
+            }
+            (KeyCode::PageDown, KeyModifiers::NONE) => {
+                self.move_pending_approval_detail_scroll(5);
+                return true;
+            }
+            _ => {}
+        }
+        if self.pending_approval_decision_submitted() {
+            if matches!(
+                (key.code, key.modifiers),
+                (KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ) {
+                self.handle_stop_shell_command();
+            }
+            return true;
+        }
+        let decision = match (key.code, key.modifiers) {
+            (KeyCode::Char('y' | 'Y'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
+            }
+            (KeyCode::Esc, KeyModifiers::NONE)
+            | (KeyCode::Char('n' | 'N'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                Some(crate::domain::conversation::ConversationApprovalDecision::Decline)
+            }
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.submit_pending_approval_decision(
+                    crate::domain::conversation::ConversationApprovalDecision::Decline,
+                );
+                self.handle_stop_shell_command();
+                return true;
+            }
+            _ => None,
+        };
+        if let Some(decision) = decision {
+            self.submit_pending_approval_decision(decision);
+        }
+        true
+    }
+    fn move_pending_approval_detail_scroll(&mut self, delta: isize) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.move_approval_detail_scroll(delta);
+        }
+    }
+    fn pending_approval_decision_submitted(&self) -> bool {
+        matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.pending_approval_decision().is_some()
+        )
+    }
+    fn submit_pending_approval_decision(
+        &mut self,
+        decision: crate::domain::conversation::ConversationApprovalDecision,
+    ) {
+        let approval_id = match &self.conversation_state {
+            ConversationState::Ready(conversation)
+                if conversation.pending_approval_decision().is_none() =>
+            {
+                conversation
+                    .pending_approval_request
+                    .as_ref()
+                    .map(|request| request.approval_id.clone())
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+            ConversationState::Ready(_) => None,
+        };
+        if let Some(approval_id) = approval_id {
+            self.dispatch_conversation_runtime(
+                ConversationRuntimeEvent::ApprovalDecisionSubmitted {
+                    approval_id,
+                    decision,
+                },
+            );
+        }
+    }
     pub(super) fn handle_ctrl_c(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationHidden);
+        if self.approval_overlay_active() {
+            self.submit_pending_approval_decision(
+                crate::domain::conversation::ConversationApprovalDecision::Decline,
+            );
+            self.handle_stop_shell_command();
+            return;
+        }
         if self.is_shell_overlay_visible() {
             self.close_shell_overlay();
+            return;
+        }
+
+        if self.conversation_has_running_turn() {
+            self.handle_stop_shell_command();
             return;
         }
 
@@ -655,6 +785,9 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::core::app::StartupReadySnapshot;
+    use crate::domain::conversation::{
+        ConversationApprovalRequest, ConversationApprovalRequestKind,
+    };
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
@@ -812,6 +945,24 @@ mod tests {
                 .max_auto_turns_label(),
             "4"
         );
+        assert!(status_text(&app).contains("auto-follow enabled"));
+
+        app.execute_inline_shell_command_input(command(":turns off"));
+        assert_eq!(
+            ready_conversation(&app)
+                .auto_follow_state
+                .max_auto_turns_label(),
+            "off"
+        );
+        assert!(status_text(&app).contains("auto-follow disabled"));
+
+        app.execute_inline_shell_command_input(command(":turns infinite"));
+        assert_eq!(
+            ready_conversation(&app)
+                .auto_follow_state
+                .max_auto_turns_label(),
+            "infinite"
+        );
 
         app.execute_inline_shell_command_input(command(":model default"));
         assert_eq!(app.turn_options.model, None);
@@ -831,12 +982,104 @@ mod tests {
         app.execute_inline_shell_command_input(command(":think unknown"));
         assert!(status_text(&app).contains("supported values"));
 
+        let parallel_workspace = app.planning_workspace_directory();
+        app.open_parallel_mode_automation_epoch(parallel_workspace.clone());
+        app.set_parallel_mode_enabled_for_test(true);
+        let parallel_epoch = app
+            .parallel_mode_automation_epoch_id()
+            .expect("parallel epoch should be open before stop");
+        assert!(
+            app.parallel_mode_control_plane
+                .automation_epoch_is_active(&parallel_workspace, parallel_epoch)
+        );
+
         app.execute_inline_shell_command_input(command(":stop"));
         assert!(status_text(&app).contains("no active turn is running"));
+        assert!(!app.parallel_mode_enabled());
+        assert!(app.parallel_mode_automation_epoch_id().is_none());
+        assert!(
+            !app.parallel_mode_control_plane
+                .automation_epoch_is_active(&parallel_workspace, parallel_epoch),
+            ":stop must close the automation permit before another dispatch can start"
+        );
+        assert!(
+            ready_conversation(&app)
+                .auto_follow_state
+                .post_turn_continuation_paused()
+        );
+
+        ready_conversation_mut(&mut app)
+            .auto_follow_state
+            .reset_for_manual_turn();
+        assert!(
+            ready_conversation(&app)
+                .auto_follow_state
+                .post_turn_continuation_paused(),
+            "manual turns must not re-arm automation after :stop"
+        );
+        assert!(
+            !ready_conversation(&app)
+                .auto_follow_state
+                .parallel_post_turn_continuation_allowed(),
+            "manual turns must not re-arm the parallel continuation path"
+        );
+
+        app.execute_inline_shell_command_input(command(":parallel"));
+        assert!(
+            ready_conversation(&app)
+                .auto_follow_state
+                .post_turn_continuation_paused(),
+            "parallel opt-in must not clear the single-session stop"
+        );
+        assert!(
+            ready_conversation(&app)
+                .auto_follow_state
+                .parallel_post_turn_continuation_allowed(),
+            "explicit parallel opt-in should re-arm only the parallel continuation path"
+        );
+        app.execute_inline_shell_command_input(command(":parallel off"));
+        assert!(
+            !ready_conversation(&app)
+                .auto_follow_state
+                .parallel_post_turn_continuation_allowed()
+        );
+
+        app.execute_inline_shell_command_input(command(":turns 2"));
+        assert!(
+            ready_conversation(&app).auto_follow_state.can_queue_next(),
+            "only an explicit positive :turns command should re-arm automation"
+        );
 
         ready_conversation_mut(&mut app).record_turn_started("turn-1".to_string());
         app.execute_inline_shell_command_input(command(":stop"));
         assert!(status_text(&app).contains("active app-server sessions"));
+        assert!(ready_conversation(&app).interrupt_request_pending);
+        app.execute_inline_shell_command_input(command(":stop"));
+        assert!(status_text(&app).contains("stop already requested"));
+    }
+
+    #[test]
+    fn ctrl_c_interrupts_a_running_turn_once_and_keeps_idle_navigation_semantics() {
+        let mut app = test_native_tui_app();
+        ready_conversation_mut(&mut app).mark_turn_submitting("/tmp/root".to_string());
+
+        app.handle_ctrl_c();
+        assert!(ready_conversation(&app).interrupt_request_pending);
+        ready_conversation_mut(&mut app).record_turn_started("turn-ctrl-c".to_string());
+        assert!(ready_conversation(&app).interrupt_request_pending);
+        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
+
+        app.handle_ctrl_c();
+        assert!(status_text(&app).contains("stop already requested"));
+        assert!(ready_conversation(&app).interrupt_request_pending);
+
+        ready_conversation_mut(&mut app).mark_turn_finished();
+        assert!(!ready_conversation(&app).interrupt_request_pending);
+        app.handle_ctrl_c();
+        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
+        assert!(ready_conversation(&app).is_blank_draft());
+        app.handle_ctrl_c();
+        assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Visible);
     }
 
     #[test]
@@ -958,6 +1201,74 @@ mod tests {
         app.shell_overlay = ShellOverlay::Queue;
         app.handle_ctrl_c();
         assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    }
+
+    #[test]
+    fn approval_overlay_consumes_all_input_and_routes_only_explicit_decisions() {
+        let mut app = test_native_tui_app();
+        let conversation = ready_conversation_mut(&mut app);
+        conversation.input_buffer = "draft prompt".to_string();
+        conversation.mark_turn_submitting("/tmp/root".to_string());
+        conversation.pending_approval_request = Some(ConversationApprovalRequest {
+            approval_id: "approval-key".to_string(),
+            server_request_id: "server-key".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Command execution requested.".to_string(),
+            details: (1..=8).map(|index| format!("Detail {index}")).collect(),
+        });
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
+        assert_eq!(ready_conversation(&app).approval_detail_scroll_offset, 1);
+        assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
+        assert!(ready_conversation(&app).pending_approval_request.is_some());
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            "approval decision submitted: accept / waiting for runtime resolution"
+        );
+        assert!(ready_conversation(&app).pending_approval_request.is_some());
+        assert_eq!(
+            ready_conversation(&app).pending_approval_decision(),
+            Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('n'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
+        assert_eq!(
+            ready_conversation(&app).pending_approval_decision(),
+            Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
+        );
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            "approval decision submitted: accept / waiting for runtime resolution"
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+
+        app.close_shell_overlay();
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+
+        assert!(
+            app.handle_shell_overlay_key(modified_key(KeyCode::Char('c'), KeyModifiers::CONTROL,))
+        );
+        assert!(ready_conversation(&app).interrupt_request_pending);
+        assert_eq!(
+            ready_conversation(&app).pending_approval_decision(),
+            Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
+        );
+        assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
     }
 
     #[test]

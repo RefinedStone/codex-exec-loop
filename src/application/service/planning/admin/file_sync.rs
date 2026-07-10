@@ -2,13 +2,15 @@
 // 실제 쓰기/읽기는 workspace port를 통해 수행하고, planning 저장소 갱신은 facade helper에 맡긴다.
 // Admin API는 실패 원인을 operator에게 그대로 보여 주므로 `Context`로 어느 파일 작업이 실패했는지 붙이고,
 // parallel busy guard는 `bail!`로 즉시 중단한다.
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow};
+use rand::RngCore;
 
 // 이 파일은 `PlanningAdminFacadeService`에 export/apply 동작을 붙인다. 반환 outcome은 admin page/API가
 // notice와 영향을 받은 path 목록을 표시하는 데 쓰는 얇은 DTO다.
 use super::{PlanningAdminFacadeService, PlanningAdminFileSyncOutcome};
 // Runtime projection snapshot에는 parallel slot lease와 distributor queue 상태가 함께 들어 있다. file sync는
 // accepted 파일을 직접 덮어쓸 수 있으므로 이 snapshot으로 병렬 작업 중 여부를 먼저 검사한다.
+#[cfg(test)]
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot;
 // 현재 admin file sync의 대상은 operator planning documents 중 result-output markdown이다. 상수를 써서 export
 // 경로, apply 경로, notice path가 planning service 전체의 canonical path와 일치하게 한다.
@@ -20,78 +22,89 @@ impl PlanningAdminFacadeService {
     // Accepted planning support file을 workspace 파일로 export한다. parallel worker가 같은 planning authority를
     // 수정 중이면 stale file을 내보낼 수 있으므로 guard를 먼저 통과해야 한다.
     pub fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
-        self.ensure_no_parallel_working("export planning support files")?;
-        // Operator documents는 DB/authority가 현재 accepted로 보는 planning support 문서 묶음이다. export는
-        // 이 accepted state를 source of truth로 삼고 workspace 파일은 단순 편집 사본으로 만든다.
-        let documents = self.load_operator_planning_documents()?;
-        // paths는 실제로 쓴 planning-relative path를 caller에게 알려 주는 기록이다. 대상 파일이 늘어나도
-        // notice count와 UI 표시가 helper 호출 수와 함께 맞춰지도록 Vec으로 누적한다.
-        self.planning_workspace_port
-            .replace_planning_workspace_file(
-                self.workspace_dir.as_str(),
-                RESULT_OUTPUT_FILE_PATH,
-                Some(&documents.result_output_markdown),
-            )
-            .with_context(|| format!("failed to export {RESULT_OUTPUT_FILE_PATH}"))?;
-        let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
-
-        // outcome notice는 admin page flash/status copy의 원천이다. paths는 사용자가 어떤 workspace 파일을
-        // 열어 편집하면 되는지 보여 주는 machine-readable 목록이다.
-        Ok(PlanningAdminFileSyncOutcome {
-            notice: format!(
-                "exported {} planning support files for editing",
-                paths.len()
-            ),
-            paths,
+        self.ensure_default_authority()?;
+        self.with_file_sync_guard("export planning support files", |_owner_token| {
+            let documents = self.load_operator_planning_documents()?;
+            self.planning_workspace_port
+                .export_planning_file_sync_candidate(
+                    self.workspace_dir.as_str(),
+                    RESULT_OUTPUT_FILE_PATH,
+                    &documents.result_output_markdown,
+                    documents.observed_planning_revision,
+                )
+                .with_context(|| format!("failed to export {RESULT_OUTPUT_FILE_PATH}"))?;
+            let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+            Ok(PlanningAdminFileSyncOutcome {
+                notice: format!(
+                    "exported {} planning support files for editing",
+                    paths.len()
+                ),
+                paths,
+            })
         })
     }
 
     // workspace에 export된 파일을 다시 accepted operator documents로 적용한다. 이 경로는 draft validation/promotion이
     // 아니라 admin이 직접 support file을 동기화하는 명령이므로 missing file을 오류로 본다.
     pub fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
-        self.ensure_no_parallel_working("apply exported planning support files")?;
-        let exported_result_output = self
-            .planning_workspace_port
-            // apply는 export된 candidate 파일이 있어야 의미가 있다. authority-backed active read로 되돌아가면
-            // operator가 실제 workspace에서 고친 내용이 사라질 수 있으므로 candidate copy만 읽는다.
-            .load_optional_planning_candidate_file(
-                self.workspace_dir.as_str(),
-                RESULT_OUTPUT_FILE_PATH,
-            )?
-            .ok_or_else(|| anyhow::anyhow!("missing exported file: {RESULT_OUTPUT_FILE_PATH}"))?;
-        // 기존 operator documents를 읽고 대상 필드만 export된 파일 내용으로 교체한다. 다른 planning support
-        // document가 생겨도 이 함수가 의도치 않게 나머지 필드를 초기화하지 않게 하기 위해서다.
-        let mut documents = self.load_operator_planning_documents()?;
-        documents.result_output_markdown = exported_result_output;
-        self.commit_operator_planning_documents(documents)?;
-        // 현재 적용 대상은 result-output 하나다. export와 같은 path list shape를 유지해 admin caller가 두 작업의
-        // 결과를 같은 UI contract로 표시할 수 있다.
-        let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
-        Ok(PlanningAdminFileSyncOutcome {
-            notice: format!("applied {} exported planning paths", paths.len()),
-            paths,
+        self.ensure_default_authority()?;
+        self.with_file_sync_guard("apply exported planning support files", |owner_token| {
+            let exported = self
+                .planning_workspace_port
+                .load_planning_file_sync_candidate(
+                    self.workspace_dir.as_str(),
+                    RESULT_OUTPUT_FILE_PATH,
+                )?
+                .ok_or_else(|| anyhow!("missing exported file: {RESULT_OUTPUT_FILE_PATH}"))?;
+            let mut documents = self.load_operator_planning_documents()?;
+            documents.result_output_markdown = exported.body;
+            documents.observed_planning_revision = exported.observed_planning_revision;
+            self.commit_operator_planning_documents_with_guard(documents, owner_token)?;
+            let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+            Ok(PlanningAdminFileSyncOutcome {
+                notice: format!("applied {} exported planning paths", paths.len()),
+                paths,
+            })
         })
     }
 
-    // File sync는 accepted planning state를 workspace file과 왕복시키므로 parallel worker가 lease를 들고 있거나
-    // distributor queue item을 처리 중이면 막는다. action 문자열은 오류 문구의 동사로 쓴다.
-    fn ensure_no_parallel_working(&self, action: &str) -> Result<()> {
-        // Authority projection은 slot leases와 distributor queue records를 한 번에 읽는 snapshot이다. service 계층에서
-        // 이 guard를 두면 admin API, pages, telegram 같은 모든 inbound가 같은 안전 규칙을 공유한다.
-        let runtime = self
+    fn with_file_sync_guard<T>(
+        &self,
+        action: &str,
+        operation: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<T> {
+        let mut token = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut token);
+        let owner_token = token
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        self.planning_authority_port
+            .acquire_admin_authority_mutation_guard(
+                self.workspace_dir.as_str(),
+                &owner_token,
+                action,
+            )?;
+        let result = operation(&owner_token);
+        let release = self
             .planning_authority_port
-            .load_runtime_projections(self.workspace_dir.as_str())?;
-        // busy reason이 있으면 구체적인 slot/item 정보를 포함해 실패한다. 단순 "busy"보다 어떤 task가
-        // 파일 동기화를 막고 있는지 operator가 바로 알 수 있다.
-        if let Some(reason) = describe_parallel_busy(&runtime) {
-            bail!("{action} is blocked while parallel work is active: {reason}");
+            .release_admin_authority_mutation_guard(self.workspace_dir.as_str(), &owner_token);
+        match (result, release) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(error)) => Err(error.context(
+                "planning file sync completed but its runtime exclusion guard could not be released",
+            )),
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(release_error)) => Err(anyhow!(
+                "planning file sync failed: {error:#}; runtime exclusion guard release also failed: {release_error:#}"
+            )),
         }
-        Ok(())
     }
 }
 
 // Parallel busy 설명은 guard의 정책을 문자열로 낮추는 helper다. lease를 먼저 검사하는 이유는 이미 실행/정리
 // 중인 slot이 queue record보다 accepted 파일 충돌 위험을 더 직접적으로 나타내기 때문이다.
+#[cfg(test)]
 fn describe_parallel_busy(runtime: &PlanningAuthorityRuntimeProjectionSnapshot) -> Option<String> {
     // Leased/Running/CleanupPending은 모두 file sync가 끼어들면 안 되는 상태다. cleanup도 아직 authority state를
     // 정리하는 중일 수 있어 완료된 슬롯으로 취급하지 않는다.
@@ -151,6 +164,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
+    #[cfg(not(windows))]
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -165,13 +180,14 @@ mod tests {
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
-        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+        PlanningFileSyncCandidateRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::service::planning::PlanningServices;
     use crate::domain::parallel_mode::{
         ParallelModeQueueItemState, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     };
 
+    #[cfg(not(windows))]
     #[test]
     fn export_and_apply_round_trip_result_output_through_workspace_file() {
         let fixture = TestAdminFixture::new("admin-file-sync-round-trip");
@@ -216,6 +232,129 @@ mod tests {
         assert_eq!(applied.notice, "applied 1 exported planning paths");
         assert_eq!(applied.paths, vec![RESULT_OUTPUT_FILE_PATH.to_string()]);
         assert_eq!(reloaded.result_output_markdown, edited_body);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn git_backed_file_sync_uses_candidate_file_without_mutating_active_db_on_export() {
+        let workspace = TempPlanningWorkspace::new("admin-file-sync-git-backed");
+        let output = Command::new("git")
+            .args(["init", "-q", &workspace.path])
+            .output()
+            .expect("git init should run");
+        assert!(output.status.success(), "git init should succeed");
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+            FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone()),
+        );
+        let facade = build_facade_with_sqlite(workspace.path.clone(), workspace_port, sqlite);
+        let accepted_body = "# Result Output\n\nAccepted DB body.";
+        let edited_body = "# Result Output\n\nEdited candidate body.";
+        let mut documents = facade
+            .load_operator_planning_documents()
+            .expect("documents should load");
+        documents.result_output_markdown = accepted_body.to_string();
+        facade
+            .commit_operator_planning_documents(documents)
+            .expect("accepted DB body should commit");
+
+        facade
+            .export_active_files_for_edit()
+            .expect("git-backed candidate should export");
+        assert_eq!(
+            facade
+                .load_operator_planning_documents()
+                .expect("active DB body should reload")
+                .result_output_markdown,
+            accepted_body,
+            "export must not write through to active_documents"
+        );
+        let candidate = Path::new(&workspace.path).join(RESULT_OUTPUT_FILE_PATH);
+        assert_eq!(fs::read_to_string(&candidate).unwrap(), accepted_body);
+        let manifest = Path::new(&workspace.path)
+            .join(".codex-exec-loop/planning/.akra-file-sync-result-output.json");
+        assert!(
+            !manifest.exists(),
+            "git-backed export baseline must stay in the repo-scoped DB"
+        );
+        let status = Command::new("git")
+            .args([
+                "-C",
+                &workspace.path,
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ])
+            .output()
+            .expect("git status should run");
+        assert!(status.status.success());
+        assert!(
+            !String::from_utf8_lossy(&status.stdout).contains(".akra-file-sync-result-output.json")
+        );
+
+        fs::write(&candidate, edited_body).expect("candidate edit should write");
+        facade
+            .apply_exported_files()
+            .expect("candidate should apply to DB authority");
+        assert_eq!(
+            facade
+                .load_operator_planning_documents()
+                .expect("applied DB body should reload")
+                .result_output_markdown,
+            edited_body
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn stale_export_cannot_overwrite_newer_planning_authority() {
+        let fixture = TestAdminFixture::new("admin-file-sync-stale-export");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("documents should load");
+        documents.result_output_markdown = "# Result Output\n\nExport baseline.".to_string();
+        fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect("baseline should commit");
+        fixture
+            .facade
+            .export_active_files_for_edit()
+            .expect("baseline should export");
+
+        let mut newer = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("newer documents should load");
+        newer.result_output_markdown = "# Result Output\n\nNewer accepted body.".to_string();
+        fixture
+            .facade
+            .commit_operator_planning_documents(newer)
+            .expect("newer authority should commit");
+        fs::write(
+            Path::new(&fixture.workspace.path).join(RESULT_OUTPUT_FILE_PATH),
+            "# Result Output\n\nStale operator edit.",
+        )
+        .expect("stale candidate edit should write");
+
+        let error = fixture
+            .facade
+            .apply_exported_files()
+            .expect_err("stale export must lose the revision CAS");
+        assert!(
+            error
+                .to_string()
+                .contains("planning db changed while editing")
+        );
+        assert_eq!(
+            fixture
+                .facade
+                .load_operator_planning_documents()
+                .expect("newer authority should remain")
+                .result_output_markdown,
+            "# Result Output\n\nNewer accepted body."
+        );
     }
 
     #[test]
@@ -334,6 +473,60 @@ mod tests {
     }
 
     #[test]
+    fn file_sync_guard_blocks_late_runtime_lease_and_queue_projection() {
+        let fixture = TestAdminFixture::new("admin-file-sync-guard-first");
+        fixture
+            .authority_port
+            .acquire_admin_file_sync_guard(
+                &fixture.workspace.path,
+                "file-sync-owner",
+                "export planning support files",
+            )
+            .expect("idle runtime should admit file sync guard");
+
+        let lease_error = fixture
+            .authority_port
+            .upsert_runtime_slot_lease(
+                &fixture.workspace.path,
+                &slot_lease("slot-late", "task-late", ParallelModeSlotLeaseState::Leased),
+            )
+            .expect_err("late lease must lose to file sync guard");
+        assert!(
+            lease_error
+                .to_string()
+                .contains("admin authority mutation guard")
+        );
+        let queue_error = fixture
+            .authority_port
+            .upsert_runtime_distributor_queue_record(
+                &fixture.workspace.path,
+                &queue_record(
+                    "queue-late",
+                    "task-late",
+                    ParallelModeQueueItemState::Queued,
+                ),
+            )
+            .expect_err("late queue projection must lose to file sync guard");
+        assert!(
+            queue_error
+                .to_string()
+                .contains("admin authority mutation guard")
+        );
+
+        fixture
+            .authority_port
+            .release_admin_file_sync_guard(&fixture.workspace.path, "file-sync-owner")
+            .expect("file sync guard should release");
+        fixture
+            .authority_port
+            .upsert_runtime_slot_lease(
+                &fixture.workspace.path,
+                &slot_lease("slot-late", "task-late", ParallelModeSlotLeaseState::Leased),
+            )
+            .expect("runtime projection should resume after release");
+    }
+
+    #[test]
     fn describe_parallel_busy_ignores_empty_and_terminal_runtime_state() {
         let runtime = PlanningAuthorityRuntimeProjectionSnapshot {
             distributor_queue_records: vec![
@@ -421,6 +614,16 @@ mod tests {
         workspace_port: Arc<dyn PlanningWorkspacePort>,
     ) -> (PlanningAdminFacadeService, Arc<dyn PlanningAuthorityPort>) {
         let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let facade = build_facade_with_sqlite(workspace_dir, workspace_port, sqlite.clone());
+        let authority_port: Arc<dyn PlanningAuthorityPort> = sqlite;
+        (facade, authority_port)
+    }
+
+    fn build_facade_with_sqlite(
+        workspace_dir: String,
+        workspace_port: Arc<dyn PlanningWorkspacePort>,
+        sqlite: Arc<SqlitePlanningAuthorityAdapter>,
+    ) -> PlanningAdminFacadeService {
         let authority_port: Arc<dyn PlanningAuthorityPort> = sqlite.clone();
         let task_repository_port: Arc<dyn PlanningTaskRepositoryPort> = sqlite;
         let planning = PlanningServices::from_ports(
@@ -429,14 +632,13 @@ mod tests {
             task_repository_port.clone(),
             Arc::new(NoopPlanningWorkerPort),
         );
-        let facade = PlanningAdminFacadeService::from_planning_with_authority(
+        PlanningAdminFacadeService::from_planning_with_authority(
             workspace_dir,
             planning,
             workspace_port,
-            authority_port.clone(),
+            authority_port,
             task_repository_port,
-        );
-        (facade, authority_port)
+        )
     }
 
     fn slot_lease(
@@ -470,7 +672,9 @@ mod tests {
             agent_id: "agent-1".to_string(),
             task_id: task_id.to_string(),
             task_title: format!("Task {task_id}"),
+            delivery_target: None,
             source_branch: "prerelease".to_string(),
+            source_base_commit_sha: "base".to_string(),
             source_commit_sha: "source".to_string(),
             branch_name: format!("akra-agent/slot-1/{task_id}"),
             worktree_path: "/tmp/worktree".to_string(),
@@ -478,6 +682,8 @@ mod tests {
             original_commit_sha: None,
             planning_refresh_state: "complete".to_string(),
             integration_state: "queued".to_string(),
+            integration_base_commit_sha: None,
+            integration_commit_sha: None,
             conflict_files: Vec::new(),
             recovery_note: None,
             validation_summary: "validation unavailable".to_string(),
@@ -489,6 +695,8 @@ mod tests {
             integration_note: "queued".to_string(),
             enqueued_at: "2026-05-12T00:00:00+00:00".to_string(),
             updated_at: "2026-05-12T00:00:00+00:00".to_string(),
+            retry_attempts: 0,
+            retry_not_before: None,
         }
     }
 
@@ -543,6 +751,7 @@ mod tests {
     struct PortBackedResultOutputWorkspacePort {
         accepted_result_output_markdown: Mutex<Option<String>>,
         candidate_result_output_markdown: Mutex<Option<String>>,
+        candidate_planning_revision: Mutex<Option<i64>>,
         replace_calls: Mutex<usize>,
     }
 
@@ -551,6 +760,7 @@ mod tests {
             Self {
                 accepted_result_output_markdown: Mutex::new(Some(initial_body.to_string())),
                 candidate_result_output_markdown: Mutex::new(None),
+                candidate_planning_revision: Mutex::new(None),
                 replace_calls: Mutex::new(0),
             }
         }
@@ -586,6 +796,52 @@ mod tests {
     }
 
     impl PlanningWorkspacePort for PortBackedResultOutputWorkspacePort {
+        fn export_planning_file_sync_candidate(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+            body: &str,
+            observed_planning_revision: Option<i64>,
+        ) -> Result<String> {
+            if relative_path != RESULT_OUTPUT_FILE_PATH {
+                return Err(anyhow!("unexpected file-sync path"));
+            }
+            *self
+                .candidate_result_output_markdown
+                .lock()
+                .expect("workspace port candidate state should not be poisoned") =
+                Some(body.to_string());
+            *self
+                .candidate_planning_revision
+                .lock()
+                .expect("workspace port candidate revision should not be poisoned") =
+                observed_planning_revision;
+            *self
+                .replace_calls
+                .lock()
+                .expect("workspace port state should not be poisoned") += 1;
+            Ok(relative_path.to_string())
+        }
+
+        fn load_planning_file_sync_candidate(
+            &self,
+            _workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<PlanningFileSyncCandidateRecord>> {
+            if relative_path != RESULT_OUTPUT_FILE_PATH {
+                return Err(anyhow!("unexpected file-sync path"));
+            }
+            Ok(self
+                .current_candidate_result_output()
+                .map(|body| PlanningFileSyncCandidateRecord {
+                    body,
+                    observed_planning_revision: *self
+                        .candidate_planning_revision
+                        .lock()
+                        .expect("workspace port candidate revision should not be poisoned"),
+                }))
+        }
+
         fn stage_planning_draft_files(
             &self,
             _workspace_dir: &str,
@@ -721,6 +977,14 @@ mod tests {
     struct MissingResultOutputWorkspacePort;
 
     impl PlanningWorkspacePort for MissingResultOutputWorkspacePort {
+        fn load_planning_file_sync_candidate(
+            &self,
+            _workspace_dir: &str,
+            _relative_path: &str,
+        ) -> Result<Option<PlanningFileSyncCandidateRecord>> {
+            Ok(None)
+        }
+
         fn stage_planning_draft_files(
             &self,
             _workspace_dir: &str,

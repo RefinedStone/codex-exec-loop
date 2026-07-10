@@ -1,5 +1,9 @@
 logs/
-artifacts/
+artifacts/*
+!artifacts/terminal-bridge-readiness-2026-04-23/
+artifacts/terminal-bridge-readiness-2026-04-23/*
+!artifacts/terminal-bridge-readiness-2026-04-23/README.md
+/tmp/
 .gjc/
 .codex
 .idea/
@@ -18,4 +22,5 @@ blob-report/
 npm/vendor/
 npm/.staging/
 .codex-exec-loop/runtime/
+.codex-exec-loop/planning/.akra-file-sync-result-output.json
 .reference

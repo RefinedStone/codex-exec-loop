@@ -1,6 +1,7 @@
 use super::*;
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use std::collections::BTreeSet;
-use std::sync::Barrier;
+use std::sync::{Barrier, Mutex, mpsc};
 
 // 디스패치 계획 테스트는 실제 planning worker 전체를 띄우지 않고도 큐 우선순위와
 // `next_task` 파생값이 같은 입력에서 만들어졌는지만 검증하면 충분하다.
@@ -42,6 +43,24 @@ fn queue_task(rank: usize, task_id: &str) -> PriorityQueueTask {
         updated_at: format!("2026-04-30T00:0{rank}:00Z"),
         rank_reasons: vec!["ready".to_string()],
     }
+}
+
+fn install_runtime_insert_failure(repo: &TempGitRepo, trigger_name: &str, table_name: &str) {
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let location = authority
+        .resolve_authority_location(&repo.workspace_dir())
+        .expect("authority location should resolve before fault injection");
+    let connection = rusqlite::Connection::open(&location.authority_store_path)
+        .expect("authority store should open for fault injection");
+    connection
+        .execute_batch(&format!(
+            "CREATE TRIGGER {trigger_name}
+             BEFORE INSERT ON {table_name}
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced {table_name} insert failure');
+             END;"
+        ))
+        .expect("authority write failure trigger should install");
 }
 
 // readiness snapshot이 없거나 repository 상태를 읽을 수 없는 board는 모든 slot을
@@ -172,7 +191,9 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
         agent_id: "agent-task-2".to_string(),
         task_id: "task-2".to_string(),
         task_title: "Task 2".to_string(),
+        delivery_target: None,
         source_branch: "akra-agent/slot-2/task-2".to_string(),
+        source_base_commit_sha: "base".to_string(),
         source_commit_sha: repo.head_sha(),
         branch_name: "akra-agent/slot-2/task-2".to_string(),
         worktree_path: repo.workspace_dir(),
@@ -180,6 +201,8 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
         original_commit_sha: None,
         planning_refresh_state: "done".to_string(),
         integration_state: "queued".to_string(),
+        integration_base_commit_sha: None,
+        integration_commit_sha: None,
         conflict_files: Vec::new(),
         recovery_note: None,
         validation_summary: "queued".to_string(),
@@ -191,6 +214,8 @@ fn build_dispatch_plan_excludes_leased_and_queued_tasks() {
         integration_note: "queued for distributor".to_string(),
         enqueued_at: "2026-04-30T00:00:00Z".to_string(),
         updated_at: "2026-04-30T00:00:00Z".to_string(),
+        retry_attempts: 0,
+        retry_not_before: None,
     };
     SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
         &repo.workspace_dir(),
@@ -312,6 +337,197 @@ fn build_dispatch_plan_allows_failed_start_task_after_task_changes() {
     );
 }
 
+#[test]
+fn operator_update_during_failed_start_cleanup_is_not_reblocked_by_later_detail_write() {
+    let repo = TempGitRepo::new("failed-start-update-during-cleanup");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task 1", "agent-task-1", "task-1"),
+        )
+        .expect("task lease should be acquired");
+    let operator_updated_at = Mutex::new(None::<String>);
+
+    service
+        .release_workspace_slot_lease_after_failed_start_with_test_hook(
+            &lease.worktree_path,
+            || {
+                let runtime_projection =
+                    SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+                        .expect("pre-cleanup dispatch block should already be durable");
+                let blocked_at = chrono::DateTime::parse_from_rfc3339(
+                    &runtime_projection.task_dispatch_blocks[0].blocked_at,
+                )
+                .expect("dispatch block timestamp should be RFC3339");
+                let updated_at = (blocked_at + chrono::TimeDelta::milliseconds(1)).to_rfc3339();
+                *operator_updated_at
+                    .lock()
+                    .expect("operator update timestamp mutex should not be poisoned") =
+                    Some(updated_at);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            },
+        )
+        .expect("failed start cleanup should complete")
+        .expect("leased workspace should be released");
+
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should include failure records");
+    let block = &runtime_projection.task_dispatch_blocks[0];
+    let detail = runtime_projection
+        .session_details
+        .iter()
+        .find(|detail| detail.session_key == lease.session_key())
+        .expect("failed-start detail should be persisted");
+    assert_eq!(detail.updated_at, block.blocked_at);
+
+    let mut updated_task = queue_task(1, "task-1");
+    updated_task.updated_at = operator_updated_at
+        .into_inner()
+        .expect("operator update timestamp mutex should not be poisoned")
+        .expect("operator update should occur after pre-block");
+    let updated_queue = PriorityQueueProjection {
+        next_task: Some(updated_task.clone()),
+        active_tasks: vec![updated_task],
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+    let updated_projection = PlanningRuntimeProjection::ready_with_queue_projection(
+        "prompt".to_string(),
+        updated_queue.queue_summary(),
+        None,
+        updated_queue.next_task.clone(),
+        updated_queue,
+    );
+    let plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &updated_projection, usize::MAX)
+        .expect("operator-updated task dispatch plan should build");
+    assert!(plan.excluded_task_ids.is_empty());
+    assert_eq!(plan.candidates[0].task_id, "task-1");
+}
+
+#[test]
+fn failed_start_block_survives_session_detail_authority_failure_and_allows_updated_task() {
+    let repo = TempGitRepo::new("failed-start-detail-authority-failure");
+    let service = test_parallel_mode_service();
+    let unchanged_projection = planning_projection_with_active_tasks(&["task-1"]);
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task 1", "agent-task-1", "task-1"),
+        )
+        .expect("task lease should be acquired");
+    install_runtime_insert_failure(
+        &repo,
+        "fail_failed_start_session_detail",
+        "runtime_session_details",
+    );
+
+    let error = service
+        .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
+        .expect_err("session detail failure should remain observable after cleanup");
+    assert!(error.contains("failed to store agent session detail"));
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!repo.branch_exists(&lease.branch_name));
+
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should retain the failed-start fence");
+    assert_eq!(runtime_projection.task_dispatch_blocks.len(), 1);
+    assert_eq!(runtime_projection.task_dispatch_blocks[0].task_id, "task-1");
+    let unchanged_plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &unchanged_projection, usize::MAX)
+        .expect("unchanged task dispatch plan should build");
+    assert_eq!(unchanged_plan.excluded_task_ids, vec!["task-1"]);
+    assert!(unchanged_plan.candidates.is_empty());
+
+    let mut updated_task = queue_task(1, "task-1");
+    updated_task.updated_at = "2999-01-01T00:00:00Z".to_string();
+    let updated_queue = PriorityQueueProjection {
+        next_task: Some(updated_task.clone()),
+        active_tasks: vec![updated_task],
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+    let updated_projection = PlanningRuntimeProjection::ready_with_queue_projection(
+        "prompt".to_string(),
+        updated_queue.queue_summary(),
+        None,
+        updated_queue.next_task.clone(),
+        updated_queue,
+    );
+    let updated_plan = service
+        .build_dispatch_plan(&repo.workspace_dir(), &updated_projection, usize::MAX)
+        .expect("operator-updated task dispatch plan should build");
+    assert!(updated_plan.excluded_task_ids.is_empty());
+    assert_eq!(updated_plan.candidates[0].task_id, "task-1");
+}
+
+#[test]
+fn failed_start_block_survives_session_detail_mirror_failure() {
+    let repo = TempGitRepo::new("failed-start-detail-mirror-failure");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task 1", "agent-task-1", "task-1"),
+        )
+        .expect("task lease should be acquired");
+    let detail_path = repo.session_detail_path(&lease.session_key());
+    fs::remove_file(&detail_path).expect("assigned detail mirror should be removable");
+    fs::create_dir(&detail_path).expect("directory collision should block mirror rename");
+
+    let error = service
+        .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
+        .expect_err("session detail mirror failure should remain observable after cleanup");
+    assert!(error.contains("failed to persist agent session detail"));
+    assert!(!repo.slot_lease_path(1).exists());
+    assert!(!repo.branch_exists(&lease.branch_name));
+
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should retain the failed-start fence");
+    assert_eq!(runtime_projection.task_dispatch_blocks.len(), 1);
+    assert_eq!(runtime_projection.task_dispatch_blocks[0].task_id, "task-1");
+    assert_eq!(runtime_projection.session_details.len(), 1);
+    assert_eq!(runtime_projection.session_details[0].state_label, "failed");
+}
+
+#[test]
+fn failed_start_dispatch_block_failure_preserves_lease_branch_and_worktree() {
+    let repo = TempGitRepo::new("failed-start-block-write-failure");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task 1", "agent-task-1", "task-1"),
+        )
+        .expect("task lease should be acquired");
+    install_runtime_insert_failure(
+        &repo,
+        "fail_failed_start_dispatch_block",
+        "runtime_task_dispatch_blocks",
+    );
+
+    let error = service
+        .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
+        .expect_err("failed dispatch fence must stop cleanup");
+    assert!(error.contains("failed to store startup failure dispatch block"));
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(repo.branch_exists(&lease.branch_name));
+    assert_eq!(
+        current_branch(&PathBuf::from(&lease.worktree_path)),
+        lease.branch_name
+    );
+
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should retain the active lease");
+    assert!(runtime_projection.slot_leases.contains_key("slot-1"));
+    assert!(runtime_projection.task_dispatch_blocks.is_empty());
+}
+
 // lease 획득은 여러 agent가 동시에 idle slot을 잡으려는 첫 관문이다. barrier로
 // 경쟁을 한 번에 시작시킨 뒤 성공 수가 pool 크기와 같고, 초과 요청은 같은
 // exhaustion 오류로 떨어지는지 확인해 allocation lock의 직렬화 계약을 고정한다.
@@ -377,7 +593,7 @@ fn concurrent_slot_lease_requests_are_serialized_across_idle_slots() {
     assert!(
         errors
             .iter()
-            .all(|error| error == "no idle slot is available for lease"),
+            .all(|error| error == "no remote-verified idle slot is available for lease"),
         "unexpected concurrent lease errors: {errors:?}"
     );
     let pool = build_pool_board(
@@ -393,6 +609,144 @@ fn concurrent_slot_lease_requests_are_serialized_across_idle_slots() {
     assert_eq!(pool.leased_slots, DEFAULT_POOL_SIZE);
     assert_eq!(pool.blocked_slots, 0);
     assert_eq!(pool.idle_slots, 0);
+}
+
+#[test]
+fn reconcile_waits_for_checkout_and_lease_persistence_under_one_pool_mutation_lock() {
+    let repo = TempGitRepo::new("allocation-reconcile-barrier");
+    let service = Arc::new(test_parallel_mode_service());
+    let workspace_dir = repo.workspace_dir();
+    let (checkout_reached_tx, checkout_reached_rx) = mpsc::channel();
+    let (resume_allocation_tx, resume_allocation_rx) = mpsc::channel();
+    let allocator_service = service.clone();
+    let allocator_workspace = workspace_dir.clone();
+    let allocator = thread::spawn(move || {
+        allocator_service.acquire_slot_lease_with_test_hook(
+            &allocator_workspace,
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            move || {
+                checkout_reached_tx
+                    .send(())
+                    .expect("allocator barrier should signal checkout");
+                resume_allocation_rx
+                    .recv()
+                    .expect("allocator barrier should resume lease persistence");
+            },
+        )
+    });
+    checkout_reached_rx
+        .recv()
+        .expect("allocator should pause after checkout");
+
+    assert!(
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&workspace_dir)
+            .expect("authority projection should load while allocation is paused")
+            .slot_leases
+            .is_empty(),
+        "lease persistence must occur after the allocation barrier"
+    );
+    let (reconcile_started_tx, reconcile_started_rx) = mpsc::channel();
+    let (reconcile_done_tx, reconcile_done_rx) = mpsc::channel();
+    let reconcile_workspace = workspace_dir.clone();
+    let reconciler = thread::spawn(move || {
+        reconcile_started_tx
+            .send(())
+            .expect("reconcile start should signal");
+        let board = reconcile_pool_board(
+            &SqlitePlanningAuthorityAdapter::new(),
+            &test_parallel_runtime(),
+            &reconcile_workspace,
+        );
+        reconcile_done_tx
+            .send(board)
+            .expect("reconcile completion should signal");
+    });
+    reconcile_started_rx
+        .recv()
+        .expect("concurrent reconcile should start");
+    assert!(
+        reconcile_done_rx
+            .recv_timeout(std::time::Duration::from_millis(150))
+            .is_err(),
+        "reconcile must wait while checkout has not yet persisted its lease"
+    );
+
+    resume_allocation_tx
+        .send(())
+        .expect("allocator should resume");
+    let lease = allocator
+        .join()
+        .expect("allocator thread should not panic")
+        .expect("allocator should persist the lease");
+    let board = reconcile_done_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("reconcile should finish after allocation releases the permit");
+    reconciler
+        .join()
+        .expect("reconcile thread should not panic");
+
+    let projection = SqlitePlanningAuthorityAdapter::load_runtime_projections(&workspace_dir)
+        .expect("authority projection should retain allocated lease");
+    assert_eq!(projection.slot_leases.get(&lease.slot_id), Some(&lease));
+    assert!(repo.branch_exists(&lease.branch_name));
+    assert_eq!(
+        current_branch(&PathBuf::from(&lease.worktree_path)),
+        lease.branch_name
+    );
+    assert!(repo.slot_lease_path(1).is_file());
+    assert_eq!(board.leased_slots, 1);
+    assert_eq!(board.idle_slots, DEFAULT_POOL_SIZE - 1);
+}
+
+#[test]
+fn late_stream_events_from_released_generation_cannot_mutate_reallocated_slot() {
+    let repo = TempGitRepo::new("late-stream-generation");
+    let service = test_parallel_mode_service();
+    let first = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("first generation should acquire");
+    service
+        .release_workspace_slot_lease_after_failed_start_for_lease(&first)
+        .expect("first generation should release")
+        .expect("first generation should be present");
+    let second = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("second generation should acquire the reusable slot");
+    assert_eq!(first.slot_id, second.slot_id);
+    assert_ne!(first.lease_generation, second.lease_generation);
+    assert_ne!(first.session_key(), second.session_key());
+
+    assert!(
+        service
+            .record_workspace_slot_thread_prepared_for_lease(&first, "late-thread")
+            .expect("late thread event should be ignored")
+            .is_none()
+    );
+    let running_error = service
+        .mark_workspace_slot_running_for_lease(&first)
+        .expect_err("late TurnStarted must reject the replacement generation");
+    assert!(running_error.contains("lease generation changed"));
+    assert!(
+        service
+            .release_workspace_slot_lease_after_failed_start_for_lease(&first)
+            .expect("late terminal event should be ignored")
+            .is_none()
+    );
+
+    let projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("replacement generation should remain");
+    assert_eq!(projection.slot_leases.get(&second.slot_id), Some(&second));
+    assert_eq!(
+        current_branch(&PathBuf::from(&second.worktree_path)),
+        second.branch_name
+    );
 }
 
 // 사용자가 로컬 표준 branch를 삭제한 linked-worktree 상태에서도 pool baseline은 표준 remote
@@ -456,8 +810,52 @@ fn slot_git_status_detects_staged_changes_and_relative_git_dir() {
         inspect_slot_git_status(&repo.repo_root).expect("git status should inspect repo root");
     assert_eq!(status.detail_label(), "staged changes");
     assert!(!status.is_clean_baseline());
-    assert!(!status.is_ready_for_integration());
     assert!(!status.has_pending_operation);
+}
+
+#[test]
+fn slot_git_status_separates_ignored_output_from_frozen_source_changes() {
+    let repo = TempGitRepo::new("slot-status-ignored-output");
+    fs::write(repo.repo_root.join("build-cache.tmp"), "ignored output\n")
+        .expect("ignored output should write");
+
+    let status =
+        inspect_slot_git_status(&repo.repo_root).expect("git status should inspect repo root");
+
+    assert_eq!(status.detail_label(), "ignored files");
+    assert!(!status.is_clean_baseline());
+    assert!(status.is_clean_for_frozen_delivery());
+}
+
+#[cfg(unix)]
+#[test]
+fn slot_git_status_blocks_executable_local_filter_without_running_it() {
+    let repo = TempGitRepo::new("slot-status-hostile-filter");
+    let marker = repo.root.join("status-filter-executed");
+    fs::write(
+        repo.repo_root.join(".gitattributes"),
+        "README.md filter=hostile\n",
+    )
+    .expect("filter attributes should write");
+    fs::write(repo.repo_root.join("README.md"), "changed through filter\n")
+        .expect("filtered path should change");
+    run_git(
+        &repo.repo_root,
+        &[
+            "config",
+            "filter.hostile.clean",
+            &format!("sh -c 'printf executed > {}'", marker.display()),
+        ],
+    );
+
+    let error = inspect_slot_git_status(&repo.repo_root)
+        .expect_err("status must fail before an executable local filter can run");
+
+    assert!(
+        error.to_string().contains("filter.hostile.clean"),
+        "error: {error}"
+    );
+    assert!(!marker.exists(), "status executed the hostile clean filter");
 }
 
 // linked worktree의 planning 파일이 canonical repository의 authority shadow store와
@@ -502,10 +900,10 @@ fn inspect_readiness_reports_authority_store_from_canonical_repo_root() {
     assert!(!capability.detail.contains("version = 0"));
 }
 
-// 표준 remote branch가 아직 없더라도 일반 workspace HEAD가 있으면 readiness는 통과시킨다.
-// 실제 표준 branch 생성과 push는 mutating reconcile 단계에서 한 번에 수행된다.
+// 표준 remote branch가 없으면 현재 workspace HEAD가 있더라도 readiness는 막아야 한다.
+// integration target 생성은 운영자의 명시적 원격 작업이며 Akra가 암묵적으로 seed하지 않는다.
 #[test]
-fn inspect_readiness_allows_missing_origin_standard_branch_when_head_can_seed() {
+fn inspect_readiness_blocks_missing_remote_integration_branch_without_seeding() {
     let repo = TempGitRepo::new("missing-origin-prerelease");
     repo.create_bare_origin_remote();
     repo.delete_remote_standard_tracking_branch();
@@ -519,22 +917,26 @@ fn inspect_readiness_allows_missing_origin_standard_branch_when_head_can_seed() 
         .capability(ParallelModeCapabilityKey::AkraBranch)
         .expect("akra branch capability should exist");
 
-    assert_eq!(capability.state, ParallelModeCapabilityState::Ready);
+    assert_eq!(capability.state, ParallelModeCapabilityState::Blocked);
     assert!(
         capability
             .summary()
             .contains(&remote_standard_branch_name())
     );
-    assert!(capability.summary().contains("current HEAD"));
+    assert!(capability.summary().contains("explicitly"));
+    assert!(!snapshot.allows_parallel_mode());
 }
 
-// 표준 remote branch를 새로 seed해야 하는 상태에서는 push remote가 필수다. remote-tracking ref도
-// push remote도 없는데 readiness가 degraded로 통과하면 `:parallel`이 곧바로 reconcile 실패로
-// 이어진다.
+// configured push remote 자체가 없으면 required integration branch도 확인할 수 없으므로
+// readiness는 같은 fail-closed 상태를 유지한다.
 #[test]
 fn inspect_readiness_blocks_missing_standard_branch_when_push_remote_is_absent() {
     let repo = TempGitRepo::new("missing-standard-no-push-remote");
     repo.delete_remote_standard_tracking_branch();
+    run_git(
+        &repo.repo_root,
+        &["remote", "remove", DEFAULT_PUSH_REMOTE_NAME],
+    );
     let service = test_parallel_mode_service();
     let snapshot = service.inspect_readiness(
         &repo.workspace_dir(),
@@ -546,7 +948,7 @@ fn inspect_readiness_blocks_missing_standard_branch_when_push_remote_is_absent()
         .expect("akra branch capability should exist");
 
     assert_eq!(capability.state, ParallelModeCapabilityState::Blocked);
-    assert!(capability.summary().contains("cannot be seeded"));
+    assert!(capability.summary().contains("unavailable"));
     assert!(!snapshot.allows_parallel_mode());
 }
 

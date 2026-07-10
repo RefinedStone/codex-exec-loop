@@ -3,8 +3,6 @@
  * TUI stdout/stderr를 건드리면 terminal protocol과 app-server stream을 오염시킬 수 있으므로,
  * diagnostics는 tracing JSONL 파일이나 선택적 tokio-console layer로만 나간다.
  */
-mod executable;
-
 use std::fmt;
 
 pub mod event_log;

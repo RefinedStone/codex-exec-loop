@@ -20,7 +20,8 @@ use crate::application::service::planning::{
 use crate::core::app::{TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
+    ConversationApprovalDecision, ConversationApprovalResolution, ConversationApprovalReview,
+    ConversationMessage, ConversationMessageKind,
 };
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
@@ -39,6 +40,14 @@ pub(super) enum ConversationRuntimeEvent {
         origin: PromptOrigin,
     },
     StreamSnapshotApplied(Box<TurnStreamSnapshot>),
+    ApprovalDecisionSubmitted {
+        approval_id: String,
+        decision: ConversationApprovalDecision,
+    },
+    ApprovalDecisionSubmissionFailed {
+        approval_id: String,
+        error: String,
+    },
     RuntimeNoticeObserved {
         notice: String,
     },
@@ -78,6 +87,16 @@ pub(super) enum ConversationRuntimeEffect {
         thread_id: String,
         review: ConversationApprovalReview,
     },
+    ResolveApprovalRequest {
+        approval_id: String,
+        decision: ConversationApprovalDecision,
+    },
+    ShowApprovalOverlay,
+    CloseApprovalOverlay,
+    // A Ctrl-C can arrive while turn/start is still in flight. Once TurnStarted
+    // arrives, resend the sticky request so the app-server stream observes a
+    // generation newer than the one sampled before turn/start.
+    ResendPendingInterrupt,
     DispatchOperatorAlert {
         alert: OperatorAlert,
     },
@@ -181,14 +200,20 @@ pub(super) fn reduce_conversation_runtime(
              * stream starts so the next post-turn policy can detect repetition.
              */
             let prompt = prompt.trim().to_string();
-            if prompt.is_empty() || !state.can_accept_runtime_prompt() {
+            let auto_follow_blocked = matches!(origin, PromptOrigin::AutoFollow(_))
+                && !state.auto_follow_state.can_queue_next();
+            if prompt.is_empty() || !state.can_accept_runtime_prompt() || auto_follow_blocked {
                 // Empty prompts and prompts sent while the runtime is not ready
-                // are ignored rather than turned into provider calls.
+                // or while auto-follow is disarmed are ignored rather than turned
+                // into provider calls. This is the final defense for delayed
+                // QueueAutoPrompt effects after `:turns off` or `:stop`.
                 event_log::emit_lazy("prompt_submission_ignored", || {
                     json!({
                         "origin": prompt_origin_label(&origin),
                         "reason": if prompt.is_empty() {
                             "empty_prompt"
+                        } else if auto_follow_blocked {
+                            "auto_follow_disarmed"
                         } else {
                             "runtime_prompt_not_acceptable"
                         },
@@ -319,7 +344,11 @@ pub(super) fn reduce_conversation_runtime(
                 // Turn id is later used by TurnCompleted and auto-follow
                 // provenance, so it is recorded as soon as the provider reports
                 // start.
+                let resend_pending_interrupt = state.interrupt_request_pending;
                 state.record_turn_started(turn_id);
+                if resend_pending_interrupt {
+                    effects.push(ConversationRuntimeEffect::ResendPendingInterrupt);
+                }
             }
             TurnStreamUpdate::StatusUpdated { text } => {
                 // Provider status copy owns the main status line while a turn is
@@ -373,6 +402,30 @@ pub(super) fn reduce_conversation_runtime(
                 }
                 state.update_approval_review(review);
             }
+            TurnStreamUpdate::ApprovalRequested { request } => {
+                state.status_text =
+                    "approval required / Y to accept / N or Esc to decline".to_string();
+                state.set_pending_approval_request(request);
+                effects.push(ConversationRuntimeEffect::ShowApprovalOverlay);
+            }
+            TurnStreamUpdate::ApprovalResolved {
+                approval_id,
+                resolution,
+            } => {
+                let resolves_current_request = state
+                    .pending_approval_request
+                    .as_ref()
+                    .is_some_and(|request| request.approval_id == approval_id);
+                if resolves_current_request {
+                    state.clear_pending_approval_request(&approval_id);
+                    state.status_text = approval_resolution_status(resolution).to_string();
+                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                }
+            }
+            TurnStreamUpdate::TurnInterruptRequestFailed { message } => {
+                state.clear_interrupt_request();
+                state.status_text = message;
+            }
             TurnStreamUpdate::TurnCompleted {
                 turn_id,
                 changed_planning_file_paths,
@@ -383,6 +436,7 @@ pub(super) fn reduce_conversation_runtime(
                 // whether to auto-follow. That policy needs fresh planning state,
                 // so it is emitted as an effect after the model enters evaluating
                 // state.
+                let approval_was_pending = state.pending_approval_request.is_some();
                 queue_post_turn_evaluation(
                     &mut state,
                     &mut effects,
@@ -390,6 +444,9 @@ pub(super) fn reduce_conversation_runtime(
                     changed_planning_file_paths,
                     execution_snapshot_capture,
                 );
+                if approval_was_pending {
+                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                }
             }
             TurnStreamUpdate::Failed {
                 message,
@@ -397,7 +454,11 @@ pub(super) fn reduce_conversation_runtime(
             } => {
                 // Failure ends the active turn locally. No post-turn evaluation
                 // is scheduled because planning side effects may be incomplete.
+                let approval_was_pending = state.pending_approval_request.is_some();
                 state.fail_turn(message);
+                if approval_was_pending {
+                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                }
             }
             TurnStreamUpdate::RuntimeNotice { notice } => {
                 // Execution-layer notices come from effect runners, not provider
@@ -406,6 +467,27 @@ pub(super) fn reduce_conversation_runtime(
                 state.extend_runtime_notices([notice]);
             }
         },
+        ConversationRuntimeEvent::ApprovalDecisionSubmitted {
+            approval_id,
+            decision,
+        } => {
+            if state.mark_approval_decision_submitted(&approval_id, decision) {
+                state.status_text = format!(
+                    "approval decision submitted: {} / waiting for runtime resolution",
+                    approval_decision_label(decision)
+                );
+                effects.push(ConversationRuntimeEffect::ResolveApprovalRequest {
+                    approval_id,
+                    decision,
+                });
+            }
+        }
+        ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed { approval_id, error } => {
+            if state.clear_pending_approval_resolution(&approval_id) {
+                state.status_text =
+                    format!("approval decision failed: {error} / retry accept or decline");
+            }
+        }
         ConversationRuntimeEvent::RuntimeNoticeObserved { notice } => {
             state.extend_runtime_notices([notice]);
         }
@@ -425,6 +507,23 @@ pub(super) fn reduce_conversation_runtime(
             state.extend_runtime_notices(runtime_notices);
             match action {
                 PostTurnContinuationAction::QueueAutoPrompt(queued_prompt) => {
+                    let parallel_dispatch_queued = matches!(
+                        provenance.parallel_queue_signal,
+                        Some(ParallelModePostTurnQueueSignal::AutoFollowQueued)
+                    );
+                    let parallel_dispatch_allowed = parallel_dispatch_queued
+                        && state
+                            .auto_follow_state
+                            .parallel_post_turn_continuation_allowed();
+                    if !state.auto_follow_state.can_queue_next() && !parallel_dispatch_allowed {
+                        let reason = if state.auto_follow_state.post_turn_continuation_paused() {
+                            AutoFollowSkipReason::PostTurnContinuationPaused
+                        } else {
+                            AutoFollowSkipReason::LimitReached
+                        };
+                        apply_auto_follow_skip(&mut state, &mut effects, reason, operator_alerts);
+                        return ConversationRuntimeReduction { state, effects };
+                    }
                     // Queueing records the pending loop in visible history before
                     // emitting QueueAutoPrompt. The effect will re-enter this
                     // reducer as SubmitPrompt with PromptOrigin::AutoFollow.
@@ -448,24 +547,67 @@ pub(super) fn reduce_conversation_runtime(
                         handoff_task,
                     });
                 }
-                PostTurnContinuationAction::SkipAutoFollow { reason } => {
+                PostTurnContinuationAction::SkipAutoFollow { mut reason } => {
                     // Skips are durable status messages because they explain why
                     // the automatic loop stopped and often require operator
                     // action before the next manual prompt.
-                    state.record_auto_follow_skip(reason);
-                    state.status_text = reason.runtime_status(&state.auto_follow_state);
-                    state.append_status_message(state.status_text.clone());
-                    for alert in operator_alerts {
-                        state.extend_runtime_notices([alert.runtime_notice()]);
-                        state.append_status_message(alert.transcript_banner());
-                        effects.push(ConversationRuntimeEffect::DispatchOperatorAlert { alert });
+                    if reason == AutoFollowSkipReason::PostTurnContinuationPaused
+                        && !state.auto_follow_state.post_turn_continuation_paused()
+                        && !state.auto_follow_state.is_enabled()
+                    {
+                        // Application execution receives `continuation_paused`
+                        // for both secure-default off and sticky operator stop so
+                        // it can suppress hidden workers. Preserve the distinct
+                        // operator-facing reason at the TUI boundary.
+                        reason = AutoFollowSkipReason::LimitReached;
                     }
+                    apply_auto_follow_skip(&mut state, &mut effects, reason, operator_alerts);
                 }
             }
         }
     }
 
     ConversationRuntimeReduction { state, effects }
+}
+
+fn apply_auto_follow_skip(
+    state: &mut ConversationViewModel,
+    effects: &mut Vec<ConversationRuntimeEffect>,
+    reason: AutoFollowSkipReason,
+    operator_alerts: Vec<OperatorAlert>,
+) {
+    state.record_auto_follow_skip(reason);
+    state.status_text = reason.runtime_status(&state.auto_follow_state);
+    state.append_status_message(state.status_text.clone());
+    for alert in operator_alerts {
+        state.extend_runtime_notices([alert.runtime_notice()]);
+        state.append_status_message(alert.transcript_banner());
+        effects.push(ConversationRuntimeEffect::DispatchOperatorAlert { alert });
+    }
+}
+
+fn approval_resolution_status(resolution: ConversationApprovalResolution) -> &'static str {
+    match resolution {
+        ConversationApprovalResolution::Accepted => "approval accepted for this request",
+        ConversationApprovalResolution::Declined => "approval declined",
+        ConversationApprovalResolution::TimedOut => "approval timed out and was declined",
+        ConversationApprovalResolution::Interrupted => {
+            "approval declined because the turn was interrupted"
+        }
+        ConversationApprovalResolution::Disconnected => {
+            "approval declined because the runtime disconnected"
+        }
+        ConversationApprovalResolution::InvalidRequest => {
+            "approval request was invalid and was declined"
+        }
+    }
+}
+
+fn approval_decision_label(decision: ConversationApprovalDecision) -> &'static str {
+    match decision {
+        ConversationApprovalDecision::Accept => "accept",
+        ConversationApprovalDecision::Decline => "decline",
+    }
 }
 
 pub(super) fn conversation_runtime_auto_prompt_queued(
@@ -533,7 +675,9 @@ mod tests {
     use crate::core::app::TurnStreamState;
     use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
     use crate::domain::conversation::{
-        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessageKind,
+        ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationApprovalResolution, ConversationApprovalReview,
+        ConversationApprovalReviewStatus, ConversationMessage, ConversationMessageKind,
         ConversationToolActivity, ConversationToolActivityKind,
     };
     use tracing_subscriber::EnvFilter;
@@ -623,6 +767,197 @@ mod tests {
         });
         assert!(blocked_manual_prompt.effects.is_empty());
         assert!(blocked_manual_prompt.state.messages.is_empty());
+    }
+
+    #[test]
+    fn submitting_phase_interrupt_is_resent_when_the_turn_id_arrives() {
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.mark_turn_submitting("/tmp/workspace".to_string());
+        assert!(state.mark_interrupt_requested_once());
+
+        let reduction = reduce_conversation_runtime(
+            state,
+            stream_snapshot_event(ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-after-stop".to_string(),
+            }),
+        );
+
+        assert!(reduction.state.interrupt_request_pending);
+        assert!(
+            reduction
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, ConversationRuntimeEffect::ResendPendingInterrupt))
+        );
+    }
+
+    #[test]
+    fn approval_request_decision_and_resolution_drive_modal_effects() {
+        let request = ConversationApprovalRequest {
+            approval_id: "approval-7".to_string(),
+            server_request_id: "server-7".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Command execution requested.".to_string(),
+            details: vec!["Command: cargo test".to_string()],
+        };
+        let requested = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            stream_snapshot_event(ConversationStreamEvent::ApprovalRequested {
+                request: request.clone(),
+            }),
+        );
+        assert_eq!(requested.state.pending_approval_request, Some(request));
+        assert_eq!(
+            requested.state.status_text,
+            "approval required / Y to accept / N or Esc to decline"
+        );
+        assert!(
+            requested
+                .effects
+                .contains(&ConversationRuntimeEffect::ShowApprovalOverlay)
+        );
+
+        let stale_resolution = reduce_conversation_runtime(
+            requested.state,
+            stream_snapshot_event(ConversationStreamEvent::ApprovalResolved {
+                approval_id: "approval-stale".to_string(),
+                resolution: ConversationApprovalResolution::Declined,
+            }),
+        );
+        assert!(stale_resolution.state.pending_approval_request.is_some());
+        assert!(
+            !stale_resolution
+                .effects
+                .contains(&ConversationRuntimeEffect::CloseApprovalOverlay)
+        );
+
+        let submitted = reduce_conversation_runtime(
+            stale_resolution.state,
+            ConversationRuntimeEvent::ApprovalDecisionSubmitted {
+                approval_id: "approval-7".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            },
+        );
+        assert_eq!(
+            submitted.effects,
+            vec![ConversationRuntimeEffect::ResolveApprovalRequest {
+                approval_id: "approval-7".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            }]
+        );
+        assert!(submitted.state.pending_approval_request.is_some());
+        assert_eq!(
+            submitted.state.pending_approval_decision(),
+            Some(ConversationApprovalDecision::Accept)
+        );
+        assert_eq!(
+            submitted.state.status_text,
+            "approval decision submitted: accept / waiting for runtime resolution"
+        );
+
+        let rapid_decline = reduce_conversation_runtime(
+            submitted.state,
+            ConversationRuntimeEvent::ApprovalDecisionSubmitted {
+                approval_id: "approval-7".to_string(),
+                decision: ConversationApprovalDecision::Decline,
+            },
+        );
+        assert!(rapid_decline.effects.is_empty());
+        assert_eq!(
+            rapid_decline.state.pending_approval_decision(),
+            Some(ConversationApprovalDecision::Accept)
+        );
+        assert!(rapid_decline.state.pending_approval_request.is_some());
+
+        let resolved = reduce_conversation_runtime(
+            rapid_decline.state,
+            stream_snapshot_event(ConversationStreamEvent::ApprovalResolved {
+                approval_id: "approval-7".to_string(),
+                resolution: ConversationApprovalResolution::Accepted,
+            }),
+        );
+        assert!(resolved.state.pending_approval_request.is_none());
+        assert_eq!(resolved.state.pending_approval_decision(), None);
+        assert!(
+            resolved
+                .effects
+                .contains(&ConversationRuntimeEffect::CloseApprovalOverlay)
+        );
+        assert_eq!(
+            resolved.state.status_text,
+            "approval accepted for this request"
+        );
+    }
+
+    #[test]
+    fn failed_approval_submission_reopens_the_current_modal_for_retry() {
+        let request = ConversationApprovalRequest {
+            approval_id: "approval-retry".to_string(),
+            server_request_id: "server-retry".to_string(),
+            method: "item/commandExecution/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::CommandExecution,
+            summary: "Command execution requested.".to_string(),
+            details: vec!["Command: cargo test".to_string()],
+        };
+        let requested = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            stream_snapshot_event(ConversationStreamEvent::ApprovalRequested { request }),
+        );
+        let submitted = reduce_conversation_runtime(
+            requested.state,
+            ConversationRuntimeEvent::ApprovalDecisionSubmitted {
+                approval_id: "approval-retry".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            },
+        );
+
+        let failed = reduce_conversation_runtime(
+            submitted.state,
+            ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed {
+                approval_id: "approval-retry".to_string(),
+                error: "runtime unavailable".to_string(),
+            },
+        );
+        assert!(failed.state.pending_approval_request.is_some());
+        assert_eq!(failed.state.pending_approval_decision(), None);
+        assert_eq!(
+            failed.state.status_text,
+            "approval decision failed: runtime unavailable / retry accept or decline"
+        );
+
+        let retried = reduce_conversation_runtime(
+            failed.state,
+            ConversationRuntimeEvent::ApprovalDecisionSubmitted {
+                approval_id: "approval-retry".to_string(),
+                decision: ConversationApprovalDecision::Decline,
+            },
+        );
+        assert_eq!(
+            retried.effects,
+            vec![ConversationRuntimeEffect::ResolveApprovalRequest {
+                approval_id: "approval-retry".to_string(),
+                decision: ConversationApprovalDecision::Decline,
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_interrupt_failure_reopens_stop_request_gate() {
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.mark_turn_submitting("/tmp/workspace".to_string());
+        assert!(state.mark_interrupt_requested_once());
+
+        let mut reduction = reduce_conversation_runtime(
+            state,
+            stream_snapshot_event(ConversationStreamEvent::TurnInterruptRequestFailed {
+                message: "interrupt retries exhausted".to_string(),
+            }),
+        );
+
+        assert!(!reduction.state.interrupt_request_pending);
+        assert_eq!(reduction.state.status_text, "interrupt retries exhausted");
+        assert!(reduction.state.mark_interrupt_requested_once());
     }
 
     #[test]
@@ -763,6 +1098,7 @@ mod tests {
     fn auto_follow_turn_completion_advances_done_progress() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.thread_id = "thread-1".to_string();
+        state.auto_follow_state.set_max_auto_turns(20);
 
         let reduction = reduce_conversation_runtime(
             state,
@@ -801,9 +1137,63 @@ mod tests {
 
         assert_eq!(reduction.state.auto_follow_state.progress_label(), "1/20");
         assert!(
-            !reduction.state.auto_follow_state.has_live_activity(),
-            "completed auto turn should not leave a stale running phase"
+            reduction.state.auto_follow_state.has_live_activity(),
+            "completed auto turn must hold manual intake until post-turn evaluation settles"
         );
+        assert!(!reduction.state.can_accept_manual_prompt());
+    }
+
+    #[test]
+    fn completed_turn_with_auto_follow_off_blocks_manual_input_until_evaluation_settles() {
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.thread_id = "thread-1".to_string();
+        state.auto_follow_state.set_max_auto_turns(0);
+        state.messages.extend([
+            ConversationMessage::new(ConversationMessageKind::User, "operator task", None, None),
+            ConversationMessage::new(
+                ConversationMessageKind::Agent,
+                "parallel worker result",
+                None,
+                None,
+            ),
+        ]);
+
+        let reduction = reduce_conversation_runtime(
+            state,
+            stream_snapshot_event(ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            }),
+        );
+
+        assert!(reduction.effects.iter().any(|effect| matches!(
+            effect,
+            ConversationRuntimeEffect::EvaluatePostTurn {
+                completed_turn_id,
+                ..
+            } if completed_turn_id == "turn-1"
+        )));
+        assert!(reduction.state.auto_follow_state.has_live_activity());
+        assert!(!reduction.state.can_accept_manual_prompt());
+
+        let reduction = reduce_conversation_runtime(
+            reduction.state,
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
+                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: PostTurnContinuationAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::LimitReached,
+                    },
+                    operator_alerts: Vec::new(),
+                }),
+            },
+        );
+
+        assert!(!reduction.state.auto_follow_state.has_live_activity());
+        assert!(reduction.state.can_accept_manual_prompt());
     }
 
     #[test]
@@ -897,7 +1287,8 @@ mod tests {
 
     #[test]
     fn queued_auto_prompt_uses_post_turn_provenance_for_handoff() {
-        let state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.auto_follow_state.set_max_auto_turns(3);
         let handoff_task = PlanningTaskHandoff {
             task_id: "task-1".to_string(),
             task_title: "Implement provenance".to_string(),
@@ -949,5 +1340,238 @@ mod tests {
             .expect("post-turn queue action should emit an auto prompt effect");
         assert_eq!(queued_effect.0, "turn-from-provenance");
         assert_eq!(queued_effect.1, Some(handoff_task));
+    }
+
+    #[test]
+    fn default_off_rejects_direct_auto_follow_submission() {
+        let reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "continue queue".to_string(),
+                transcript_text: "continue queue".to_string(),
+                origin: auto_follow_origin(),
+            },
+        );
+
+        assert!(reduction.effects.is_empty());
+        assert!(reduction.state.messages.is_empty());
+        assert!(!reduction.state.auto_follow_state.can_queue_next());
+    }
+
+    #[test]
+    fn manual_prompt_does_not_rearm_auto_follow_after_stop_or_off() {
+        let mut stopped = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        stopped.auto_follow_state.set_max_auto_turns(5);
+        stopped.auto_follow_state.pause_post_turn_continuation();
+        let stopped = reduce_conversation_runtime(
+            stopped,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "manual work".to_string(),
+                transcript_text: "manual work".to_string(),
+                origin: PromptOrigin::Manual,
+            },
+        );
+        assert!(
+            stopped
+                .state
+                .auto_follow_state
+                .post_turn_continuation_paused()
+        );
+        assert!(!stopped.state.auto_follow_state.can_queue_next());
+
+        let disabled = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: "manual work".to_string(),
+                transcript_text: "manual work".to_string(),
+                origin: PromptOrigin::Manual,
+            },
+        );
+        assert!(!disabled.state.auto_follow_state.is_enabled());
+        assert!(!disabled.state.auto_follow_state.can_queue_next());
+    }
+
+    #[test]
+    fn stale_post_turn_queue_result_cannot_bypass_stop_or_off() {
+        for mut state in [
+            ConversationViewModel::new_draft("/tmp/stopped".to_string()),
+            ConversationViewModel::new_draft("/tmp/off".to_string()),
+        ] {
+            if state.cwd.ends_with("stopped") {
+                state.auto_follow_state.set_max_auto_turns(5);
+                state.auto_follow_state.pause_post_turn_continuation();
+            }
+            let reduction = reduce_conversation_runtime(
+                state,
+                ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                    evaluation: Box::new(PostTurnEvaluationOutcome {
+                        provenance: PostTurnEvaluationProvenance::new("turn-stale".to_string()),
+                        runtime_projection: PlanningRuntimeProjection::ready_with_details(
+                            "Planning Context".to_string(),
+                            "queue has a ready task".to_string(),
+                            None,
+                            None,
+                        ),
+                        planning_repair_state: None,
+                        runtime_notices: Vec::new(),
+                        action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
+                            PostTurnQueuedPrompt {
+                                prompt: "must not run".to_string(),
+                                mode_label: "planning queue".to_string(),
+                                transcript_text: "must not run".to_string(),
+                            },
+                        )),
+                        operator_alerts: Vec::new(),
+                    }),
+                },
+            );
+
+            assert!(
+                !reduction.effects.iter().any(|effect| matches!(
+                    effect,
+                    ConversationRuntimeEffect::QueueAutoPrompt { .. }
+                )),
+                "stale result queued an automatic prompt for {}",
+                reduction.state.cwd
+            );
+            assert!(
+                reduction.state.status_text.contains("disabled")
+                    || reduction.state.status_text.contains("disarmed")
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_parallel_queue_signal_obeys_stop_and_parallel_only_rearm() {
+        let evaluation = |completed_turn_id: &str| PostTurnEvaluationOutcome {
+            provenance: PostTurnEvaluationProvenance::new(completed_turn_id.to_string())
+                .with_parallel_queue_signal(Some(
+                    ParallelModePostTurnQueueSignal::AutoFollowQueued,
+                )),
+            runtime_projection: PlanningRuntimeProjection::ready_with_details(
+                "Planning Context".to_string(),
+                "queue has a ready task".to_string(),
+                None,
+                None,
+            ),
+            planning_repair_state: None,
+            runtime_notices: Vec::new(),
+            action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(PostTurnQueuedPrompt {
+                prompt: "dispatch ready task".to_string(),
+                mode_label: "planning queue".to_string(),
+                transcript_text: "dispatch ready task".to_string(),
+            })),
+            operator_alerts: Vec::new(),
+        };
+
+        let default_off = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/parallel".to_string()),
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(evaluation("turn-parallel")),
+            },
+        );
+        assert!(
+            default_off
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
+        );
+
+        let mut stopped = ConversationViewModel::new_draft("/tmp/stopped".to_string());
+        stopped.auto_follow_state.pause_post_turn_continuation();
+        let stopped = reduce_conversation_runtime(
+            stopped,
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(evaluation("turn-stopped")),
+            },
+        );
+        assert!(
+            !stopped
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. }))
+        );
+        assert!(stopped.state.status_text.contains("stopped and disarmed"));
+
+        let mut parallel_rearmed =
+            ConversationViewModel::new_draft("/tmp/parallel-rearmed".to_string());
+        parallel_rearmed
+            .auto_follow_state
+            .pause_post_turn_continuation();
+        parallel_rearmed
+            .auto_follow_state
+            .rearm_parallel_post_turn_continuation();
+        assert!(
+            parallel_rearmed
+                .auto_follow_state
+                .post_turn_continuation_paused(),
+            "parallel rearm must not clear the single-session stop"
+        );
+        let parallel_rearmed = reduce_conversation_runtime(
+            parallel_rearmed,
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(evaluation("turn-parallel-rearmed")),
+            },
+        );
+        assert!(
+            parallel_rearmed
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, ConversationRuntimeEffect::QueueAutoPrompt { .. })),
+            "an explicit :parallel rearm must admit the parallel-only queue signal"
+        );
+        assert!(
+            parallel_rearmed
+                .state
+                .auto_follow_state
+                .post_turn_continuation_paused(),
+            "dispatching parallel work must leave single-session auto-follow stopped"
+        );
+    }
+
+    #[test]
+    fn application_pause_reason_is_rendered_as_disabled_for_secure_default_off() {
+        let reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/off".to_string()),
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new("turn-off".to_string()),
+                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: PostTurnContinuationAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::PostTurnContinuationPaused,
+                    },
+                    operator_alerts: Vec::new(),
+                }),
+            },
+        );
+
+        assert!(reduction.state.status_text.contains("auto-follow disabled"));
+        assert!(!reduction.state.status_text.contains("disarmed"));
+    }
+
+    #[test]
+    fn stale_off_evaluation_does_not_misreport_a_later_explicit_rearm() {
+        let mut state = ConversationViewModel::new_draft("/tmp/rearmed".to_string());
+        state.auto_follow_state.set_max_auto_turns(2);
+        let reduction = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new("turn-before-rearm".to_string()),
+                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: PostTurnContinuationAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::PostTurnContinuationPaused,
+                    },
+                    operator_alerts: Vec::new(),
+                }),
+            },
+        );
+
+        assert!(reduction.state.status_text.contains("auto-follow re-armed"));
+        assert!(reduction.state.auto_follow_state.can_queue_next());
     }
 }

@@ -32,6 +32,7 @@ const HANDLED_NOTIFICATION_METHODS: &[&str] = &[
 const DEFERRED_NOTIFICATION_METHODS: &[&str] = &[
     "item/commandExecution/outputDelta",
     "item/commandExecution/terminalInteraction",
+    "item/fileChange/patchUpdated",
     "item/fileChange/outputDelta",
     "item/mcpToolCall/progress",
     "item/plan/delta",
@@ -40,6 +41,7 @@ const DEFERRED_NOTIFICATION_METHODS: &[&str] = &[
     "item/reasoning/textDelta",
     "item/started",
     "turn/diff/updated",
+    "turn/moderationMetadata",
     "turn/plan/updated",
 ];
 
@@ -51,32 +53,47 @@ const DIAGNOSTIC_ONLY_NOTIFICATION_METHODS: &[&str] = &[
     "command/exec/outputDelta",
     "configWarning",
     "deprecationNotice",
+    "externalAgentConfig/import/completed",
+    "externalAgentConfig/import/progress",
     "fs/changed",
     "fuzzyFileSearch/sessionCompleted",
     "fuzzyFileSearch/sessionUpdated",
+    "guardianWarning",
     "hook/completed",
     "hook/started",
     "mcpServer/oauthLogin/completed",
     "mcpServer/startupStatus/updated",
     "model/rerouted",
+    "model/safetyBuffering/updated",
+    "model/verification",
+    "process/exited",
+    "process/outputDelta",
+    "remoteControl/status/changed",
     "serverRequest/resolved",
     "skills/changed",
     "thread/tokenUsage/updated",
     "windows/worldWritableWarning",
     "windowsSandbox/setupCompleted",
+    "warning",
 ];
 
 const IGNORED_NOTIFICATION_METHODS: &[&str] = &[
     "thread/archived",
     "thread/closed",
     "thread/compacted",
+    "thread/deleted",
+    "thread/goal/cleared",
+    "thread/goal/updated",
     "thread/name/updated",
     "thread/realtime/closed",
     "thread/realtime/error",
     "thread/realtime/itemAdded",
     "thread/realtime/outputAudio/delta",
+    "thread/realtime/sdp",
     "thread/realtime/started",
-    "thread/realtime/transcriptUpdated",
+    "thread/realtime/transcript/delta",
+    "thread/realtime/transcript/done",
+    "thread/settings/updated",
     "thread/started",
     "thread/unarchived",
 ];
@@ -368,7 +385,22 @@ fn schema_snapshot_carries_provenance_and_reviewable_format() {
     assert_eq!(schema.get("version").and_then(Value::as_str), Some("v2"));
     assert_eq!(
         schema.get("x-generated-from").and_then(Value::as_str),
-        Some("codex app-server protocol snapshot")
+        Some("codex app-server generate-json-schema --experimental")
+    );
+    assert!(
+        schema
+            .get("x-source-cli-version")
+            .and_then(Value::as_str)
+            .is_some_and(|version| version.starts_with("codex-cli "))
+    );
+    assert!(
+        schema
+            .get("x-generated-content-sha256")
+            .and_then(Value::as_str)
+            .is_some_and(
+                |value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            ),
+        "checked-in schema snapshot should identify the pristine generated bundle"
     );
     assert!(
         schema
@@ -376,6 +408,43 @@ fn schema_snapshot_carries_provenance_and_reviewable_format() {
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty()),
         "checked-in schema snapshot should explain its provenance role"
+    );
+}
+
+#[test]
+fn server_request_schema_snapshot_carries_provenance_and_reviewable_format() {
+    let body =
+        include_str!("../../../../../schema/codex_app_server_protocol.server_request.schema.json");
+    assert!(
+        body.lines().count() > 100,
+        "checked-in server-request schema should stay pretty-printed"
+    );
+
+    let schema = server_request_schema_root();
+    assert_eq!(
+        schema.pointer("/$id").and_then(Value::as_str),
+        Some("urn:codex-exec-loop-native:app-server-protocol:server-request:snapshot")
+    );
+    assert_eq!(
+        schema.get("version").and_then(Value::as_str),
+        Some("server-request")
+    );
+    assert_eq!(
+        schema.get("x-generated-artifact").and_then(Value::as_str),
+        Some("ServerRequest.json")
+    );
+    assert!(
+        schema
+            .get("x-source-cli-version")
+            .and_then(Value::as_str)
+            .is_some_and(|version| version.starts_with("codex-cli "))
+    );
+    assert_eq!(
+        schema
+            .get("x-generated-content-sha256")
+            .and_then(Value::as_str)
+            .map(str::len),
+        Some(64)
     );
 }
 
@@ -551,24 +620,36 @@ fn schema_root() -> Value {
     .expect("checked-in app-server protocol schema should parse")
 }
 
+fn server_request_schema_root() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../../../schema/codex_app_server_protocol.server_request.schema.json"
+    ))
+    .expect("checked-in app-server server-request schema should parse")
+}
+
 fn schema_integer_fields() -> Vec<SchemaIntegerField> {
     let mut fields = Vec::new();
     collect_schema_integer_fields(&schema_root(), "$", &mut fields);
+    collect_schema_integer_fields(
+        &server_request_schema_root(),
+        "$server-request",
+        &mut fields,
+    );
     fields
 }
 
 fn collect_schema_integer_fields(node: &Value, path: &str, fields: &mut Vec<SchemaIntegerField>) {
     match node {
         Value::Object(object) => {
-            if schema_node_is_integer(object) {
-                if let Some(format) = object.get("format").and_then(Value::as_str) {
-                    fields.push(SchemaIntegerField {
-                        path: path.to_string(),
-                        format: format.to_string(),
-                        minimum: json_integer(object.get("minimum")),
-                        maximum: json_integer(object.get("maximum")),
-                    });
-                }
+            if schema_node_is_integer(object)
+                && let Some(format) = object.get("format").and_then(Value::as_str)
+            {
+                fields.push(SchemaIntegerField {
+                    path: path.to_string(),
+                    format: format.to_string(),
+                    minimum: json_integer(object.get("minimum")),
+                    maximum: json_integer(object.get("maximum")),
+                });
             }
             for (key, value) in object {
                 collect_schema_integer_fields(value, &format!("{path}/{key}"), fields);

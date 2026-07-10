@@ -12,7 +12,9 @@ use crate::domain::planning::{
 
 // pool helper는 slot worktree와 lease projection을 다시 연결하고 cleanup 가능 여부를 판정한다.
 use super::pool::{
-    branch_is_cleanup_ready, cleanup_slot, resolve_workspace_head_sha, resolve_workspace_slot_lease,
+    PoolSlotCleanupIdentity, PoolSlotCleanupLeaseAuthority, acquire_pool_mutation_lock,
+    branch_is_integrated_into, cleanup_slot_to_ref_locked, resolve_workspace_head_sha,
+    resolve_workspace_slot_lease,
 };
 // session detail helper들은 completion lifecycle의 UI-visible 상태 전이를 runtime projection에 기록한다.
 use super::session_detail::{
@@ -23,7 +25,7 @@ use super::session_detail::{
 // completion 흐름은 parallel mode service 본체와 pool baseline branch, timestamp helper를 공유한다.
 use super::{
     ParallelModeOfficialCompletionReport, ParallelModeService, current_timestamp,
-    pool_baseline_branch,
+    pool_baseline_branch_for_repo,
 };
 
 // 이 impl 조각은 parallel slot이 "작업 실행 완료"에서 "ledger 반영, queue 통합, cleanup"으로
@@ -56,6 +58,50 @@ impl ParallelModeService {
         // 실패 완료나 제한적 완료일 때 ledger와 UI에 남길 추가 맥락이다.
         failure_context: Option<&str>,
     ) -> Result<Option<ParallelModeOfficialCompletionReport>, String> {
+        self.begin_workspace_official_completion_inner(
+            workspace_dir,
+            None,
+            completed_turn_id,
+            official_completion_refresh_order,
+            final_response_text,
+            validation_summary,
+            failure_context,
+        )
+    }
+
+    pub(crate) fn begin_workspace_official_completion_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        completed_turn_id: &str,
+        official_completion_refresh_order: Option<u64>,
+        final_response_text: Option<&str>,
+        validation_summary: Option<&str>,
+        failure_context: Option<&str>,
+    ) -> Result<Option<ParallelModeOfficialCompletionReport>, String> {
+        self.begin_workspace_official_completion_inner(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+            completed_turn_id,
+            official_completion_refresh_order,
+            final_response_text,
+            validation_summary,
+            failure_context,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn begin_workspace_official_completion_inner(
+        &self,
+        workspace_dir: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        completed_turn_id: &str,
+        official_completion_refresh_order: Option<u64>,
+        final_response_text: Option<&str>,
+        validation_summary: Option<&str>,
+        failure_context: Option<&str>,
+    ) -> Result<Option<ParallelModeOfficialCompletionReport>, String> {
+        let mutation_lock =
+            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         /*
         이 함수의 첫 번째 책임은 "이 workspace가 정말 병렬 agent slot인가"를
         authoritative lease projection으로 확인하는 것이다. caller는 TUI turn 종료 경로에서
@@ -71,6 +117,10 @@ impl ParallelModeService {
         else {
             return Ok(None);
         };
+        mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
+            return Ok(None);
+        }
         // Running lease만 agent가 실제 작업을 끝냈다고 보고할 수 있다.
         // 다른 상태는 completion lifecycle 순서가 맞지 않으므로 no-op으로 돌려보낸다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -183,6 +233,26 @@ impl ParallelModeService {
         // refreshing 표시를 적용할 parallel slot workspace이다.
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        self.mark_workspace_official_completion_refreshing_inner(workspace_dir, None)
+    }
+
+    pub(crate) fn mark_workspace_official_completion_refreshing_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        self.mark_workspace_official_completion_refreshing_inner(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+        )
+    }
+
+    fn mark_workspace_official_completion_refreshing_inner(
+        &self,
+        workspace_dir: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        let mutation_lock =
+            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         /*
         refreshing 표시는 hidden planning worker가 contract를 받아 실제 authority
         갱신을 수행하기 시작했다는 runtime-only 증거이다. 이 함수가 ledger 자체를 수정하지
@@ -195,6 +265,10 @@ impl ParallelModeService {
         else {
             return Ok(None);
         };
+        mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
+            return Ok(None);
+        }
         // Running이 아니면 이미 완료/정리 쪽으로 전이되었거나 아직 실행 중이 아니므로 과거 상태로 되돌리지 않는다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
             return Ok(None);
@@ -230,6 +304,29 @@ impl ParallelModeService {
         // planning authority refresh가 어떤 결과로 끝났는지 session history에 남길 문장이다.
         authority_refresh_outcome: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        self.mark_workspace_commit_ready_inner(workspace_dir, None, authority_refresh_outcome)
+    }
+
+    pub(crate) fn mark_workspace_commit_ready_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        authority_refresh_outcome: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        self.mark_workspace_commit_ready_inner(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+            authority_refresh_outcome,
+        )
+    }
+
+    fn mark_workspace_commit_ready_inner(
+        &self,
+        workspace_dir: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        authority_refresh_outcome: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        let mutation_lock =
+            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         /*
         commit_ready는 official ledger refresh가 성공했다는 경계이다. 이 함수는
         아직 queue item을 만들지 않고 session detail만 갱신한다. queue enqueue를 분리해 둔
@@ -242,6 +339,10 @@ impl ParallelModeService {
         else {
             return Ok(None);
         };
+        mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
+            return Ok(None);
+        }
         // Running lease만 commit_ready로 갈 수 있다.
         // cleanup pending 같은 후속 상태가 된 slot은 늦은 성공 이벤트로 되돌리면 안 된다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
@@ -284,6 +385,25 @@ impl ParallelModeService {
             .enqueue_workspace_commit_ready_result(workspace_dir)
     }
 
+    pub(crate) fn enqueue_workspace_commit_ready_result_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<Option<crate::domain::parallel_mode::ParallelModeDistributorQueueItem>, String>
+    {
+        self.distributor_service
+            .enqueue_workspace_commit_ready_result_for_lease(expected_lease)
+    }
+
+    pub(crate) fn enqueue_workspace_commit_ready_result_guarded(
+        &self,
+        workspace_dir: &str,
+        permit: &super::ParallelModeAutomationPermit,
+    ) -> Result<Option<crate::domain::parallel_mode::ParallelModeDistributorQueueItem>, String>
+    {
+        self.distributor_service
+            .enqueue_workspace_commit_ready_result_guarded(workspace_dir, permit)
+    }
+
     /*
     queue processing도 같은 facade 패턴이다. completion lifecycle이 만든
     commit-ready 결과는 distributor queue head에서 push, PR, readiness check, integration,
@@ -310,6 +430,29 @@ impl ParallelModeService {
         // official worker가 반환한 실패 원인이다. session history와 UI feed에 남는다.
         failure_detail: &str,
     ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        self.mark_workspace_official_completion_failed_inner(workspace_dir, None, failure_detail)
+    }
+
+    pub(crate) fn mark_workspace_official_completion_failed_for_lease(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        failure_detail: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        self.mark_workspace_official_completion_failed_inner(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+            failure_detail,
+        )
+    }
+
+    fn mark_workspace_official_completion_failed_inner(
+        &self,
+        workspace_dir: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        failure_detail: &str,
+    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+        let mutation_lock =
+            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         /*
         failure 전이는 agent 산출물을 폐기한다는 뜻이 아니라, official ledger에 아직
         신뢰 가능한 완료로 반영되지 않았다는 뜻이다. 그래서 lease는 Running으로 남겨 재시도나
@@ -321,6 +464,10 @@ impl ParallelModeService {
         else {
             return Ok(None);
         };
+        mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if expected_lease.is_some_and(|expected| !resolution.lease.same_generation_as(expected)) {
+            return Ok(None);
+        }
         // Running 상태가 아니면 이미 다른 lifecycle 전이가 적용된 것이므로 실패 이벤트로 되돌리지 않는다.
         if resolution.lease.state != ParallelModeSlotLeaseState::Running {
             return Ok(None);
@@ -356,6 +503,8 @@ impl ParallelModeService {
         // cleanup pending 후보가 되는 slot workspace이다.
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
+        let mutation_lock =
+            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         /*
         cleanup pending은 "agent branch의 산출물이 baseline으로 통합되었고 이제 slot을
         idle baseline으로 되돌릴 수 있다"는 lease 상태이다. 이 함수는 workspace만 아는 호출자를
@@ -376,7 +525,14 @@ impl ParallelModeService {
             return Ok(None);
         }
         // agent branch가 baseline에 통합되기 전에는 worktree를 정리하면 산출물을 잃을 수 있다.
-        if !branch_is_cleanup_ready(&resolution.context.repo_root, &resolution.lease.branch_name) {
+        let integration_target_oid = self
+            .fetch_fresh_pool_integration_target(&resolution.context.repo_root)?
+            .commit_sha;
+        if !branch_is_integrated_into(
+            &resolution.context.repo_root,
+            &resolution.lease.branch_name,
+            &integration_target_oid,
+        ) {
             return Ok(None);
         }
 
@@ -386,10 +542,11 @@ impl ParallelModeService {
         재사용하는 이유는 session history, pool board projection, lease mirror 갱신 규칙이
         slot lifecycle 모듈에 모여 있기 때문이다.
         */
-        self.mark_slot_cleanup_pending(
+        self.mark_slot_cleanup_pending_locked(
             workspace_dir,
             &resolution.lease.slot_id,
             &resolution.lease.agent_id,
+            &mutation_lock,
         )
         // lifecycle helper의 성공 snapshot을 Option으로 감싸 workspace 기반 facade 계약에 맞춘다.
         .map(Some)
@@ -407,6 +564,8 @@ impl ParallelModeService {
         // cleanup을 시도할 slot workspace이다.
         workspace_dir: &str,
     ) -> Result<Option<ParallelModeSlotLeaseSnapshot>, String> {
+        let mutation_lock =
+            acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         /*
         실제 cleanup은 destructive에 가까운 작업이다. slot worktree를 baseline으로
         reset하고 lease를 idle로 되돌리는 단계이므로, 이 함수는 반드시 CleanupPending 상태에서만
@@ -419,11 +578,16 @@ impl ParallelModeService {
         else {
             return Ok(None);
         };
+        mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
         // CleanupPending이 아니면 slot 정리를 실행하지 않는다.
         // 이 guard가 Running 작업의 worktree reset을 막는 마지막 방어선이다.
         if resolution.lease.state != ParallelModeSlotLeaseState::CleanupPending {
             return Ok(None);
         }
+        crate::git_execution_guard::ensure_host_git_execution_config_safe(
+            &resolution.workspace_path,
+        )
+        .map_err(|error| format!("slot cleanup blocked: {error:#}"))?;
 
         /*
         `cleanup_slot`은 git worktree와 authority-backed lease 상태를 함께 정리하는
@@ -433,19 +597,28 @@ impl ParallelModeService {
         */
         // pool helper가 false를 돌려주면 baseline reset 또는 lease 정리가 실패한 것이다.
         // caller가 slot을 재사용하지 않도록 오류로 승격한다.
-        if !cleanup_slot(
+        let integration_target_oid = self
+            .fetch_fresh_pool_integration_target(&resolution.context.repo_root)?
+            .commit_sha;
+        if !cleanup_slot_to_ref_locked(
             self.planning_authority.as_ref(),
             self.parallel_runtime.as_ref(),
-            &resolution.context.repo_root,
-            &resolution.context.pool_root,
-            &resolution.lease.slot_id,
-            &resolution.workspace_path,
-            &resolution.lease.branch_name,
+            &PoolSlotCleanupIdentity::new(
+                &resolution.context.repo_root,
+                &resolution.context.canonical_repo_root,
+                &resolution.context.pool_root,
+                &resolution.lease.slot_id,
+                &resolution.workspace_path,
+                &resolution.lease.branch_name,
+            ),
+            &integration_target_oid,
+            PoolSlotCleanupLeaseAuthority::CleanupPending(&resolution.lease),
+            &mutation_lock,
         ) {
             return Err(format!(
                 "slot `{}` could not be reset to `{}` after successful completion",
                 resolution.lease.slot_id,
-                pool_baseline_branch()
+                pool_baseline_branch_for_repo(&resolution.context.repo_root)
             ));
         }
         // cleanup 성공 후 session detail에도 cleaned 이벤트를 남긴다.

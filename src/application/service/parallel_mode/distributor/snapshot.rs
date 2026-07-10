@@ -1,6 +1,7 @@
 use super::super::supervisor::selected_runtime_session_detail;
 use super::super::{
-    PoolRuntimeContext, current_branch_name, distributor_integration_branch,
+    DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH, PoolRuntimeContext, current_branch_name,
+    derive_integration_worktree_path, distributor_integration_branch_for_repo,
     inspect_slot_git_status, short_sha,
 };
 use super::{ParallelModeDistributorQueueRecord, matching_lease_for_queue_record};
@@ -24,6 +25,13 @@ pub(super) fn build_distributor_snapshot_from_context(
     context: &PoolRuntimeContext,
 ) -> ParallelModeDistributorSnapshot {
     let history = context.session_details.clone();
+    let integration_branch = context
+        .distributor_queue_records
+        .iter()
+        .find(|record| record.queue_state.is_active())
+        .and_then(|record| record.delivery_target.as_ref())
+        .map(|target| target.integration_branch.clone())
+        .unwrap_or_else(|| distributor_integration_branch_for_repo(&context.repo_root));
     let queue_records = context.distributor_queue_records.clone();
     let runtime_event_feed = build_runtime_event_feed(&context.runtime_events);
     /*
@@ -36,7 +44,7 @@ pub(super) fn build_distributor_snapshot_from_context(
         .filter(|record| record.queue_state.is_active())
         .map(ParallelModeDistributorQueueRecord::display_item)
         .collect::<Vec<_>>();
-    let completion_feed = build_distributor_completion_feed(&history);
+    let completion_feed = build_distributor_completion_feed(&history, &integration_branch);
     if let Some(queue_head) = active_distributor_queue_head(&queue_records) {
         /*
         active queue head가 있으면 session detail보다 우선한다. distributor는 head 하나만
@@ -50,7 +58,7 @@ pub(super) fn build_distributor_snapshot_from_context(
             queue_head.integration_note.clone(),
         )
         .with_head_blocked_detail(blocked_head_detail(queue_head))
-        .with_head_rebase_provenance(rebase_provenance_label(queue_head))
+        .with_head_rebase_provenance(rebase_provenance_label(queue_head, &integration_branch))
         .with_orchestrator_status(build_orchestrator_status(context, queue_head))
         .with_runtime_event_feed(runtime_event_feed);
     }
@@ -199,25 +207,41 @@ integration worktree readiness는 queue가 비어 있을 때도 계속 보여 �
 생기기 전에 작업대를 정리할 수 있다.
 */
 fn inspect_integration_worktree_readiness(context: &PoolRuntimeContext) -> String {
-    let repo_root = context.canonical_repo_root.as_path();
-    let Some(branch_name) = current_branch_name(repo_root) else {
-        return "unknown: branch could not be inspected".to_string();
+    let Some(record) = context
+        .distributor_queue_records
+        .iter()
+        .find(|record| record.queue_state.is_active())
+    else {
+        return "ready: no active delivery needs a dedicated integration worktree".to_string();
     };
-    let integration_branch = distributor_integration_branch();
-    if branch_name != integration_branch {
+    let Some(target) = record.delivery_target.as_ref() else {
+        return "blocked: active legacy queue item has no immutable delivery target".to_string();
+    };
+    let integration_path = derive_integration_worktree_path(
+        &context.pool_root,
+        &target.push_remote,
+        &target.github_repository,
+        &target.integration_branch,
+    );
+    if !integration_path.exists() {
         return format!(
-            "blocked: expected `{}` but checked out `{branch_name}`",
-            integration_branch
+            "ready: dedicated integration worktree will be created at {}",
+            integration_path.display()
         );
     }
-    let Some(status) = inspect_slot_git_status(repo_root) else {
+    let Ok(status) = inspect_slot_git_status(&integration_path) else {
         return "unknown: git status could not be inspected".to_string();
     };
-    if status.is_ready_for_integration() {
-        format!("ready: {} worktree clean", integration_branch)
-    } else {
-        format!("blocked: {}", status.detail_label())
+    if !status.is_clean_baseline() {
+        return format!("blocked: {}", status.detail_label());
     }
+    if let Some(branch_name) = current_branch_name(&integration_path) {
+        return format!("blocked: dedicated worktree is attached to `{branch_name}`");
+    }
+    format!(
+        "ready: clean detached integration worktree at {}",
+        integration_path.display()
+    )
 }
 
 /*
@@ -282,7 +306,10 @@ fn blocked_head_detail(record: &ParallelModeDistributorQueueRecord) -> Option<St
         .then(|| record.integration_note.clone())
 }
 
-fn rebase_provenance_label(record: &ParallelModeDistributorQueueRecord) -> Option<String> {
+fn rebase_provenance_label(
+    record: &ParallelModeDistributorQueueRecord,
+    integration_branch: &str,
+) -> Option<String> {
     /*
     original_commit_sha가 없으면 현재 commit을 원본으로 간주한다. 이렇게 하면 오래된
     queue record도 provenance 없는 정상 record로 표시되고, 실제 rewrite가 있었던 경우만
@@ -298,7 +325,7 @@ fn rebase_provenance_label(record: &ParallelModeDistributorQueueRecord) -> Optio
             "rebased {} -> {} onto `{}`",
             short_sha(original_commit_sha),
             short_sha(&record.commit_sha),
-            distributor_integration_branch()
+            integration_branch
         )
     })
 }
@@ -335,6 +362,7 @@ integration branch에 실제로 들어갔는지를 보여 준다. 각 항목은 
 */
 fn build_distributor_completion_feed(
     history: &[ParallelModeAgentSessionDetailSnapshot],
+    integration_branch: &str,
 ) -> Vec<ParallelModeCompletionFeedEntry> {
     vec![
         ParallelModeCompletionFeedEntry::new(
@@ -372,7 +400,7 @@ fn build_distributor_completion_feed(
                 || {
                     format!(
                         "nothing has been integrated into {} yet",
-                        distributor_integration_branch()
+                        integration_branch
                     )
                 },
             ),
@@ -426,7 +454,7 @@ pub(super) fn build_placeholder_distributor_snapshot(
                 "merged",
                 format!(
                     "nothing has been integrated into {} yet",
-                    distributor_integration_branch()
+                    DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH
                 ),
             ),
         ],

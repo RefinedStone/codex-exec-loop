@@ -128,6 +128,8 @@ fn parallel_mode_presentation_actions_for_event(
     match event {
         ParallelModeControlPlanePresentationEvent::EnterProgress {
             workspace_directory,
+            epoch_id: _,
+            effect_id: _,
             readiness_snapshot,
             loading_stage,
             status_text,
@@ -178,20 +180,34 @@ fn parallel_mode_presentation_actions_for_event(
                 Vec::new()
             }
         }
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text } => {
-            vec![ParallelModePresentationAction::ShowStatus(status_text)]
-        }
-        ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice } => {
-            vec![ParallelModePresentationAction::ObserveRuntimeNotice(notice)]
-        }
+        ParallelModeControlPlanePresentationEvent::StatusShown {
+            workspace_directory,
+            status_text,
+        } => context
+            .accepts_workspace(&workspace_directory)
+            .then_some(ParallelModePresentationAction::ShowStatus(status_text))
+            .into_iter()
+            .collect(),
+        ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+            workspace_directory,
+            notice,
+        } => context
+            .accepts_workspace(&workspace_directory)
+            .then_some(ParallelModePresentationAction::ObserveRuntimeNotice(notice))
+            .into_iter()
+            .collect(),
         ParallelModeControlPlanePresentationEvent::PostTurnAutoFollowPromptConsumed => Vec::new(),
         ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
             workspace_directory,
-        } => vec![
-            ParallelModePresentationAction::RefreshPlanningRuntimeProjection {
-                workspace_directory,
-            },
-        ],
+        } => context
+            .accepts_workspace(&workspace_directory)
+            .then_some(
+                ParallelModePresentationAction::RefreshPlanningRuntimeProjection {
+                    workspace_directory,
+                },
+            )
+            .into_iter()
+            .collect(),
         ParallelModeControlPlanePresentationEvent::ModeDisabled { .. } => Vec::new(),
     }
 }
@@ -226,6 +242,9 @@ pub(super) fn pending_parallel_mode_supervisor_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::service::parallel_mode::control_plane::{
+        ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEffectKind,
+    };
     use crate::domain::parallel_mode::ParallelModeReadinessState;
 
     fn readiness_snapshot(workspace: &str) -> ParallelModeReadinessSnapshot {
@@ -237,6 +256,13 @@ mod tests {
         )
     }
 
+    fn entry_effect(sequence: u64) -> ParallelModeControlPlaneEffectId {
+        ParallelModeControlPlaneEffectId {
+            sequence,
+            kind: ParallelModeControlPlaneEffectKind::EnterParallelMode,
+        }
+    }
+
     #[test]
     fn enter_progress_maps_to_projection_and_status_actions_for_current_workspace() {
         let context = ParallelModePresentationBridgeContext::new("/work".to_string(), true);
@@ -246,6 +272,8 @@ mod tests {
             &context,
             ParallelModeControlPlanePresentationEvent::EnterProgress {
                 workspace_directory: "/work".to_string(),
+                epoch_id: 1,
+                effect_id: entry_effect(1),
                 readiness_snapshot: Some(readiness.clone()),
                 loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
                 status_text: "parallel mode: loading".to_string(),
@@ -294,10 +322,36 @@ mod tests {
             &context,
             ParallelModeControlPlanePresentationEvent::EnterProgress {
                 workspace_directory: "/work".to_string(),
+                epoch_id: 1,
+                effect_id: entry_effect(1),
                 readiness_snapshot: None,
                 loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
                 status_text: "parallel mode: loading".to_string(),
             },
+        );
+
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn prior_workspace_worker_completion_cannot_mutate_current_draft_presentation() {
+        let context = ParallelModePresentationBridgeContext::new("/draft-a".to_string(), true);
+
+        let actions = parallel_mode_presentation_actions(
+            &context,
+            vec![
+                ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
+                    workspace_directory: "/worker-b".to_string(),
+                },
+                ParallelModeControlPlanePresentationEvent::StatusShown {
+                    workspace_directory: "/worker-b".to_string(),
+                    status_text: "worker B completed".to_string(),
+                },
+                ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+                    workspace_directory: "/worker-b".to_string(),
+                    notice: "worker B notice".to_string(),
+                },
+            ],
         );
 
         assert!(actions.is_empty());

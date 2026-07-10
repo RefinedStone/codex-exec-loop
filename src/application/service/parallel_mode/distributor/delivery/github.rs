@@ -1,7 +1,6 @@
 use super::*;
 use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
 
-use crate::application::service::parallel_mode::distributor_integration_branch;
 const AKRA_GITHUB_PR_MODE_ENV: &str = "AKRA_GITHUB_PR_MODE";
 const AKRA_GITHUB_PR_MODE_CONFIG_KEY: &str = "akra.githubPrMode";
 
@@ -36,10 +35,24 @@ pub(super) fn distributor_push_source_branch(
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    automation_permit: Option<&ParallelModeAutomationPermit>,
+    claim_permit: &DistributorQueueHeadClaimPermit,
 ) -> Result<String, String> {
     // capability snapshot을 record에 보관해 blocked supervisor 화면이 "왜 push 불가인지" 즉시 설명하게 한다.
     let repo_root = resolution.context.repo_root.clone();
-    let push_remote = push_remote_name(&repo_root);
+    let source_branch = record.effective_source_branch();
+    let source_commit_sha = record.effective_source_commit_sha();
+    let push_remote = record
+        .delivery_target
+        .as_ref()
+        .map(|target| target.push_remote.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let credential_redacted_push_url = record
+        .delivery_target
+        .as_ref()
+        .and_then(|target| target.credential_redacted_push_url.clone())
+        .unwrap_or_default();
+    claim_permit.renew("source push capability inspection")?;
     let capabilities = github_automation.inspect_capabilities(&repo_root);
     record.github_capabilities = Some(capabilities.clone());
     if !capabilities.push_ready() {
@@ -61,7 +74,7 @@ pub(super) fn distributor_push_source_branch(
     record.queue_state = ParallelModeQueueItemState::Pushing;
     record.integration_note = format!(
         "distributor is pushing `{}` to `{}`",
-        record.branch_name, push_remote
+        source_branch, push_remote
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
@@ -81,7 +94,35 @@ pub(super) fn distributor_push_source_branch(
         &record.integration_note,
     );
 
-    if let Err(error) = github_automation.push_branch(&repo_root, &record.branch_name, false) {
+    if let Some(notice) = block_if_automation_epoch_closed(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        automation_permit,
+        "source branch push",
+    )? {
+        return Ok(notice);
+    }
+    if let Some(notice) = block_if_delivery_target_changed(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
+        claim_permit,
+        "source branch push",
+    )? {
+        return Ok(notice);
+    }
+    claim_permit.renew("exact frozen source push")?;
+    if let Err(error) = github_automation.push_frozen_commit_to_delivery_target(
+        &repo_root,
+        &push_remote,
+        &credential_redacted_push_url,
+        &source_commit_sha,
+        &source_branch,
+    ) {
         // 실제 push 실패는 remote/auth/network 상태와 연결되므로 같은 block path로 복구 가능하게 만든다.
         return block_distributor_queue_record(
             planning_authority,
@@ -92,7 +133,7 @@ pub(super) fn distributor_push_source_branch(
             record,
             format!(
                 "source branch `{}` could not be pushed to `{}`: {error}",
-                record.branch_name, push_remote
+                source_branch, push_remote
             ),
         );
     }
@@ -112,7 +153,7 @@ pub(super) fn distributor_push_source_branch(
 
     Ok(format!(
         "distributor pushed source branch / agent: {} / branch: {}",
-        record.agent_id, record.branch_name
+        record.agent_id, source_branch
     ))
 }
 
@@ -124,17 +165,61 @@ PR workflow는 push와 독립적인 delivery 선택지다.
 integration을 선택한다. 이 분기를 source branch push 뒤에 두어 "git push는 되지만 PR은 안 되는"
 환경을 실제 배포 가능한 상태로 취급한다.
 */
+#[allow(clippy::too_many_arguments)]
 pub(super) fn distributor_prepare_pull_request_or_skip(
     planning_authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    automation_permit: Option<&ParallelModeAutomationPermit>,
+    claim_permit: &DistributorQueueHeadClaimPermit,
+    autonomous_delivery_allowed: &Result<bool, String>,
 ) -> Result<Vec<String>, String> {
+    claim_permit.renew("pull request delivery policy inspection")?;
     let repo_root = resolution.context.repo_root.clone();
-    let mode = resolve_pull_request_delivery_mode(runtime, &repo_root);
+    let mode = match resolve_pull_request_delivery_mode(runtime, &repo_root) {
+        Ok(mode) => mode,
+        Err(detail) => {
+            return Ok(vec![block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                detail,
+            )?]);
+        }
+    };
+    let autonomous_delivery = match autonomous_delivery_allowed {
+        Ok(allowed) => *allowed,
+        Err(detail) => {
+            return Ok(vec![block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                detail.clone(),
+            )?]);
+        }
+    };
 
     if mode == PullRequestDeliveryMode::Disabled {
+        if !autonomous_delivery {
+            return Ok(vec![block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                "direct integration is disabled unless AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1 is set in the parent process"
+                    .to_string(),
+            )?]);
+        }
         return Ok(vec![distributor_skip_pull_request_workflow(
             planning_authority,
             runtime,
@@ -148,16 +233,27 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
     let capabilities = recorded_or_inspected_capabilities(record, &repo_root, github_automation);
     if !capabilities.pull_request_workflow_ready() {
         return match mode {
-            PullRequestDeliveryMode::Auto => Ok(vec![distributor_skip_pull_request_workflow(
+            PullRequestDeliveryMode::Auto if autonomous_delivery => {
+                Ok(vec![distributor_skip_pull_request_workflow(
+                    planning_authority,
+                    runtime,
+                    resolution,
+                    record,
+                    mode,
+                    format!(
+                        "unavailable in explicitly enabled autonomous mode: {}",
+                        pull_request_workflow_unavailable_summary(&capabilities)
+                    ),
+                )?])
+            }
+            PullRequestDeliveryMode::Auto => Ok(vec![block_distributor_queue_record(
                 planning_authority,
                 runtime,
-                resolution,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
                 record,
-                mode,
-                format!(
-                    "unavailable in auto mode: {}",
-                    pull_request_workflow_unavailable_summary(&capabilities)
-                ),
+                "automatic PR fallback requires explicit autonomous delivery opt-in".to_string(),
             )?]),
             PullRequestDeliveryMode::Required => Ok(vec![block_distributor_queue_record(
                 planning_authority,
@@ -184,6 +280,8 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
         resolution,
         record,
         github_automation,
+        automation_permit,
+        claim_permit,
     )?);
     if record.queue_state == ParallelModeQueueItemState::Blocked {
         return Ok(notices);
@@ -195,6 +293,8 @@ pub(super) fn distributor_prepare_pull_request_or_skip(
         resolution,
         record,
         github_automation,
+        autonomous_delivery,
+        claim_permit,
     )?);
     Ok(notices)
 }
@@ -214,6 +314,8 @@ pub(super) fn distributor_ensure_pull_request(
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    automation_permit: Option<&ParallelModeAutomationPermit>,
+    claim_permit: &DistributorQueueHeadClaimPermit,
 ) -> Result<String, String> {
     // PR 조작은 push와 다른 capability지만, 직전 push 단계에서 갱신한 snapshot이 있으면 재사용한다.
     let repo_root = resolution.context.repo_root.clone();
@@ -255,10 +357,48 @@ pub(super) fn distributor_ensure_pull_request(
         &record.integration_note,
     );
 
-    let integration_branch = distributor_integration_branch();
-    let pull_request = match github_automation.ensure_pull_request(
+    let integration_branch = record
+        .delivery_target
+        .as_ref()
+        .map(|target| target.integration_branch.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let push_remote = record
+        .delivery_target
+        .as_ref()
+        .map(|target| target.push_remote.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let credential_redacted_push_url = record
+        .delivery_target
+        .as_ref()
+        .and_then(|target| target.credential_redacted_push_url.clone())
+        .unwrap_or_default();
+    if let Some(notice) = block_if_automation_epoch_closed(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        automation_permit,
+        "pull request ensure",
+    )? {
+        return Ok(notice);
+    }
+    if let Some(notice) = block_if_delivery_target_changed(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        github_automation,
+        claim_permit,
+        "pull request ensure",
+    )? {
+        return Ok(notice);
+    }
+    claim_permit.renew("pull request ensure")?;
+    let pull_request = match github_automation.ensure_pull_request_for_delivery_target(
         &repo_root,
-        integration_branch,
+        &push_remote,
+        &credential_redacted_push_url,
+        &integration_branch,
         &record.branch_name,
         &build_distributor_pull_request_title(record),
         &build_distributor_pull_request_body(record),
@@ -315,6 +455,8 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
     resolution: &WorkspaceSlotLeaseResolution,
     record: &mut ParallelModeDistributorQueueRecord,
     github_automation: &dyn GithubAutomationPort,
+    autonomous_delivery: bool,
+    claim_permit: &DistributorQueueHeadClaimPermit,
 ) -> Result<String, String> {
     let Some(pr_number) = record.pull_request_number else {
         // PR 번호가 없다면 이전 ensure 단계의 durable write가 깨진 것이므로 operator recovery로 넘긴다.
@@ -351,8 +493,24 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
     );
 
     let repo_root = resolution.context.repo_root.clone();
+    let push_remote = record
+        .delivery_target
+        .as_ref()
+        .map(|target| target.push_remote.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let credential_redacted_push_url = record
+        .delivery_target
+        .as_ref()
+        .and_then(|target| target.credential_redacted_push_url.clone())
+        .unwrap_or_default();
     // readiness는 queue record의 저장 값이 아니라 GitHub 현재 상태를 다시 읽어 drift를 잡는다.
-    let pull_request = match github_automation.inspect_pull_request(&repo_root, pr_number) {
+    claim_permit.renew("pull request readiness inspection")?;
+    let pull_request = match github_automation.inspect_pull_request_for_delivery_target(
+        &repo_root,
+        &push_remote,
+        &credential_redacted_push_url,
+        pr_number,
+    ) {
         Ok(pull_request) => pull_request,
         Err(error) => {
             return block_distributor_queue_record(
@@ -367,9 +525,18 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
         }
     };
 
+    let integration_branch = record
+        .delivery_target
+        .as_ref()
+        .map(|target| target.integration_branch.clone())
+        .unwrap_or_else(|| "unknown".to_string());
     record.pull_request_url = Some(pull_request.url.clone());
-    if !pull_request.state.eq_ignore_ascii_case("open") {
-        // closed/merged PR은 source branch와 queue state가 이미 외부에서 변했을 수 있어 자동 통합을 멈춘다.
+    if let Some(detail) = pull_request_readiness_error(
+        &pull_request,
+        record,
+        &integration_branch,
+        autonomous_delivery,
+    ) {
         return block_distributor_queue_record(
             planning_authority,
             runtime,
@@ -377,59 +544,13 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
             &resolution.context.pool_root,
             Some(&resolution.lease),
             record,
-            format!(
-                "pull request #{} is not open (`{}`)",
-                pull_request.number, pull_request.state
-            ),
-        );
-    }
-    if pull_request.is_draft {
-        // draft PR은 사람이 아직 통합 표면을 확정하지 않은 신호라 distributor가 로컬 반영하지 않는다.
-        return block_distributor_queue_record(
-            planning_authority,
-            runtime,
-            &resolution.context.repo_root,
-            &resolution.context.pool_root,
-            Some(&resolution.lease),
-            record,
-            format!("pull request #{} is still a draft", pull_request.number),
-        );
-    }
-    let integration_branch = distributor_integration_branch();
-    if pull_request.base_branch != integration_branch {
-        return block_distributor_queue_record(
-            planning_authority,
-            runtime,
-            &resolution.context.repo_root,
-            &resolution.context.pool_root,
-            Some(&resolution.lease),
-            record,
-            format!(
-                "pull request #{} targets `{}` instead of `{}`",
-                pull_request.number, pull_request.base_branch, integration_branch
-            ),
-        );
-    }
-    if pull_request.head_branch != record.branch_name {
-        // head drift는 queue record가 가리키는 agent result와 PR content가 달라졌다는 강한 불일치이다.
-        return block_distributor_queue_record(
-            planning_authority,
-            runtime,
-            &resolution.context.repo_root,
-            &resolution.context.pool_root,
-            Some(&resolution.lease),
-            record,
-            format!(
-                "pull request #{} head drifted from `{}` to `{}`",
-                pull_request.number, record.branch_name, pull_request.head_branch
-            ),
+            detail,
         );
     }
 
     record.integration_note = format!(
         "pull request #{} is open and ready for integration into `{}`",
-        pull_request.number,
-        distributor_integration_branch()
+        pull_request.number, integration_branch
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(
@@ -444,6 +565,159 @@ pub(super) fn distributor_check_pull_request_merge_readiness(
         "distributor verified pull request readiness / agent: {} / pr: #{}",
         record.agent_id, pull_request.number
     ))
+}
+
+pub(super) fn distributor_recheck_pull_request_before_integration_push(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+    github_automation: &dyn GithubAutomationPort,
+    claim_permit: &DistributorQueueHeadClaimPermit,
+    autonomous_delivery_allowed: &Result<bool, String>,
+) -> Result<Option<String>, String> {
+    let Some(pr_number) = record.pull_request_number else {
+        return Ok(None);
+    };
+    claim_permit.renew("pre-push autonomous delivery policy inspection")?;
+    let target = record
+        .delivery_target
+        .as_ref()
+        .expect("validated delivery target must be present");
+    let autonomous_delivery = match autonomous_delivery_allowed {
+        Ok(allowed) => *allowed,
+        Err(detail) => {
+            return block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                detail.clone(),
+            )
+            .map(Some);
+        }
+    };
+
+    claim_permit.renew("pre-push pull request readiness reinspection")?;
+    let credential_redacted_push_url = target
+        .credential_redacted_push_url
+        .as_deref()
+        .expect("validated delivery target must contain a credential-redacted push URL");
+    let pull_request = match github_automation.inspect_pull_request_for_delivery_target(
+        &resolution.context.repo_root,
+        &target.push_remote,
+        credential_redacted_push_url,
+        pr_number,
+    ) {
+        Ok(pull_request) => pull_request,
+        Err(error) => {
+            return block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                format!(
+                    "pull request #{pr_number} could not be reinspected immediately before integration push: {error}"
+                ),
+            )
+            .map(Some);
+        }
+    };
+    record.pull_request_url = Some(pull_request.url.clone());
+    if let Some(detail) = pull_request_readiness_error(
+        &pull_request,
+        record,
+        &target.integration_branch,
+        autonomous_delivery,
+    ) {
+        return block_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            format!("pre-push pull request gate changed: {detail}"),
+        )
+        .map(Some);
+    }
+    Ok(None)
+}
+
+fn pull_request_readiness_error(
+    pull_request: &GithubAutomationPullRequest,
+    record: &ParallelModeDistributorQueueRecord,
+    integration_branch: &str,
+    autonomous_delivery: bool,
+) -> Option<String> {
+    if !pull_request.state.eq_ignore_ascii_case("open") {
+        return Some(format!(
+            "pull request #{} is not open (`{}`)",
+            pull_request.number, pull_request.state
+        ));
+    }
+    if pull_request.is_draft {
+        return Some(format!(
+            "pull request #{} is still a draft",
+            pull_request.number
+        ));
+    }
+    if pull_request.base_branch != integration_branch {
+        return Some(format!(
+            "pull request #{} targets `{}` instead of `{}`",
+            pull_request.number, pull_request.base_branch, integration_branch
+        ));
+    }
+    let source_branch = record.effective_source_branch();
+    if pull_request.head_branch != source_branch {
+        return Some(format!(
+            "pull request #{} head drifted from `{}` to `{}`",
+            pull_request.number, source_branch, pull_request.head_branch
+        ));
+    }
+    let source_commit_sha = record.effective_source_commit_sha();
+    if pull_request.head_commit_sha.as_deref() != Some(source_commit_sha.as_str()) {
+        return Some(format!(
+            "pull request #{} head commit does not match frozen source commit `{}`",
+            pull_request.number,
+            short_sha(&source_commit_sha)
+        ));
+    }
+    if !autonomous_delivery && pull_request.review_decision.as_deref() != Some("APPROVED") {
+        return Some(format!(
+            "pull request #{} has not received an explicit APPROVED review decision",
+            pull_request.number
+        ));
+    }
+    if !autonomous_delivery
+        && !pull_request
+            .approved_review_commit_shas
+            .iter()
+            .any(|approved_sha| approved_sha == &source_commit_sha)
+    {
+        return Some(format!(
+            "pull request #{} has no APPROVED review bound to frozen source commit `{}`",
+            pull_request.number,
+            short_sha(&source_commit_sha)
+        ));
+    }
+    if !autonomous_delivery && pull_request.merge_state_status.as_deref() != Some("CLEAN") {
+        return Some(format!(
+            "pull request #{} merge state is not explicitly CLEAN",
+            pull_request.number
+        ));
+    }
+    if !autonomous_delivery && pull_request.required_checks_passed != Some(true) {
+        return Some(format!(
+            "pull request #{} required checks are failing or unknown",
+            pull_request.number
+        ));
+    }
+    None
 }
 
 /*
@@ -475,27 +749,32 @@ fn build_distributor_pull_request_body(record: &ParallelModeDistributorQueueReco
 fn resolve_pull_request_delivery_mode(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
-) -> PullRequestDeliveryMode {
-    if let Ok(value) = std::env::var(AKRA_GITHUB_PR_MODE_ENV)
-        && let Some(mode) = parse_pull_request_delivery_mode(&value)
-    {
-        return mode;
+) -> Result<PullRequestDeliveryMode, String> {
+    if let Ok(value) = std::env::var(AKRA_GITHUB_PR_MODE_ENV) {
+        return parse_pull_request_delivery_mode(&value).ok_or_else(|| {
+            format!("{AKRA_GITHUB_PR_MODE_ENV} is invalid; expected required, auto, or disabled")
+        });
     }
 
-    runtime
-        .run_command(
-            "git",
-            &[
-                "-C",
-                repo_root,
-                "config",
-                "--get",
-                AKRA_GITHUB_PR_MODE_CONFIG_KEY,
-            ],
-            None,
-        )
-        .and_then(|value| parse_pull_request_delivery_mode(&value))
-        .unwrap_or(PullRequestDeliveryMode::Auto)
+    let config_value = runtime.run_command(
+        "git",
+        &[
+            "-C",
+            repo_root,
+            "config",
+            "--get",
+            AKRA_GITHUB_PR_MODE_CONFIG_KEY,
+        ],
+        None,
+    );
+    match config_value {
+        Some(value) => parse_pull_request_delivery_mode(&value).ok_or_else(|| {
+            format!(
+                "{AKRA_GITHUB_PR_MODE_CONFIG_KEY} is invalid; expected required, auto, or disabled"
+            )
+        }),
+        None => Ok(PullRequestDeliveryMode::Required),
+    }
 }
 
 fn parse_pull_request_delivery_mode(value: &str) -> Option<PullRequestDeliveryMode> {
@@ -546,7 +825,11 @@ fn distributor_skip_pull_request_workflow(
     record.queue_state = ParallelModeQueueItemState::MergePending;
     record.integration_note = format!(
         "pull request workflow skipped ({reason}); queued branch will be integrated directly into `{}`",
-        distributor_integration_branch()
+        record
+            .delivery_target
+            .as_ref()
+            .map(|target| target.integration_branch.as_str())
+            .unwrap_or("unknown")
     );
     record.updated_at = current_timestamp();
     write_distributor_queue_record(

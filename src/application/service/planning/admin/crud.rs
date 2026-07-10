@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Result, anyhow, bail};
+use rand::RngCore;
 
 use super::direction_mutation::{
     PlanningAdminDirectionMutationCommand, PlanningAdminDirectionMutationService,
@@ -17,6 +18,8 @@ use crate::application::service::planning::task_mutation::{
     PlanningTaskMutationSource, PlanningTaskUpdateInput,
 };
 use crate::domain::planning::{OriginSessionKind, TaskMutationProvenance, TaskStatus};
+
+const ADMIN_NEW_TASK_MUTATION_SCOPE: &str = "__admin-new-task__";
 
 /*
  * admin CRUD는 operator-facing mutation bridge다. direction 변경은 direction catalog와 task cascade를 함께
@@ -42,8 +45,14 @@ impl PlanningAdminFacadeService {
         // direction upsert는 catalog document semantics가 강하므로 task mutation service를 거치지 않는다. 전용
         // direction mutation service가 id 생성, default 보장, dependent cleanup 정책을 담당하고 facade는 refreshed
         // management view와 notice만 조립한다.
-        let outcome = PlanningAdminDirectionMutationService::new(self)
-            .apply(PlanningAdminDirectionMutationCommand::Upsert(request))?;
+        self.ensure_default_authority()?;
+        let outcome =
+            self.with_admin_authority_mutation_guard("upsert planning direction", |owner_token| {
+                PlanningAdminDirectionMutationService::new(self).apply_with_authority_guard(
+                    PlanningAdminDirectionMutationCommand::Upsert(request),
+                    owner_token,
+                )
+            })?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
             notice: if outcome.updated {
@@ -60,8 +69,14 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminCrudOutcome> {
         // default direction delete는 실제 삭제가 아니라 retained outcome으로 보고한다. blank task creation fallback과
         // bootstrap repair anchor라서 operator가 삭제를 눌러도 service가 다시 보장하고 no-op에 가까운 notice를 돌려준다.
-        let outcome = PlanningAdminDirectionMutationService::new(self)
-            .apply(PlanningAdminDirectionMutationCommand::Delete(request))?;
+        self.ensure_default_authority()?;
+        let outcome =
+            self.with_admin_authority_mutation_guard("delete planning direction", |owner_token| {
+                PlanningAdminDirectionMutationService::new(self).apply_with_authority_guard(
+                    PlanningAdminDirectionMutationCommand::Delete(request),
+                    owner_token,
+                )
+            })?;
         let management = self.load_management_view()?;
         if !outcome.deleted {
             return Ok(PlanningAdminCrudOutcome {
@@ -69,7 +84,6 @@ impl PlanningAdminFacadeService {
                 management,
             });
         }
-        self.clear_deleted_task_runtime_projections(&outcome.removed_task_ids)?;
         Ok(PlanningAdminCrudOutcome {
             notice: format!(
                 "direction `{}` deleted with {} child tasks",
@@ -86,18 +100,24 @@ impl PlanningAdminFacadeService {
         // worker/runtime/model command와 같은 priority 계산과 queue projection commit 규칙을 공유해야 하기 때문이다.
         self.ensure_default_authority()?;
         let updated = !request.id.trim().is_empty();
+        let guarded_task_ids = vec![if updated {
+            request.id.trim().to_string()
+        } else {
+            ADMIN_NEW_TASK_MUTATION_SCOPE.to_string()
+        }];
         let command = task_command_from_request(request)?;
-        let commit = self
-            .task_mutation_service
-            .apply_commands(PlanningTaskMutationRequest {
-                workspace_directory: self.workspace_dir.clone(),
-                // admin UI에서 온 명시적 operator edit이므로 source는 User다. model-generated command와 구분해야
-                // audit/debug에서 사람이 바꾼 task와 자동 추출 task를 나눠 볼 수 있다.
-                source: PlanningTaskMutationSource::User,
-                legacy_source_turn_id: None,
-                provenance: TaskMutationProvenance::new(OriginSessionKind::System),
-                commands: vec![command],
-            })?;
+        let commit = self.with_admin_task_mutation_guard(&guarded_task_ids, || {
+            self.task_mutation_service
+                .apply_commands(PlanningTaskMutationRequest {
+                    workspace_directory: self.workspace_dir.clone(),
+                    // admin UI에서 온 명시적 operator edit이므로 source는 User다. model-generated command와 구분해야
+                    // audit/debug에서 사람이 바꾼 task와 자동 추출 task를 나눠 볼 수 있다.
+                    source: PlanningTaskMutationSource::User,
+                    legacy_source_turn_id: None,
+                    provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+                    commands: vec![command],
+                })
+        })?;
         let task_id = commit.committed_task_ids.first().cloned().ok_or_else(|| {
             anyhow!("planning task mutation completed without returning a task id")
         })?;
@@ -117,24 +137,26 @@ impl PlanningAdminFacadeService {
     ) -> Result<PlanningAdminCrudOutcome> {
         // admin delete는 명시적 operator maintenance action이다. worker/runtime task command는 여전히 task를 삭제할 수
         // 없고 `cancelled`로 이동해야 한다. 그래서 delete만 shared mutation service 바깥의 admin-only path로 남긴다.
+        self.ensure_default_authority()?;
         let task_id = normalized_required_id(&request.id, "task id")?;
-        let mut documents = self.load_operator_planning_documents()?;
-        let original_count = documents.task_authority.tasks.len();
-        // 직접 삭제는 이 operator path로 제한된다. 삭제 후 dangling dependency/blocker reference를 남기면 queue
-        // validation과 rank reason이 없는 task를 가리키게 되므로 commit 전에 graph reference를 함께 정리한다.
-        documents
-            .task_authority
-            .tasks
-            .retain(|task| task.id.trim() != task_id);
-        if documents.task_authority.tasks.len() == original_count {
-            bail!("task `{task_id}` was not found");
-        }
-        remove_task_references(
-            &mut documents.task_authority,
-            &BTreeSet::from([task_id.to_string()]),
-        );
-        self.commit_operator_planning_documents(documents)?;
-        self.clear_deleted_task_runtime_projections(&BTreeSet::from([task_id.to_string()]))?;
+        self.with_admin_task_mutation_guard(&[task_id.to_string()], || {
+            let mut documents = self.load_operator_planning_documents()?;
+            let original_count = documents.task_authority.tasks.len();
+            // 직접 삭제는 이 operator path로 제한된다. 삭제 후 dangling dependency/blocker reference를 남기면 queue
+            // validation과 rank reason이 없는 task를 가리키게 되므로 commit 전에 graph reference를 함께 정리한다.
+            documents
+                .task_authority
+                .tasks
+                .retain(|task| task.id.trim() != task_id);
+            if documents.task_authority.tasks.len() == original_count {
+                bail!("task `{task_id}` was not found");
+            }
+            remove_task_references(
+                &mut documents.task_authority,
+                &BTreeSet::from([task_id.to_string()]),
+            );
+            self.commit_operator_planning_documents(documents)
+        })?;
         let management = self.load_management_view()?;
         Ok(PlanningAdminCrudOutcome {
             notice: format!("task `{task_id}` deleted"),
@@ -142,17 +164,70 @@ impl PlanningAdminFacadeService {
         })
     }
 
-    fn clear_deleted_task_runtime_projections(&self, task_ids: &BTreeSet<String>) -> Result<()> {
-        if task_ids.is_empty() {
-            return Ok(());
-        }
-        let task_ids = task_ids.iter().cloned().collect::<Vec<_>>();
+    fn with_admin_task_mutation_guard<T>(
+        &self,
+        task_ids: &[String],
+        operation: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let mut random = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut random);
+        let owner_token = random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         self.planning_authority_port
-            .clear_parallel_runtime_projections_for_tasks(
+            .acquire_admin_task_mutation_guard(
                 self.workspace_dir.as_str(),
-                &task_ids,
-                "admin task delete",
-            )
+                task_ids,
+                &owner_token,
+            )?;
+        let outcome = operation();
+        let release = self
+            .planning_authority_port
+            .release_admin_task_mutation_guard(self.workspace_dir.as_str(), task_ids, &owner_token);
+        match (outcome, release) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(release_error)) => Err(release_error.context(
+                "admin mutation committed but its runtime exclusion guard could not be released",
+            )),
+            (Err(error), Err(release_error)) => Err(anyhow!(
+                "admin mutation failed: {error:#}; runtime exclusion guard release also failed: {release_error:#}"
+            )),
+        }
+    }
+
+    fn with_admin_authority_mutation_guard<T>(
+        &self,
+        action: &str,
+        operation: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<T> {
+        let mut random = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut random);
+        let owner_token = random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        self.planning_authority_port
+            .acquire_admin_authority_mutation_guard(
+                self.workspace_dir.as_str(),
+                &owner_token,
+                action,
+            )?;
+        let outcome = operation(&owner_token);
+        let release = self
+            .planning_authority_port
+            .release_admin_authority_mutation_guard(self.workspace_dir.as_str(), &owner_token);
+        match (outcome, release) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(release_error)) => Err(release_error.context(
+                "admin authority mutation committed but its exclusion guard could not be released",
+            )),
+            (Err(error), Err(release_error)) => Err(anyhow!(
+                "admin authority mutation failed: {error:#}; exclusion guard release also failed: {release_error:#}"
+            )),
+        }
     }
 }
 
@@ -424,7 +499,236 @@ mod tests {
     }
 
     #[test]
-    fn task_delete_removes_task_references_and_runtime_projections() {
+    fn admin_task_and_direction_edits_serialize_against_runtime_ownership() {
+        let fixture = TestAdminFixture::new("admin-crud-runtime-edit-guard");
+        let added = fixture
+            .facade
+            .upsert_task(task_request(
+                "",
+                "general-workstream",
+                "Guarded task",
+                "Original",
+                "ready",
+                "50",
+                "0",
+                "original",
+                "",
+                "",
+            ))
+            .expect("inactive task creation should be allowed");
+        let task_id = added
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.title == "Guarded task")
+            .expect("created guarded task should be visible")
+            .id
+            .clone();
+        let task_ids = vec![task_id.clone()];
+
+        fixture
+            .authority_port
+            .acquire_admin_task_mutation_guard(&fixture.workspace.path, &task_ids, "operator-first")
+            .expect("operator-first guard should acquire");
+        let late_projection = fixture
+            .authority_port
+            .upsert_runtime_slot_lease(
+                &fixture.workspace.path,
+                &slot_lease("slot-1", &task_id, ParallelModeSlotLeaseState::Running),
+            )
+            .expect_err("late runtime projection must lose to the admin guard");
+        assert!(late_projection.to_string().contains("admin mutation guard"));
+        fixture
+            .authority_port
+            .release_admin_task_mutation_guard(&fixture.workspace.path, &task_ids, "operator-first")
+            .expect("operator-first guard should release");
+
+        fixture
+            .facade
+            .upsert_direction(direction_request(
+                "dir-runtime-owned",
+                "Runtime-owned direction",
+                "active",
+                "Runtime-owned",
+            ))
+            .expect("runtime-owned direction should be created before the lease");
+        fixture
+            .facade
+            .upsert_task(task_request(
+                &task_id,
+                "dir-runtime-owned",
+                "Guarded task",
+                "Original",
+                "ready",
+                "50",
+                "0",
+                "original",
+                "",
+                "",
+            ))
+            .expect("task should move to the runtime-owned direction before the lease");
+
+        fixture
+            .authority_port
+            .upsert_runtime_slot_lease(
+                &fixture.workspace.path,
+                &slot_lease("slot-1", &task_id, ParallelModeSlotLeaseState::Running),
+            )
+            .expect("runtime-first lease should persist");
+        let task_error = fixture
+            .facade
+            .upsert_task(task_request(
+                &task_id,
+                "dir-runtime-owned",
+                "Changed while running",
+                "Changed",
+                "cancelled",
+                "1",
+                "0",
+                "changed",
+                "",
+                "",
+            ))
+            .expect_err("active task edit must fail closed");
+        assert!(task_error.to_string().contains("slot `slot-1` is running"));
+        let direction_error = fixture
+            .facade
+            .upsert_direction(direction_request(
+                "dir-runtime-owned",
+                "Changed direction while running",
+                "paused",
+                "Changed",
+            ))
+            .expect_err("active child direction edit must fail closed");
+        assert!(
+            direction_error
+                .to_string()
+                .contains("slot slot-1 is running")
+        );
+        let direction_delete_error = fixture
+            .facade
+            .delete_direction(PlanningAdminDirectionDeleteRequest {
+                id: "dir-runtime-owned".to_string(),
+            })
+            .expect_err("active child direction delete must fail closed");
+        assert!(
+            direction_delete_error
+                .to_string()
+                .contains("slot slot-1 is running")
+        );
+
+        fixture
+            .authority_port
+            .remove_runtime_slot_lease(&fixture.workspace.path, "slot-1")
+            .expect("runtime lease should clear");
+        fixture
+            .facade
+            .upsert_task(task_request(
+                &task_id,
+                "dir-runtime-owned",
+                "Changed after cleanup",
+                "Changed",
+                "awaiting_user",
+                "1",
+                "0",
+                "changed",
+                "",
+                "",
+            ))
+            .expect("inactive task edit should be allowed");
+        fixture
+            .facade
+            .upsert_direction(direction_request(
+                "dir-runtime-owned",
+                "Changed direction after cleanup",
+                "active",
+                "Changed",
+            ))
+            .expect("inactive child direction edit should be allowed");
+    }
+
+    #[test]
+    fn admin_task_upsert_and_delete_wait_for_official_refresh_ownership() {
+        let fixture = TestAdminFixture::new("admin-crud-official-refresh-guard");
+        let added = fixture
+            .facade
+            .upsert_task(task_request(
+                "",
+                "general-workstream",
+                "Refresh-owned task",
+                "Original",
+                "ready",
+                "50",
+                "0",
+                "original",
+                "",
+                "",
+            ))
+            .expect("task should exist before official refresh ownership");
+        let task_id = added
+            .management
+            .tasks
+            .iter()
+            .find(|task| task.title == "Refresh-owned task")
+            .expect("created task should be visible")
+            .id
+            .clone();
+        let refresh_order = fixture
+            .authority_port
+            .reserve_next_official_refresh_order(&fixture.workspace.path)
+            .expect("refresh order should reserve");
+        assert_eq!(
+            fixture
+                .authority_port
+                .acquire_official_refresh_claim(
+                    &fixture.workspace.path,
+                    refresh_order,
+                    "official-owner",
+                )
+                .expect("official refresh claim should acquire"),
+            crate::application::port::outbound::planning_authority_port::PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+
+        let update_error = fixture
+            .facade
+            .upsert_task(task_request(
+                &task_id,
+                "general-workstream",
+                "Changed during refresh",
+                "Changed",
+                "ready",
+                "50",
+                "0",
+                "changed",
+                "",
+                "",
+            ))
+            .expect_err("official refresh must block task updates");
+        assert!(update_error.to_string().contains("official-refresh"));
+        let delete_error = fixture
+            .facade
+            .delete_task(PlanningAdminTaskDeleteRequest {
+                id: task_id.clone(),
+            })
+            .expect_err("official refresh must block task deletion");
+        assert!(delete_error.to_string().contains("official-refresh"));
+
+        fixture
+            .authority_port
+            .release_official_refresh_claim(
+                &fixture.workspace.path,
+                refresh_order,
+                "official-owner",
+            )
+            .expect("official refresh claim should release");
+        fixture
+            .facade
+            .delete_task(PlanningAdminTaskDeleteRequest { id: task_id })
+            .expect("task deletion should proceed after refresh release");
+    }
+
+    #[test]
+    fn task_delete_preserves_authority_and_runtime_while_task_is_running() {
         let fixture = TestAdminFixture::new("admin-crud-task-delete");
         let mut documents = fixture
             .facade
@@ -476,20 +780,22 @@ mod tests {
             )
             .expect("runtime queue record should persist");
 
-        let outcome = fixture
+        let error = fixture
             .facade
             .delete_task(PlanningAdminTaskDeleteRequest {
                 id: "deleted-task".to_string(),
             })
-            .expect("task delete should remove task and runtime residue");
-        let kept_task = outcome
-            .management
+            .expect_err("running task delete must be rejected");
+        let management = fixture
+            .facade
+            .load_management_view()
+            .expect("authority should remain readable after rejected delete");
+        let kept_task = management
             .tasks
             .iter()
             .find(|task| task.id == "kept-dependency-task")
             .expect("dependency task should remain");
-        let blocked_task = outcome
-            .management
+        let blocked_task = management
             .tasks
             .iter()
             .find(|task| task.id == "kept-blocked-task")
@@ -499,18 +805,119 @@ mod tests {
             .load_runtime_projections(&fixture.workspace.path)
             .expect("runtime projection should reload after cleanup");
 
-        assert_eq!(outcome.notice, "task `deleted-task` deleted");
         assert!(
-            !outcome
-                .management
+            management
                 .tasks
                 .iter()
                 .any(|task| task.id == "deleted-task")
         );
-        assert_eq!(kept_task.depends_on_text, "");
-        assert_eq!(blocked_task.blocked_by_text, "");
-        assert!(runtime.slot_leases.is_empty());
+        assert_eq!(kept_task.depends_on_text, "deleted-task");
+        assert_eq!(blocked_task.blocked_by_text, "deleted-task");
+        assert!(error.to_string().contains("slot `slot-1` is running"));
+        assert_eq!(runtime.slot_leases.len(), 1);
+        assert_eq!(runtime.distributor_queue_records.len(), 1);
+    }
+
+    #[test]
+    fn task_delete_cleans_terminal_runtime_residue_atomically() {
+        let fixture = TestAdminFixture::new("admin-crud-terminal-task-delete");
+        let mut documents = fixture
+            .facade
+            .load_operator_planning_documents()
+            .expect("seeded documents should load");
+        documents.directions = direction_catalog(vec![direction("general-workstream")]);
+        documents.task_authority = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task(
+                "deleted-task",
+                "general-workstream",
+                Vec::new(),
+                Vec::new(),
+            )],
+        };
+        fixture
+            .facade
+            .commit_operator_planning_documents(documents)
+            .expect("fixture documents should commit");
+        fixture
+            .authority_port
+            .upsert_runtime_distributor_queue_record(
+                &fixture.workspace.path,
+                &queue_record(
+                    "queue-terminal",
+                    "deleted-task",
+                    ParallelModeQueueItemState::Queued,
+                ),
+            )
+            .expect("active queue record should persist");
+        assert!(
+            fixture
+                .authority_port
+                .try_acquire_distributor_queue_claim(
+                    &fixture.workspace.path,
+                    "queue-terminal",
+                    "terminal-owner",
+                )
+                .expect("active queue claim should acquire")
+        );
+        fixture
+            .authority_port
+            .upsert_runtime_distributor_queue_record(
+                &fixture.workspace.path,
+                &queue_record(
+                    "queue-terminal",
+                    "deleted-task",
+                    ParallelModeQueueItemState::Done,
+                ),
+            )
+            .expect("queue record should reach a terminal state");
+
+        let outcome = fixture
+            .facade
+            .delete_task(PlanningAdminTaskDeleteRequest {
+                id: "deleted-task".to_string(),
+            })
+            .expect("terminal-only task should delete");
+        let runtime = fixture
+            .authority_port
+            .load_runtime_projections(&fixture.workspace.path)
+            .expect("runtime projection should reload");
+
+        assert_eq!(outcome.notice, "task `deleted-task` deleted");
+        assert!(outcome.management.tasks.is_empty());
         assert!(runtime.distributor_queue_records.is_empty());
+        assert!(
+            !fixture
+                .authority_port
+                .renew_distributor_queue_claim(
+                    &fixture.workspace.path,
+                    "queue-terminal",
+                    "terminal-owner",
+                )
+                .expect("late claim renewal should fail closed")
+        );
+        assert!(
+            !fixture
+                .authority_port
+                .try_acquire_distributor_queue_claim(
+                    &fixture.workspace.path,
+                    "queue-terminal",
+                    "late-owner",
+                )
+                .expect("late claim acquisition should fail closed")
+        );
+        let replay_error = fixture
+            .authority_port
+            .upsert_runtime_distributor_queue_record(
+                &fixture.workspace.path,
+                &queue_record(
+                    "queue-replayed",
+                    "deleted-task",
+                    ParallelModeQueueItemState::Done,
+                ),
+            )
+            .expect_err("retired task projection replay must fail");
+        assert!(replay_error.to_string().contains("retired planning task"));
     }
 
     #[test]
@@ -803,7 +1210,9 @@ mod tests {
             agent_id: "agent-1".to_string(),
             task_id: task_id.to_string(),
             task_title: format!("Task {task_id}"),
+            delivery_target: None,
             source_branch: "prerelease".to_string(),
+            source_base_commit_sha: "base".to_string(),
             source_commit_sha: "source".to_string(),
             branch_name: format!("akra-agent/slot-1/{task_id}"),
             worktree_path: "/tmp/worktree".to_string(),
@@ -811,6 +1220,8 @@ mod tests {
             original_commit_sha: None,
             planning_refresh_state: "complete".to_string(),
             integration_state: "queued".to_string(),
+            integration_base_commit_sha: None,
+            integration_commit_sha: None,
             conflict_files: Vec::new(),
             recovery_note: None,
             validation_summary: "validation unavailable".to_string(),
@@ -822,6 +1233,8 @@ mod tests {
             integration_note: "queued".to_string(),
             enqueued_at: "2026-05-12T00:00:00+00:00".to_string(),
             updated_at: "2026-05-12T00:00:00+00:00".to_string(),
+            retry_attempts: 0,
+            retry_not_before: None,
         }
     }
 

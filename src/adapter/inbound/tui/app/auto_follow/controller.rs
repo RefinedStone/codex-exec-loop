@@ -18,7 +18,7 @@ use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, ConversationState,
-    DEFAULT_AUTO_FOLLOW_MAX_TURNS, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
+    DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
 };
 
 impl NativeTuiApp {
@@ -44,7 +44,7 @@ impl NativeTuiApp {
                 conversation.auto_follow_state.max_auto_turns_label()
             }
             ConversationState::Loading | ConversationState::Failed(_) => {
-                DEFAULT_AUTO_FOLLOW_MAX_TURNS.to_string()
+                DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string()
             }
         }
     }

@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
-    PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
+    PlanningFileSyncBaselineRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
 };
 
 use super::SqlitePlanningAuthorityAdapter;
@@ -16,6 +16,22 @@ use super::SqlitePlanningAuthorityAdapter;
  * trait method를 그 구현 함수로 연결하는 경계 역할을 한다.
  */
 impl RepoScopedPlanningWorkspacePort for SqlitePlanningAuthorityAdapter {
+    fn store_repo_scoped_file_sync_baseline(
+        &self,
+        workspace_dir: &str,
+        baseline: &PlanningFileSyncBaselineRecord,
+    ) -> Result<()> {
+        Self::store_repo_scoped_file_sync_baseline(workspace_dir, baseline)
+    }
+
+    fn load_repo_scoped_file_sync_baseline(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<PlanningFileSyncBaselineRecord>> {
+        Self::load_repo_scoped_file_sync_baseline(workspace_dir, relative_path)
+    }
+
     // workspace가 `.git`/repo authority를 가진 저장소인지 빠르게 판별해 filesystem adapter의 분기 기준을 제공한다.
     fn is_git_backed_workspace(&self, workspace_dir: &str) -> bool {
         Self::is_git_backed_workspace(workspace_dir)
@@ -86,6 +102,15 @@ impl RepoScopedPlanningWorkspacePort for SqlitePlanningAuthorityAdapter {
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()> {
         Self::commit_active_workspace_files(workspace_dir, record)
+    }
+
+    fn compare_and_swap_active_workspace_files(
+        &self,
+        workspace_dir: &str,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
+        Self::compare_and_swap_active_workspace_files(workspace_dir, observed, replacement)
     }
 
     // active_documents에서 단일 planning 파일 본문을 선택적으로 읽는다.

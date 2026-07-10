@@ -6,6 +6,7 @@ use super::contract_tests::{
 };
 use super::*;
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
+use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
 
 #[test]
 fn inline_main_buffer_ready_shell_matches_snapshot() {
@@ -66,6 +67,128 @@ fn planning_manual_editor_matches_snapshot() {
     assert!(rendered.contains("result-output.md"));
     assert!(!rendered.contains("┌"));
     assert_snapshot!("planning_manual_editor", rendered);
+}
+
+#[test]
+fn approval_overlay_matches_snapshot() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.pending_approval_request = Some(ConversationApprovalRequest {
+        approval_id: "approval-render".to_string(),
+        server_request_id: "server-42".to_string(),
+        method: "item/commandExecution/requestApproval".to_string(),
+        kind: ConversationApprovalRequestKind::CommandExecution,
+        summary: "Command execution requested; values are bounded and normalized for display."
+            .to_string(),
+        details: vec![
+            "Command: cargo test --lib".to_string(),
+            "Working directory: /workspace".to_string(),
+            "Reason: verify approval flow".to_string(),
+        ],
+    });
+    app.shell_overlay = ShellOverlay::Approval;
+
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
+
+    assert!(rendered.contains("Approval Required"));
+    assert!(rendered.contains("Command: cargo test --lib"));
+    assert!(rendered.contains("Working directory: /workspace"));
+    assert!(rendered.contains("Y: approve once"));
+    assert_snapshot!("approval_overlay", rendered);
+
+    let narrow = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
+    assert!(narrow.contains("Y: approve once"));
+    assert!(narrow.contains("N / Esc: decline"));
+    assert!(narrow.contains("prompt: paused while an approval decision"));
+    assert!(
+        narrow.lines().all(|line| {
+            line.strip_prefix('"')
+                .and_then(|line| line.strip_suffix('"'))
+                .unwrap_or(line)
+                .chars()
+                .count()
+                <= 48
+        }),
+        "narrow approval overlay exceeded its viewport:\n{narrow}"
+    );
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    assert!(conversation.mark_approval_decision_submitted(
+        "approval-render",
+        crate::domain::conversation::ConversationApprovalDecision::Accept,
+    ));
+    let awaiting_resolution = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
+    assert!(awaiting_resolution.contains("Decision submitted: accept"));
+    assert!(awaiting_resolution.contains("Decision locked: accept"));
+    assert!(awaiting_resolution.contains("Waiting for runtime resolution"));
+    assert!(!awaiting_resolution.contains("N / Esc: decline"));
+}
+
+#[test]
+fn approval_overlay_scrolls_long_permission_details_without_hiding_decision_keys() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.pending_approval_request = Some(ConversationApprovalRequest {
+        approval_id: "approval-scroll".to_string(),
+        server_request_id: "server-scroll".to_string(),
+        method: "item/permissions/requestApproval".to_string(),
+        kind: ConversationApprovalRequestKind::Permissions,
+        summary: "Additional turn-scoped permissions requested.".to_string(),
+        details: (1..=20)
+            .map(|index| format!("Rule {index:02}: /workspace/path-{index:02}"))
+            .collect(),
+    });
+    conversation.approval_detail_scroll_offset = usize::MAX;
+    app.shell_overlay = ShellOverlay::Approval;
+
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 80, 20);
+
+    assert!(
+        rendered.contains("Requested Details / 14-20 of 20"),
+        "unexpected last approval detail page:\n{rendered}"
+    );
+    assert!(rendered.contains("Rule 14: /workspace/path-14"));
+    assert!(rendered.contains("Rule 20: /workspace/path-20"));
+    assert!(!rendered.contains("Rule 13: /workspace/path-13"));
+    assert!(rendered.contains("Y: approve once"));
+    assert!(rendered.contains("Ctrl-C: decline + stop"));
+}
+
+#[test]
+fn approval_overlay_scrolls_wrapped_command_rows_to_the_exact_suffix() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.pending_approval_request = Some(ConversationApprovalRequest {
+        approval_id: "approval-wrapped".to_string(),
+        server_request_id: "server-wrapped".to_string(),
+        method: "item/commandExecution/requestApproval".to_string(),
+        kind: ConversationApprovalRequestKind::CommandExecution,
+        summary: "Review the exact bounded command.".to_string(),
+        details: vec![
+            format!("Command: {}", "safe-prefix ".repeat(30)),
+            "Exact suffix: rm -rf protected-output".to_string(),
+        ],
+    });
+    conversation.approval_detail_scroll_offset = usize::MAX;
+    app.shell_overlay = ShellOverlay::Approval;
+
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 48, 20);
+
+    assert!(rendered.contains("Exact suffix: rm -rf"), "{rendered}");
+    assert!(rendered.contains("protected-output"), "{rendered}");
+    assert!(rendered.contains("Y: approve once"));
+    assert!(rendered.contains("Ctrl-C: decline + stop"));
 }
 
 #[test]

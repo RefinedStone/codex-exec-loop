@@ -9,16 +9,8 @@ lease 파일은 planning authority의 runtime lease record를 사람이 확인�
 `PlanningAuthorityPort`이지만, `.leases/<slot>.json` 미러는 worktree pool을 파일시스템에서
 점검할 때 중요한 단서가 된다.
 */
-// pool root에서 lease mirror 디렉터리를 계산하는 작은 path helper이다. 모든 write/remove가
-// 이 함수를 지나가게 해 `.leases` namespace가 코드 여러 곳에 흩어지지 않게 한다.
-fn slot_leases_root(pool_root: &Path) -> PathBuf {
-    /*
-    `.leases`는 pool root 아래의 lease mirror namespace이다. 실제 slot worktree
-    내부에 lease 파일을 두지 않는 이유는 cleanup 과정에서 worktree가 reset/clean되어도 운영
-    metadata는 살아 있어야 하기 때문이다. pool root 기준으로 모아 두면 reconciliation과
-    수동 점검이 slot 디렉터리와 lease 파일을 나란히 확인할 수 있다.
-    */
-    pool_root.join(".leases")
+fn slot_lease_relative_path(slot_id: &str) -> PathBuf {
+    PathBuf::from(".leases").join(format!("{slot_id}.json"))
 }
 
 // 특정 slot lease mirror 파일의 최종 경로를 계산한다. pool inspector와 테스트가 같은 helper를
@@ -36,32 +28,32 @@ pub(in crate::application::service::parallel_mode) fn slot_lease_file_path(
     pool이 생성한 안전한 값이라 별도 sanitization이 필요 없고, 테스트와 운영자가 특정 slot의
     lease JSON을 예측 가능한 경로에서 찾을 수 있다.
     */
-    slot_leases_root(pool_root).join(format!("{slot_id}.json"))
+    pool_root.join(slot_lease_relative_path(slot_id))
 }
 
 /*
 slot lease 저장은 두 저장소를 함께 갱신한다. 먼저 planning authority에
 upsert해 application이 읽는 runtime projection을 갱신하고, 그 다음 pool root의 JSON 파일을
-temp file + rename 방식으로 기록한다. rename을 쓰는 이유는 중간에 프로세스가 죽어도
-부분적으로 쓰인 lease 파일을 최종 파일명으로 남기지 않기 위해서이다.
+FD-anchored private atomic mirror capability로 기록한다. application은 임시 파일명을 만들지
+않으며 adapter가 무작위 exclusive temp와 최종 경로 identity를 함께 검증한다.
 
 이 함수가 실패를 `String`으로 자세히 반환하는 이유는 슬롯 획득/상태 전이 중 어디서
 원장 갱신이 막혔는지 TUI notice와 테스트에서 바로 드러내기 위해서이다.
 */
-// slot lease 상태 전이를 영속화한다. dispatcher/supervisor가 읽는 authority projection을
-// 먼저 갱신하고, 그 다음 사람이 확인 가능한 `.leases` mirror를 atomic-ish 방식으로 갱신한다.
+// 새 slot generation의 최초 lease를 영속화한다. 기존 generation의 lifecycle state 변경은
+// `transition_slot_lease`가 양쪽 store에 exact previous-snapshot CAS를 적용한다.
 pub(in crate::application::service::parallel_mode) fn write_slot_lease(
     // planning_authority는 runtime projection의 source of truth이다. SQLite adapter든
     // 테스트 fake든 같은 port를 통해 lease row를 갱신한다.
     planning_authority: &dyn PlanningAuthorityPort,
     // runtime은 pool-local mirror 파일 I/O의 outbound boundary이다. authority write 순서는
-    // application이 결정하지만, 실제 directory/write/rename 호출은 이 port 뒤에서 수행한다.
+    // application이 결정하지만, 실제 private atomic install은 이 port 뒤에서 수행한다.
     runtime: &dyn ParallelModeRuntimePort,
     // workspace_dir은 authority row scope이다. 같은 pool이라도 workspace별 runtime projection이
     // 다를 수 있으므로 lease upsert/remove에는 항상 workspace를 같이 넘긴다.
     workspace_dir: &str,
     // pool_root는 mirror 파일의 filesystem scope이다. authority write와 달리 이 값은
-    // `.leases` directory와 temp file 경로를 만드는 데만 쓴다.
+    // `.leases` 아래의 final relative path를 고정하는 데만 쓴다.
     pool_root: &Path,
     // lease는 저장할 완성 snapshot이다. caller가 Leased/Running/CleanupPending 같은
     // 상태 전이를 이미 결정하고, 이 함수는 그 결정을 두 저장소에 반영한다.
@@ -85,84 +77,257 @@ pub(in crate::application::service::parallel_mode) fn write_slot_lease(
     중요한 관찰 지점이기 때문이다. caller가 오류를 받으면 slot lease 전이를 실패로 보고
     사용자에게 명확한 원인을 표시할 수 있다.
     */
-    // mirror directory는 authority write 이후에 만든다. directory 생성 실패는 authority에는
-    // 이미 반영된 상태라 caller에게 오류를 돌려 cleanup/retry가 가능하게 한다.
-    let leases_root = slot_leases_root(pool_root);
-    runtime
-        .ensure_directory_exists(&leases_root)
-        .map_err(|error| format!("failed to create lease directory: {error}"))?;
-    // 최종 파일과 임시 파일 경로를 분리한다. 같은 slot의 lease를 덮어쓸 때도 기존 JSON은
-    // rename 직전까지 유지된다.
-    let lease_path = slot_lease_file_path(pool_root, &lease.slot_id);
-    let temp_path = lease_path.with_extension("tmp");
     // pretty JSON을 쓰는 이유는 mirror가 프로그램뿐 아니라 사람의 복구/점검 입력이기도 하기 때문이다.
     let lease_body = serde_json::to_string_pretty(lease)
         .map_err(|error| format!("failed to serialize slot lease: {error}"))?;
     /*
-    temp path 확장자는 최종 `.json`과 구분되는 `.tmp`이다. 같은 slot lease를 덮어쓸
-    때도 먼저 temp에 완성된 JSON을 쓰고 rename하므로, reader가 중간에 파일을 열어도 깨진
-    최종 JSON을 볼 가능성을 줄인다. 이 패턴은 distributor queue와 session detail mirror에도
-    반복되는 pool-local persistence 규칙이다.
+    application은 pool root와 normalized relative final path만 넘긴다. adapter가 pinned
+    directory descriptor 아래에서 private random temp를 만들고 fsync 후 원자 교체하므로,
+    예측 가능한 temp alias나 metadata-directory symlink를 따라가지 않는다.
     */
-    // temp write 실패에는 slot id를 붙인다. pool에는 여러 slot이 동시에 존재하므로
+    // write 실패에는 slot id를 붙인다. pool에는 여러 slot이 동시에 존재하므로
     // path보다 운영자가 알아보는 slot id가 오류 triage에 바로 필요하다.
     runtime
-        .write_string(&temp_path, &lease_body)
-        .map_err(|error| {
-            format!(
-                "failed to write temporary slot lease `{}`: {error}",
-                lease.slot_id
-            )
-        })?;
-    // rename이 성공하는 순간 mirror의 최종 파일이 새 snapshot으로 교체된다. 이 단계가
-    // 실패하면 authority는 이미 갱신됐지만 파일 관찰 상태가 낡을 수 있어 오류를 반환한다.
-    runtime
-        .rename(&temp_path, &lease_path)
+        .write_runtime_mirror_atomic(
+            pool_root,
+            &slot_lease_relative_path(&lease.slot_id),
+            &lease_body,
+        )
         .map_err(|error| format!("failed to persist slot lease `{}`: {error}", lease.slot_id))
 }
 
-/*
-slot lease 제거는 cleanup의 마지막 원장 정리 단계이다. planning authority에서
-runtime lease를 먼저 지우고, 성공한 경우에만 파일 미러를 지운다. 권위 저장소 삭제가
-실패했는데 파일만 지우면 application projection과 파일시스템 단서가 엇갈리므로 false를
-반환해 호출자가 cleanup 실패로 취급하게 한다.
-*/
-// slot lease를 authority projection과 filesystem mirror 양쪽에서 제거한다. cleanup 성공 후
-// slot이 idle로 다시 보이려면 권위 저장소 삭제가 먼저 성공해야 한다.
-pub(in crate::application::service::parallel_mode) fn remove_slot_lease(
-    // lease row 삭제의 source of truth이다. 삭제 실패는 slot이 아직 runtime projection에서
-    // active로 보일 수 있음을 뜻하므로 false로 반환한다.
+pub(in crate::application::service::parallel_mode) fn transition_slot_lease(
     planning_authority: &dyn PlanningAuthorityPort,
-    // runtime은 mirror file deletion의 outbound boundary이다. authority delete는 먼저 수행하고,
-    // mirror deletion은 idempotent cleanup으로 처리한다.
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    previous: &ParallelModeSlotLeaseSnapshot,
+    next: &ParallelModeSlotLeaseSnapshot,
+) -> Result<(), String> {
+    if !previous.same_generation_as(next) {
+        return Err(format!(
+            "slot lease `{}` lifecycle transition changed immutable generation identity",
+            previous.slot_id
+        ));
+    }
+    let next_body = serde_json::to_string_pretty(next)
+        .map_err(|error| format!("failed to serialize next slot lease: {error}"))?;
+    let relative = slot_lease_relative_path(&next.slot_id);
+    let observed_mirror = runtime
+        .read_runtime_mirror_optional(pool_root, &relative)
+        .map_err(|error| {
+            format!(
+                "failed to inspect slot lease transition mirror `{}`: {error}",
+                next.slot_id
+            )
+        })?;
+    if let Some(body) = observed_mirror.as_deref() {
+        let observed =
+            serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(body).map_err(|_| {
+                format!(
+                    "slot lease transition mirror `{}` is malformed",
+                    next.slot_id
+                )
+            })?;
+        if !observed.same_generation_as(previous) {
+            return Err(format!(
+                "slot lease transition mirror `{}` belongs to a different generation",
+                next.slot_id
+            ));
+        }
+    }
+
+    let authority_transitioned = match planning_authority.replace_runtime_slot_lease_if_matches(
+        workspace_dir,
+        previous,
+        next,
+    ) {
+        Ok(transitioned) => transitioned,
+        Err(error) => {
+            let restored = planning_authority
+                .replace_runtime_slot_lease_if_matches(workspace_dir, next, previous)
+                .unwrap_or(false);
+            return Err(format!(
+                "failed to transition slot lease `{}` in authority: {error}; ambiguous write rollback: {}",
+                next.slot_id,
+                if restored {
+                    "exact previous snapshot restored"
+                } else {
+                    "no matching transition snapshot was replaced"
+                }
+            ));
+        }
+    };
+    if !authority_transitioned {
+        return Err(format!(
+            "slot lease `{}` changed before the lifecycle transition",
+            next.slot_id
+        ));
+    }
+
+    let mirror_failure = match runtime.compare_and_swap_runtime_mirror_file(
+        pool_root,
+        &relative,
+        observed_mirror.as_deref(),
+        Some(&next_body),
+    ) {
+        Ok(true) => return Ok(()),
+        Ok(false) => "mirror changed after its exact snapshot was inspected".to_string(),
+        Err(error) => error.to_string(),
+    };
+
+    let mirror_restored = runtime
+        .compare_and_swap_runtime_mirror_file(
+            pool_root,
+            &relative,
+            Some(&next_body),
+            observed_mirror.as_deref(),
+        )
+        .unwrap_or(false)
+        || runtime
+            .read_runtime_mirror_optional(pool_root, &relative)
+            .is_ok_and(|body| body.as_deref() == observed_mirror.as_deref());
+    let authority_restored = planning_authority
+        .replace_runtime_slot_lease_if_matches(workspace_dir, next, previous)
+        .unwrap_or(false);
+    let rollback = match (authority_restored, mirror_restored) {
+        (true, true) => "exact previous snapshot restored in authority and mirror",
+        (true, false) => "authority restored; mirror was replaced or could not be restored",
+        (false, true) => "mirror restored; authority was replaced or could not be restored",
+        (false, false) => {
+            "replacement state preserved; neither store matched the failed transition"
+        }
+    };
+    Err(format!(
+        "failed to persist slot lease transition `{}`: {mirror_failure}; rollback: {rollback}",
+        next.slot_id
+    ))
+}
+
+/*
+slot lease 제거는 cleanup의 마지막 원장 정리 단계이다. mirror와 authority 모두 cleanup이
+검증한 exact snapshot과 일치할 때만 삭제한다. mirror CAS를 먼저 실행해야 authority 삭제 뒤
+교체된 mirror를 발견하는 부분 성공을 피할 수 있고, authority CAS는 늦게 들어온 새 세대를
+절대로 지우지 않는다.
+*/
+// exact lease generation을 authority projection과 filesystem mirror 양쪽에서 제거한다.
+pub(in crate::application::service::parallel_mode) fn remove_slot_lease(
+    // lease row 삭제의 source of truth이다. exact compare-and-delete 실패는 replacement가
+    // 존재할 수 있음을 뜻하므로 false로 반환한다.
+    planning_authority: &dyn PlanningAuthorityPort,
+    // runtime은 mirror file compare-and-delete의 outbound boundary이다.
     runtime: &dyn ParallelModeRuntimePort,
     // workspace_dir은 삭제할 authority projection scope이다.
     workspace_dir: &str,
     // pool_root는 삭제할 mirror file scope이다.
     pool_root: &Path,
-    // slot_id는 authority key와 mirror filename을 동시에 식별한다.
-    slot_id: &str,
+    // expected는 cleanup이 처음 검증한 exact lease generation이다.
+    expected: &ParallelModeSlotLeaseSnapshot,
 ) -> bool {
     /*
-    remove는 cleanup_slot의 마지막 상태 정리 단계에서 호출된다. agent branch가
-    baseline에 통합되고 slot worktree가 detached baseline으로 돌아간 뒤에 lease를 지워야 slot이
-    다시 idle로 보인다. 따라서 authority delete 실패는 단순 mirror 정리 실패가 아니라
-    "pool이 아직 이 slot을 leased로 볼 수 있음"이라는 의미라 false로 보고한다.
+    remove는 agent branch가 통합되고 slot worktree가 detached baseline으로 돌아간 뒤 호출된다.
+    두 저장소 중 어느 하나라도 expected generation과 다르면 replacement ownership을 보존하고
+    false를 반환한다.
     */
-    if planning_authority
-        .remove_runtime_slot_lease(workspace_dir, slot_id)
-        .is_err()
+    let Ok(expected_body) = serde_json::to_string_pretty(expected) else {
+        return false;
+    };
+    // missing mirror는 idempotent success이지만, 다른 body는 replacement이므로 삭제를 거부한다.
+    if !runtime
+        .remove_runtime_mirror_file_if_matches(
+            pool_root,
+            &slot_lease_relative_path(&expected.slot_id),
+            &expected_body,
+        )
+        .unwrap_or(false)
     {
         return false;
     }
-    /*
-    authority에서 lease가 제거된 뒤에는 mirror 파일 삭제를 시도한다. 파일이 이미
-    없다면 이전 recovery나 수동 정리로 mirror가 사라진 상태일 수 있으므로 성공으로 취급한다.
-    반대로 파일이 있고 삭제가 실패하면 pool root의 관찰 가능한 상태가 남아 있으므로 false를
-    반환해 cleanup caller가 재시도/복구 대상으로 남길 수 있게 한다.
-    */
-    // mirror가 이미 없으면 성공으로 본다. authority가 지워진 뒤의 mirror deletion은
-    // idempotent cleanup 성격이라, missing file을 오류로 만들면 수동 복구 후 cleanup 재시도가 불필요하게 실패한다.
-    let lease_path = slot_lease_file_path(pool_root, slot_id);
-    !runtime.path_exists(&lease_path) || runtime.remove_file(&lease_path).is_ok()
+    planning_authority
+        .remove_runtime_slot_lease_if_matches(workspace_dir, expected)
+        .unwrap_or(false)
+}
+
+pub(in crate::application::service::parallel_mode) fn rollback_slot_lease_write_failure(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    expected: &ParallelModeSlotLeaseSnapshot,
+) -> bool {
+    let authority_removed = planning_authority
+        .remove_runtime_slot_lease_if_matches(workspace_dir, expected)
+        .unwrap_or(false);
+    let mirror_removed = serde_json::to_string_pretty(expected).is_ok_and(|expected_body| {
+        runtime
+            .remove_runtime_mirror_file_if_matches(
+                pool_root,
+                &slot_lease_relative_path(&expected.slot_id),
+                &expected_body,
+            )
+            .unwrap_or(false)
+    });
+    authority_removed && mirror_removed
+}
+
+pub(in crate::application::service::parallel_mode) fn slot_lease_mirror_matches_or_missing(
+    runtime: &dyn ParallelModeRuntimePort,
+    pool_root: &Path,
+    expected: &ParallelModeSlotLeaseSnapshot,
+) -> bool {
+    let Ok(expected_body) = serde_json::to_string_pretty(expected) else {
+        return false;
+    };
+    runtime
+        .read_runtime_mirror_optional(pool_root, &slot_lease_relative_path(&expected.slot_id))
+        .is_ok_and(|body| body.as_deref().is_none_or(|body| body == expected_body))
+}
+
+pub(in crate::application::service::parallel_mode) fn orphaned_slot_lease_mirror_matches_identity_or_missing(
+    runtime: &dyn ParallelModeRuntimePort,
+    pool_root: &Path,
+    slot_id: &str,
+    branch_name: &str,
+    worktree_path: &Path,
+) -> bool {
+    let Ok(body) =
+        runtime.read_runtime_mirror_optional(pool_root, &slot_lease_relative_path(slot_id))
+    else {
+        return false;
+    };
+    body.is_none_or(|body| {
+        serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&body).is_ok_and(|lease| {
+            lease.slot_id == slot_id
+                && lease.branch_name == branch_name
+                && lease.worktree_path == worktree_path.display().to_string()
+        })
+    })
+}
+
+pub(in crate::application::service::parallel_mode) fn remove_orphaned_slot_lease_mirror_if_matches(
+    runtime: &dyn ParallelModeRuntimePort,
+    pool_root: &Path,
+    slot_id: &str,
+    branch_name: &str,
+    worktree_path: &Path,
+) -> bool {
+    let relative = slot_lease_relative_path(slot_id);
+    let Ok(body) = runtime.read_runtime_mirror_optional(pool_root, &relative) else {
+        return false;
+    };
+    let Some(body) = body else {
+        return true;
+    };
+    let Ok(lease) = serde_json::from_str::<ParallelModeSlotLeaseSnapshot>(&body) else {
+        return false;
+    };
+    if lease.slot_id != slot_id
+        || lease.branch_name != branch_name
+        || lease.worktree_path != worktree_path.display().to_string()
+    {
+        return false;
+    }
+    runtime
+        .remove_runtime_mirror_file_if_matches(pool_root, &relative, &body)
+        .unwrap_or(false)
 }

@@ -69,6 +69,14 @@
   .system-chip {
     flex: 1 1 150px;
     text-align: center;
+    border-color: rgba(152, 171, 196, 0.34);
+    color: var(--game-muted);
+    background: rgba(152, 171, 196, 0.08);
+  }
+  .system-chip.is-snapshot {
+    border-color: rgba(93, 169, 255, 0.42);
+    color: #5da9ff;
+    background: rgba(93, 169, 255, 0.08);
   }
   .radar {
     position: relative;
@@ -117,10 +125,10 @@
       <div class="metric-line"><small>blocked slot</small><strong>{{ dashboard.metrics.blocked_slot_count }}</strong></div>
       <div class="metric-line"><small>지표 출처</small><strong>{{ dashboard.metrics.source_label }}</strong><small>{{ dashboard.metrics.mock_metric_note }}</small></div>
       <div class="system-grid">
-        <span class="system-chip">Git 상태 정상</span>
-        <span class="system-chip">GitHub 연동 정상</span>
-        <span class="system-chip">Worktree 풀 {{ dashboard.workspace.readiness }}</span>
-        <span class="system-chip">저장소 {{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</span>
+        <span class="system-chip">Git 상태 미집계</span>
+        <span class="system-chip">GitHub 연동 미집계</span>
+        <span class="system-chip is-snapshot">Worktree 풀 {{ dashboard.workspace.readiness }}</span>
+        <span class="system-chip is-snapshot">저장소 {{ dashboard.workspace.branch.as_deref().unwrap_or("-") }}</span>
       </div>
     </section>
   </div>

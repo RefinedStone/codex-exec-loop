@@ -39,7 +39,7 @@ impl ManualPromptIntakeService {
         }
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn prepare_manual_turn(
         &self,
         request: ManualPromptIntakeRequest,
@@ -400,7 +400,14 @@ mod tests {
         assert!(joined.contains("manual_intake_started"));
         assert!(joined.contains("manual_intake_committed"));
         assert!(joined.contains("manual_intake_failed"));
-        assert!(joined.contains("manual intake prepare failed"));
+        let failed_line = capture
+            .lines()
+            .into_iter()
+            .find(|line| line.contains("manual_intake_failed"))
+            .expect("failed manual intake event should be captured");
+        assert!(failed_line.contains(r#"\"reason\":{\"chars\":"#));
+        assert!(failed_line.contains(r#"\"redacted\":true"#));
+        assert!(!failed_line.contains("manual intake prepare failed"));
         let mut sink = capture.make_writer();
         std::io::Write::flush(&mut sink).expect("capture sink should flush");
     }
@@ -430,6 +437,7 @@ mod tests {
                 PlanningDirectionAuthorityCommit {
                     observed_planning_revision: None,
                     directions: &direction_snapshot.directions,
+                    authority_mutation_owner_token: None,
                 },
             )
             .expect("direction authority commit should delegate");

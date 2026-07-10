@@ -68,8 +68,10 @@ impl StartupDiagnostics {
             .unwrap_or_else(|| "schema-id-missing".to_string());
         let version = Self::bundled_schema_snapshot_string_field("version")
             .unwrap_or_else(|| "version-missing".to_string());
+        let source_cli = Self::bundled_schema_snapshot_string_field("x-source-cli-version")
+            .unwrap_or_else(|| "source-cli-missing".to_string());
         format!(
-            "embedded {BUNDLED_SCHEMA_SNAPSHOT_PATH} ({version}; {schema_id}; sha256:{}; {} bytes)",
+            "embedded {BUNDLED_SCHEMA_SNAPSHOT_PATH} ({version}; {source_cli}; {schema_id}; sha256:{}; {} bytes)",
             &checksum[..12],
             BUNDLED_SCHEMA_SNAPSHOT_CONTENTS.len()
         )
@@ -119,6 +121,7 @@ mod tests {
         assert!(label.contains(BUNDLED_SCHEMA_SNAPSHOT_PATH));
         assert!(label.contains("urn:codex-exec-loop-native:app-server-protocol:v2:snapshot"));
         assert!(label.contains("v2"));
+        assert!(label.contains("codex-cli 0.144.0"));
         assert!(label.contains("sha256:"));
     }
 
@@ -134,7 +137,12 @@ mod tests {
         );
         assert_eq!(
             StartupDiagnostics::bundled_schema_snapshot_string_field("x-generated-from").as_deref(),
-            Some("codex app-server protocol snapshot")
+            Some("codex app-server generate-json-schema --experimental")
+        );
+        assert_eq!(
+            StartupDiagnostics::bundled_schema_snapshot_string_field("x-source-cli-version")
+                .as_deref(),
+            Some("codex-cli 0.144.0")
         );
         assert!(StartupDiagnostics::bundled_schema_snapshot_string_field("description").is_some());
         assert_eq!(

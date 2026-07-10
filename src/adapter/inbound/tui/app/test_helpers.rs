@@ -1,3 +1,4 @@
+use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -8,6 +9,8 @@ use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+    GithubRepositoryVisibility, credential_redacted_canonical_github_push_url,
+    parse_github_repository_identity,
 };
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::parallel_agent_worker_port::{
@@ -21,7 +24,6 @@ use crate::application::port::outbound::session_catalog_port::SessionCatalogPort
 use crate::application::port::outbound::startup_probe_port::{
     AppServerStartupContext, StartupProbePort,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
@@ -155,6 +157,40 @@ pub(crate) fn test_planning_services(
 #[derive(Debug, Default)]
 struct TestGithubAutomationPort;
 
+fn run_test_git(repo_root: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(["-C", repo_root])
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "test git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn test_push_url(repo_root: &str, push_remote: &str) -> Result<String> {
+    let configured_url = run_test_git(repo_root, &["remote", "get-url", "--push", push_remote])?;
+    Ok(credential_redacted_canonical_github_push_url(&configured_url).unwrap_or(configured_url))
+}
+
+fn require_test_delivery_target(
+    repo_root: &str,
+    push_remote: &str,
+    credential_redacted_push_url: &str,
+) -> Result<()> {
+    let configured_url = test_push_url(repo_root, push_remote)?;
+    anyhow::ensure!(
+        configured_url == credential_redacted_push_url,
+        "test frozen push URL does not match the configured push remote"
+    );
+    Ok(())
+}
+
 impl GithubAutomationPort for TestGithubAutomationPort {
     /*
      * Parallel-mode tests often care about pool/distributor behavior, not host GitHub tooling.
@@ -181,6 +217,120 @@ impl GithubAutomationPort for TestGithubAutomationPort {
                 "test gh auth ready",
                 None,
             ),
+        )
+    }
+
+    fn repository_identity(&self, _repo_root: &str) -> Result<String> {
+        Ok("RefinedStone/codex-exec-loop".to_string())
+    }
+
+    fn repository_visibility(&self, _repo_root: &str) -> Result<GithubRepositoryVisibility> {
+        Ok(GithubRepositoryVisibility::Private)
+    }
+
+    fn credential_redacted_push_url_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+    ) -> Result<String> {
+        test_push_url(repo_root, push_remote)
+    }
+
+    fn repository_identity_for_push_url(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+    ) -> Result<String> {
+        require_test_delivery_target(repo_root, push_remote, credential_redacted_push_url)?;
+        Ok(
+            parse_github_repository_identity(credential_redacted_push_url)
+                .unwrap_or_else(|| "RefinedStone/codex-exec-loop".to_string()),
+        )
+    }
+
+    fn repository_visibility_for_push_url(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+    ) -> Result<GithubRepositoryVisibility> {
+        require_test_delivery_target(repo_root, push_remote, credential_redacted_push_url)?;
+        Ok(GithubRepositoryVisibility::Private)
+    }
+
+    fn remote_branch_head(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        branch_name: &str,
+    ) -> Result<Option<String>> {
+        let push_url = test_push_url(repo_root, push_remote)?;
+        self.remote_branch_head_for_delivery_target(repo_root, push_remote, &push_url, branch_name)
+    }
+
+    fn remote_branch_head_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+    ) -> Result<Option<String>> {
+        require_test_delivery_target(repo_root, push_remote, credential_redacted_push_url)?;
+        let branch_ref = format!("refs/heads/{branch_name}");
+        let output = Command::new("git")
+            .args(["-C", repo_root, "ls-remote", "--heads"])
+            .arg(credential_redacted_push_url)
+            .arg(&branch_ref)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "test remote head inspection failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut heads = stdout.lines().filter_map(|line| {
+            let (oid, remote_ref) = line.split_once(char::is_whitespace)?;
+            (remote_ref.trim() == branch_ref).then(|| oid.trim().to_string())
+        });
+        let head = heads.next();
+        anyhow::ensure!(
+            heads.next().is_none(),
+            "test remote returned duplicate branch heads"
+        );
+        Ok(head)
+    }
+
+    fn fetch_branch_to_tracking_ref_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+        tracking_ref: &str,
+    ) -> Result<String> {
+        require_test_delivery_target(repo_root, push_remote, credential_redacted_push_url)?;
+        let expected_tracking_ref = format!("refs/remotes/{push_remote}/{branch_name}");
+        anyhow::ensure!(
+            tracking_ref == expected_tracking_ref,
+            "test fetch target does not match the requested remote branch"
+        );
+        let refspec = format!("+refs/heads/{branch_name}:{tracking_ref}");
+        run_test_git(
+            repo_root,
+            &[
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                credential_redacted_push_url,
+                &refspec,
+            ],
+        )?;
+        run_test_git(
+            repo_root,
+            &["rev-parse", &format!("{tracking_ref}^{{commit}}")],
         )
     }
 
@@ -236,7 +386,12 @@ impl GithubAutomationPort for TestGithubAutomationPort {
         ))
     }
 
-    fn push_integration_branch(&self, _repo_root: &str, _branch_name: &str) -> Result<()> {
+    fn push_integration_branch(
+        &self,
+        _repo_root: &str,
+        _branch_name: &str,
+        _expected_old_commit_sha: &str,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -330,12 +485,20 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
         Ok(())
     }
 
+    fn resolve_approval_request(
+        &self,
+        _approval_id: &str,
+        _decision: crate::domain::conversation::ConversationApprovalDecision,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn run_new_thread_stream(
         &self,
         _cwd: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         Ok(())
     }
@@ -345,7 +508,7 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
         _thread_id: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         Ok(())
     }
@@ -424,7 +587,8 @@ mod tests {
         app_server_port
             .request_stop_all_sessions()
             .expect("stop fixture should succeed");
-        let (event_sender, _event_receiver) = std::sync::mpsc::channel();
+        let (event_sender, _event_receiver) =
+            crate::application::service::conversation_runtime_event::conversation_stream_channel();
         app_server_port
             .run_new_thread_stream(
                 "/tmp/root",

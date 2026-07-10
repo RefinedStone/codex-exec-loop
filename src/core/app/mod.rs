@@ -9,6 +9,7 @@ pub mod conversation;
 pub mod effect;
 pub mod event;
 pub mod projection;
+pub mod request;
 pub mod session;
 pub mod snapshot;
 pub mod startup;
@@ -18,10 +19,14 @@ pub mod turn_submission;
 
 pub use command::AppCommand;
 pub use controller::{CoreController, CoreDispatchOutcome};
-pub use conversation::{ConversationReadySnapshot, ConversationSnapshot, ConversationState};
+pub use conversation::{
+    ConversationReadySnapshot, ConversationSnapshot, ConversationState,
+    ConversationThreadReviewSnapshot,
+};
 pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
+pub use request::{ConversationLoadCorrelation, StartupCheckCorrelation};
 pub use session::{SessionCatalogReadySnapshot, SessionCatalogSnapshot, SessionCatalogState};
 pub use snapshot::AppSnapshot;
 pub use startup::{

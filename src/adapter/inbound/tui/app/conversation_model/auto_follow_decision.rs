@@ -73,8 +73,18 @@ impl AutoFollowSkipReason {
     ) -> String {
         // 모든 variant를 직접 매핑해 새 guardrail이 생길 때 operator copy 추가를 강제한다.
         match self {
+            Self::PostTurnContinuationPaused
+                if !auto_follow_state.post_turn_continuation_paused() =>
+            {
+                "auto-follow was re-armed after this post-turn evaluation began; the new budget applies to the next completed turn"
+                    .to_string()
+            }
             Self::PostTurnContinuationPaused => {
-                "post-turn continuation is paused for this internal runtime cycle".to_string()
+                "auto-follow was stopped by the operator and remains disarmed until :turns is set again"
+                    .to_string()
+            }
+            Self::LimitReached if !auto_follow_state.is_enabled() => {
+                "auto-follow is disabled; use :turns <positive|infinite> to opt in".to_string()
             }
             Self::LimitReached => format!(
                 "reached the configured auto-turn budget ({})",
@@ -127,9 +137,17 @@ impl AutoFollowSkipReason {
      * Detail보다 덜 설명적이지만 paused/stopped/skipped prefix를 유지해 operator가
      * 자동 follow-up 상태를 빠르게 분류할 수 있게 한다.
      */
-    pub(crate) fn activity_summary(self) -> &'static str {
+    pub(crate) fn activity_summary(self, auto_follow_state: &AutoFollowState) -> &'static str {
         match self {
-            Self::PostTurnContinuationPaused => "paused: internal continuation",
+            Self::PostTurnContinuationPaused
+                if !auto_follow_state.post_turn_continuation_paused() =>
+            {
+                "ready: auto-follow re-armed"
+            }
+            Self::PostTurnContinuationPaused => "stopped: auto-follow disarmed",
+            Self::LimitReached if !auto_follow_state.is_enabled() => {
+                "disabled: explicit opt-in required"
+            }
             Self::LimitReached => "stopped: turn limit reached",
             Self::NoAgentReply => "skipped: no agent reply",
             Self::StopKeywordMatched => "stopped: stop keyword matched",
@@ -151,8 +169,19 @@ impl AutoFollowSkipReason {
      */
     pub(crate) fn runtime_status(self, auto_follow_state: &AutoFollowState) -> String {
         match self {
+            Self::PostTurnContinuationPaused
+                if !auto_follow_state.post_turn_continuation_paused() =>
+            {
+                "turn completed / auto-follow re-armed; the new budget applies after the next completed turn"
+                    .to_string()
+            }
             Self::PostTurnContinuationPaused => {
-                "turn completed / internal continuation paused".to_string()
+                "turn completed / auto-follow stopped and disarmed; use :turns to re-enable"
+                    .to_string()
+            }
+            Self::LimitReached if !auto_follow_state.is_enabled() => {
+                "turn completed / auto-follow disabled; use :turns <positive|infinite> to enable"
+                    .to_string()
             }
             Self::LimitReached => format!(
                 "turn completed / auto-follow stopped: turn limit reached ({})",
@@ -217,7 +246,7 @@ mod tests {
                 .contains("post-turn planning worker timed out")
         );
         assert_eq!(
-            reason.activity_summary(),
+            reason.activity_summary(&state),
             "paused: post-turn planning worker timeout"
         );
     }

@@ -45,8 +45,8 @@ use super::worker::orchestration::{
 };
 use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
-    PlanningOfficialCompletionRefreshContract, PriorityQueueTask, QueueIdlePolicy,
-    TurnSnapshotCapture as DomainTurnSnapshotCapture,
+    PlanningOfficialCompletionRefreshContract, PostTurnContinuationPermit, PriorityQueueTask,
+    QueueIdlePolicy, TurnSnapshotCapture as DomainTurnSnapshotCapture,
     TurnSnapshotCaptureState as DomainTurnSnapshotCaptureState,
 };
 
@@ -411,6 +411,7 @@ pub struct PlanningPostTurnRepairRequest<'a> {
     pub repair_request: &'a PlanningRepairRequest,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
     pub max_attempts: usize,
+    pub continuation_permit: &'a PostTurnContinuationPermit,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnRepairOutcome {
@@ -1036,6 +1037,17 @@ impl PlanningWorkerUseCases {
         self.worker_orchestration
             .refresh_queue_from_reply(prepared.as_refresh_request())
     }
+    pub fn refresh_prepared_queue_from_reply_with_permit(
+        &self,
+        prepared: &PlanningPreparedQueueRefresh,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> anyhow::Result<PlanningWorkerRunOutcome> {
+        self.worker_orchestration
+            .refresh_queue_from_reply_with_permit(
+                prepared.as_refresh_request(),
+                continuation_permit,
+            )
+    }
     pub fn finalize_post_turn_queue_refresh(
         &self,
         request: PlanningPostTurnQueueRefreshFinalizationRequest<'_>,
@@ -1104,6 +1116,14 @@ impl PlanningWorkerUseCases {
             runtime_projection,
             events,
         }
+    }
+
+    pub fn finalize_post_turn_queue_refresh_with_permit(
+        &self,
+        request: PlanningPostTurnQueueRefreshFinalizationRequest<'_>,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> Option<PlanningPostTurnQueueRefreshFinalizationOutcome> {
+        continuation_permit.with_current(|| self.finalize_post_turn_queue_refresh(request))
     }
     pub fn refresh_queue_from_official_completion(
         &self,
@@ -1176,6 +1196,17 @@ impl PlanningWorkerUseCases {
     ) -> anyhow::Result<PlanningWorkerRunOutcome> {
         self.worker_orchestration
             .refresh_queue_from_official_completion(prepared.as_refresh_request())
+    }
+    pub fn refresh_prepared_official_completion_with_permit(
+        &self,
+        prepared: &PlanningPreparedOfficialCompletionRefresh,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> anyhow::Result<PlanningWorkerRunOutcome> {
+        self.worker_orchestration
+            .refresh_queue_from_official_completion_with_permit(
+                prepared.as_refresh_request(),
+                continuation_permit,
+            )
     }
     pub fn finalize_post_turn_official_completion_refresh(
         &self,
@@ -1253,6 +1284,9 @@ impl PlanningWorkerUseCases {
         let mut attempts = Vec::new();
 
         for attempt_number in 1..=max_attempts {
+            if !request.continuation_permit.is_current() {
+                break;
+            }
             let attempt_retry_reason = next_retry_reason;
             let started_runtime_projection = runtime_projection.clone();
             let worker_request = PlanningLedgerRepairRequest {
@@ -1270,7 +1304,7 @@ impl PlanningWorkerUseCases {
                 .render_repair_task_authority_prompt(&worker_request);
             let worker_outcome = self
                 .worker_orchestration
-                .repair_task_authority(worker_request);
+                .repair_task_authority_with_permit(worker_request, request.continuation_permit);
             let result = match worker_outcome {
                 Ok(outcome) => {
                     runtime_projection = outcome.runtime_projection.clone();
@@ -1450,6 +1484,7 @@ mod tests {
         optional_files: Mutex<BTreeMap<String, String>>,
         load_error: Mutex<Option<String>>,
         commits: Mutex<Vec<PlanningWorkspaceLoadRecord>>,
+        before_cas_record: Mutex<Option<PlanningWorkspaceLoadRecord>>,
     }
 
     impl ScriptedPlanningWorkspacePort {
@@ -1461,6 +1496,7 @@ mod tests {
                 optional_files: Mutex::new(BTreeMap::new()),
                 load_error: Mutex::new(None),
                 commits: Mutex::new(Vec::new()),
+                before_cas_record: Mutex::new(None),
             }
         }
 
@@ -1470,6 +1506,7 @@ mod tests {
                 optional_files: Mutex::new(BTreeMap::new()),
                 load_error: Mutex::new(Some(message.to_string())),
                 commits: Mutex::new(Vec::new()),
+                before_cas_record: Mutex::new(None),
             }
         }
 
@@ -1478,6 +1515,20 @@ mod tests {
                 .lock()
                 .expect("workspace commit log should not be poisoned")
                 .clone()
+        }
+
+        fn current_record(&self) -> PlanningWorkspaceLoadRecord {
+            self.record
+                .lock()
+                .expect("workspace record should not be poisoned")
+                .clone()
+        }
+
+        fn mutate_before_next_cas(&self, record: PlanningWorkspaceLoadRecord) {
+            *self
+                .before_cas_record
+                .lock()
+                .expect("workspace CAS mutation should not be poisoned") = Some(record);
         }
     }
 
@@ -1557,6 +1608,35 @@ mod tests {
                 .expect("workspace commit log should not be poisoned")
                 .push(record.clone());
             Ok(())
+        }
+
+        fn compare_and_swap_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            observed: &PlanningWorkspaceLoadRecord,
+            replacement: &PlanningWorkspaceLoadRecord,
+        ) -> Result<bool> {
+            let mut current = self
+                .record
+                .lock()
+                .expect("workspace record should not be poisoned");
+            if let Some(concurrent) = self
+                .before_cas_record
+                .lock()
+                .expect("workspace CAS mutation should not be poisoned")
+                .take()
+            {
+                *current = concurrent;
+            }
+            if *current != *observed {
+                return Ok(false);
+            }
+            *current = replacement.clone();
+            self.commits
+                .lock()
+                .expect("workspace commit log should not be poisoned")
+                .push(replacement.clone());
+            Ok(true)
         }
 
         fn load_optional_planning_file(
@@ -2027,10 +2107,120 @@ mod tests {
         assert!(restored.reconciliation_result.notices.iter().any(|notice| {
             notice == "planning reconciliation restored protected planning files"
         }));
+        assert_eq!(
+            restored
+                .reconciliation_result
+                .restored_protected_files
+                .len(),
+            1
+        );
+        assert_eq!(
+            restored.reconciliation_result.restored_protected_files[0].relative_path,
+            RESULT_OUTPUT_FILE_PATH
+        );
         let commits = workspace_port.commits();
         assert!(commits.iter().any(|record| {
             record.result_output_markdown.as_deref() == Some("# Result Output\n- Pre-turn copy.")
         }));
+    }
+
+    #[test]
+    fn reconcile_post_turn_preserves_concurrent_operator_content_and_blocks_follow_up() {
+        let workspace_port = Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+            "# Result Output\n- Worker candidate.",
+        ));
+        workspace_port.mutate_before_next_cas(PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("# Result Output\n- Operator edit.".to_string()),
+        });
+        let planning = planning_services(workspace_port.clone());
+        let current = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+        let capture = PlanningTurnExecutionSnapshotCapture::ready(
+            "/tmp/workspace",
+            PlanningExecutionSnapshot {
+                result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+            },
+        );
+        let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+
+        let outcome = planning
+            .runtime
+            .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
+                workspace_directory: "/tmp/workspace",
+                completed_turn_id: "late-worker-turn",
+                changed_planning_file_paths: &changed_paths,
+                execution_snapshot_capture: Some(&capture),
+                current_runtime_projection: &current,
+            });
+
+        let blocked = outcome
+            .reconciliation_result
+            .auto_follow_block_reason
+            .as_deref()
+            .expect("concurrent operator mutation should block continuation");
+        assert!(blocked.contains("concurrent protected-file mutation"));
+        assert!(blocked.contains("operator content was preserved"));
+        assert!(
+            outcome
+                .reconciliation_result
+                .restored_protected_files
+                .is_empty()
+        );
+        assert!(workspace_port.commits().is_empty());
+        assert_eq!(
+            workspace_port
+                .current_record()
+                .result_output_markdown
+                .as_deref(),
+            Some("# Result Output\n- Operator edit.")
+        );
+    }
+
+    #[test]
+    fn reconcile_post_turn_does_not_report_a_restore_when_content_already_matches() {
+        let workspace_port = Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+            "# Result Output\n- Pre-turn copy.",
+        ));
+        let planning = planning_services(workspace_port.clone());
+        let current = PlanningRuntimeProjection::ready(
+            "prompt".to_string(),
+            "queue summary".to_string(),
+            Some(sample_queue_head()),
+        );
+        let capture = PlanningTurnExecutionSnapshotCapture::ready(
+            "/tmp/workspace",
+            PlanningExecutionSnapshot {
+                result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+            },
+        );
+        let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+
+        let outcome = planning
+            .runtime
+            .reconcile_post_turn(PlanningPostTurnReconciliationRequest {
+                workspace_directory: "/tmp/workspace",
+                completed_turn_id: "no-op-worker-turn",
+                changed_planning_file_paths: &changed_paths,
+                execution_snapshot_capture: Some(&capture),
+                current_runtime_projection: &current,
+            });
+
+        assert!(outcome.reconciliation_result.notices.is_empty());
+        assert!(
+            outcome
+                .reconciliation_result
+                .restored_protected_files
+                .is_empty()
+        );
+        assert!(
+            outcome
+                .reconciliation_result
+                .auto_follow_block_reason
+                .is_none()
+        );
     }
 
     #[test]
@@ -2650,6 +2840,7 @@ mod tests {
                 PlanningDirectionAuthorityCommit {
                     observed_planning_revision: None,
                     directions: &directions,
+                    authority_mutation_owner_token: None,
                 },
             )
             .expect("direction authority should commit");

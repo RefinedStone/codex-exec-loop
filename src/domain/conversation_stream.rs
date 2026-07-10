@@ -1,4 +1,7 @@
-use crate::domain::conversation::{ConversationApprovalReview, ConversationToolActivity};
+use crate::domain::conversation::{
+    ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
+    ConversationToolActivity,
+};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +35,16 @@ pub enum ConversationStreamEvent {
     },
     ApprovalReviewUpdated {
         review: ConversationApprovalReview,
+    },
+    ApprovalRequested {
+        request: ConversationApprovalRequest,
+    },
+    ApprovalResolved {
+        approval_id: String,
+        resolution: ConversationApprovalResolution,
+    },
+    TurnInterruptRequestFailed {
+        message: String,
     },
     TurnCompleted {
         turn_id: String,

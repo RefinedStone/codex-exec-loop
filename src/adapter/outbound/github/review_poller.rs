@@ -6,30 +6,63 @@ application service는 "현재 branch의 PR을 찾고, 해당 PR의 review 활�
 GitHub REST endpoint, curl 실행, 응답 DTO mapping으로 풀어낸다. GitHub API JSON 구조는 private response
 타입에 가두고, 바깥에는 `GithubPullRequestActivitySnapshot`만 노출한다.
 */
+use crate::application::port::outbound::github_automation_port::{
+    AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR,
+    parse_github_repository_identity, resolve_github_push_remote_name_strict,
+};
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivityKind,
     GithubPullRequestActivitySnapshot, GithubPullRequestTarget,
 };
+use crate::git_subprocess;
 use crate::subprocess;
 use anyhow::{Context, Result, anyhow, bail};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+#[cfg(test)]
+use std::ffi::OsStr;
+#[cfg(test)]
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const PER_PAGE: usize = 100;
+const MAX_PAGINATED_PAGES: usize = 20;
+const MAX_PAGINATED_ITEMS: usize = PER_PAGE * MAX_PAGINATED_PAGES;
+const MAX_GITHUB_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PAGINATED_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+const ACTIVITY_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
 const CURL_MAX_TIME_SECONDS: &str = "30";
 const CURL_SPAWN_ATTEMPTS: usize = 3;
 const CURL_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(10);
-const WINDOWS_USERS_ROOT: &str = "/mnt/c/Users";
+const LEGACY_CREDENTIAL_SCAN_ENV: &str = "AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN";
+
+#[cfg(unix)]
+fn unresolved_curl_executable_path() -> PathBuf {
+    PathBuf::from("/__akra_unresolved_curl_executable__")
+}
+
+#[cfg(windows)]
+fn unresolved_curl_executable_path() -> PathBuf {
+    PathBuf::from(r"C:\__akra_unresolved_curl_executable__.exe")
+}
+
+#[cfg(unix)]
+fn unresolved_gh_executable_path() -> PathBuf {
+    PathBuf::from("/__akra_unresolved_gh_executable__")
+}
+
+#[cfg(windows)]
+fn unresolved_gh_executable_path() -> PathBuf {
+    PathBuf::from(r"C:\__akra_unresolved_gh_executable__.exe")
+}
 // GitHub `head=owner:branch` 같은 query value는 branch slash, colon, and shell-sensitive 문자를 포함할 수 있다.
 // endpoint path는 직접 조립하지만 query value는 이 set으로 percent-encode해 GitHub search 조건이 깨지지 않게 한다.
 const GITHUB_QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
@@ -57,35 +90,105 @@ const GITHUB_QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
 pub struct GithubReviewPollerAdapter {
     // 테스트와 production이 같은 request builder를 쓰되, 테스트는 curl path/base URL을 바꿀 수 있게 값으로 둔다.
     curl_path: String,
+    curl_resolution_error: Option<String>,
     api_base_url: String,
     user_agent: String,
     // local GitHub credential에서 추출한 token이다. raw credential line은 이 adapter 밖으로 보존하지 않는다.
     token: String,
+    subprocess_timeout: Duration,
+}
+
+#[derive(Clone, Copy)]
+struct GithubActivityLoadBudget {
+    deadline: Instant,
+}
+
+impl GithubActivityLoadBudget {
+    fn new() -> Self {
+        Self {
+            deadline: Instant::now()
+                .checked_add(ACTIVITY_LOAD_TIMEOUT)
+                .unwrap_or_else(Instant::now),
+        }
+    }
+
+    fn remaining(self, operation: &str) -> Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                anyhow!(
+                    "GitHub review activity load exceeded its {:?} aggregate deadline before {operation}",
+                    ACTIVITY_LOAD_TIMEOUT
+                )
+            })
+    }
 }
 
 impl GithubReviewPollerAdapter {
     pub fn new(token: impl Into<String>) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::new_for_workspace(token, &cwd)
+    }
+
+    fn new_for_workspace(token: impl Into<String>, workspace: &Path) -> Self {
+        Self::new_for_workspace_with_curl_resolution(
+            token,
+            crate::trusted_executable::resolve_native_from_current_path("curl", workspace),
+        )
+    }
+
+    #[cfg(test)]
+    fn new_for_workspace_with_path(
+        token: impl Into<String>,
+        workspace: &Path,
+        path: &OsStr,
+    ) -> Self {
+        Self::new_for_workspace_with_curl_resolution(
+            token,
+            crate::trusted_executable::resolve_native_from_path("curl", path, workspace),
+        )
+    }
+
+    fn new_for_workspace_with_curl_resolution(
+        token: impl Into<String>,
+        resolution: Result<PathBuf>,
+    ) -> Self {
+        let (curl_path, curl_resolution_error) = match resolution {
+            Ok(path) => (path.display().to_string(), None),
+            Err(error) => (
+                unresolved_curl_executable_path().display().to_string(),
+                Some(error.to_string()),
+            ),
+        };
         Self {
-            curl_path: "curl".to_string(),
+            curl_path,
+            curl_resolution_error,
             api_base_url: GITHUB_API_BASE_URL.to_string(),
             user_agent: format!("codex-exec-loop-native/{}", env!("CARGO_PKG_VERSION")),
             token: token.into(),
+            subprocess_timeout: subprocess::configured_subprocess_timeout(),
         }
     }
     pub fn from_local_github_credentials(repo_root: &Path) -> Result<Self> {
         /*
         poller는 repository automation과 같은 local GitHub credential contract를 쓴다.
-        gh auth token, git credential helper, repo-local credential file, WSL fallback에서 찾은 token은
-        즉시 bearer token으로 변환한다. 이후 HTTP code는 token source나 raw credential URL을 알지 못한다.
+        discovery는 환경변수와 신뢰된 gh auth token으로 제한한다. repository local credential.helper는 임의
+        명령을 실행할 수 있고 credential file은 별도 owner/symlink 검증 없이는 신뢰할 수 없으므로 둘 다 사용하지 않는다. 찾은 token은
+        즉시 bearer token으로 변환하며 이후 HTTP code는 token source나 raw credential URL을 알지 못한다.
         */
-        Ok(Self::new(Self::read_local_github_token(repo_root)?))
+        Ok(Self::new_for_workspace(
+            Self::read_local_github_token(repo_root)?,
+            repo_root,
+        ))
     }
 
     /*
     현재 git branch에서 열린 PR을 찾는 discovery entrypoint다.
 
-    repository full name은 origin remote에서, head branch는 현재 checkout에서 읽는다. detached HEAD, 빈 branch,
-    base branch 자체는 review 대상 PR을 특정할 수 없으므로 `None`으로 접어 service가 polling을 건너뛰게 한다.
+    repository full name은 delivery와 같은 configured push remote에서, head branch는 현재
+    checkout에서 읽는다. detached HEAD, 빈 branch, base branch 자체는 review 대상 PR을 특정할 수
+    없으므로 `None`으로 접어 service가 polling을 건너뛰게 한다.
     */
     pub fn find_open_pull_request_for_current_branch(
         &self,
@@ -122,12 +225,15 @@ impl GithubReviewPollerAdapter {
             .next()
             .map(|pull_request| GithubPullRequestTarget::new(repository, pull_request.number)))
     }
+    #[cfg(test)]
     fn resolve_git_dir(repo_root: &Path) -> Result<PathBuf> {
         Self::resolve_git_path(repo_root, "--git-dir", "git dir")
     }
+    #[cfg(test)]
     fn resolve_git_common_dir(repo_root: &Path) -> Result<PathBuf> {
         Self::resolve_git_path(repo_root, "--git-common-dir", "git common dir")
     }
+    #[cfg(test)]
     fn resolve_git_path(repo_root: &Path, flag: &str, label: &str) -> Result<PathBuf> {
         /*
         linked worktree에서는 `.git`이 directory가 아니라 pointer file일 수 있다.
@@ -144,12 +250,50 @@ impl GithubReviewPollerAdapter {
     }
     fn resolve_repository_full_name(repo_root: &Path) -> Result<String> {
         /*
-        repository identity는 origin remote에서 얻는다.
+        repository identity는 delivery와 같은 push remote의 push URL에서 얻는다.
         GitHub pull request API는 repository-scoped라 owner/repo path를 먼저 알아야 한다.
         이 lookup을 local git에 묶으면 어떤 installation을 검색해야 할지 모르는 상태에서 GitHub에 broad search를 하지 않아도 된다.
         */
-        let origin_url = Self::run_git_command(repo_root, &["remote", "get-url", "origin"])?;
-        Self::parse_repository_full_name(&origin_url)
+        let push_remote = Self::resolve_push_remote_name(repo_root)?;
+        let remote_url = Self::run_git_command(
+            repo_root,
+            &["remote", "get-url", "--push", push_remote.as_str()],
+        )
+        .map_err(|_| {
+            anyhow!(
+                "configured GitHub push remote `{push_remote}` is not available; implicit fallback is disabled"
+            )
+        })?;
+        Self::parse_repository_full_name(&remote_url)
+    }
+    fn resolve_push_remote_name(repo_root: &Path) -> Result<String> {
+        let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();
+        let config_value =
+            Self::read_optional_repo_config(repo_root, AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY)?;
+        resolve_github_push_remote_name_strict(env_value.as_deref(), config_value.as_deref())
+            .map_err(|message| anyhow!("{message}; implicit fallback is disabled"))
+    }
+    fn read_optional_repo_config(repo_root: &Path, key: &str) -> Result<Option<String>> {
+        let mut command = git_subprocess::command(std::iter::empty::<&str>());
+        command
+            .arg("-C")
+            .arg(repo_root)
+            .args(["config", "--get", key])
+            .stdin(Stdio::null());
+        let output = subprocess::command_output_with_timeout(
+            &mut command,
+            &format!("git config --get {key}"),
+            subprocess::configured_subprocess_timeout(),
+        )
+        .with_context(|| format!("failed to read repository configuration `{key}`"))?;
+        if output.status.success() {
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return Ok((!value.is_empty()).then_some(value));
+        }
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+        bail!("failed to read repository configuration `{key}`")
     }
     fn resolve_current_branch_name(repo_root: &Path) -> Result<String> {
         /*
@@ -160,21 +304,35 @@ impl GithubReviewPollerAdapter {
         Self::run_git_command(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
     }
     fn run_git_command(repo_root: &Path, args: &[&str]) -> Result<String> {
+        Self::run_git_command_with_program(
+            repo_root,
+            args,
+            Path::new("git"),
+            subprocess::configured_subprocess_timeout(),
+        )
+    }
+
+    fn run_git_command_with_program(
+        repo_root: &Path,
+        args: &[&str],
+        program: &Path,
+        timeout: Duration,
+    ) -> Result<String> {
         /*
         git은 non-interactive command로 실행하고 stdout은 helper boundary에서 trim한다.
         이 helper 위쪽 caller는 repository/branch/credential 같은 domain-specific parse error를 붙이고,
-        command 자체가 실패하면 stderr를 포함해 origin 설정이나 worktree 상태 문제를 진단할 수 있게 한다.
+        command 자체가 실패하면 stderr를 포함해 remote 설정이나 worktree 상태 문제를 진단할 수 있게 한다.
         */
         let command_label = format!("git {}", args.join(" "));
-        let mut command = Command::new("git");
+        let mut command =
+            git_subprocess::command_with_program(program.as_os_str(), std::iter::empty::<&str>());
         command
             .arg("-C")
             .arg(repo_root)
             .args(args)
-            .stdin(Stdio::null())
-            .env("GIT_TERMINAL_PROMPT", "0");
-        let output =
-            subprocess::command_output(&mut command, &command_label).with_context(|| {
+            .stdin(Stdio::null());
+        let output = subprocess::command_output_with_timeout(&mut command, &command_label, timeout)
+            .with_context(|| {
                 format!(
                     "failed to run git {} from {}",
                     args.join(" "),
@@ -191,64 +349,45 @@ impl GithubReviewPollerAdapter {
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
-    fn parse_repository_full_name(origin_url: &str) -> Result<String> {
-        // poller는 GitHub REST path의 `{owner}/{repo}`만 필요하므로 SSH/HTTPS origin을 같은 identity로 접는다.
+    fn parse_repository_full_name(remote_url: &str) -> Result<String> {
+        // poller는 GitHub REST path의 `{owner}/{repo}`만 필요하므로 SSH/HTTPS remote를 같은 identity로 접는다.
         // 다른 hosting provider URL은 GitHub API로 안전하게 변환할 수 없어 명시적으로 거부한다.
-        let repository = match origin_url {
-            value if value.starts_with("git@github.com:") => value
-                .trim_start_matches("git@github.com:")
-                .trim_end_matches(".git")
-                .to_string(),
-            value if value.starts_with("ssh://git@github.com/") => value
-                .trim_start_matches("ssh://git@github.com/")
-                .trim_end_matches(".git")
-                .to_string(),
-            value if value.starts_with("https://") && value.contains("github.com/") => {
-                let trimmed = value.trim_start_matches("https://");
-                let repository = if let Some((_, repository)) = trimmed.split_once("@github.com/") {
-                    repository
-                } else {
-                    trimmed.trim_start_matches("github.com/")
-                };
-                repository.trim_end_matches(".git").to_string()
+        parse_github_repository_identity(remote_url).ok_or_else(|| {
+            if remote_url.contains("github.com") {
+                anyhow!("failed to parse GitHub repository identity")
+            } else {
+                anyhow!("unsupported GitHub remote URL")
             }
-            _ => bail!("unsupported GitHub origin URL {origin_url}"),
-        };
-        if repository.split('/').count() != 2 {
-            bail!("failed to parse repository from {origin_url}");
-        }
-        Ok(repository)
+        })
     }
     fn read_local_github_token(repo_root: &Path) -> Result<String> {
-        Self::read_local_github_token_for_root(repo_root, Path::new(WINDOWS_USERS_ROOT))
+        let gh_program =
+            crate::trusted_executable::resolve_native_from_current_path("gh", repo_root)
+                .unwrap_or_else(|_| unresolved_gh_executable_path());
+        Self::read_local_github_token_with_gh_program(repo_root, &gh_program)
     }
 
-    fn read_local_github_token_for_root(
+    fn read_local_github_token_with_gh_program(
         repo_root: &Path,
-        windows_users_root: &Path,
+        gh_program: &Path,
     ) -> Result<String> {
+        if std::env::var_os(LEGACY_CREDENTIAL_SCAN_ENV).is_some() {
+            bail!(
+                "AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN is no longer supported; use an explicit token environment variable or trusted gh auth token"
+            );
+        }
         if let Some(token) = Self::read_token_from_environment() {
             return Ok(token);
         }
-        if let Some(token) = Self::read_gh_auth_token(repo_root)? {
+        if let Some(token) = Self::read_gh_auth_token_with_program(
+            repo_root,
+            gh_program,
+            subprocess::configured_subprocess_timeout(),
+        )? {
             return Ok(token);
-        }
-        if let Some(token) = Self::read_git_credential_fill_token(repo_root)? {
-            return Ok(token);
-        }
-        if let Some(token) = Self::read_named_github_credential_token(repo_root)? {
-            return Ok(token);
-        }
-        if let Some(token) = Self::read_git_credential_file_token_for_root(windows_users_root)? {
-            return Ok(token);
-        }
-        if let Some(credential_line) =
-            Self::find_windows_github_credential_line_in_root(windows_users_root)?
-        {
-            return Self::parse_github_credential_token(&credential_line);
         }
         bail!(
-            "no GitHub token found in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth, git credential fill, or local git credential files"
+            "no GitHub token found in AKRA_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN; trusted gh auth was unavailable; repository credential helpers and direct credential-file scanning are not used"
         );
     }
 
@@ -263,15 +402,31 @@ impl GithubReviewPollerAdapter {
             })
     }
 
-    fn read_gh_auth_token(repo_root: &Path) -> Result<Option<String>> {
-        let mut command = Command::new("gh");
+    fn read_gh_auth_token_with_program(
+        repo_root: &Path,
+        program: &Path,
+        timeout: Duration,
+    ) -> Result<Option<String>> {
+        #[cfg(not(test))]
+        if !program.is_absolute() {
+            bail!("gh credential discovery requires a pinned absolute executable")
+        }
+        let mut command = Command::new(program);
+        crate::trusted_executable::configure_credential_command_environment(
+            &mut command,
+            repo_root,
+            true,
+        )?;
         command
             .arg("auth")
             .arg("token")
-            .current_dir(repo_root)
+            .current_dir(crate::trusted_executable::neutral_user_config_directory(
+                repo_root,
+            ))
             .stdin(Stdio::null())
             .env("GIT_TERMINAL_PROMPT", "0");
-        let output = subprocess::command_output(&mut command, "gh auth token");
+        let output =
+            subprocess::command_output_with_timeout(&mut command, "gh auth token", timeout);
         let Ok(output) = output else {
             return Ok(None);
         };
@@ -282,73 +437,17 @@ impl GithubReviewPollerAdapter {
         Ok((!token.is_empty()).then_some(token))
     }
 
-    fn read_git_credential_fill_token(repo_root: &Path) -> Result<Option<String>> {
-        let repository = Self::resolve_repository_full_name(repo_root).ok();
-        for query in Self::git_credential_queries(repository.as_deref()) {
-            if let Some(token) = Self::run_git_credential_fill(repo_root, &query)? {
-                return Ok(Some(token));
-            }
-        }
-        Ok(None)
-    }
-
-    fn git_credential_queries(repository: Option<&str>) -> Vec<String> {
-        let mut queries = Vec::new();
-        if let Some(repository) = repository {
-            queries.push(format!(
-                "protocol=https\nhost=github.com\npath={repository}\n\n"
-            ));
-        }
-        queries.push("protocol=https\nhost=github.com\n\n".to_string());
-        queries
-    }
-
-    fn run_git_credential_fill(repo_root: &Path, query: &str) -> Result<Option<String>> {
-        let mut child = Command::new("git")
-            .arg("-C")
-            .arg(repo_root)
-            .arg("credential")
-            .arg("fill")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .spawn()
-            .context("failed to spawn git credential fill")?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(query.as_bytes())
-                .context("failed to write git credential query")?;
-        }
-        let output = match subprocess::wait_with_output(child, "git credential fill") {
-            Ok(output) => output,
-            Err(error) if error.kind() == io::ErrorKind::TimedOut => return Ok(None),
-            Err(error) => return Err(error).context("failed to wait for git credential fill"),
-        };
-        if !output.status.success() {
-            return Ok(None);
-        }
-        let body = String::from_utf8_lossy(&output.stdout);
-        Ok(Self::parse_git_credential_password(&body))
-    }
-
-    fn parse_git_credential_password(body: &str) -> Option<String> {
-        body.lines().find_map(|line| {
-            line.strip_prefix("password=")
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
-    }
-
+    #[cfg(test)]
     fn read_named_github_credential_token(repo_root: &Path) -> Result<Option<String>> {
         /*
         linked worktree에는 개별 git dir과 common git dir이 나뉠 수 있으므로 먼저 worktree-local credential을
         확인하고, 없으면 common dir을 확인한다. `refinedstone-credentials`는 기존 checkout을 깨지 않기 위한
         legacy fallback일 뿐 새 이름은 `akra-github-credentials`다.
         */
-        let git_dir = Self::resolve_git_dir(repo_root)?;
-        let common_dir = Self::resolve_git_common_dir(repo_root)?;
+        let git_dir = Self::resolve_git_dir(repo_root)
+            .map_err(|_| anyhow!("failed to resolve a repo-local legacy credential directory"))?;
+        let common_dir = Self::resolve_git_common_dir(repo_root)
+            .map_err(|_| anyhow!("failed to resolve a shared legacy credential directory"))?;
         for root in [git_dir.as_path(), common_dir.as_path()] {
             for file_name in [
                 "akra-github-credentials",
@@ -360,7 +459,7 @@ impl GithubReviewPollerAdapter {
                     continue;
                 }
                 let line = Self::read_first_non_empty_line(&credential_path)
-                    .with_context(|| format!("failed to read {}", credential_path.display()))?;
+                    .context("failed to read a repo-local legacy GitHub credential file")?;
                 if line.starts_with("https://") {
                     return Ok(Some(Self::parse_github_credential_token(&line)?));
                 }
@@ -370,12 +469,14 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
+    #[cfg(test)]
     fn read_git_credential_file_token_for_root(users_root: &Path) -> Result<Option<String>> {
         Self::read_git_credential_file_token_from_candidates(
             Self::git_credential_file_candidates_for_root(users_root)?,
         )
     }
 
+    #[cfg(test)]
     fn read_git_credential_file_token_from_candidates(
         candidates: Vec<PathBuf>,
     ) -> Result<Option<String>> {
@@ -383,8 +484,8 @@ impl GithubReviewPollerAdapter {
             if !path.is_file() {
                 continue;
             }
-            let contents = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
+            let contents =
+                fs::read_to_string(&path).context("failed to read a legacy Git credential file")?;
             for line in contents.lines().map(str::trim) {
                 if !line.starts_with("https://") || !line.contains("@github.com") {
                     continue;
@@ -397,6 +498,7 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
+    #[cfg(test)]
     fn git_credential_file_candidates_for_root(users_root: &Path) -> Result<Vec<PathBuf>> {
         let mut candidates = Vec::new();
         if let Some(path) =
@@ -419,12 +521,14 @@ impl GithubReviewPollerAdapter {
         Ok(candidates)
     }
 
+    #[cfg(test)]
     fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
         if !candidates.contains(&path) {
             candidates.push(path);
         }
     }
 
+    #[cfg(test)]
     fn read_first_non_empty_line(path: &Path) -> Result<String> {
         /*
         credential file은 이 adapter 밖의 git/helper script가 관리하므로 trailing newline이나 빈 줄이 있을 수 있다.
@@ -436,9 +540,10 @@ impl GithubReviewPollerAdapter {
             .map(str::trim)
             .find(|line| !line.is_empty())
             .map(ToString::to_string)
-            .ok_or_else(|| anyhow!("missing token line in {}", path.display()))
+            .ok_or_else(|| anyhow!("legacy GitHub credential file has no usable token line"))
     }
 
+    #[cfg(test)]
     fn find_windows_github_credential_line_in_root(users_root: &Path) -> Result<Option<String>> {
         let Some(credential_path) =
             Self::resolve_windows_credential_path_for_current_user_in_root(users_root)?
@@ -456,8 +561,7 @@ impl GithubReviewPollerAdapter {
                 return Ok(None);
             }
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to read {}", credential_path.display()));
+                return Err(error).context("failed to read a legacy Windows credential file");
             }
         };
         // Windows credential file에는 여러 host credential이 섞일 수 있으므로 GitHub line만 선택한다.
@@ -466,6 +570,7 @@ impl GithubReviewPollerAdapter {
         }))
     }
 
+    #[cfg(test)]
     fn resolve_windows_credential_path_for_current_user_in_root(
         users_root: &Path,
     ) -> Result<Option<PathBuf>> {
@@ -482,6 +587,7 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
+    #[cfg(test)]
     fn current_user_names() -> Vec<String> {
         let mut names = Vec::new();
         for key in ["USERNAME", "USER"] {
@@ -489,17 +595,16 @@ impl GithubReviewPollerAdapter {
                 .ok()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
-            {
-                if !names
+                && !names
                     .iter()
                     .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
-                {
-                    names.push(value);
-                }
+            {
+                names.push(value);
             }
         }
         names
     }
+    #[cfg(test)]
     fn resolve_current_user_windows_home(
         users_root: &Path,
         current_user: &str,
@@ -518,8 +623,7 @@ impl GithubReviewPollerAdapter {
                 return Ok(direct_match_exists.then_some(direct_match));
             }
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to read {}", users_root.display()));
+                return Err(error).context("failed to inspect legacy Windows credential profiles");
             }
         };
         // Windows user directory casing은 WSL `$USER`와 다를 수 있으므로 case-insensitive scan으로 fallback을 보존한다.
@@ -540,6 +644,7 @@ impl GithubReviewPollerAdapter {
         }
         Ok(None)
     }
+    #[cfg(test)]
     fn parse_github_credential_token(line: &str) -> Result<String> {
         // credential line은 `https://<username>:<token>@github.com` 형태다. bearer token으로 쓰는 값은 password slot뿐이다.
         let credential = line
@@ -570,38 +675,51 @@ impl GithubReviewPollerAdapter {
     fn fetch_pull_request_details(
         &self,
         target: &GithubPullRequestTarget,
+        budget: GithubActivityLoadBudget,
     ) -> Result<PullRequestResponse> {
-        self.fetch_object(&format!(
-            "/repos/{}/pulls/{}",
-            target.repository, target.number
-        ))
+        self.fetch_object_with_budget(
+            &format!("/repos/{}/pulls/{}", target.repository, target.number),
+            Some(budget),
+        )
     }
     fn fetch_pull_request_reviews(
         &self,
         target: &GithubPullRequestTarget,
+        budget: GithubActivityLoadBudget,
     ) -> Result<Vec<PullRequestReviewResponse>> {
-        self.fetch_paginated_array(&format!(
-            "/repos/{}/pulls/{}/reviews",
-            target.repository, target.number
-        ))
+        self.fetch_paginated_array_with_budget(
+            &format!(
+                "/repos/{}/pulls/{}/reviews",
+                target.repository, target.number
+            ),
+            Some(budget),
+        )
     }
     fn fetch_review_comments(
         &self,
         target: &GithubPullRequestTarget,
+        budget: GithubActivityLoadBudget,
     ) -> Result<Vec<PullRequestReviewCommentResponse>> {
-        self.fetch_paginated_array(&format!(
-            "/repos/{}/pulls/{}/comments",
-            target.repository, target.number
-        ))
+        self.fetch_paginated_array_with_budget(
+            &format!(
+                "/repos/{}/pulls/{}/comments",
+                target.repository, target.number
+            ),
+            Some(budget),
+        )
     }
     fn fetch_issue_comments(
         &self,
         target: &GithubPullRequestTarget,
+        budget: GithubActivityLoadBudget,
     ) -> Result<Vec<IssueCommentResponse>> {
-        self.fetch_paginated_array(&format!(
-            "/repos/{}/issues/{}/comments",
-            target.repository, target.number
-        ))
+        self.fetch_paginated_array_with_budget(
+            &format!(
+                "/repos/{}/issues/{}/comments",
+                target.repository, target.number
+            ),
+            Some(budget),
+        )
     }
     fn fetch_object<T>(&self, endpoint: &str) -> Result<T>
     where
@@ -612,9 +730,21 @@ impl GithubReviewPollerAdapter {
         curl failure, HTTP status failure, serde shape error가 paginated array endpoint와 같은 endpoint context를 갖게 하려는
         의도다. 호출자가 object인지 array인지에 따라 진단 품질이 달라지면 polling failure를 해석하기 어렵다.
         */
-        let body = self.fetch_json(endpoint)?;
+        self.fetch_object_with_budget(endpoint, None)
+    }
+
+    fn fetch_object_with_budget<T>(
+        &self,
+        endpoint: &str,
+        budget: Option<GithubActivityLoadBudget>,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let body = self.fetch_json_with_budget(endpoint, budget)?;
         Self::parse_json(&body, endpoint)
     }
+    #[cfg(test)]
     fn fetch_paginated_array<T>(&self, endpoint: &str) -> Result<Vec<T>>
     where
         T: DeserializeOwned,
@@ -626,39 +756,105 @@ impl GithubReviewPollerAdapter {
         tradeoff는 page마다 request를 하나씩 더 보내는 것이지만, PR review activity volume에서는 충분히 작고
         fixture JSON으로 테스트하기도 단순하다.
         */
+        self.fetch_paginated_array_with_budget(endpoint, None)
+    }
+
+    fn fetch_paginated_array_with_budget<T>(
+        &self,
+        endpoint: &str,
+        budget: Option<GithubActivityLoadBudget>,
+    ) -> Result<Vec<T>>
+    where
+        T: DeserializeOwned,
+    {
         let mut items = Vec::new();
-        let mut page = 1;
-        loop {
+        let mut aggregate_bytes = 0_usize;
+        for page in 1..=MAX_PAGINATED_PAGES {
             let page_endpoint = format!("{endpoint}?per_page={PER_PAGE}&page={page}");
-            let body = self.fetch_json(&page_endpoint)?;
+            let body = self.fetch_json_with_budget(&page_endpoint, budget)?;
+            aggregate_bytes = aggregate_bytes
+                .checked_add(body.len())
+                .filter(|total| *total <= MAX_PAGINATED_RESPONSE_BYTES)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "GitHub pagination response exceeded the aggregate {} byte limit for {endpoint}",
+                        MAX_PAGINATED_RESPONSE_BYTES
+                    )
+                })?;
             let page_items: Vec<T> = Self::parse_json(&body, &page_endpoint)?;
             let count = page_items.len();
+            if count > PER_PAGE {
+                bail!(
+                    "GitHub pagination returned {count} items for a {PER_PAGE}-item page at {page_endpoint}"
+                );
+            }
+            let item_count = items
+                .len()
+                .checked_add(count)
+                .filter(|total| *total <= MAX_PAGINATED_ITEMS)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "GitHub pagination exceeded the {MAX_PAGINATED_ITEMS}-item limit for {endpoint}"
+                    )
+                })?;
+            items.reserve(item_count - items.len());
             items.extend(page_items);
             if count < PER_PAGE {
                 return Ok(items);
             }
-
-            page += 1;
         }
+        bail!(
+            "GitHub pagination remained full after {MAX_PAGINATED_PAGES} pages for {endpoint}; refusing an incomplete activity snapshot"
+        )
     }
+    #[cfg(test)]
     fn fetch_json(&self, endpoint: &str) -> Result<String> {
+        self.fetch_json_with_budget(endpoint, None)
+    }
+
+    fn fetch_json_with_budget(
+        &self,
+        endpoint: &str,
+        budget: Option<GithubActivityLoadBudget>,
+    ) -> Result<String> {
         /*
         persistent HTTP client 대신 curl을 사용해 adapter dependency를 가볍게 유지하고 repository shell automation과 실행 방식을 맞춘다.
         timeout flag는 TUI contract의 일부다.
         review polling은 app-server loop를 무기한 막지 않고, 진단 가능한 command failure로 돌아와야 한다.
         bearer token과 API version/user-agent header는 이 outbound boundary에서만 조립한다.
         */
+        if let Some(error) = &self.curl_resolution_error {
+            bail!("trusted curl executable could not be pinned: {error}")
+        }
         let url = format!("{}{}", self.api_base_url, endpoint);
         let authorization = format!("Authorization: Bearer {}", self.token);
         let user_agent = format!("User-Agent: {}", self.user_agent);
         let api_version = format!("X-GitHub-Api-Version: {}", GITHUB_API_VERSION);
+        let request_timeout = match budget {
+            Some(budget) => self
+                .subprocess_timeout
+                .min(budget.remaining(&format!("requesting {endpoint}"))?),
+            None => self.subprocess_timeout,
+        };
         let output = self
-            .run_curl_process(&url, &api_version, &authorization, &user_agent)
+            .run_curl_process(
+                &url,
+                &api_version,
+                &authorization,
+                &user_agent,
+                request_timeout,
+            )
             .with_context(|| format!("failed to run {} for {url}", self.curl_path))?;
         if !output.status.success() {
             bail!(
                 "github api request failed for {url}: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        if output.stdout.len() > MAX_GITHUB_RESPONSE_BYTES {
+            bail!(
+                "github api response exceeded the {} byte limit for {url}",
+                MAX_GITHUB_RESPONSE_BYTES
             );
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -669,27 +865,45 @@ impl GithubReviewPollerAdapter {
         api_version: &str,
         authorization: &str,
         user_agent: &str,
+        request_timeout: Duration,
     ) -> io::Result<Output> {
         let config = build_curl_stdin_config(api_version, authorization, user_agent);
         let command_label = format!("{} {url}", self.curl_path);
         for attempt in 1..=CURL_SPAWN_ATTEMPTS {
             let mut command = Command::new(&self.curl_path);
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            crate::trusted_executable::configure_credential_command_environment(
+                &mut command,
+                &cwd,
+                false,
+            )
+            .map_err(io::Error::other)?;
             command
+                .arg("-q")
                 .args([
-                    "-sSfL",
+                    // curl forwards custom headers across redirects. Never let a 3xx move the
+                    // bearer token to another HTTPS host; repository moves must be reconciled
+                    // through the frozen GitHub remote identity instead.
+                    "-sSf",
+                    "--proto",
+                    "=https",
                     "--connect-timeout",
                     CURL_CONNECT_TIMEOUT_SECONDS,
                     "--max-time",
                     CURL_MAX_TIME_SECONDS,
+                    "--max-filesize",
+                    &MAX_GITHUB_RESPONSE_BYTES.to_string(),
                     "--config",
                     "-",
                 ])
-                .arg(url)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let mut child = match command.spawn() {
-                Ok(child) => child,
+                .arg(url);
+            let output = match subprocess::command_output_with_input_and_timeout(
+                &mut command,
+                &command_label,
+                config.as_bytes(),
+                request_timeout,
+            ) {
+                Ok(output) => output,
                 Err(error)
                     if attempt < CURL_SPAWN_ATTEMPTS && is_transient_curl_spawn_error(&error) =>
                 {
@@ -698,10 +912,7 @@ impl GithubReviewPollerAdapter {
                 }
                 Err(error) => return Err(error),
             };
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(config.as_bytes())?;
-            }
-            return subprocess::wait_with_output(child, &command_label);
+            return Ok(output);
         }
 
         unreachable!("curl spawn retry loop should return from every attempt")
@@ -860,10 +1071,11 @@ impl GithubReviewPollerPort for GithubReviewPollerAdapter {
         이전 snapshot과의 diffing은 application service가 맡고, adapter는 각 poll을 stateless하게 유지한다.
         매번 GitHub에서 PR header와 세 activity endpoint를 다시 읽어 authoritative PR timeline snapshot을 재구성한다.
         */
-        let pull_request = self.fetch_pull_request_details(target)?;
-        let reviews = self.fetch_pull_request_reviews(target)?;
-        let review_comments = self.fetch_review_comments(target)?;
-        let issue_comments = self.fetch_issue_comments(target)?;
+        let budget = GithubActivityLoadBudget::new();
+        let pull_request = self.fetch_pull_request_details(target, budget)?;
+        let reviews = self.fetch_pull_request_reviews(target, budget)?;
+        let review_comments = self.fetch_review_comments(target, budget)?;
+        let issue_comments = self.fetch_issue_comments(target, budget)?;
         Ok(Self::to_snapshot(
             target,
             pull_request,
@@ -926,27 +1138,22 @@ struct IssueCommentResponse {
 struct GitHubUser {
     login: String,
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod timeout_policy_tests {
     use super::GithubReviewPollerAdapter;
-    use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn gh_auth_token_timeout_degrades_to_none() {
-        let _guard = env_lock()
-            .lock()
-            .expect("environment fixture lock should not be poisoned");
         let root = unique_temp_dir("review-poller-gh-auth-timeout");
         fs::create_dir_all(&root).expect("fixture root should be created");
-        write_executable_script(
+        let program = write_executable_script(
             &root,
             "gh",
             r#"#!/bin/sh
@@ -954,40 +1161,12 @@ set -eu
 sleep 2
 "#,
         );
-        let _path = PathEnvGuard::prepend(&root);
-        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
-
-        let token = GithubReviewPollerAdapter::read_gh_auth_token(&root)
-            .expect("timed out gh auth token should degrade to none");
-
-        assert_eq!(token, None);
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn git_credential_fill_timeout_degrades_to_none() {
-        let _guard = env_lock()
-            .lock()
-            .expect("environment fixture lock should not be poisoned");
-        let root = unique_temp_dir("review-poller-git-credential-timeout");
-        fs::create_dir_all(&root).expect("fixture root should be created");
-        write_executable_script(
+        let token = GithubReviewPollerAdapter::read_gh_auth_token_with_program(
             &root,
-            "git",
-            r#"#!/bin/sh
-set -eu
-cat >/dev/null
-sleep 2
-"#,
-        );
-        let _path = PathEnvGuard::prepend(&root);
-        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
-
-        let token = GithubReviewPollerAdapter::run_git_credential_fill(
-            &root,
-            "protocol=https\nhost=github.com\n\n",
+            &program,
+            Duration::from_millis(50),
         )
-        .expect("timed out git credential fill should degrade to none");
+        .expect("timed out gh auth token should degrade to none");
 
         assert_eq!(token, None);
         let _ = fs::remove_dir_all(&root);
@@ -995,12 +1174,9 @@ sleep 2
 
     #[test]
     fn run_git_command_uses_shared_timeout_policy() {
-        let _guard = env_lock()
-            .lock()
-            .expect("environment fixture lock should not be poisoned");
         let root = unique_temp_dir("review-poller-run-git-timeout");
         fs::create_dir_all(&root).expect("fixture root should be created");
-        write_executable_script(
+        let program = write_executable_script(
             &root,
             "git",
             r#"#!/bin/sh
@@ -1008,11 +1184,13 @@ set -eu
 sleep 2
 "#,
         );
-        let _path = PathEnvGuard::prepend(&root);
-        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
-
-        let error = GithubReviewPollerAdapter::run_git_command(&root, &["rev-parse", "HEAD"])
-            .expect_err("timed out git command should surface timeout");
+        let error = GithubReviewPollerAdapter::run_git_command_with_program(
+            &root,
+            &["rev-parse", "HEAD"],
+            &program,
+            Duration::from_millis(50),
+        )
+        .expect_err("timed out git command should surface timeout");
         let error_chain = error
             .chain()
             .map(ToString::to_string)
@@ -1025,9 +1203,6 @@ sleep 2
 
     #[test]
     fn fetch_json_uses_shared_timeout_policy_for_curl() {
-        let _guard = env_lock()
-            .lock()
-            .expect("environment fixture lock should not be poisoned");
         let root = unique_temp_dir("review-poller-fetch-json-timeout");
         fs::create_dir_all(&root).expect("fixture root should be created");
         let script = write_executable_script(
@@ -1038,12 +1213,13 @@ set -eu
 sleep 2
 "#,
         );
-        let _env = EnvVarGuard::apply(&[(SUBPROCESS_TIMEOUT_ENV, Some("1"))]);
         let adapter = GithubReviewPollerAdapter {
             curl_path: script.display().to_string(),
+            curl_resolution_error: None,
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "secret-token".to_string(),
+            subprocess_timeout: std::time::Duration::from_millis(50),
         };
 
         let error = adapter
@@ -1061,9 +1237,6 @@ sleep 2
 
     #[test]
     fn fetch_json_sends_authorization_via_curl_stdin_config() {
-        let _guard = env_lock()
-            .lock()
-            .expect("environment fixture lock should not be poisoned");
         let root = unique_temp_dir("review-poller-curl-stdin-config");
         fs::create_dir_all(&root).expect("fixture root should be created");
         let argv_path = root.join("curl-argv.txt");
@@ -1084,9 +1257,11 @@ printf '{{"ok":true}}'
         );
         let adapter = GithubReviewPollerAdapter {
             curl_path: script.display().to_string(),
+            curl_resolution_error: None,
             api_base_url: "https://api.test".to_string(),
             user_agent: "akra-test".to_string(),
             token: "secret-token".to_string(),
+            subprocess_timeout: std::time::Duration::from_secs(1),
         };
 
         let body = adapter
@@ -1098,7 +1273,7 @@ printf '{{"ok":true}}'
         assert_eq!(body, "{\"ok\":true}");
         assert_eq!(
             argv,
-            "-sSfL\n--connect-timeout\n10\n--max-time\n30\n--config\n-\nhttps://api.test/repos/acme/widgets/pulls/42\n"
+            "-q\n-sSf\n--proto\n=https\n--connect-timeout\n10\n--max-time\n30\n--max-filesize\n8388608\n--config\n-\nhttps://api.test/repos/acme/widgets/pulls/42\n"
         );
         assert!(
             stdin.contains("header = \"Authorization: Bearer secret-token\""),
@@ -1106,6 +1281,79 @@ printf '{{"ok":true}}'
         );
         assert!(!argv.contains("secret-token"));
         assert!(!stdin.contains("url = \"https://api.test/repos/acme/widgets/pulls/42\""));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fetch_json_ignores_poisoned_home_curl_config_before_sending_bearer_token() {
+        let _guard = crate::test_utils::process_environment_mutex()
+            .lock()
+            .expect("environment fixture lock should not be poisoned");
+        let root = unique_temp_dir("review-poller-poisoned-curlrc");
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("fixture home should be created");
+        let trace_path = root.join("curl-trace.log");
+        let output_path = root.join("curl-output.log");
+        let proxy_contact_path = root.join("proxy-contact.log");
+        fs::write(
+            home.join(".curlrc"),
+            format!(
+                "trace = \"{}\"\noutput = \"{}\"\nproxy = \"http://127.0.0.1:9\"\n",
+                trace_path.display(),
+                output_path.display(),
+            ),
+        )
+        .expect("poisoned curlrc should be written");
+        let script = write_executable_script(
+            &root,
+            "fake-curl",
+            &format!(
+                r#"#!/bin/sh
+set -eu
+if [ "${{1-}}" != "-q" ] && [ -f "$HOME/.curlrc" ]; then
+  cat > "{trace_path}"
+  printf 'poisoned output\n' > "{output_path}"
+  printf 'poisoned proxy contacted\n' > "{proxy_contact_path}"
+  exit 65
+fi
+cat >/dev/null
+printf '{{"ok":true}}'
+"#,
+                trace_path = trace_path.display(),
+                output_path = output_path.display(),
+                proxy_contact_path = proxy_contact_path.display(),
+            ),
+        );
+        let adapter = GithubReviewPollerAdapter {
+            curl_path: script.display().to_string(),
+            curl_resolution_error: None,
+            api_base_url: "https://api.test".to_string(),
+            user_agent: "akra-test".to_string(),
+            token: "bearer-token-must-not-leak".to_string(),
+            subprocess_timeout: std::time::Duration::from_secs(1),
+        };
+        let previous_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &home) };
+
+        let result = adapter.fetch_json("/repos/acme/widgets/pulls/42");
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        assert_eq!(
+            result.expect("fake curl should return JSON"),
+            "{\"ok\":true}"
+        );
+        for leak_path in [&trace_path, &output_path, &proxy_contact_path] {
+            assert!(
+                !leak_path.exists(),
+                "curl user configuration must not create {}",
+                leak_path.display()
+            );
+        }
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1127,75 +1375,5 @@ printf '{{"ok":true}}'
         fs::set_permissions(&script_path, permissions)
             .expect("script fixture should be executable");
         script_path
-    }
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        &LOCK
-    }
-
-    struct EnvVarGuard {
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    }
-
-    impl EnvVarGuard {
-        fn apply(updates: &[(&'static str, Option<&str>)]) -> Self {
-            let saved = updates
-                .iter()
-                .map(|(key, _)| (*key, std::env::var_os(key)))
-                .collect::<Vec<_>>();
-            unsafe {
-                for (key, value) in updates {
-                    match value {
-                        Some(value) => std::env::set_var(key, value),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-            Self { saved }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                for (key, value) in &self.saved {
-                    match value {
-                        Some(value) => std::env::set_var(key, value),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-        }
-    }
-
-    struct PathEnvGuard {
-        previous: Option<std::ffi::OsString>,
-    }
-
-    impl PathEnvGuard {
-        fn prepend(directory: &Path) -> Self {
-            let previous = std::env::var_os("PATH");
-            let mut paths = vec![directory.to_path_buf()];
-            if let Some(path) = &previous {
-                paths.extend(std::env::split_paths(path));
-            }
-            let joined_path = std::env::join_paths(paths).expect("test PATH should join");
-            unsafe {
-                std::env::set_var("PATH", joined_path);
-            }
-            Self { previous }
-        }
-    }
-
-    impl Drop for PathEnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.previous {
-                    Some(path) => std::env::set_var("PATH", path),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-        }
     }
 }

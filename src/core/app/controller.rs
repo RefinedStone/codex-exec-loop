@@ -1,7 +1,8 @@
 use super::{
-    AppCommand, AppEvent, AppSnapshot, AppState, CoreEffect, CoreEffectCompletion, CoreInput,
-    TurnStreamState,
+    AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
+    CoreEffectCompletion, CoreInput, StartupCheckCorrelation, TurnStreamState,
 };
+use crate::domain::planning::ManualPromptCorrelation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreDispatchOutcome {
@@ -14,6 +15,11 @@ pub struct CoreDispatchOutcome {
 pub struct CoreController {
     state: AppState,
     turn_stream_state: TurnStreamState,
+    next_startup_check_generation: u64,
+    in_flight_startup_check: Option<StartupCheckCorrelation>,
+    next_conversation_load_generation: u64,
+    in_flight_conversation_load: Option<ConversationLoadCorrelation>,
+    in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
 }
 
 impl CoreController {
@@ -21,6 +27,11 @@ impl CoreController {
         Self {
             state: AppState::new(),
             turn_stream_state: TurnStreamState::new(),
+            next_startup_check_generation: 1,
+            in_flight_startup_check: None,
+            next_conversation_load_generation: 1,
+            in_flight_conversation_load: None,
+            in_flight_manual_prompt_preparation: None,
         }
     }
 
@@ -36,8 +47,16 @@ impl CoreController {
                 snapshot: self.snapshot(),
             },
             CoreInput::Command(AppCommand::RunStartupChecks) => {
+                let correlation = StartupCheckCorrelation::new(take_generation(
+                    &mut self.next_startup_check_generation,
+                    "startup check",
+                ));
+                self.in_flight_startup_check = Some(correlation);
                 self.state.mark_startup_loading();
-                self.startup_changed_outcome(vec![CoreEffect::RunStartupChecks])
+                self.startup_changed_outcome(
+                    correlation,
+                    vec![CoreEffect::RunStartupChecks { correlation }],
+                )
             }
             CoreInput::Command(AppCommand::LoadSessionCatalog {
                 limit,
@@ -53,17 +72,59 @@ impl CoreController {
                 thread_id,
                 fallback_workspace_directory,
             }) => {
-                self.state.mark_conversation_loading();
-                self.conversation_changed_outcome(vec![CoreEffect::LoadConversation {
+                let correlation = ConversationLoadCorrelation::new(
+                    take_generation(
+                        &mut self.next_conversation_load_generation,
+                        "conversation load",
+                    ),
                     thread_id,
-                    fallback_workspace_directory,
-                }])
+                );
+                self.in_flight_conversation_load = Some(correlation.clone());
+                self.state.mark_conversation_loading();
+                self.conversation_changed_outcome(
+                    Some(correlation.clone()),
+                    vec![CoreEffect::LoadConversation {
+                        correlation,
+                        fallback_workspace_directory,
+                    }],
+                )
             }
-            CoreInput::Command(AppCommand::PrepareManualPrompt(request)) => CoreDispatchOutcome {
+            CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
+                self.in_flight_conversation_load = None;
+                self.state.reset_conversation();
+                self.turn_stream_state = TurnStreamState::new();
+                self.conversation_changed_outcome(None, Vec::new())
+            }
+            CoreInput::Command(AppCommand::LoadParallelPeekConversation {
+                request_id,
+                thread_id,
+            }) => CoreDispatchOutcome {
                 events: Vec::new(),
-                effects: vec![CoreEffect::PrepareManualPrompt(request)],
+                effects: vec![CoreEffect::LoadParallelPeekConversation {
+                    request_id,
+                    thread_id,
+                }],
                 snapshot: self.snapshot(),
             },
+            CoreInput::Command(AppCommand::PrepareManualPrompt(request)) => {
+                if self.in_flight_manual_prompt_preparation.is_some() {
+                    return CoreDispatchOutcome {
+                        events: Vec::new(),
+                        effects: Vec::new(),
+                        snapshot: self.snapshot(),
+                    };
+                }
+                self.in_flight_manual_prompt_preparation = Some(request.correlation.clone());
+                CoreDispatchOutcome {
+                    events: Vec::new(),
+                    effects: vec![CoreEffect::PrepareManualPrompt(request)],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::CancelManualPromptPreparation) => {
+                self.in_flight_manual_prompt_preparation = None;
+                self.unchanged_outcome()
+            }
             CoreInput::Command(AppCommand::SubmitTurn(request)) => CoreDispatchOutcome {
                 events: Vec::new(),
                 effects: vec![CoreEffect::SubmitTurn(request)],
@@ -74,31 +135,74 @@ impl CoreController {
                 effects: vec![CoreEffect::EvaluatePostTurn(request)],
                 snapshot: self.snapshot(),
             },
-            CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded(result)) => {
+            CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded {
+                correlation,
+                result,
+            }) => {
+                if self.in_flight_startup_check != Some(correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.in_flight_startup_check = None;
                 self.state.apply_startup_result(result);
-                self.startup_changed_outcome(Vec::new())
+                self.startup_changed_outcome(correlation, Vec::new())
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::SessionCatalogLoaded(result)) => {
                 self.state.apply_session_catalog_result(result);
                 self.session_catalog_changed_outcome(Vec::new())
             }
-            CoreInput::EffectCompleted(CoreEffectCompletion::ConversationLoaded(result)) => {
+            CoreInput::EffectCompleted(CoreEffectCompletion::ConversationLoaded {
+                correlation,
+                mut result,
+            }) => {
+                if self.in_flight_conversation_load.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                if result.as_ref().is_ok_and(|ready| {
+                    ready.conversation.thread_id != correlation.requested_thread_id
+                }) {
+                    result = Err("conversation provider returned a different thread".to_string());
+                }
+                let loaded_stream_identity = result.as_ref().ok().map(|ready| {
+                    (
+                        ready.thread_id.clone(),
+                        ready.title.clone(),
+                        ready.workspace_directory.clone(),
+                    )
+                });
+                self.in_flight_conversation_load = None;
                 self.state.apply_conversation_result(result);
                 self.turn_stream_state = TurnStreamState::new();
-                self.conversation_changed_outcome(Vec::new())
-            }
-            CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
-                let changed = self.state.apply_planning_runtime_projection(Box::new(
-                    result.runtime_projection().clone(),
-                ));
-                let snapshot = self.snapshot();
-                let mut events = Vec::new();
-                if changed {
-                    events.push(AppEvent::SnapshotChanged(snapshot.clone()));
+                if let Some((thread_id, title, cwd)) = loaded_stream_identity {
+                    self.turn_stream_state
+                        .seed_loaded_thread_identity(thread_id, title, cwd);
                 }
-                events.push(AppEvent::ManualPromptPrepared(result));
+                self.conversation_changed_outcome(Some(correlation), Vec::new())
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::ParallelPeekConversationLoaded {
+                request_id,
+                thread_id,
+                result,
+            }) => CoreDispatchOutcome {
+                events: vec![AppEvent::ParallelPeekConversationLoaded {
+                    request_id,
+                    thread_id,
+                    result,
+                }],
+                effects: Vec::new(),
+                snapshot: self.snapshot(),
+            },
+            CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
+                if self.in_flight_manual_prompt_preparation.as_ref() != Some(result.correlation()) {
+                    return CoreDispatchOutcome {
+                        events: Vec::new(),
+                        effects: Vec::new(),
+                        snapshot: self.snapshot(),
+                    };
+                }
+                self.in_flight_manual_prompt_preparation = None;
+                let snapshot = self.snapshot();
                 CoreDispatchOutcome {
-                    events,
+                    events: vec![AppEvent::ManualPromptPrepared(result)],
                     effects: Vec::new(),
                     snapshot,
                 }
@@ -192,10 +296,25 @@ impl CoreController {
         }
     }
 
-    fn startup_changed_outcome(&self, effects: Vec<CoreEffect>) -> CoreDispatchOutcome {
+    fn unchanged_outcome(&self) -> CoreDispatchOutcome {
+        CoreDispatchOutcome {
+            events: Vec::new(),
+            effects: Vec::new(),
+            snapshot: self.snapshot(),
+        }
+    }
+
+    fn startup_changed_outcome(
+        &self,
+        correlation: StartupCheckCorrelation,
+        effects: Vec<CoreEffect>,
+    ) -> CoreDispatchOutcome {
         let snapshot = self.snapshot();
         CoreDispatchOutcome {
-            events: vec![AppEvent::StartupChanged(snapshot.startup.clone())],
+            events: vec![AppEvent::StartupChanged {
+                correlation,
+                snapshot: snapshot.startup.clone(),
+            }],
             effects,
             snapshot,
         }
@@ -212,14 +331,29 @@ impl CoreController {
         }
     }
 
-    fn conversation_changed_outcome(&self, effects: Vec<CoreEffect>) -> CoreDispatchOutcome {
+    fn conversation_changed_outcome(
+        &self,
+        correlation: Option<ConversationLoadCorrelation>,
+        effects: Vec<CoreEffect>,
+    ) -> CoreDispatchOutcome {
         let snapshot = self.snapshot();
         CoreDispatchOutcome {
-            events: vec![AppEvent::ConversationChanged(snapshot.conversation.clone())],
+            events: vec![AppEvent::ConversationChanged {
+                correlation,
+                snapshot: snapshot.conversation.clone(),
+            }],
             effects,
             snapshot,
         }
     }
+}
+
+fn take_generation(next_generation: &mut u64, operation: &str) -> u64 {
+    let generation = *next_generation;
+    *next_generation = generation
+        .checked_add(1)
+        .unwrap_or_else(|| panic!("{operation} generation exhausted"));
+    generation
 }
 
 impl Default for CoreController {
@@ -252,6 +386,25 @@ mod tests {
     use crate::domain::planning::TurnSnapshotCapture;
     use crate::domain::recent_sessions::RecentSessions;
 
+    fn manual_prompt_correlation() -> crate::domain::planning::ManualPromptCorrelation {
+        crate::domain::planning::ManualPromptCorrelation {
+            request_id: 1,
+            generation: 1,
+            workspace_directory: "/tmp/workspace".to_string(),
+        }
+    }
+
+    fn startup_check_correlation(generation: u64) -> StartupCheckCorrelation {
+        StartupCheckCorrelation::new(generation)
+    }
+
+    fn conversation_load_correlation(
+        generation: u64,
+        thread_id: &str,
+    ) -> ConversationLoadCorrelation {
+        ConversationLoadCorrelation::new(generation, thread_id)
+    }
+
     #[test]
     fn new_controller_exposes_initial_snapshot() {
         let controller = CoreController::new();
@@ -283,30 +436,43 @@ mod tests {
         assert_eq!(outcome.snapshot.startup, StartupSnapshot::Loading);
         assert_eq!(
             outcome.events,
-            vec![AppEvent::StartupChanged(StartupSnapshot::Loading)]
+            vec![AppEvent::StartupChanged {
+                correlation: startup_check_correlation(1),
+                snapshot: StartupSnapshot::Loading,
+            }]
         );
-        assert_eq!(outcome.effects, vec![CoreEffect::RunStartupChecks]);
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::RunStartupChecks {
+                correlation: startup_check_correlation(1),
+            }]
+        );
     }
 
     #[test]
     fn startup_completion_marks_startup_ready() {
         let mut controller = CoreController::new();
         let ready_snapshot = sample_startup_ready_snapshot();
+        controller.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::StartupChecksLoaded(Ok(Box::new(ready_snapshot.clone()))),
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation(1),
+                result: Ok(Box::new(ready_snapshot.clone())),
+            },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.revision, 2);
         assert_eq!(
             outcome.snapshot.startup,
             StartupSnapshot::Ready(Box::new(ready_snapshot.clone()))
         );
         assert_eq!(
             outcome.events,
-            vec![AppEvent::StartupChanged(StartupSnapshot::Ready(Box::new(
-                ready_snapshot
-            )))]
+            vec![AppEvent::StartupChanged {
+                correlation: startup_check_correlation(1),
+                snapshot: StartupSnapshot::Ready(Box::new(ready_snapshot)),
+            }]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -314,12 +480,16 @@ mod tests {
     #[test]
     fn startup_completion_marks_startup_failed() {
         let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::StartupChecksLoaded(Err("codex missing".to_string())),
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation(1),
+                result: Err("codex missing".to_string()),
+            },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.revision, 2);
         assert_eq!(
             outcome.snapshot.startup,
             StartupSnapshot::Failed {
@@ -328,11 +498,60 @@ mod tests {
         );
         assert_eq!(
             outcome.events,
-            vec![AppEvent::StartupChanged(StartupSnapshot::Failed {
-                message: "codex missing".to_string()
-            })]
+            vec![AppEvent::StartupChanged {
+                correlation: startup_check_correlation(1),
+                snapshot: StartupSnapshot::Failed {
+                    message: "codex missing".to_string(),
+                },
+            }]
         );
         assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn startup_completion_only_accepts_latest_generation_in_both_orders() {
+        let mut stale_success = CoreController::new();
+        stale_success.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        stale_success.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+
+        let dropped = stale_success.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation(1),
+                result: Ok(Box::new(sample_startup_ready_snapshot())),
+            },
+        ));
+        assert!(dropped.events.is_empty());
+        assert_eq!(dropped.snapshot.startup, StartupSnapshot::Loading);
+
+        let accepted = stale_success.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation(2),
+                result: Err("latest startup failed".to_string()),
+            },
+        ));
+        assert!(matches!(
+            accepted.snapshot.startup,
+            StartupSnapshot::Failed { ref message } if message == "latest startup failed"
+        ));
+
+        let mut stale_failure = CoreController::new();
+        stale_failure.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        stale_failure.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        let accepted = stale_failure.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation(2),
+                result: Ok(Box::new(sample_startup_ready_snapshot())),
+            },
+        ));
+        let accepted_snapshot = accepted.snapshot.startup.clone();
+        let dropped = stale_failure.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation(1),
+                result: Err("stale startup failed".to_string()),
+            },
+        ));
+        assert!(dropped.events.is_empty());
+        assert_eq!(dropped.snapshot.startup, accepted_snapshot);
     }
 
     #[test]
@@ -377,13 +596,38 @@ mod tests {
         assert_eq!(outcome.snapshot.conversation, ConversationSnapshot::Loading);
         assert_eq!(
             outcome.events,
-            vec![AppEvent::ConversationChanged(ConversationSnapshot::Loading)]
+            vec![AppEvent::ConversationChanged {
+                correlation: Some(conversation_load_correlation(1, "thread-1")),
+                snapshot: ConversationSnapshot::Loading,
+            }]
         );
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::LoadConversation {
-                thread_id: "thread-1".to_string(),
+                correlation: conversation_load_correlation(1, "thread-1"),
                 fallback_workspace_directory: "/tmp/root".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parallel_peek_load_dispatches_effect_without_replacing_active_conversation() {
+        let mut controller = CoreController::new();
+
+        let outcome = controller.handle_input(CoreInput::Command(
+            AppCommand::LoadParallelPeekConversation {
+                request_id: 7,
+                thread_id: "thread-peek".to_string(),
+            },
+        ));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert!(outcome.events.is_empty());
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::LoadParallelPeekConversation {
+                request_id: 7,
+                thread_id: "thread-peek".to_string(),
             }]
         );
     }
@@ -412,7 +656,7 @@ mod tests {
     fn prepare_manual_prompt_returns_core_effect_without_state_revision() {
         let mut controller = CoreController::new();
         let request = ManualPromptPreparationRequest {
-            workspace_directory: "/tmp/workspace".to_string(),
+            correlation: manual_prompt_correlation(),
             raw_prompt: "ship it".to_string(),
             parent_thread_id: Some("thread-1".to_string()),
             parent_turn_id: Some("turn-1".to_string()),
@@ -428,6 +672,148 @@ mod tests {
             vec![CoreEffect::PrepareManualPrompt(Box::new(request))]
         );
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
+    }
+
+    #[test]
+    fn manual_prompt_preparation_dispatch_and_completion_are_exactly_once() {
+        let mut controller = CoreController::new();
+        let correlation = manual_prompt_correlation();
+        let request = ManualPromptPreparationRequest {
+            correlation: correlation.clone(),
+            raw_prompt: "ship it".to_string(),
+            parent_thread_id: None,
+            parent_turn_id: None,
+        };
+
+        let first = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(request.clone()),
+        )));
+        let duplicate = controller.handle_input(CoreInput::Command(
+            AppCommand::PrepareManualPrompt(Box::new(request)),
+        ));
+        let mut other_correlation = correlation.clone();
+        other_correlation.request_id += 1;
+        let overlapping = controller.handle_input(CoreInput::Command(
+            AppCommand::PrepareManualPrompt(Box::new(ManualPromptPreparationRequest {
+                correlation: other_correlation.clone(),
+                raw_prompt: "other".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
+            })),
+        ));
+
+        assert_eq!(first.effects.len(), 1);
+        assert!(duplicate.effects.is_empty());
+        assert!(overlapping.effects.is_empty());
+
+        let stale_result = Box::new(ManualPromptPreparationResult::Rejected {
+            correlation: other_correlation.clone(),
+            transcript_text: "other".to_string(),
+            runtime_projection: Box::new(PlanningRuntimeProjection::invalid("stale")),
+            reason: "stale".to_string(),
+        });
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(stale_result),
+        ));
+        assert!(stale.events.is_empty());
+
+        let matching_result = Box::new(ManualPromptPreparationResult::Rejected {
+            correlation,
+            transcript_text: "ship it".to_string(),
+            runtime_projection: Box::new(PlanningRuntimeProjection::invalid("blocked")),
+            reason: "blocked".to_string(),
+        });
+        let matching = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(matching_result.clone()),
+        ));
+        let duplicate_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(matching_result),
+        ));
+        assert!(
+            matching
+                .events
+                .iter()
+                .any(|event| matches!(event, AppEvent::ManualPromptPrepared(_)))
+        );
+        assert!(duplicate_completion.events.is_empty());
+
+        let next = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(ManualPromptPreparationRequest {
+                correlation: other_correlation,
+                raw_prompt: "other".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
+            }),
+        )));
+        assert_eq!(next.effects.len(), 1);
+    }
+
+    #[test]
+    fn cancelling_manual_prompt_preparation_reopens_dispatch_and_drops_late_completion() {
+        let mut controller = CoreController::new();
+        let first_correlation = manual_prompt_correlation();
+        let first_request = ManualPromptPreparationRequest {
+            correlation: first_correlation.clone(),
+            raw_prompt: "old workspace prompt".to_string(),
+            parent_thread_id: None,
+            parent_turn_id: None,
+        };
+        let _ = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(first_request),
+        )));
+
+        let cancelled = controller.handle_input(CoreInput::Command(
+            AppCommand::CancelManualPromptPreparation,
+        ));
+        assert!(cancelled.events.is_empty());
+        assert!(cancelled.effects.is_empty());
+        assert!(controller.in_flight_manual_prompt_preparation.is_none());
+
+        let mut second_correlation = first_correlation.clone();
+        second_correlation.request_id += 1;
+        second_correlation.generation += 1;
+        second_correlation.workspace_directory = "/tmp/other-workspace".to_string();
+        let second = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(ManualPromptPreparationRequest {
+                correlation: second_correlation.clone(),
+                raw_prompt: "new workspace prompt".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
+            }),
+        )));
+        assert_eq!(second.effects.len(), 1);
+
+        let late = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(
+                ManualPromptPreparationResult::Rejected {
+                    correlation: first_correlation,
+                    transcript_text: "old workspace prompt".to_string(),
+                    runtime_projection: Box::new(PlanningRuntimeProjection::invalid("stale")),
+                    reason: "late completion".to_string(),
+                },
+            )),
+        ));
+        assert!(late.events.is_empty());
+        assert_eq!(
+            controller.in_flight_manual_prompt_preparation,
+            Some(second_correlation.clone())
+        );
+
+        let current = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(
+                ManualPromptPreparationResult::Rejected {
+                    correlation: second_correlation,
+                    transcript_text: "new workspace prompt".to_string(),
+                    runtime_projection: Box::new(PlanningRuntimeProjection::invalid("blocked")),
+                    reason: "current completion".to_string(),
+                },
+            )),
+        ));
+        assert!(matches!(
+            current.events.as_slice(),
+            [AppEvent::ManualPromptPrepared(_)]
+        ));
+        assert!(controller.in_flight_manual_prompt_preparation.is_none());
     }
 
     #[test]
@@ -495,21 +881,29 @@ mod tests {
     fn conversation_completion_marks_ready() {
         let mut controller = CoreController::new();
         let ready = sample_conversation_ready_snapshot();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        }));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::ConversationLoaded(Ok(Box::new(ready.clone()))),
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-1"),
+                result: Ok(Box::new(ready.clone())),
+            },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.revision, 2);
         assert_eq!(
             outcome.snapshot.conversation,
             ConversationSnapshot::Ready(Box::new(ready.clone()))
         );
         assert_eq!(
             outcome.events,
-            vec![AppEvent::ConversationChanged(ConversationSnapshot::Ready(
-                Box::new(ready)
-            ))]
+            vec![AppEvent::ConversationChanged {
+                correlation: Some(conversation_load_correlation(1, "thread-1")),
+                snapshot: ConversationSnapshot::Ready(Box::new(ready)),
+            }]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -517,12 +911,19 @@ mod tests {
     #[test]
     fn conversation_completion_marks_failed() {
         let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        }));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::ConversationLoaded(Err("thread unavailable".to_string())),
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-1"),
+                result: Err("thread unavailable".to_string()),
+            },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.revision, 2);
         assert_eq!(
             outcome.snapshot.conversation,
             ConversationSnapshot::Failed {
@@ -531,11 +932,147 @@ mod tests {
         );
         assert_eq!(
             outcome.events,
-            vec![AppEvent::ConversationChanged(
-                ConversationSnapshot::Failed {
+            vec![AppEvent::ConversationChanged {
+                correlation: Some(conversation_load_correlation(1, "thread-1")),
+                snapshot: ConversationSnapshot::Failed {
                     message: "thread unavailable".to_string()
-                }
-            )]
+                },
+            }]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_completion_only_accepts_latest_request() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-a".to_string(),
+            fallback_workspace_directory: "/tmp/a".to_string(),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-b".to_string(),
+            fallback_workspace_directory: "/tmp/b".to_string(),
+        }));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-a"),
+                result: Err("stale A failure".to_string()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(stale.snapshot.conversation, ConversationSnapshot::Loading);
+
+        let thread_b = sample_conversation_ready_snapshot_for("thread-b");
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(2, "thread-b"),
+                result: Ok(Box::new(thread_b.clone())),
+            },
+        ));
+        assert_eq!(
+            accepted.snapshot.conversation,
+            ConversationSnapshot::Ready(Box::new(thread_b.clone()))
+        );
+
+        let late_success = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-a"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for("thread-a"))),
+            },
+        ));
+        assert!(late_success.events.is_empty());
+        assert_eq!(
+            late_success.snapshot.conversation,
+            ConversationSnapshot::Ready(Box::new(thread_b))
+        );
+    }
+
+    #[test]
+    fn invalidated_conversation_load_cannot_reset_new_turn_stream() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-a".to_string(),
+            fallback_workspace_directory: "/tmp/a".to_string(),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        controller.handle_input(CoreInput::ConversationStreamUpdated(
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-draft".to_string(),
+                title: "New draft".to_string(),
+                cwd: "/tmp/new".to_string(),
+            },
+        ));
+        controller.handle_input(CoreInput::ConversationStreamUpdated(
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-new".to_string(),
+            },
+        ));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-a"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for("thread-a"))),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(stale.snapshot.conversation, ConversationSnapshot::Idle);
+
+        let notice = controller.handle_input(CoreInput::ConversationRuntimeNotice(
+            "new turn still active".to_string(),
+        ));
+        assert!(matches!(
+            notice.events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if snapshot.thread_id.as_deref() == Some("thread-draft")
+                    && snapshot.active_turn_id.as_deref() == Some("turn-new")
+        ));
+    }
+
+    #[test]
+    fn matching_conversation_request_rejects_provider_thread_mismatch() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-a".to_string(),
+            fallback_workspace_directory: "/tmp/a".to_string(),
+        }));
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-a"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for(
+                    "thread-other",
+                ))),
+            },
+        ));
+        assert!(matches!(
+            outcome.snapshot.conversation,
+            ConversationSnapshot::Failed { ref message }
+                if message == "conversation provider returned a different thread"
+        ));
+    }
+
+    #[test]
+    fn parallel_peek_completion_passes_through_without_mutating_core_state() {
+        let mut controller = CoreController::new();
+        let ready = sample_conversation_ready_snapshot();
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ParallelPeekConversationLoaded {
+                request_id: 7,
+                thread_id: "thread-peek".to_string(),
+                result: Ok(Box::new(ready.clone())),
+            },
+        ));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ParallelPeekConversationLoaded {
+                request_id: 7,
+                thread_id: "thread-peek".to_string(),
+                result: Ok(Box::new(ready)),
+            }]
         );
         assert!(outcome.effects.is_empty());
     }
@@ -635,7 +1172,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_load_resets_previous_turn_stream_identity() {
+    fn conversation_load_replaces_previous_turn_stream_identity() {
         let mut controller = CoreController::new();
         controller.handle_input(CoreInput::ConversationStreamUpdated(
             TurnStreamEvent::ThreadPrepared {
@@ -644,10 +1181,15 @@ mod tests {
                 cwd: "/tmp/old".to_string(),
             },
         ));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
         controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::ConversationLoaded(Ok(Box::new(
-                sample_conversation_ready_snapshot(),
-            ))),
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-1"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot())),
+            },
         ));
 
         let outcome = controller.handle_input(CoreInput::ConversationRuntimeNotice(
@@ -658,9 +1200,9 @@ mod tests {
             outcome.events,
             vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
                 revision: 1,
-                thread_id: None,
-                title: None,
-                cwd: None,
+                thread_id: Some("thread-1".to_string()),
+                title: Some("Core runtime".to_string()),
+                cwd: Some("/tmp/workspace".to_string()),
                 active_turn_id: None,
                 status_text: None,
                 terminal: None,
@@ -670,6 +1212,44 @@ mod tests {
             })]
         );
         assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn resumed_turn_accepts_post_turn_completion_without_thread_prepared_event() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-1"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot())),
+            },
+        ));
+        controller.handle_input(CoreInput::ConversationStreamUpdated(
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+            },
+        ));
+        controller.handle_input(CoreInput::ConversationTurnCompleted {
+            turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: TurnSnapshotCapture::capture_failed(
+                "/tmp/workspace",
+                "test capture skipped".to_string(),
+            ),
+        });
+        let execution = Box::new(sample_post_turn_execution());
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
+        ));
+
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
+        );
     }
 
     #[test]
@@ -729,9 +1309,19 @@ mod tests {
     }
 
     #[test]
-    fn manual_prompt_preparation_completion_updates_projection_and_passes_through() {
+    fn manual_prompt_preparation_completion_defers_projection_until_tui_accepts_correlation() {
         let mut controller = CoreController::new();
+        let correlation = manual_prompt_correlation();
+        let _ = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(ManualPromptPreparationRequest {
+                correlation: correlation.clone(),
+                raw_prompt: "ship it".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
+            }),
+        )));
         let result = Box::new(ManualPromptPreparationResult::Rejected {
+            correlation,
             transcript_text: "ship it".to_string(),
             runtime_projection: Box::new(PlanningRuntimeProjection::invalid(
                 "planning validation failed",
@@ -743,14 +1333,8 @@ mod tests {
             CoreEffectCompletion::ManualPromptPrepared(result.clone()),
         ));
 
-        assert_eq!(outcome.snapshot.revision, 1);
-        assert_eq!(
-            outcome.events,
-            vec![
-                AppEvent::SnapshotChanged(outcome.snapshot.clone()),
-                AppEvent::ManualPromptPrepared(result)
-            ]
-        );
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(outcome.events, vec![AppEvent::ManualPromptPrepared(result)]);
         assert!(outcome.effects.is_empty());
     }
 
@@ -883,8 +1467,12 @@ mod tests {
     }
 
     fn sample_conversation_ready_snapshot() -> ConversationReadySnapshot {
+        sample_conversation_ready_snapshot_for("thread-1")
+    }
+
+    fn sample_conversation_ready_snapshot_for(thread_id: &str) -> ConversationReadySnapshot {
         DomainConversationSnapshot {
-            thread_id: "thread-1".to_string(),
+            thread_id: thread_id.to_string(),
             title: "Core runtime".to_string(),
             cwd: "/tmp/workspace".to_string(),
             messages: vec![ConversationMessage::new(

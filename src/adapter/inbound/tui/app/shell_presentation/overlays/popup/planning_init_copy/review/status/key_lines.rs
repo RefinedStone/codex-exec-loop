@@ -17,7 +17,9 @@ pub(super) fn build_simple_review_key_lines(is_turn_budget_editing: bool) -> Vec
                 "controls: Enter saves  |  Esc/Ctrl+C cancels  |  Backspace deletes",
             ),
             // 세 번째 줄은 validation rule을 UI에 드러내 잘못된 budget 입력을 줄인다.
-            AkraTheme::key_line("validation: use a whole number greater than 0, or type infinite."),
+            AkraTheme::key_line(
+                "validation: use a positive whole number or infinite to enable; off or 0 disables.",
+            ),
         ];
     }
 

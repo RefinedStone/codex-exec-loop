@@ -18,12 +18,14 @@ use crate::domain::conversation::{
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
 
+const TEST_AUTO_FOLLOW_MAX_TURNS: usize = 20;
+
 // ConversationViewModel tests start from a fully loaded thread rather than a
 // startup shell. That keeps each assertion focused on reducer-visible
 // presentation state: warnings, notices, approval status, and auto-follow
 // decisions.
 fn ready_conversation() -> ConversationViewModel {
-    ConversationViewModel::from_snapshot(
+    let mut conversation = ConversationViewModel::from_snapshot(
         ConversationSnapshot {
             thread_id: "thread-1".to_string(),
             title: "Existing session".to_string(),
@@ -33,7 +35,11 @@ fn ready_conversation() -> ConversationViewModel {
             runtime_notices: Vec::new(),
         },
         "/tmp/workspace".to_string(),
-    )
+    );
+    conversation
+        .auto_follow_state
+        .set_max_auto_turns(TEST_AUTO_FOLLOW_MAX_TURNS);
+    conversation
 }
 
 // Auto-follow prompt rendering consults the planning runtime, but these tests
@@ -253,7 +259,7 @@ fn approval_review_status_preserves_warning_suffix() {
 
     assert_eq!(
         conversation.status_text,
-        "approval review in progress / target: command-1 / risk: high / handling: manual handoff / warning"
+        "approval review in progress / target: command-1 / risk: high / warning"
     );
 }
 
@@ -272,7 +278,7 @@ fn stop_keyword_rule_normalizes_valid_identifier_like_values() {
 }
 
 #[test]
-fn max_auto_turn_candidate_accepts_positive_numbers_and_infinite() {
+fn max_auto_turn_candidate_accepts_positive_infinite_and_disable_tokens() {
     assert_eq!(
         AutoFollowState::normalize_max_auto_turns_candidate(" 7 "),
         Some(7)
@@ -287,12 +293,58 @@ fn max_auto_turn_candidate_accepts_positive_numbers_and_infinite() {
     );
     assert_eq!(
         AutoFollowState::normalize_max_auto_turns_candidate("0"),
-        None
+        Some(0)
+    );
+    assert_eq!(
+        AutoFollowState::normalize_max_auto_turns_candidate(" OFF "),
+        Some(0)
     );
     assert_eq!(
         AutoFollowState::normalize_max_auto_turns_candidate("three"),
         None
     );
+}
+
+#[test]
+fn new_and_resumed_conversations_default_auto_follow_to_off() {
+    let draft = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+    assert!(!draft.auto_follow_state.is_enabled());
+    assert!(!draft.auto_follow_state.can_queue_next());
+    assert_eq!(draft.auto_follow_state.max_auto_turns_label(), "off");
+
+    let resumed = ConversationViewModel::from_snapshot(
+        ConversationSnapshot {
+            thread_id: "thread-off".to_string(),
+            title: "Existing session".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        },
+        "/tmp/workspace".to_string(),
+    );
+    assert!(!resumed.auto_follow_state.is_enabled());
+    assert!(!resumed.auto_follow_state.can_queue_next());
+    assert_eq!(resumed.auto_follow_state.progress_label(), "off");
+}
+
+#[test]
+fn manual_turn_reset_preserves_off_and_operator_stop_until_explicit_rearm() {
+    let mut disabled = AutoFollowState::new();
+    disabled.reset_for_manual_turn();
+    assert!(!disabled.can_queue_next());
+    assert_eq!(disabled.max_auto_turns_label(), "off");
+
+    let mut stopped = AutoFollowState::new();
+    stopped.set_max_auto_turns(4);
+    stopped.pause_post_turn_continuation();
+    stopped.reset_for_manual_turn();
+    assert!(stopped.post_turn_continuation_paused());
+    assert!(!stopped.can_queue_next());
+
+    stopped.set_max_auto_turns(4);
+    assert!(!stopped.post_turn_continuation_paused());
+    assert!(stopped.can_queue_next());
 }
 
 // Stop rules are evaluated before creating another app-server turn. The cases

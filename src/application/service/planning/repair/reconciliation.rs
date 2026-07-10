@@ -137,9 +137,9 @@ impl PlanningReconciliationService {
 
     /*
      * turn이 capture된 active path를 실제로 건드렸을 때만 protected planning file을 복구한다.
-     * changed path list가 cheap guard이고, result-output이 포함되면 service는 pre-turn snapshot을
-     * commit하고 notice를 기록한다. TUI/auto-follow caller가 reconciliation이 보호 planning copy에
-     * 대한 turn edit을 의도적으로 폐기했음을 설명할 수 있게 하기 위해서다.
+     * changed path list가 cheap guard이고, result-output이 포함되면 service는 현재 candidate를 읽은
+     * 뒤 그 exact value에 대해서만 pre-turn snapshot을 CAS 복구한다. 중간에 operator edit이 들어오면
+     * 현재 내용을 보존하고 auto-follow를 차단한다.
      */
     pub fn reconcile_after_turn(
         &self,
@@ -154,14 +154,31 @@ impl PlanningReconciliationService {
         }
 
         let mut result = PlanningReconciliationResult::default();
-        self.planning_workspace_port
-            .commit_planning_workspace_files(
-                workspace_dir,
-                &execution_snapshot_to_workspace_record(execution_snapshot),
-            )?;
-        result
-            .notices
-            .push("planning reconciliation restored protected planning files".to_string());
+        let observed = self
+            .planning_workspace_port
+            .load_planning_workspace_files(workspace_dir)?;
+        let replacement = execution_snapshot_to_workspace_record(execution_snapshot);
+        if observed == replacement {
+            return Ok(result);
+        }
+        if self
+            .planning_workspace_port
+            .compare_and_swap_planning_workspace_files(workspace_dir, &observed, &replacement)?
+        {
+            result
+                .notices
+                .push("planning reconciliation restored protected planning files".to_string());
+            result
+                .restored_protected_files
+                .push(PlanningProtectedFileRestoration {
+                    relative_path: RESULT_OUTPUT_FILE_PATH,
+                    archived_candidate_path: None,
+                });
+        } else {
+            let blocked = "planning reconciliation detected a concurrent protected-file mutation; current operator content was preserved and automatic continuation was blocked".to_string();
+            result.notices.push(blocked.clone());
+            result.auto_follow_block_reason = Some(blocked);
+        }
         Ok(result)
     }
 }

@@ -183,6 +183,15 @@ fn upsert_task_row(
     task: &crate::domain::planning::TaskDefinition,
 ) -> Result<()> {
     let task_id = task.id.trim();
+    // An explicit authority recreation is the only operation that clears a
+    // retirement tombstone. Runtime projection writers cannot resurrect a
+    // task merely by replaying stale worker state.
+    transaction
+        .execute(
+            "DELETE FROM retired_planning_tasks WHERE task_id = ?1",
+            params![task_id],
+        )
+        .with_context(|| format!("failed to clear retired task marker `{task_id}`"))?;
     /*
     The searchable columns are intentionally normalized views of the domain task. The
     JSON payload remains the full restore source, while these columns support queue,

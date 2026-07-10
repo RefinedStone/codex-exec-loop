@@ -64,7 +64,6 @@ mod tests {
     use crate::application::port::outbound::startup_probe_port::{
         AppServerStartupContext, StartupProbePort,
     };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
     use crate::application::service::session_service::SessionService;
@@ -131,7 +130,7 @@ mod tests {
             _cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }
@@ -140,7 +139,7 @@ mod tests {
             _thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }

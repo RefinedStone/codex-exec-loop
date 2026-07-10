@@ -26,7 +26,10 @@ fn build_runtime_events_snapshot_reads_bounded_slot_timeline() {
 
     assert_eq!(snapshot.total_event_count, 2);
     assert_eq!(snapshot.visible_count(), 2);
-    assert_eq!(snapshot.entries[0].event_kind, "slot_lease_upsert");
+    assert_eq!(
+        snapshot.entries[0].event_kind,
+        "slot_lease_replaced_if_matches"
+    );
     assert_eq!(snapshot.entries[0].projection_kind, "slot_lease");
     assert_eq!(snapshot.entries[0].projection_key, "slot-1");
     assert!(snapshot.entries[0].summary.contains("state: running"));

@@ -1,18 +1,15 @@
-// interactive turn runtime은 별도 worker/thread에서 stream event를 밀어 넣는다.
-// `Sender`를 port 메서드 인자로 받으면 TUI 쪽 수신 루프가 만든 채널에 outbound adapter가 직접 이벤트를 보낼 수 있다.
-use std::sync::mpsc::Sender;
-
 // app-server 실행, snapshot 조회, stop 요청은 모두 I/O 경계라 실패할 수 있다.
 // application service는 구체 오류 타입보다 failure context 보존이 중요하므로 `anyhow::Result`를 그대로 사용한다.
 use anyhow::Result;
 
 // `ConversationStreamEvent`는 outbound runtime이 TUI로 보내는 application-level stream contract이다.
 // port는 app-server protocol event가 아니라 이 정규화된 enum만 노출한다.
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::ConversationStreamSender;
 // snapshot은 저장된 conversation read model이고, runtime control truth는 중단/제어의 실제 소유자를 나타낸다.
 // 둘 다 TUI가 구체 adapter 타입을 몰라도 대화 화면과 제어 버튼을 구성하게 해 주는 domain 값이다.
 use crate::domain::conversation::{
-    ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
+    ConversationApprovalDecision, ConversationRuntimeControlTruth, ConversationSnapshot,
+    ConversationTurnOptions,
 };
 
 // `InteractiveTurnRuntimePort`는 `ConversationService`가 outbound runtime에 요구하는 대화 실행 계약이다.
@@ -34,6 +31,14 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
     // TUI controller는 사용자 명령을 이 메서드 하나로 전달하고, adapter는 app-server connection/turn interrupt 구현을 소유한다.
     fn request_stop_all_sessions(&self) -> Result<()>;
 
+    fn resolve_approval_request(
+        &self,
+        _approval_id: &str,
+        _decision: ConversationApprovalDecision,
+    ) -> Result<()> {
+        anyhow::bail!("interactive approval decisions are not supported by this runtime")
+    }
+
     // 아직 thread_id가 없는 새 대화를 시작하고 첫 prompt를 stream으로 실행한다.
     // 성공은 "stream worker를 시작했다"는 의미이고, 실제 메시지/완료/실패 상태는 `event_sender`로 이어서 전달된다.
     fn run_new_thread_stream(
@@ -46,7 +51,7 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         options: ConversationTurnOptions,
         // outbound runtime이 `ThreadPrepared`, `TurnStarted`, delta, tool activity, completion/failure를 보낼 채널이다.
         // sender 소유권을 넘기는 이유는 runtime worker가 호출 stack보다 오래 살아 있을 수 있기 때문이다.
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()>;
 
     // 이미 존재하는 conversation thread에 후속 prompt를 stream으로 실행한다.
@@ -60,6 +65,6 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         // model/think 같은 operator-selected turn overrides이다.
         options: ConversationTurnOptions,
         // 후속 turn의 stream event를 전달할 채널이다. 실패도 panic이 아니라 `Failed` 이벤트나 `Result` 오류로 표현된다.
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()>;
 }

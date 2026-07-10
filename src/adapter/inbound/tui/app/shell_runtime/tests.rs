@@ -105,7 +105,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         _cwd: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         Ok(())
     }
@@ -114,7 +114,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         _thread_id: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         Ok(())
     }
@@ -162,7 +162,7 @@ impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         _request: ParallelAgentWorkerStreamRequest<'_>,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         self.launch_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -317,18 +317,18 @@ fn conversation_lifecycle_body_state_is_driven_by_core_snapshot() {
     /*
      * Session selection may keep presentation chrome such as the highlighted
      * session row in TUI, but Loading/Ready/Failed conversation body state must
-     * come back through core ConversationChanged snapshots. Test-only background
-     * load messages re-enter the same core completion path instead of calling the
-     * TUI lifecycle reducer directly.
+     * come back through correlated core ConversationChanged snapshots. The
+     * test-only background shim uses the same TUI correlation gate.
      */
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
     const CONVERSATION_LIFECYCLE_RS: &str = include_str!("../conversation_lifecycle.rs");
     const SHELL_RUNTIME_RS: &str = include_str!("../shell_runtime.rs");
 
-    assert!(APP_RUNTIME_RS.contains("AppEvent::ConversationChanged(snapshot)"));
+    assert!(APP_RUNTIME_RS.contains("AppEvent::ConversationChanged {"));
+    assert!(APP_RUNTIME_RS.contains("apply_correlated_conversation_snapshot"));
     assert!(APP_RUNTIME_RS.contains("apply_core_conversation_snapshot(snapshot)"));
     assert!(CONVERSATION_LIFECYCLE_RS.contains("CoreConversationSnapshotApplied"));
-    assert!(SHELL_RUNTIME_RS.contains("CoreEffectCompletion::ConversationLoaded"));
+    assert!(SHELL_RUNTIME_RS.contains("ConversationLoadCorrelation::new"));
     assert!(!APP_RUNTIME_RS.contains("apply_loaded_conversation_result"));
     assert!(!SHELL_RUNTIME_RS.contains("apply_loaded_conversation_result"));
     assert!(!CONVERSATION_LIFECYCLE_RS.contains("ConversationLifecycleEvent::ConversationLoaded"));
@@ -565,10 +565,16 @@ fn create_temp_git_repo(prefix: &str) -> String {
     run_git(&root, &["commit", "-qm", "init"]);
     run_git(&root, &["branch", "akra"]);
     run_git(&root, &["branch", "prerelease"]);
-    run_git(
-        &root,
-        &["update-ref", "refs/remotes/origin/prerelease", "prerelease"],
-    );
+    let origin = root
+        .parent()
+        .expect("temp repository should have a parent")
+        .join("origin.git");
+    let origin_path = origin
+        .to_str()
+        .expect("temp origin path should be valid utf-8");
+    run_git(&root, &["init", "--bare", "-q", origin_path]);
+    run_git(&root, &["remote", "add", "origin", origin_path]);
+    run_git(&root, &["push", "-q", "-u", "origin", "prerelease"]);
 
     fs::canonicalize(&root)
         .expect("temp git repo should canonicalize")

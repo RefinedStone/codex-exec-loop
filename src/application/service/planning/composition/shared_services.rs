@@ -59,6 +59,7 @@ impl PlanningSharedServices {
         let directions = PlanningDirectionsService::new(
             ports.workspace.clone(),
             ports.task_repository.clone(),
+            ports.authority.clone(),
             validation.clone(),
             priority_queue.clone(),
         );

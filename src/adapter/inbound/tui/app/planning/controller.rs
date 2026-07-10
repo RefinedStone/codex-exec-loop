@@ -498,7 +498,6 @@ mod tests {
     use crate::application::port::outbound::startup_probe_port::{
         AppServerStartupContext, StartupProbePort,
     };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
     use crate::application::service::planning::{
@@ -582,7 +581,7 @@ mod tests {
             _cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> anyhow::Result<()> {
             Ok(())
         }
@@ -592,7 +591,7 @@ mod tests {
             _thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> anyhow::Result<()> {
             Ok(())
         }
@@ -898,8 +897,8 @@ mod tests {
         );
 
         let truth = codex_port.runtime_control_truth();
-        assert_eq!(truth.approval, ConversationControlSupport::ManualHandoff);
-        assert_eq!(truth.interrupt, ConversationControlSupport::Unsupported);
+        assert_eq!(truth.approval, ConversationControlSupport::RuntimeNative);
+        assert_eq!(truth.interrupt, ConversationControlSupport::RuntimeNative);
 
         let snapshot = codex_port
             .load_conversation_snapshot("thread-fixture")
@@ -908,7 +907,8 @@ mod tests {
         codex_port
             .request_stop_all_sessions()
             .expect("stop should be accepted");
-        let (new_thread_sender, _new_thread_receiver) = std::sync::mpsc::channel();
+        let (new_thread_sender, _new_thread_receiver) =
+            crate::application::service::conversation_runtime_event::conversation_stream_channel();
         codex_port
             .run_new_thread_stream(
                 "/tmp/root",
@@ -917,7 +917,8 @@ mod tests {
                 new_thread_sender,
             )
             .expect("new thread stream should be accepted");
-        let (turn_sender, _turn_receiver) = std::sync::mpsc::channel();
+        let (turn_sender, _turn_receiver) =
+            crate::application::service::conversation_runtime_event::conversation_stream_channel();
         codex_port
             .run_turn_stream(
                 "thread-fixture",

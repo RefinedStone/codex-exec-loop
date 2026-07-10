@@ -43,7 +43,8 @@ The canonical current contract for supersession, planning, and directions lives 
 - Some shell actions remain gated by startup diagnostics.
 - Non-stream requests can still fall back to isolated runtime access while a main stream is active.
 - Planning detail mode supports manual authoring only; the `llm-assisted` branch remains disabled.
-- The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.
+- The main TUI supports one-shot command-execution and bounded turn-scoped permission approvals;
+  uninspectable file-change requests, unattended workers, and unsupported methods remain fail-closed.
 
 ## Code Entry
 

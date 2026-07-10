@@ -7,6 +7,7 @@ use crate::application::service::planning::{
     PlanningTaskHandoff,
 };
 use crate::diagnostics::event_log;
+use crate::domain::planning::PostTurnContinuationPermit;
 use serde_json::json;
 
 // Repair 진행 상태는 TUI의 planning worker panel에 남는다. 사용자는 hidden prompt를
@@ -36,6 +37,7 @@ impl PostTurnEvaluationExecutor {
         repair_request: &PlanningRepairRequest,
         // 이전 handoff task는 repair가 queue-driven 흐름에서 어떤 task context를 보존해야 하는지 알려 준다.
         previous_handoff_task: Option<&PlanningTaskHandoff>,
+        continuation_permit: &PostTurnContinuationPermit,
     ) -> HiddenPlanningRepairOutcome {
         let log_context =
             PostTurnWorkerLogContext::new(thread_id, completed_turn_id, workspace_directory);
@@ -49,6 +51,7 @@ impl PostTurnEvaluationExecutor {
                 repair_request,
                 previous_handoff_task,
                 max_attempts: DEFAULT_POST_TURN_REPAIR_ATTEMPT_LIMIT,
+                continuation_permit,
             });
         self.apply_repair_outcome(
             log_context,

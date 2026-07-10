@@ -1,3 +1,4 @@
+use crate::core::app::{AppCommand, ConversationReadySnapshot};
 use crate::domain::parallel_mode::ParallelModeAgentRosterEntry;
 
 use super::parallel_peek_overlay_ui::ParallelPeekConversationPreview;
@@ -135,40 +136,60 @@ impl NativeTuiApp {
             return;
         };
 
-        let thread_id = entry.thread_id.clone();
-        let preview = match thread_id.as_deref() {
-            Some(thread_id) => match self.application.load_conversation_snapshot(thread_id) {
-                Ok(snapshot) => ParallelPeekConversationPreview {
-                    agent_id: entry.agent_id,
-                    slot_id: entry.slot_id,
-                    task_title: entry.task_title,
-                    thread_id: Some(thread_id.to_string()),
-                    snapshot: Some(snapshot),
-                    status_text: "conversation snapshot loaded".to_string(),
-                },
-                Err(error) => ParallelPeekConversationPreview {
-                    agent_id: entry.agent_id,
-                    slot_id: entry.slot_id,
-                    task_title: entry.task_title,
-                    thread_id: Some(thread_id.to_string()),
-                    snapshot: None,
-                    status_text: format!("conversation snapshot failed: {error}"),
-                },
-            },
-            None => ParallelPeekConversationPreview {
-                agent_id: entry.agent_id,
-                slot_id: entry.slot_id,
-                task_title: entry.task_title,
-                thread_id: None,
-                snapshot: None,
-                status_text: "thread id has not been captured yet".to_string(),
+        let thread_id = entry.thread_id;
+        let preview = ParallelPeekConversationPreview {
+            agent_id: entry.agent_id,
+            slot_id: entry.slot_id,
+            task_title: entry.task_title,
+            thread_id: thread_id.clone(),
+            snapshot: None,
+            status_text: if thread_id.is_some() {
+                "conversation snapshot loading".to_string()
+            } else {
+                "thread id has not been captured yet".to_string()
             },
         };
         let status_text = format!(
             "parallel peek: {} / {} / {}",
             preview.agent_id, preview.slot_id, preview.status_text
         );
-        self.parallel_peek_overlay_ui_state.open_preview(preview);
+        if let Some(thread_id) = thread_id {
+            let request_id = self
+                .parallel_peek_overlay_ui_state
+                .begin_conversation_load(preview, thread_id.clone());
+            self.dispatch_core_command(AppCommand::LoadParallelPeekConversation {
+                request_id,
+                thread_id,
+            });
+        } else {
+            self.parallel_peek_overlay_ui_state.open_preview(preview);
+        }
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    pub(super) fn apply_parallel_peek_conversation_load(
+        &mut self,
+        request_id: u64,
+        thread_id: String,
+        result: Result<Box<ConversationReadySnapshot>, String>,
+    ) {
+        let result = result.map(|ready| *ready.conversation);
+        if !self
+            .parallel_peek_overlay_ui_state
+            .complete_conversation_load(request_id, thread_id.as_str(), result)
+        {
+            return;
+        }
+
+        let Some(preview) = self.parallel_peek_overlay_ui_state.preview() else {
+            return;
+        };
+        let status_text = format!(
+            "parallel peek: {} / {} / {}",
+            preview.agent_id, preview.slot_id, preview.status_text
+        );
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });

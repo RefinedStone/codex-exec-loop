@@ -80,6 +80,11 @@ impl AppState {
         self.advance_revision();
     }
 
+    pub fn reset_conversation(&mut self) {
+        self.conversation = ConversationState::Idle;
+        self.advance_revision();
+    }
+
     pub fn apply_planning_runtime_projection(
         &mut self,
         projection: Box<RuntimeProjection>,

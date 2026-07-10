@@ -8,6 +8,7 @@ const DEFAULT_BIN: &str = env!("CARGO_BIN_EXE_codex-exec-loop-native");
 const AKRA_BIN: &str = env!("CARGO_BIN_EXE_akra");
 const ADMIN_BIN: &str = env!("CARGO_BIN_EXE_akra-admin");
 const TELEGRAM_BIN: &str = env!("CARGO_BIN_EXE_akra-telegram");
+const TEST_ADMIN_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 #[test]
 fn default_binary_and_akra_wrapper_share_help_and_error_contracts() {
@@ -28,6 +29,7 @@ fn default_binary_and_akra_wrapper_share_help_and_error_contracts() {
 fn admin_binary_reports_actual_ephemeral_port_and_exits_on_interrupt() {
     let mut child = Command::new(ADMIN_BIN)
         .args(["--port", "0"])
+        .env("AKRA_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -40,8 +42,9 @@ fn admin_binary_reports_actual_ephemeral_port_and_exits_on_interrupt() {
 
     assert_contains(
         first_line.as_bytes(),
-        "local planning admin server listening on http://127.0.0.1:",
+        "local planning admin server listening on http://akra-",
     );
+    assert_contains(first_line.as_bytes(), ".localhost:");
     assert!(
         !first_line.trim_end().ends_with(":0"),
         "admin server should report the actual ephemeral port, not the requested port 0: {first_line:?}"
@@ -70,14 +73,22 @@ fn admin_and_telegram_binaries_report_bootstrap_argument_errors() {
     assert_failure(&admin_error);
     assert_contains(&admin_error.stderr, "unsupported argument: --unknown");
 
+    let missing_noninteractive_token = Command::new(ADMIN_BIN)
+        .args(["--port", "0"])
+        .env_remove("AKRA_ADMIN_TOKEN")
+        .output()
+        .expect("non-interactive admin bootstrap should run");
+    assert_failure(&missing_noninteractive_token);
+    assert_contains(
+        &missing_noninteractive_token.stderr,
+        "AKRA_ADMIN_TOKEN is required when the admin server is not attached to an interactive terminal",
+    );
+
     let telegram_help = run_command(TELEGRAM_BIN, &["--help"]);
     assert_success(&telegram_help);
     assert_contains(&telegram_help.stdout, "Usage: akra telegram");
 
-    let telegram_error = run_command(
-        TELEGRAM_BIN,
-        &["--token", "test", "--poll-timeout-seconds", "0"],
-    );
+    let telegram_error = run_command(TELEGRAM_BIN, &["--poll-timeout-seconds", "0"]);
     assert_failure(&telegram_error);
     assert_contains(
         &telegram_error.stderr,

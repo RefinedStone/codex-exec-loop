@@ -521,6 +521,11 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
     this function to compute cursor offsets. Loading/failed states get static
     affordance rows; ready state delegates to the input-aware branch below.
     */
+    if app.shell_overlay == ShellOverlay::Approval {
+        return vec![Line::from(
+            "prompt: paused while an approval decision is pending",
+        )];
+    }
     let mut lines = match context.conversation_state {
         ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
         ShellConversationState::Failed(message) => {
@@ -823,9 +828,7 @@ mod coverage_tests {
             .auto_follow_state
             .pause_post_turn_continuation();
         assert!(should_show_auto_follow_status(&conversation));
-        conversation
-            .auto_follow_state
-            .clear_post_turn_continuation_pause();
+        conversation.auto_follow_state.set_max_auto_turns(5);
         conversation.auto_follow_state.runtime_phase = AutoFollowRuntimePhase::Queued {
             started_at: Instant::now(),
             turn_index: 3,

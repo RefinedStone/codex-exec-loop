@@ -1,5 +1,7 @@
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommitResult,
+    PlanningTaskRepositoryPort, load_consistent_planning_authority_snapshots,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningWorkspacePort,
@@ -8,6 +10,7 @@ use crate::application::service::planning::authoring::init::{
     PlanningDraftEditorFile, PlanningDraftEditorSession,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
 use crate::application::service::planning::shared::authority_seed::PlanningAuthoritySeedService;
 use crate::application::service::planning::shared::auto_follow_copy::DEFAULT_QUEUE_IDLE_REVIEW_PROMPT_MARKDOWN;
 use crate::application::service::planning::shared::contract::{
@@ -89,6 +92,7 @@ pub struct PlanningDirectionsService {
     // 두 view를 하나의 coherent planning contract로 묶는다.
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     planning_validation_service: PlanningValidationService,
     authority_seed_service: PlanningAuthoritySeedService,
 }
@@ -96,6 +100,7 @@ impl PlanningDirectionsService {
     pub fn new(
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+        planning_authority_port: Arc<dyn PlanningAuthorityPort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
@@ -110,6 +115,7 @@ impl PlanningDirectionsService {
             ),
             planning_workspace_port,
             planning_task_repository_port,
+            planning_authority_port,
             planning_validation_service,
         }
     }
@@ -128,6 +134,8 @@ impl PlanningDirectionsService {
         &self,
         workspace_dir: &str,
         directions: &DirectionCatalogDocument,
+        observed_planning_revision: i64,
+        authority_mutation_owner_token: &str,
     ) -> Result<()> {
         // direction edit는 catalog만 commit한다. supporting markdown body는 workspace draft에 남고 shared draft
         // promotion flow가 active file로 옮긴다. path authority와 body authority를 한 commit에 섞지 않는 경계다.
@@ -136,8 +144,9 @@ impl PlanningDirectionsService {
             .commit_direction_authority_snapshot(
                 workspace_dir,
                 PlanningDirectionAuthorityCommit {
-                    observed_planning_revision: None,
+                    observed_planning_revision: Some(observed_planning_revision),
                     directions,
+                    authority_mutation_owner_token: Some(authority_mutation_owner_token),
                 },
             )? {
             PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(()),
@@ -243,7 +252,19 @@ impl PlanningDirectionsService {
             trimmed_non_empty(selected_direction.detail_doc_path.as_str()),
         )?;
         set_direction_detail_doc_path(&mut workspace.directions, direction_id, &detail_doc_path)?;
-        self.commit_direction_catalog(workspace_dir, &workspace.directions)?;
+        with_authority_mutation_guard(
+            self.planning_authority_port.as_ref(),
+            workspace_dir,
+            "stage direction detail editor",
+            |owner_token| {
+                self.commit_direction_catalog(
+                    workspace_dir,
+                    &workspace.directions,
+                    workspace.observed_planning_revision,
+                    owner_token,
+                )
+            },
+        )?;
         workspace
             .extra_files
             .retain(|file| file.active_path != detail_doc_path);
@@ -268,7 +289,19 @@ impl PlanningDirectionsService {
             trimmed_non_empty(workspace.directions.queue_idle.prompt_path.as_str()),
         )?;
         set_queue_idle_prompt_path(&mut workspace.directions, &prompt_path);
-        self.commit_direction_catalog(workspace_dir, &workspace.directions)?;
+        with_authority_mutation_guard(
+            self.planning_authority_port.as_ref(),
+            workspace_dir,
+            "stage queue-idle prompt editor",
+            |owner_token| {
+                self.commit_direction_catalog(
+                    workspace_dir,
+                    &workspace.directions,
+                    workspace.observed_planning_revision,
+                    owner_token,
+                )
+            },
+        )?;
         workspace
             .extra_files
             .retain(|file| file.active_path != prompt_path);
@@ -330,15 +363,43 @@ impl PlanningDirectionsService {
         // draft를 만들기 위한 임시 view다.
         self.authority_seed_service
             .ensure_default_authority(workspace_dir)?;
-        let workspace = self
-            .planning_workspace_port
-            .load_planning_workspace_files(workspace_dir)?;
-        let directions = self.load_direction_catalog(workspace_dir)?;
+        let (directions, result_output_markdown, observed_planning_revision) =
+            if let Some(snapshot) = self
+                .planning_authority_port
+                .load_planning_authority_documents(workspace_dir)?
+            {
+                (
+                    snapshot.directions,
+                    snapshot.result_output_markdown,
+                    snapshot.planning_revision,
+                )
+            } else {
+                let workspace = self
+                    .planning_workspace_port
+                    .load_planning_workspace_files(workspace_dir)?;
+                let (direction_snapshot, task_snapshot) =
+                    load_consistent_planning_authority_snapshots(
+                        self.planning_task_repository_port.as_ref(),
+                        workspace_dir,
+                    )?;
+                let direction_snapshot = direction_snapshot.ok_or_else(|| {
+                    anyhow!("default planning authority seed did not provide directions")
+                })?;
+                let task_snapshot = task_snapshot.ok_or_else(|| {
+                    anyhow!("default planning authority seed did not provide task authority")
+                })?;
+                (
+                    direction_snapshot.directions,
+                    workspace.result_output_markdown.ok_or_else(|| {
+                        anyhow!("default planning authority seed did not provide result output")
+                    })?,
+                    task_snapshot.planning_revision,
+                )
+            };
         let mut active_workspace = ActiveDirectionsWorkspace {
             directions,
-            result_output_markdown: workspace.result_output_markdown.ok_or_else(|| {
-                anyhow!("default planning authority seed did not provide result output")
-            })?,
+            observed_planning_revision,
+            result_output_markdown,
             extra_files: Vec::new(),
         };
         let mut supporting_paths = HashSet::new();
@@ -515,6 +576,7 @@ struct ActiveDirectionsWorkspace {
     // maintenance draft를 stage하는 동안만 쓰는 internal aggregate다. consistent draft를 만들 수 있을 만큼만 authority와
     // workspace body를 결합한다.
     directions: DirectionCatalogDocument,
+    observed_planning_revision: i64,
     result_output_markdown: String,
     extra_files: Vec<PlanningDraftFileRecord>,
 }

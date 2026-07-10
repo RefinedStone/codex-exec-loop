@@ -1,7 +1,7 @@
 // startup check는 git workspace를 확인하기 위해 짧은 외부 명령을 실행한다.
 // `Command`는 `git rev-parse`를 호출하는 도구이고, `Stdio`는 startup overlay에 불필요한 stderr가 섞이지 않게 제어한다.
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 // `Arc`는 TUI app runtime과 background startup task가 같은 startup probe adapter를 공유하게 한다.
 use std::sync::Arc;
 
@@ -15,6 +15,7 @@ use crate::application::port::outbound::startup_probe_port::StartupProbePort;
 // `StartupDiagnostics`는 startup overlay, prompt submit gating, recent-session loading gating이
 // 공통으로 읽는 domain snapshot이다.
 use crate::domain::startup_diagnostics::StartupDiagnostics;
+use crate::git_subprocess;
 use crate::subprocess;
 
 #[derive(Clone)]
@@ -68,9 +69,10 @@ impl StartupService {
             .display()
             .to_string();
 
-        // `codex` binary는 native client가 app-server flow를 시작할 수 있는 최소 실행 의존성이다.
-        // PATH에서 찾지 못하면 이후 turn execution이 성립하지 않으므로 hard failure로 처리한다.
-        let codex_path = which::which("codex").context("`codex` was not found on PATH")?;
+        // Resolve once through the same trusted pin used by every app-server connection. The
+        // returned path is canonical and absolute, so later PATH changes cannot redirect a turn.
+        let codex_command = crate::trusted_executable::pinned_codex_command()
+            .context("failed to pin a trusted `codex` executable at startup")?;
         /*
         `codex` binary는 native TUI가 실제 turn execution/app-server flow와 연결될 수 있는지
         보는 가장 기본적인 local prerequisite이다. 여기서 실패하면 diagnostics object를 만들지 않고
@@ -103,7 +105,7 @@ impl StartupService {
             // 여기까지 도달했다면 `codex` binary lookup은 성공한 상태이다.
             codex_binary_ok: true,
             // UI에는 단순 ok뿐 아니라 실제 발견된 binary path를 보여 줘 PATH 문제를 디버깅하게 한다.
-            codex_binary_detail: codex_path.display().to_string(),
+            codex_binary_detail: codex_command.source_executable.display().to_string(),
             // 현재 정책상 workspace는 git repo가 아니어도 ok이다. detail이 기능 제한 설명을 담당한다.
             workspace_ok: workspace_status.ok,
             // git root를 찾으면 repo root, 아니면 current directory가 들어간다.
@@ -153,14 +155,11 @@ fn detect_workspace_status_for(current_directory: &Path) -> Result<WorkspaceStat
 
     // git이 현재 directory에서 볼 수 있는 최상위 worktree path를 요청한다.
     // stdout만 읽고 stderr는 버려, git repo가 아닌 일반 directory에서 startup 화면이 에러 로그로 오염되지 않게 한다.
-    let mut command = Command::new("git");
+    let mut command = git_subprocess::command(["rev-parse", "--show-toplevel"]);
     command
-        .args(["rev-parse", "--show-toplevel"])
         .current_dir(current_directory)
-        .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .stderr(Stdio::null());
     let output = subprocess::command_output(&mut command, "git rev-parse --show-toplevel");
     /*
     `git rev-parse --show-toplevel`은 현재 directory가 git worktree 안에 있을 때 canonical

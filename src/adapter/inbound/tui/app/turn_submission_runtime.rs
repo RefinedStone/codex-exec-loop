@@ -16,8 +16,10 @@ use crate::application::service::planning::{
 };
 use crate::core::app::{AppCommand, CorePromptOrigin, TurnSubmissionRequest};
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
+use crate::domain::planning::ManualPromptCorrelation;
 use post_turn_execution::PostTurnEvaluationRequest;
 
+use super::conversation_input::MAX_PROMPT_INPUT_BYTES;
 use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
     AutoFollowSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
@@ -127,8 +129,53 @@ impl NativeTuiApp {
                     );
                 }
             }
+            ConversationRuntimeEffect::ResolveApprovalRequest {
+                approval_id,
+                decision,
+            } => {
+                if let Err(error) = self
+                    .application
+                    .resolve_approval_request(&approval_id, decision)
+                {
+                    self.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed {
+                            approval_id,
+                            error,
+                        },
+                    );
+                }
+            }
+            ConversationRuntimeEffect::ShowApprovalOverlay => {
+                self.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+            }
+            ConversationRuntimeEffect::CloseApprovalOverlay => {
+                self.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
+            }
+            ConversationRuntimeEffect::ResendPendingInterrupt => {
+                let status_text = match self.application.request_stop_all_sessions() {
+                    Ok(()) => {
+                        "stop synchronized / active app-server turn will be interrupted".to_string()
+                    }
+                    Err(error) => {
+                        self.clear_active_turn_interrupt_request();
+                        format!("stop request failed after turn start: {error}")
+                    }
+                };
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
+            }
             ConversationRuntimeEffect::DispatchOperatorAlert { alert } => {
-                let _ = self.tx.send(super::BackgroundMessage::OperatorAlert(alert));
+                if let Err(error) = self
+                    .tx
+                    .try_send(super::BackgroundMessage::OperatorAlert(alert))
+                {
+                    // This effect runs on the UI thread, which also drains the
+                    // bounded background queue. Never block that thread waiting
+                    // on itself; the reducer has already persisted the alert as a
+                    // transcript banner/runtime notice.
+                    tracing::warn!(%error, "operator alert notification queue unavailable");
+                }
             }
         }
     }
@@ -217,12 +264,56 @@ impl NativeTuiApp {
     }
 
     pub(super) fn submit_manual_prompt_from_text(&mut self, operator_prompt: String) {
+        if operator_prompt.len() > MAX_PROMPT_INPUT_BYTES {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: format!(
+                    "prompt exceeds the {MAX_PROMPT_INPUT_BYTES}-byte input limit; shorten it before submitting"
+                ),
+            });
+            return;
+        }
         let transcript_text = operator_prompt.trim().to_string();
         if transcript_text.is_empty() {
             return;
         }
+        let input_is_current = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.can_accept_manual_prompt()
+                    && conversation.input_buffer.trim() == transcript_text
+        );
+        if !input_is_current {
+            return;
+        }
+        match self.shell_action_availability() {
+            ShellActionAvailability::Pending => {
+                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+                    status_text: "prompt queued until startup checks finish".to_string(),
+                });
+                return;
+            }
+            ShellActionAvailability::Blocked => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self.submission_blocked_status(PromptOrigin::Manual),
+                });
+                return;
+            }
+            ShellActionAvailability::Ready => {}
+        }
+        if self.pending_manual_prompt_preparation.is_some() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text:
+                    "turn preparation already in progress; wait for it to finish before submitting again"
+                        .to_string(),
+            });
+            return;
+        }
+
+        let workspace_directory = self.planning_workspace_directory();
+        let correlation = self.next_manual_prompt_preparation_correlation(workspace_directory);
         let parallel_mode_enabled_at_submission = self.parallel_mode_enabled();
         self.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
+            correlation: correlation.clone(),
             transcript_text: transcript_text.clone(),
             parallel_mode_enabled_at_submission,
         });
@@ -230,7 +321,10 @@ impl NativeTuiApp {
             self.show_supersession_overlay();
             self.record_parallel_supervisor_event(
                 PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
-                truncate_parallel_prompt_event_text(&transcript_text, 96),
+                format!(
+                    "operator prompt submitted / chars: {}",
+                    transcript_text.chars().count()
+                ),
             );
             self.record_parallel_supervisor_event(
                 "Task Intake",
@@ -240,8 +334,6 @@ impl NativeTuiApp {
                 status_text: "parallel task intake: preparing operator prompt".to_string(),
             });
         }
-
-        let workspace_directory = self.planning_workspace_directory();
         let (parent_thread_id, parent_turn_id) = match &self.conversation_state {
             ConversationState::Ready(conversation) => (
                 Some(conversation.thread_id.clone())
@@ -252,7 +344,7 @@ impl NativeTuiApp {
         };
         self.dispatch_core_command(AppCommand::PrepareManualPrompt(Box::new(
             ManualPromptPreparationRequest {
-                workspace_directory,
+                correlation,
                 raw_prompt: transcript_text,
                 parent_thread_id,
                 parent_turn_id,
@@ -264,6 +356,25 @@ impl NativeTuiApp {
         &mut self,
         result: ManualPromptPreparationResult,
     ) {
+        let correlation = result.correlation().clone();
+        let result_transcript_text = result.transcript_text().to_string();
+        let Some(pending) = self
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .filter(|pending| pending.correlation == correlation)
+            .cloned()
+        else {
+            return;
+        };
+        let should_apply = result_transcript_text == pending.transcript_text
+            && self.manual_prompt_preparation_is_current(&pending);
+        let pending = self
+            .take_exact_manual_prompt_preparation(&correlation)
+            .expect("exact manual prompt preparation should remain pending");
+        if !should_apply {
+            return;
+        }
+
         self.sync_ready_conversation_planning_runtime_projection(
             result.runtime_projection().clone(),
         );
@@ -273,26 +384,17 @@ impl NativeTuiApp {
                 intake,
                 ..
             } => {
-                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
-                    return;
-                }
-                let parallel_mode_enabled_at_submission =
-                    self.take_manual_prompt_parallel_mode_at_submission(&transcript_text);
                 self.apply_manual_prompt_intake_outcome(
                     *intake,
                     transcript_text,
-                    parallel_mode_enabled_at_submission,
+                    pending.parallel_mode_enabled_at_submission,
                 );
             }
             ManualPromptPreparationResult::BootstrapReviewRequired {
-                transcript_text,
+                transcript_text: _,
                 review,
                 ..
             } => {
-                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
-                    return;
-                }
-                self.clear_manual_prompt_preparation_if_matches(&transcript_text);
                 let draft_name = review.draft_name.clone();
                 self.planning_init_overlay_ui_state
                     .open_simple_review_summary(
@@ -309,15 +411,11 @@ impl NativeTuiApp {
                 });
             }
             ManualPromptPreparationResult::BootstrapFailed {
-                transcript_text,
+                transcript_text: _,
                 kind,
                 reason,
                 ..
             } => {
-                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
-                    return;
-                }
-                self.clear_manual_prompt_preparation_if_matches(&transcript_text);
                 let status_text = match kind {
                     ManualPlanningBootstrapFailureKind::Stage => {
                         format!("planning bootstrap failed: {reason}")
@@ -335,10 +433,6 @@ impl NativeTuiApp {
                 reason,
                 ..
             } => {
-                if !self.manual_prompt_preparation_still_matches_input(&transcript_text) {
-                    return;
-                }
-                self.clear_manual_prompt_preparation_if_matches(&transcript_text);
                 self.dispatch_conversation_input(
                     ConversationInputEvent::ManualPromptPreparationFailed {
                         transcript_text,
@@ -363,7 +457,7 @@ impl NativeTuiApp {
         match outcome {
             ManualPromptIntakeOutcome::TaskCommitted { handoff, .. }
             | ManualPromptIntakeOutcome::TaskUpdated { handoff, .. } => {
-                if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
+                if handoff.transcript_text != transcript_text {
                     return;
                 }
                 let _ = self.submit_prompt_with_transcript(
@@ -388,28 +482,59 @@ impl NativeTuiApp {
         }
     }
 
-    fn take_manual_prompt_parallel_mode_at_submission(&mut self, transcript_text: &str) -> bool {
-        if self
-            .pending_manual_prompt_preparation
-            .as_ref()
-            .is_some_and(|pending| pending.transcript_text == transcript_text)
-        {
-            return self
-                .pending_manual_prompt_preparation
-                .take()
-                .map(|pending| pending.parallel_mode_enabled_at_submission)
-                .unwrap_or_else(|| self.parallel_mode_enabled());
+    fn next_manual_prompt_preparation_correlation(
+        &mut self,
+        workspace_directory: String,
+    ) -> ManualPromptCorrelation {
+        self.next_manual_prompt_preparation_request_id = self
+            .next_manual_prompt_preparation_request_id
+            .wrapping_add(1)
+            .max(1);
+        self.manual_prompt_preparation_generation = self
+            .manual_prompt_preparation_generation
+            .wrapping_add(1)
+            .max(1);
+        ManualPromptCorrelation {
+            request_id: self.next_manual_prompt_preparation_request_id,
+            generation: self.manual_prompt_preparation_generation,
+            workspace_directory,
         }
-        self.parallel_mode_enabled()
     }
 
-    fn clear_manual_prompt_preparation_if_matches(&mut self, transcript_text: &str) {
-        if self
-            .pending_manual_prompt_preparation
+    pub(super) fn cancel_manual_prompt_preparation_for_identity_transition(&mut self) {
+        self.pending_manual_prompt_preparation = None;
+        self.manual_prompt_preparation_generation = self
+            .manual_prompt_preparation_generation
+            .wrapping_add(1)
+            .max(1);
+        self.dispatch_core_command(AppCommand::CancelManualPromptPreparation);
+    }
+
+    fn take_exact_manual_prompt_preparation(
+        &mut self,
+        correlation: &ManualPromptCorrelation,
+    ) -> Option<PendingManualPromptPreparation> {
+        self.pending_manual_prompt_preparation
             .as_ref()
-            .is_some_and(|pending| pending.transcript_text == transcript_text)
+            .is_some_and(|pending| pending.correlation == *correlation)
+            .then(|| self.pending_manual_prompt_preparation.take())
+            .flatten()
+    }
+
+    fn manual_prompt_preparation_is_current(
+        &self,
+        pending: &PendingManualPromptPreparation,
+    ) -> bool {
+        if pending.correlation.generation != self.manual_prompt_preparation_generation
+            || pending.correlation.workspace_directory != self.planning_workspace_directory()
         {
-            self.pending_manual_prompt_preparation = None;
+            return false;
+        }
+        match &self.conversation_state {
+            ConversationState::Ready(conversation) => {
+                conversation.input_buffer.trim() == pending.transcript_text
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => false,
         }
     }
 
@@ -429,6 +554,7 @@ impl NativeTuiApp {
                     committed_task_id,
                     committed_planning_revision,
                     handoff,
+                    &transcript_text,
                 );
             }
             ManualPromptIntakeOutcome::TaskUpdated {
@@ -441,6 +567,7 @@ impl NativeTuiApp {
                     updated_task_id,
                     committed_planning_revision,
                     handoff,
+                    &transcript_text,
                 );
             }
             ManualPromptIntakeOutcome::Rejected { reason }
@@ -449,8 +576,8 @@ impl NativeTuiApp {
                 self.record_parallel_supervisor_event(
                     "Task Intake",
                     format!(
-                        "task generation failed for `{}` / {}",
-                        truncate_parallel_prompt_event_text(&transcript_text, 56),
+                        "task generation failed / prompt chars: {} / {}",
+                        transcript_text.chars().count(),
                         reason
                     ),
                 );
@@ -467,8 +594,9 @@ impl NativeTuiApp {
         task_id: String,
         committed_planning_revision: i64,
         handoff: crate::application::service::planning::ManualPromptMainSessionHandoff,
+        expected_transcript_text: &str,
     ) {
-        if !self.manual_prompt_preparation_still_matches_input(&handoff.transcript_text) {
+        if handoff.transcript_text != expected_transcript_text {
             return;
         }
         if let Some(conversation) = self.take_ready_conversation_state() {
@@ -510,15 +638,6 @@ impl NativeTuiApp {
         );
     }
 
-    fn manual_prompt_preparation_still_matches_input(&self, transcript_text: &str) -> bool {
-        match &self.conversation_state {
-            ConversationState::Ready(conversation) => {
-                conversation.input_buffer.trim() == transcript_text
-            }
-            ConversationState::Loading | ConversationState::Failed(_) => false,
-        }
-    }
-
     pub(super) fn submit_prompt(&mut self, prompt: String, prompt_origin: PromptOrigin) -> bool {
         let transcript_text = match &prompt_origin {
             PromptOrigin::Manual => prompt.trim().to_string(),
@@ -558,9 +677,7 @@ impl NativeTuiApp {
             tracing::Level::DEBUG,
             "user_prompt_submit_inspected",
             origin = prompt_origin_label(&prompt_origin),
-            transcript_text = transcript_text,
             transcript_text_len = transcript_text.len(),
-            prompt = prompt,
             prompt_len = prompt.len(),
             parallel_mode_enabled = self.parallel_mode_enabled(),
         );
@@ -612,9 +729,7 @@ fn user_prompt_submit_detail(
 ) -> serde_json::Value {
     serde_json::json!({
         "origin": prompt_origin_label(prompt_origin),
-        "transcript_text": transcript_text,
         "transcript_text_len": transcript_text.len(),
-        "prompt": prompt,
         "prompt_len": prompt.len(),
         "parallel_mode_enabled": parallel_mode_enabled,
     })
@@ -675,7 +790,7 @@ mod prompt_submit_diagnostics_tests {
     use crate::core::app::CorePromptOrigin;
 
     #[test]
-    fn user_prompt_submit_detail_keeps_operator_text_and_final_prompt() {
+    fn user_prompt_submit_detail_keeps_lengths_without_raw_prompt_text() {
         let detail = user_prompt_submit_detail(
             "final wrapper\noperator text",
             "operator text",
@@ -684,11 +799,11 @@ mod prompt_submit_diagnostics_tests {
         );
 
         assert_eq!(detail["origin"], "Manual");
-        assert_eq!(detail["transcript_text"], "operator text");
         assert_eq!(detail["transcript_text_len"], 13);
-        assert_eq!(detail["prompt"], "final wrapper\noperator text");
         assert_eq!(detail["prompt_len"], 27);
         assert_eq!(detail["parallel_mode_enabled"], true);
+        assert!(detail.get("transcript_text").is_none());
+        assert!(detail.get("prompt").is_none());
     }
 
     #[test]
@@ -716,7 +831,6 @@ mod tests {
     use crate::application::port::outbound::startup_probe_port::{
         AppServerStartupContext, StartupProbePort,
     };
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::manual_prompt_preparation::{
         ManualPlanningBootstrapReview, ManualPromptPreparationResult,
@@ -795,7 +909,7 @@ mod tests {
             _cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }
@@ -805,7 +919,7 @@ mod tests {
             _thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }
@@ -905,6 +1019,43 @@ mod tests {
 
     fn set_input(app: &mut NativeTuiApp, input: &str) {
         ready_conversation_mut(app).input_buffer = input.to_string();
+    }
+
+    fn arm_manual_prompt_preparation(
+        app: &mut NativeTuiApp,
+        transcript_text: &str,
+    ) -> ManualPromptCorrelation {
+        let correlation =
+            app.next_manual_prompt_preparation_correlation(app.planning_workspace_directory());
+        app.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
+            correlation: correlation.clone(),
+            transcript_text: transcript_text.to_string(),
+            parallel_mode_enabled_at_submission: app.parallel_mode_enabled(),
+        });
+        correlation
+    }
+
+    fn different_manual_prompt_correlation(
+        correlation: &ManualPromptCorrelation,
+    ) -> ManualPromptCorrelation {
+        ManualPromptCorrelation {
+            request_id: correlation.request_id.wrapping_add(1),
+            generation: correlation.generation,
+            workspace_directory: correlation.workspace_directory.clone(),
+        }
+    }
+
+    fn rejected_manual_prompt_result(
+        correlation: ManualPromptCorrelation,
+        transcript_text: &str,
+        reason: &str,
+    ) -> ManualPromptPreparationResult {
+        ManualPromptPreparationResult::Rejected {
+            correlation,
+            transcript_text: transcript_text.to_string(),
+            runtime_projection: runtime_projection(),
+            reason: reason.to_string(),
+        }
     }
 
     fn runtime_projection() -> Box<PlanningRuntimeProjection> {
@@ -1040,6 +1191,50 @@ mod tests {
     }
 
     #[test]
+    fn manual_preparation_waits_for_startup_before_planning_side_effects() {
+        let workspace = TempWorkspace::new("turn-submit-manual-startup-gate");
+        let mut pending_app = make_test_app(&workspace);
+        pending_app.startup_state = StartupState::Loading;
+        set_input(&mut pending_app, "ship it");
+
+        pending_app.submit_manual_prompt_from_text("ship it".to_string());
+
+        assert!(pending_app.pending_manual_prompt_preparation.is_none());
+        assert!(ready_conversation(&pending_app).startup_submit_armed);
+        assert_eq!(ready_conversation(&pending_app).input_buffer, "ship it");
+        assert!(ready_conversation(&pending_app).messages.is_empty());
+
+        pending_app.startup_state =
+            StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
+        pending_app.resolve_startup_submit_queue();
+
+        assert!(!ready_conversation(&pending_app).startup_submit_armed);
+        assert_eq!(ready_conversation(&pending_app).input_buffer, "");
+        assert_eq!(ready_conversation(&pending_app).messages.len(), 1);
+    }
+
+    #[test]
+    fn blocked_startup_never_enters_manual_planning_preparation() {
+        let workspace = TempWorkspace::new("turn-submit-manual-startup-blocked");
+        let mut app = make_test_app(&workspace);
+        app.startup_state =
+            StartupState::Ready(startup_ready_snapshot(workspace.path_str(), false));
+        set_input(&mut app, "ship it");
+
+        app.submit_manual_prompt_from_text("ship it".to_string());
+
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(!ready_conversation(&app).startup_submit_armed);
+        assert_eq!(ready_conversation(&app).input_buffer, "ship it");
+        assert!(ready_conversation(&app).messages.is_empty());
+        assert!(
+            ready_conversation(&app)
+                .status_text
+                .contains("startup diagnostics need attention")
+        );
+    }
+
+    #[test]
     fn resolve_startup_submit_queue_keeps_or_disarms_buffered_prompt() {
         let workspace = TempWorkspace::new("turn-submit-startup-queue");
         let mut pending_app = make_test_app(&workspace);
@@ -1097,12 +1292,17 @@ mod tests {
 
         app.resolve_startup_submit_queue();
 
-        let pending = app
-            .pending_manual_prompt_preparation
-            .as_ref()
-            .expect("ready replay should prepare the queued manual prompt");
-        assert_eq!(pending.transcript_text, "queued prompt");
-        assert!(!pending.parallel_mode_enabled_at_submission);
+        let conversation = ready_conversation(&app);
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert_eq!(conversation.input_buffer, "");
+        assert_eq!(
+            conversation
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("queued prompt")
+        );
+        assert_eq!(conversation.status_text, "starting turn");
     }
 
     #[test]
@@ -1110,9 +1310,12 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-bootstrap-review");
         let mut review_app = make_test_app(&workspace);
         set_input(&mut review_app, "create the planning workspace");
+        let review_correlation =
+            arm_manual_prompt_preparation(&mut review_app, "create the planning workspace");
 
         review_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::BootstrapReviewRequired {
+                correlation: review_correlation,
                 transcript_text: "create the planning workspace".to_string(),
                 runtime_projection: runtime_projection(),
                 review: ManualPlanningBootstrapReview {
@@ -1151,9 +1354,12 @@ mod tests {
         ] {
             let mut failure_app = make_test_app(&workspace);
             set_input(&mut failure_app, "create the planning workspace");
+            let failure_correlation =
+                arm_manual_prompt_preparation(&mut failure_app, "create the planning workspace");
 
             failure_app.apply_manual_prompt_preparation(
                 ManualPromptPreparationResult::BootstrapFailed {
+                    correlation: failure_correlation,
                     transcript_text: "create the planning workspace".to_string(),
                     runtime_projection: runtime_projection(),
                     kind,
@@ -1173,8 +1379,10 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-prep-rejected");
         let mut app = make_test_app(&workspace);
         set_input(&mut app, "ship it");
+        let correlation = arm_manual_prompt_preparation(&mut app, "ship it");
 
         app.apply_manual_prompt_preparation(ManualPromptPreparationResult::Rejected {
+            correlation,
             transcript_text: "ship it".to_string(),
             runtime_projection: runtime_projection(),
             reason: "not actionable".to_string(),
@@ -1190,9 +1398,12 @@ mod tests {
 
         let mut stale_app = make_test_app(&workspace);
         set_input(&mut stale_app, "newer text");
+        let current_correlation = arm_manual_prompt_preparation(&mut stale_app, "newer text");
+        let stale_correlation = different_manual_prompt_correlation(&current_correlation);
         let previous_status = ready_conversation(&stale_app).status_text.clone();
 
         stale_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::Rejected {
+            correlation: stale_correlation,
             transcript_text: "older text".to_string(),
             runtime_projection: runtime_projection(),
             reason: "should not surface".to_string(),
@@ -1200,6 +1411,13 @@ mod tests {
 
         assert_eq!(ready_conversation(&stale_app).status_text, previous_status);
         assert!(ready_conversation(&stale_app).messages.is_empty());
+        assert_eq!(
+            stale_app
+                .pending_manual_prompt_preparation
+                .as_ref()
+                .map(|pending| &pending.correlation),
+            Some(&current_correlation)
+        );
     }
 
     #[test]
@@ -1209,9 +1427,13 @@ mod tests {
 
         let mut stale_success_app = make_test_app(&workspace);
         set_input(&mut stale_success_app, "newer text");
+        let current_correlation =
+            arm_manual_prompt_preparation(&mut stale_success_app, "newer text");
+        let stale_correlation = different_manual_prompt_correlation(&current_correlation);
         let previous_status = ready_conversation(&stale_success_app).status_text.clone();
         stale_success_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::PromptReady {
+                correlation: stale_correlation,
                 transcript_text: "older text".to_string(),
                 runtime_projection: runtime_projection(),
                 intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
@@ -1229,8 +1451,12 @@ mod tests {
 
         let mut stale_review_app = make_test_app(&workspace);
         set_input(&mut stale_review_app, "newer text");
+        let current_correlation =
+            arm_manual_prompt_preparation(&mut stale_review_app, "newer text");
+        let stale_correlation = different_manual_prompt_correlation(&current_correlation);
         stale_review_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::BootstrapReviewRequired {
+                correlation: stale_correlation,
                 transcript_text: "older text".to_string(),
                 runtime_projection: runtime_projection(),
                 review: ManualPlanningBootstrapReview {
@@ -1244,9 +1470,13 @@ mod tests {
 
         let mut stale_failure_app = make_test_app(&workspace);
         set_input(&mut stale_failure_app, "newer text");
+        let current_correlation =
+            arm_manual_prompt_preparation(&mut stale_failure_app, "newer text");
+        let stale_correlation = different_manual_prompt_correlation(&current_correlation);
         let previous_status = ready_conversation(&stale_failure_app).status_text.clone();
         stale_failure_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::BootstrapFailed {
+                correlation: stale_correlation,
                 transcript_text: "older text".to_string(),
                 runtime_projection: runtime_projection(),
                 kind: ManualPlanningBootstrapFailureKind::Promote,
@@ -1257,6 +1487,140 @@ mod tests {
             ready_conversation(&stale_failure_app).status_text,
             previous_status
         );
+    }
+
+    #[test]
+    fn direct_manual_submission_rejects_a_prompt_above_the_input_limit() {
+        let workspace = TempWorkspace::new("turn-submit-prompt-limit");
+        let mut app = make_test_app(&workspace);
+
+        app.submit_manual_prompt_from_text("x".repeat(MAX_PROMPT_INPUT_BYTES + 1));
+
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(
+            ready_conversation(&app)
+                .status_text
+                .contains("1048576-byte input limit")
+        );
+    }
+
+    #[test]
+    fn rapid_double_enter_after_serial_preparation_does_not_duplicate_submission() {
+        let workspace = TempWorkspace::new("turn-submit-double-enter");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "ship it");
+
+        app.submit_manual_prompt_from_text("ship it".to_string());
+        let first_request_sequence = app.next_manual_prompt_preparation_request_id;
+        let first_generation = app.manual_prompt_preparation_generation;
+
+        app.start_turn_submission();
+
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert_eq!(
+            app.next_manual_prompt_preparation_request_id,
+            first_request_sequence
+        );
+        assert_eq!(app.manual_prompt_preparation_generation, first_generation);
+        assert_eq!(ready_conversation(&app).status_text, "starting turn");
+    }
+
+    #[test]
+    fn manual_preparation_lock_prevents_a_b_a_input_replacement() {
+        let workspace = TempWorkspace::new("turn-submit-input-aba");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "A");
+        let correlation = arm_manual_prompt_preparation(&mut app, "A");
+
+        app.dispatch_conversation_input(ConversationInputEvent::TextInserted {
+            text: "B".to_string(),
+        });
+        app.dispatch_conversation_input(ConversationInputEvent::BackspacePressed);
+        assert_eq!(ready_conversation(&app).input_buffer, "A");
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            "turn preparation in progress; prompt editing is locked until it finishes"
+        );
+
+        app.apply_manual_prompt_preparation(rejected_manual_prompt_result(
+            correlation,
+            "A",
+            "stale result",
+        ));
+
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            "turn preparation failed / stale result"
+        );
+        assert_eq!(ready_conversation(&app).messages.len(), 1);
+        assert!(ready_conversation(&app).input_buffer.is_empty());
+    }
+
+    #[test]
+    fn manual_preparation_result_is_dropped_after_workspace_switch() {
+        let first_workspace = TempWorkspace::new("turn-submit-workspace-first");
+        let second_workspace = TempWorkspace::new("turn-submit-workspace-second");
+        let mut app = make_test_app(&first_workspace);
+        set_input(&mut app, "ship it");
+        let correlation = arm_manual_prompt_preparation(&mut app, "ship it");
+        let previous_generation = app.manual_prompt_preparation_generation;
+
+        app.sync_draft_shell_workspace(second_workspace.path_str());
+        let switched_status = ready_conversation(&app).status_text.clone();
+        assert_eq!(
+            app.planning_workspace_directory(),
+            second_workspace.path_str()
+        );
+        assert!(app.pending_manual_prompt_preparation.is_none());
+        assert!(app.manual_prompt_preparation_generation > previous_generation);
+
+        app.dispatch_conversation_input(ConversationInputEvent::TextInserted {
+            text: " now".to_string(),
+        });
+        assert_eq!(ready_conversation(&app).input_buffer, "ship it now");
+        assert!(
+            !ready_conversation(&app)
+                .status_text
+                .contains("preparation in progress")
+        );
+        let replacement = arm_manual_prompt_preparation(&mut app, "ship it now");
+        assert_ne!(replacement, correlation);
+        assert_eq!(replacement.workspace_directory, second_workspace.path_str());
+
+        app.apply_manual_prompt_preparation(rejected_manual_prompt_result(
+            correlation,
+            "ship it",
+            "stale workspace",
+        ));
+
+        assert_eq!(
+            app.pending_manual_prompt_preparation
+                .as_ref()
+                .map(|pending| &pending.correlation),
+            Some(&replacement)
+        );
+        assert_eq!(ready_conversation(&app).status_text, switched_status);
+        assert!(ready_conversation(&app).messages.is_empty());
+        assert_eq!(ready_conversation(&app).input_buffer, "ship it now");
+    }
+
+    #[test]
+    fn manual_preparation_completion_is_consumed_only_once() {
+        let workspace = TempWorkspace::new("turn-submit-completion-once");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "ship it");
+        let correlation = arm_manual_prompt_preparation(&mut app, "ship it");
+        let result = rejected_manual_prompt_result(correlation, "ship it", "blocked");
+
+        app.apply_manual_prompt_preparation(result.clone());
+        let message_count = ready_conversation(&app).messages.len();
+        let status_text = ready_conversation(&app).status_text.clone();
+        app.apply_manual_prompt_preparation(result);
+
+        assert_eq!(ready_conversation(&app).messages.len(), message_count);
+        assert_eq!(ready_conversation(&app).status_text, status_text);
+        assert!(app.pending_manual_prompt_preparation.is_none());
     }
 
     #[test]
@@ -1279,24 +1643,19 @@ mod tests {
         let mut loading_submit_app = make_test_app(&workspace);
         loading_submit_app.conversation_state = ConversationState::Loading;
         loading_submit_app.submit_manual_prompt_from_text("ship it".to_string());
-        assert_eq!(
+        assert!(
             loading_submit_app
                 .pending_manual_prompt_preparation
-                .as_ref()
-                .map(|pending| pending.transcript_text.as_str()),
-            Some("ship it")
+                .is_none()
         );
 
         let mut clear_pending_app = make_test_app(&workspace);
         set_input(&mut clear_pending_app, "reject me");
-        clear_pending_app.submit_manual_prompt_from_text("reject me".to_string());
-        assert!(
-            clear_pending_app
-                .pending_manual_prompt_preparation
-                .is_some()
-        );
+        let clear_pending_correlation =
+            arm_manual_prompt_preparation(&mut clear_pending_app, "reject me");
         clear_pending_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::Rejected {
+                correlation: clear_pending_correlation,
                 transcript_text: "reject me".to_string(),
                 runtime_projection: runtime_projection(),
                 reason: "no task".to_string(),
@@ -1310,9 +1669,12 @@ mod tests {
 
         let mut stale_handoff_app = make_test_app(&workspace);
         set_input(&mut stale_handoff_app, "outer");
+        let stale_handoff_correlation =
+            arm_manual_prompt_preparation(&mut stale_handoff_app, "outer");
         let previous_status = ready_conversation(&stale_handoff_app).status_text.clone();
         stale_handoff_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::PromptReady {
+                correlation: stale_handoff_correlation,
                 transcript_text: "outer".to_string(),
                 runtime_projection: runtime_projection(),
                 intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
@@ -1331,9 +1693,11 @@ mod tests {
         let mut parallel_stale_handoff_app = make_test_app(&workspace);
         parallel_stale_handoff_app.set_parallel_mode_enabled_for_test(true);
         set_input(&mut parallel_stale_handoff_app, "outer parallel");
-        parallel_stale_handoff_app.submit_manual_prompt_from_text("outer parallel".to_string());
+        let parallel_stale_handoff_correlation =
+            arm_manual_prompt_preparation(&mut parallel_stale_handoff_app, "outer parallel");
         parallel_stale_handoff_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::PromptReady {
+                correlation: parallel_stale_handoff_correlation,
                 transcript_text: "outer parallel".to_string(),
                 runtime_projection: runtime_projection(),
                 intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
@@ -1352,8 +1716,14 @@ mod tests {
         assert!(!event_lines.contains("updated task task-stale"));
 
         let mut loading_match_app = make_test_app(&workspace);
+        set_input(&mut loading_match_app, "ship it");
+        arm_manual_prompt_preparation(&mut loading_match_app, "ship it");
+        let pending = loading_match_app
+            .pending_manual_prompt_preparation
+            .clone()
+            .expect("preparation should be pending");
         loading_match_app.conversation_state = ConversationState::Loading;
-        assert!(!loading_match_app.manual_prompt_preparation_still_matches_input("ship it"));
+        assert!(!loading_match_app.manual_prompt_preparation_is_current(&pending));
 
         let mut manual_submit_app = make_test_app(&workspace);
         set_input(&mut manual_submit_app, "manual prompt");
@@ -1387,7 +1757,8 @@ mod tests {
             "thread-1"
         );
         assert!(port.request_stop_all_sessions().is_ok());
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) =
+            crate::application::service::conversation_runtime_event::conversation_stream_channel();
         assert!(
             port.run_turn_stream("thread-1", "prompt", Default::default(), tx,)
                 .is_ok()
@@ -1400,8 +1771,11 @@ mod tests {
         let task = sample_handoff_task();
         let mut committed_app = make_test_app(&workspace);
         set_input(&mut committed_app, "turn this into a task");
+        let committed_correlation =
+            arm_manual_prompt_preparation(&mut committed_app, "turn this into a task");
 
         committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            correlation: committed_correlation,
             transcript_text: "turn this into a task".to_string(),
             runtime_projection: runtime_projection(),
             intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
@@ -1434,6 +1808,7 @@ mod tests {
         ] {
             let mut failure_app = make_test_app(&workspace);
             set_input(&mut failure_app, "make task");
+            let failure_correlation = arm_manual_prompt_preparation(&mut failure_app, "make task");
             let expected_reason = match &outcome {
                 ManualPromptIntakeOutcome::Rejected { reason }
                 | ManualPromptIntakeOutcome::Failed { reason } => reason.clone(),
@@ -1442,6 +1817,7 @@ mod tests {
 
             failure_app.apply_manual_prompt_preparation(
                 ManualPromptPreparationResult::PromptReady {
+                    correlation: failure_correlation,
                     transcript_text: "make task".to_string(),
                     runtime_projection: runtime_projection(),
                     intake: Box::new(outcome),
@@ -1469,8 +1845,10 @@ mod tests {
         let task = sample_handoff_task();
         let mut updated_app = make_test_app(&workspace);
         set_input(&mut updated_app, "refresh task");
+        let updated_correlation = arm_manual_prompt_preparation(&mut updated_app, "refresh task");
 
         updated_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            correlation: updated_correlation,
             transcript_text: "refresh task".to_string(),
             runtime_projection: runtime_projection(),
             intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
@@ -1492,10 +1870,12 @@ mod tests {
         let mut parallel_updated_app = make_test_app(&workspace);
         parallel_updated_app.set_parallel_mode_enabled_for_test(true);
         set_input(&mut parallel_updated_app, "parallel update");
-        parallel_updated_app.submit_manual_prompt_from_text("parallel update".to_string());
+        let parallel_updated_correlation =
+            arm_manual_prompt_preparation(&mut parallel_updated_app, "parallel update");
 
         parallel_updated_app.apply_manual_prompt_preparation(
             ManualPromptPreparationResult::PromptReady {
+                correlation: parallel_updated_correlation,
                 transcript_text: "parallel update".to_string(),
                 runtime_projection: runtime_projection(),
                 intake: Box::new(ManualPromptIntakeOutcome::TaskUpdated {
@@ -1526,7 +1906,7 @@ mod tests {
             failure_app.set_parallel_mode_enabled_for_test(true);
             let prompt = "parallel intake failure prompt with enough words to truncate in events";
             set_input(&mut failure_app, prompt);
-            failure_app.submit_manual_prompt_from_text(prompt.to_string());
+            let failure_correlation = arm_manual_prompt_preparation(&mut failure_app, prompt);
             let expected_reason = match &outcome {
                 ManualPromptIntakeOutcome::Rejected { reason }
                 | ManualPromptIntakeOutcome::Failed { reason } => reason.clone(),
@@ -1535,6 +1915,7 @@ mod tests {
 
             failure_app.apply_manual_prompt_preparation(
                 ManualPromptPreparationResult::PromptReady {
+                    correlation: failure_correlation,
                     transcript_text: prompt.to_string(),
                     runtime_projection: runtime_projection(),
                     intake: Box::new(outcome),
@@ -1564,10 +1945,12 @@ mod tests {
         let mut committed_app = make_test_app(&workspace);
         committed_app.set_parallel_mode_enabled_for_test(true);
         set_input(&mut committed_app, "안녕하세요 ?");
-        committed_app.submit_manual_prompt_from_text("안녕하세요 ?".to_string());
+        let committed_correlation =
+            arm_manual_prompt_preparation(&mut committed_app, "안녕하세요 ?");
         committed_app.set_parallel_mode_enabled_for_test(false);
 
         committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            correlation: committed_correlation,
             transcript_text: "안녕하세요 ?".to_string(),
             runtime_projection: runtime_projection(),
             intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
@@ -1601,10 +1984,12 @@ mod tests {
         let task = sample_handoff_task();
         let mut committed_app = make_test_app(&workspace);
         set_input(&mut committed_app, "turn this into a task");
-        committed_app.submit_manual_prompt_from_text("turn this into a task".to_string());
+        let committed_correlation =
+            arm_manual_prompt_preparation(&mut committed_app, "turn this into a task");
         committed_app.set_parallel_mode_enabled_for_test(true);
 
         committed_app.apply_manual_prompt_preparation(ManualPromptPreparationResult::PromptReady {
+            correlation: committed_correlation,
             transcript_text: "turn this into a task".to_string(),
             runtime_projection: runtime_projection(),
             intake: Box::new(ManualPromptIntakeOutcome::TaskCommitted {
@@ -1651,6 +2036,9 @@ mod tests {
         app.planning_worker_panel_state.last_summary = Some("accepted task".to_string());
         app.planning_worker_panel_state.last_prompt = Some("worker prompt".to_string());
         app.planning_worker_panel_state.last_response = Some("worker response".to_string());
+        ready_conversation_mut(&mut app)
+            .auto_follow_state
+            .set_max_auto_turns(1);
         let handoff_task = sample_handoff_task();
 
         app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {

@@ -45,7 +45,7 @@ pub struct MainSessionPromptAssemblyRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // `SubSessionPromptAssemblyRequest`는 parallel mode의 leased worktree에서 실행될 하위 세션 prompt이다.
-// sub-session은 코드를 고치거나 작은 commit을 만들 수 있지만 delivery는 distributor가 담당하므로,
+// sub-session은 코드 변경만 worktree에 남기고 commit과 delivery는 host/distributor가 담당하므로,
 // main-session과 다른 system prompt로 권한 경계를 강하게 제한한다.
 pub struct SubSessionPromptAssemblyRequest<'a> {
     // distributor가 만든 queued-task handoff 원문이다. 이 값이 sub-session의 유일한 작업 범위이다.
@@ -98,13 +98,14 @@ fn sub_session_execution_contract_lines() -> Vec<String> {
         "아래 `queued-task-handoff`만 수행하세요.".to_string(),
         "이 세션은 leased worktree에서 실행되는 Akra sub-session입니다.".to_string(),
         "작업 범위는 handoff의 task 하나로 제한하세요.".to_string(),
-        "의미 있는 코드 변경이 있으면 작은 reviewable commit을 남기세요.".to_string(),
+        "의미 있는 코드 변경은 커밋하지 말고 현재 worktree에 남기세요. 완료 후 Akra host가 검증된 변경만 커밋합니다."
+            .to_string(),
     ]
 }
 
 fn sub_session_delivery_boundary_lines() -> Vec<String> {
     vec![
-        "push, PR 생성, merge, shared branch rebase, worktree cleanup은 수행하지 마세요."
+        "commit, push, PR 생성, merge, shared branch rebase, worktree cleanup은 수행하지 마세요."
             .to_string(),
         "완료 후 Akra distributor가 delivery를 처리합니다.".to_string(),
     ]
@@ -132,8 +133,8 @@ fn sub_session_developer_instructions(
     let mut lines = vec![
         "You are an Akra parallel task sub-session running in a leased worktree.",
         "Execute only the queued-task handoff supplied in the turn prompt.",
-        "Keep changes scoped to that task and leave a small reviewable commit when source changes are needed.",
-        "Do not push, open pull requests, merge, rebase shared branches, or clean up the worktree; Akra distributor handles delivery after completion.",
+        "Keep changes scoped to that task and leave source changes uncommitted in the current worktree; the Akra host validates and commits them after TurnCompleted.",
+        "Do not commit, push, open pull requests, merge, rebase shared branches, or clean up the worktree; the Akra host and distributor handle commit and delivery after completion.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -159,7 +160,7 @@ impl TurnPromptAssemblyService {
 
     // manual prompt는 사람이 직접 입력한 요청을 main-session prompt로 승격한다.
     // 별도 렌더러를 만들지 않고 main-session 렌더러를 재사용해, manual 실행과 queue 실행이 같은 guardrail을 공유한다.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn build_manual_prompt(&self, request: ManualPromptAssemblyRequest<'_>) -> Option<String> {
         /*
          * manual turn도 여전히 main-session turn이다.
@@ -174,7 +175,7 @@ impl TurnPromptAssemblyService {
 
     // main-session prompt를 만든다. 반환이 `Option<String>`인 이유는 공백뿐인 user prompt를
     // app-server로 보내지 않기 위해서이다. 호출자는 `None`을 "실행할 turn 없음"으로 처리할 수 있다.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn build_main_session_prompt(
         &self,
         // 사용자 요청과 선택 planning context를 담은 조립 요청이다.
@@ -196,7 +197,7 @@ impl TurnPromptAssemblyService {
 
     // sub-session prompt를 만든다. sub-session은 handoff 하나가 작업 범위이므로,
     // handoff가 비어 있으면 session을 시작하지 않는 것이 맞다.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn build_sub_session_prompt(
         &self,
         // distributor가 lease한 slot에 전달할 handoff 요청이다.
@@ -227,7 +228,7 @@ impl TurnPromptAssemblyService {
 // main-session prompt의 실제 문자열 레이아웃을 담당한다.
 // 형식은 실행 계약, 보고 계약, user prompt 순서이다. planning context와 task authority mutation 규칙은
 // hidden intake/planning worker 계층에서만 소비되고 main-session에는 compact handoff만 들어온다.
-#[tracing::instrument(level = "trace")]
+#[tracing::instrument(level = "trace", skip(user_prompt))]
 fn render_main_session_prompt(
     // 최종 prompt의 `user prompt:` section에 들어갈 실행 요청이다.
     user_prompt: &str,
@@ -248,7 +249,7 @@ fn render_main_session_prompt(
 
 // sub-session prompt의 문자열 레이아웃이다. main-session과 달리 runtime context를 따로 받지 않고,
 // `queued-task-handoff` 하나만 작업 범위로 전달한다.
-#[tracing::instrument(level = "trace")]
+#[tracing::instrument(level = "trace", skip(handoff_prompt, persona_lines))]
 fn render_sub_session_prompt(handoff_prompt: &str, persona_lines: &[String]) -> String {
     /*
      * sub-session rendering에는 의도적으로 runtime-context slot이 없다.
@@ -267,10 +268,32 @@ fn render_sub_session_prompt(handoff_prompt: &str, persona_lines: &[String]) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::prelude::*;
+
     use super::{
         MainSessionPromptAssemblyRequest, ManualPromptAssemblyRequest, SubSessionAgentPrompt,
         SubSessionPromptAssemblyRequest, TurnPromptAssemblyService, sub_session_prompt_heading,
     };
+
+    #[derive(Clone)]
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("trace capture should not be poisoned")
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     // manual prompt가 공백을 정리하고 runtime context를 렌더링하지 않는지 확인한다.
@@ -392,7 +415,16 @@ mod tests {
                 .developer_instructions
                 .contains("parallel task sub-session")
         );
-        assert!(assembly.developer_instructions.contains("Do not push"));
+        assert!(
+            assembly
+                .developer_instructions
+                .contains("leave source changes uncommitted")
+        );
+        assert!(
+            assembly
+                .developer_instructions
+                .contains("Do not commit, push")
+        );
         assert!(!assembly.developer_instructions.contains("Persona prompt:"));
     }
 
@@ -426,5 +458,50 @@ mod tests {
                 .developer_instructions
                 .contains("You are a careful implementation agent.")
         );
+    }
+
+    #[test]
+    fn trace_spans_do_not_record_prompt_or_persona_content() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(move || CaptureWriter(writer.clone()))
+                .with_filter(tracing_subscriber::filter::LevelFilter::TRACE),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            let service = TurnPromptAssemblyService::new();
+            let _ = service.build_manual_prompt(ManualPromptAssemblyRequest {
+                operator_prompt: "operator-secret-prompt",
+            });
+            let _ = service.build_sub_session_prompt(SubSessionPromptAssemblyRequest {
+                handoff_prompt: "worker-secret-handoff",
+                agent_prompt: SubSessionAgentPrompt::new(
+                    "private-profile",
+                    vec!["private-persona-content".to_string()],
+                ),
+            });
+        });
+
+        let output = String::from_utf8(
+            captured
+                .lock()
+                .expect("trace capture should not be poisoned")
+                .clone(),
+        )
+        .expect("trace capture should be UTF-8");
+        for secret in [
+            "operator-secret-prompt",
+            "worker-secret-handoff",
+            "private-profile",
+            "private-persona-content",
+        ] {
+            assert!(
+                !output.contains(secret),
+                "trace leaked `{secret}`: {output}"
+            );
+        }
     }
 }

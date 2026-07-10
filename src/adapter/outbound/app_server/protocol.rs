@@ -7,6 +7,11 @@ use self::turn_notifications::to_conversation_message;
 pub(super) use self::turn_notifications::{
     AppServerNotification, TurnNotificationHandling, handle_turn_notification,
 };
+use super::{
+    MAX_SNAPSHOT_MESSAGES, MAX_SNAPSHOT_TOTAL_TEXT_BYTES, MAX_STREAM_COMPLETED_MESSAGE_BYTES,
+    MAX_STREAM_IDENTIFIER_BYTES, MAX_STREAM_METADATA_BYTES, STREAM_TRUNCATION_MARKER,
+    bounded_stream_text,
+};
 use crate::domain::conversation::{ConversationReasoningEffort, ConversationSnapshot};
 use crate::domain::session_summary::SessionSummary;
 
@@ -40,16 +45,31 @@ pub(super) fn to_session_summary(thread_record: ThreadRecord) -> SessionSummary 
      * 본다. 여기서 updatedAt/status/gitInfo처럼 protocol naming과 domain naming이 어긋나는 필드를 정리한다.
      */
     SessionSummary {
-        id: thread_record.id,
-        name: thread_record.name,
-        preview: thread_record.preview,
-        cwd: thread_record.cwd,
-        source: thread_record.source,
-        model_provider: thread_record.model_provider,
+        id: bounded_stream_text(thread_record.id, MAX_STREAM_IDENTIFIER_BYTES),
+        name: thread_record
+            .name
+            .map(|name| bounded_stream_text(name, MAX_STREAM_METADATA_BYTES)),
+        preview: bounded_stream_text(thread_record.preview, MAX_STREAM_METADATA_BYTES),
+        cwd: bounded_stream_text(thread_record.cwd, MAX_STREAM_METADATA_BYTES),
+        source: bounded_stream_text(thread_record.source, MAX_STREAM_IDENTIFIER_BYTES),
+        model_provider: bounded_stream_text(
+            thread_record.model_provider,
+            MAX_STREAM_IDENTIFIER_BYTES,
+        ),
         updated_at_epoch: thread_record.updated_at,
-        status_type: thread_record.status.status_type,
-        path: thread_record.path.unwrap_or_default(),
-        git_branch: thread_record.git_info.and_then(|git_info| git_info.branch),
+        status_type: bounded_stream_text(
+            thread_record.status.status_type,
+            MAX_STREAM_IDENTIFIER_BYTES,
+        ),
+        path: bounded_stream_text(
+            thread_record.path.unwrap_or_default(),
+            MAX_STREAM_METADATA_BYTES,
+        ),
+        git_branch: thread_record.git_info.and_then(|git_info| {
+            git_info
+                .branch
+                .map(|branch| bounded_stream_text(branch, MAX_STREAM_IDENTIFIER_BYTES))
+        }),
     }
 }
 
@@ -62,20 +82,56 @@ pub(super) fn to_conversation_snapshot(
      * conversation warning과 다른 UI surface에 표시되어야 하므로 먼저 분리하고, raw turn item JSON은
      * turn_notifications module의 item parser만 통과시킨다.
      */
-    let (warnings, runtime_notices) = partition_runtime_notices(warnings);
-    let title = thread_title(&thread_record);
+    let (mut warnings, runtime_notices) = partition_runtime_notices(warnings);
+    let title = bounded_stream_text(thread_title(&thread_record), MAX_STREAM_METADATA_BYTES);
+    let thread_id = bounded_stream_text(thread_record.id, MAX_STREAM_IDENTIFIER_BYTES);
+    let cwd = bounded_stream_text(thread_record.cwd, MAX_STREAM_METADATA_BYTES);
+    let mut messages = Vec::new();
+    let mut retained_text_bytes = 0usize;
+    let mut snapshot_truncated = false;
 
-    let messages = thread_record
-        .turns
-        .into_iter()
-        .flat_map(|turn| turn.items.into_iter())
-        .filter_map(to_conversation_message)
-        .collect::<Vec<_>>();
+    'turns: for turn in thread_record.turns.into_iter().rev() {
+        for item in turn.items.into_iter().rev() {
+            if messages.len() >= MAX_SNAPSHOT_MESSAGES {
+                snapshot_truncated = true;
+                break 'turns;
+            }
+            let Some(mut message) = to_conversation_message(item) else {
+                continue;
+            };
+            let remaining_text_bytes =
+                MAX_SNAPSHOT_TOTAL_TEXT_BYTES.saturating_sub(retained_text_bytes);
+            if remaining_text_bytes <= STREAM_TRUNCATION_MARKER.len() {
+                snapshot_truncated = true;
+                break 'turns;
+            }
+            let body_limit = MAX_STREAM_COMPLETED_MESSAGE_BYTES
+                .min(remaining_text_bytes.saturating_sub(STREAM_TRUNCATION_MARKER.len()));
+            snapshot_truncated |= message.text.len() > body_limit;
+            message.text = bounded_stream_text(message.text, body_limit);
+            message.phase = message
+                .phase
+                .map(|phase| bounded_stream_text(phase, MAX_STREAM_IDENTIFIER_BYTES));
+            message.item_id = message
+                .item_id
+                .map(|item_id| bounded_stream_text(item_id, MAX_STREAM_IDENTIFIER_BYTES));
+            retained_text_bytes = retained_text_bytes.saturating_add(message.text.len());
+            messages.push(message);
+        }
+    }
+    messages.reverse();
+    if snapshot_truncated {
+        warnings.push(format!(
+            "conversation history was bounded to the newest {} messages / {} text bytes",
+            messages.len(),
+            retained_text_bytes
+        ));
+    }
 
     ConversationSnapshot {
-        thread_id: thread_record.id,
+        thread_id,
         title,
-        cwd: thread_record.cwd,
+        cwd,
         messages,
         warnings,
         runtime_notices,
@@ -232,8 +288,6 @@ pub(super) struct ThreadListParams {
 pub(super) enum ApprovalPolicyValue {
     #[serde(rename = "untrusted")]
     Untrusted,
-    #[serde(rename = "on-failure")]
-    OnFailure,
     #[serde(rename = "on-request")]
     OnRequest,
     #[serde(rename = "never")]
@@ -244,6 +298,9 @@ pub(super) enum ApprovalPolicyValue {
 pub(super) enum ApprovalsReviewerValue {
     #[serde(rename = "user")]
     User,
+    #[serde(rename = "auto_review")]
+    AutoReview,
+    // Accepted by current app-server versions only as a compatibility alias.
     #[serde(rename = "guardian_subagent")]
     GuardianSubagent,
 }
@@ -507,7 +564,9 @@ mod contract_tests;
 mod tests {
     use serde_json::json;
 
-    use super::{ThreadStartResponse, to_session_summary};
+    use super::{
+        ThreadReadResponse, ThreadStartResponse, to_conversation_snapshot, to_session_summary,
+    };
 
     #[test]
     fn thread_start_response_accepts_ephemeral_thread_with_null_path() {
@@ -532,5 +591,52 @@ mod tests {
 
         let summary = to_session_summary(response.thread);
         assert_eq!(summary.path, "");
+    }
+
+    #[test]
+    fn conversation_snapshot_bounds_provider_message_before_core_queueing() {
+        let oversized = "한".repeat(super::MAX_STREAM_COMPLETED_MESSAGE_BYTES);
+        let response = serde_json::from_value::<ThreadReadResponse>(json!({
+            "thread": {
+                "id": "thread-1",
+                "name": "bounded history",
+                "preview": "preview",
+                "cwd": "/repo",
+                "source": "vscode",
+                "modelProvider": "openai",
+                "updatedAt": 1777910591,
+                "path": "/tmp/thread.jsonl",
+                "status": { "type": "idle" },
+                "gitInfo": null,
+                "turns": [{
+                    "items": [{
+                        "type": "agentMessage",
+                        "id": "agent-1",
+                        "phase": "final",
+                        "text": oversized
+                    }]
+                }]
+            }
+        }))
+        .expect("thread/read response should deserialize");
+
+        let snapshot = to_conversation_snapshot(response.thread, Vec::new());
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(
+            snapshot.messages[0]
+                .text
+                .ends_with(super::STREAM_TRUNCATION_MARKER)
+        );
+        assert!(
+            snapshot.messages[0].text.len()
+                <= super::MAX_STREAM_COMPLETED_MESSAGE_BYTES
+                    + super::STREAM_TRUNCATION_MARKER.len()
+        );
+        assert!(
+            snapshot
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("conversation history was bounded"))
+        );
     }
 }

@@ -5,4 +5,4 @@
  */
 pub mod driver;
 
-pub use driver::{CoreEffectExecutor, CoreRuntime};
+pub use driver::{CoreEffectExecutor, CoreInputSender, CoreRuntime, core_input_channel};

@@ -3,9 +3,9 @@
  * report로 감싸는 실행 경계다. cleanup, rollback, recovery 같은 상위 서비스는 shell 문자열을 직접
  * 만들지 않고 이 구조를 통해 "무엇을 실행했고 어디서 멈췄는지"를 일관된 진단으로 받는다.
  */
-use std::process::{Command, Stdio};
-
+use crate::git_subprocess;
 use crate::subprocess;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
@@ -133,11 +133,19 @@ credential prompt나 interactive input이 뜨면 TUI/background workflow가 멈�
 실패는 stderr로 수집하고 호출자가 block/retry 정책을 결정하게 한다.
 */
 fn run_git_step(step: GitCommandStep) -> GitCommandStepReport {
-    let mut command = Command::new("git");
-    command
-        .args(&step.args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null());
+    if let Some(repo_or_worktree) = git_step_repository(&step.args)
+        && let Err(error) =
+            crate::git_execution_guard::ensure_host_git_execution_config_safe(repo_or_worktree)
+    {
+        return GitCommandStepReport {
+            label: step.label,
+            args: step.args,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: error.to_string(),
+        };
+    }
+    let mut command = git_subprocess::command(step.args.iter());
     let command_label = format!("git {}", step.args.join(" "));
     let output = subprocess::command_output(&mut command, &command_label);
 
@@ -158,6 +166,12 @@ fn run_git_step(step: GitCommandStep) -> GitCommandStepReport {
             stderr: error.to_string(),
         },
     }
+}
+
+fn git_step_repository(args: &[String]) -> Option<&Path> {
+    args.windows(2)
+        .find(|window| window[0] == "-C")
+        .map(|window| Path::new(&window[1]))
 }
 
 #[cfg(test)]

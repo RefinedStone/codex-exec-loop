@@ -2,31 +2,49 @@
 GitHub automation outbound adapter다.
 
 parallel-mode orchestration은 branch push, PR 생성/조회, capability inspection을 application port로만
-바라본다. 이 파일은 그 port 호출을 repo-local git 명령과 `gh`/`scripts/gh-akra.sh` 실행으로 변환한다.
-GitHub CLI가 있으면 로컬 인증을 그대로 활용하고, 없으면 wrapper script가 git credential 기반 REST
-fallback을 제공한다.
+바라본다. 이 파일은 그 port 호출을 격리된 git 명령과 build-time에 검토·임베드된 `gh-akra.sh` 실행으로
+변환한다. GitHub CLI가 신뢰된 시스템 위치에 있으면 로컬 인증을 가져오고, 없으면 같은 임베드 helper가
+token 기반 REST fallback을 제공한다. 저장소나 설치 디렉터리의 script bytes와 PATH는 실행하지 않는다.
 */
-use std::fs::{self, OpenOptions};
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
+use rand::{RngCore, rngs::OsRng};
 
 use serde::Deserialize;
 
 use crate::application::port::outbound::github_automation_port::{
     AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR,
-    GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH as GITHUB_SCRIPT_RELATIVE_PATH,
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
-    resolve_github_push_remote_name,
+    GithubRepositoryVisibility, credential_redacted_canonical_github_push_url,
+    parse_github_repository_identity, resolve_github_push_remote_name_strict,
 };
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
+use crate::git_subprocess;
 use crate::subprocess;
 
 pub struct GithubAutomationAdapter;
+
+const FROZEN_GITHUB_REMOTE_NAME: &str = "akra-frozen-delivery-target";
+const FROZEN_GITHUB_TOKEN_ENV_VAR: &str = "AKRA_FROZEN_GITHUB_TOKEN";
+const FROZEN_GITHUB_LOGIN_ENV_VAR: &str = "AKRA_FROZEN_GITHUB_LOGIN";
+const EMBEDDED_GITHUB_HELPER: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/gh-akra.sh"));
+const REQUIRED_GITHUB_HELPER_TOOLS: &[&str] = &[
+    "sh", "git", "cat", "curl", "grep", "python3", "mktemp", "rm",
+];
+
+#[cfg(test)]
+thread_local! {
+    static TEST_GITHUB_HELPER_SOURCE: std::cell::RefCell<Option<&'static [u8]>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 impl Default for GithubAutomationAdapter {
     fn default() -> Self {
@@ -48,18 +66,27 @@ impl GithubAutomationAdapter {
     최종 guard 역할을 한다.
     */
     fn inspect_push_remote(repo_root: &str) -> ParallelModeCapabilitySnapshot {
-        let push_remote = configured_push_remote_name(repo_root);
-        let Some(_push_url) = run_git_stdout(
-            repo_root,
-            &["remote", "get-url", "--push", push_remote.as_str()],
-        )
-        .ok() else {
+        let Ok(push_remote) = configured_push_remote_name(repo_root) else {
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Blocked,
+                "configured push remote name is invalid",
+                Some("fix AKRA_GITHUB_PUSH_REMOTE or akra.githubPushRemote".to_string()),
+            );
+        };
+        let adapter = Self::new();
+        let Ok(push_url) =
+            adapter.credential_redacted_push_url_for_remote(repo_root, push_remote.as_str())
+        else {
             return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::PushRemote,
                 ParallelModeCapabilityState::Degraded,
-                format!("push remote `{}` is not configured", push_remote),
+                format!(
+                    "push remote `{}` is not a credential-free GitHub HTTPS delivery target",
+                    push_remote
+                ),
                 Some(
-                    "add a push remote or keep supersession in local-only inspection mode"
+                    "configure a credential-free GitHub HTTPS push remote for autonomous delivery"
                         .to_string(),
                 ),
             );
@@ -68,10 +95,25 @@ impl GithubAutomationAdapter {
         if let Ok(current_branch) = run_git_stdout(repo_root, &["branch", "--show-current"])
             && !current_branch.is_empty()
         {
-            let refspec = format!("HEAD:refs/heads/{current_branch}");
-            if run_git(
+            let Ok(current_commit) = run_git_stdout(repo_root, &["rev-parse", "HEAD^{commit}"])
+            else {
+                return ParallelModeCapabilitySnapshot::new(
+                    ParallelModeCapabilityKey::PushRemote,
+                    ParallelModeCapabilityState::Degraded,
+                    "current branch commit could not be frozen for push dry-run",
+                    Some("repair the current Git branch before enabling delivery".to_string()),
+                );
+            };
+            let refspec = format!("{current_commit}:refs/heads/{current_branch}");
+            if run_git_to_delivery_target(
                 repo_root,
-                &["push", "--dry-run", push_remote.as_str(), refspec.as_str()],
+                &push_url,
+                &[
+                    "push",
+                    "--dry-run",
+                    FROZEN_GITHUB_REMOTE_NAME,
+                    refspec.as_str(),
+                ],
             )
             .is_ok()
             {
@@ -93,48 +135,54 @@ impl GithubAutomationAdapter {
             );
         }
 
-        ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::PushRemote,
-            ParallelModeCapabilityState::Ready,
-            format!("push remote `{}` is configured", push_remote),
-            None,
-        )
+        match verify_github_write_identity_for_delivery_target(repo_root, &push_url) {
+            Ok(()) => ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Ready,
+                format!("push remote `{}` is configured", push_remote),
+                None,
+            ),
+            Err(_) => ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Degraded,
+                format!("push remote `{}` identity verification failed", push_remote),
+                Some("verify the pinned GitHub login and API token".to_string()),
+            ),
+        }
     }
 
     /*
     GitHub command capability는 두 실행 경로를 함께 본다.
 
-    `gh`가 있으면 사람이 익숙한 GitHub CLI 상태를 보고하고, 없더라도 Akra GitHub wrapper script가
-    있으면 automation은 계속 가능하다. 둘 다 없을 때만 PR automation을 degraded로 표시한다.
+    trusted system path에 `gh`가 있으면 사람이 익숙한 GitHub CLI 상태를 보고한다. 없더라도 binary에
+    임베드된 helper의 REST fallback은 계속 가능하다. helper가 요구하는 trusted bash/toolchain 자체가
+    없을 때만 PR automation을 blocked로 표시한다.
     */
-    fn inspect_gh_binary() -> ParallelModeCapabilitySnapshot {
-        match which::which("gh") {
-            Ok(path) => ParallelModeCapabilitySnapshot::new(
+    fn inspect_gh_binary(repo_root: &str) -> ParallelModeCapabilitySnapshot {
+        let executables = match TrustedGithubExecutables::resolve(repo_root) {
+            Ok(executables) => executables,
+            Err(error) => {
+                return ParallelModeCapabilitySnapshot::new(
+                    ParallelModeCapabilityKey::GhBinary,
+                    ParallelModeCapabilityState::Blocked,
+                    format!("trusted GitHub automation runtime is unavailable: {error}"),
+                    Some("install bash and the required GitHub helper tools in a trusted system location".to_string()),
+                );
+            }
+        };
+        match executables.gh {
+            Some(path) => ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::GhBinary,
                 ParallelModeCapabilityState::Ready,
                 format!("gh found at {}", path.display()),
                 None,
             ),
-            Err(_) => {
-                let script_path = github_script_path();
-                if script_path.is_file() {
-                    return ParallelModeCapabilitySnapshot::new(
-                        ParallelModeCapabilityKey::GhBinary,
-                        ParallelModeCapabilityState::Ready,
-                        format!(
-                            "gh is not installed; Akra GitHub API fallback is available at {}",
-                            script_path.display()
-                        ),
-                        None,
-                    );
-                }
-                ParallelModeCapabilitySnapshot::new(
-                    ParallelModeCapabilityKey::GhBinary,
-                    ParallelModeCapabilityState::Degraded,
-                    "gh is not installed on PATH and the Akra GitHub fallback script is missing",
-                    Some("install GitHub CLI or restore scripts/gh-akra.sh".to_string()),
-                )
-            }
+            None => ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GhBinary,
+                ParallelModeCapabilityState::Ready,
+                "gh is not installed in a trusted system location; the embedded Akra GitHub API fallback is available",
+                None,
+            ),
         }
     }
 
@@ -151,32 +199,33 @@ impl GithubAutomationAdapter {
     ) -> ParallelModeCapabilitySnapshot {
         /*
         실제 PR 생성은 Akra wrapper의 token discovery 계약을 쓴다.
-        readiness도 같은 wrapper를 따라야 `gh` binary 존재 여부와 상관없이 env token, gh auth token,
-        local credential file, git credential helper 경로를 같은 기준으로 본다.
+        readiness도 같은 wrapper를 따라야 `gh` binary 존재 여부와 상관없이 explicit env token과 trusted
+        gh auth token 경로를 같은 기준으로 본다.
         */
-        let script_path = github_script_path();
-        if !script_path.is_file() {
+        let Ok(push_remote) = configured_push_remote_name(repo_root) else {
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::GhAuth,
+                ParallelModeCapabilityState::Blocked,
+                "GitHub authentication was not attempted because the push remote is invalid",
+                Some("fix AKRA_GITHUB_PUSH_REMOTE or akra.githubPushRemote".to_string()),
+            );
+        };
+        let adapter = Self::new();
+        let Ok(push_url) = adapter.credential_redacted_push_url_for_remote(repo_root, &push_remote)
+        else {
             return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::GhAuth,
                 ParallelModeCapabilityState::Degraded,
-                "GitHub automation auth status is unavailable because the Akra wrapper script is missing",
-                Some("restore scripts/gh-akra.sh or install a bundled release with the GitHub wrapper".to_string()),
+                "GitHub authentication requires a credential-free HTTPS delivery target",
+                Some("configure the autonomous delivery push remote as GitHub HTTPS".to_string()),
             );
-        }
-        let script_path = script_path.to_string_lossy().into_owned();
-        let mut command = Command::new("bash");
-        command
-            .current_dir(repo_root)
-            .args([script_path.as_str(), "auth", "status"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .env("GIT_TERMINAL_PROMPT", "0");
-        let auth_status =
-            subprocess::command_output(&mut command, &format!("bash {script_path} auth status"))
-                .map(|output| output.status);
-
-        if auth_status.is_ok_and(|status| status.success()) {
+        };
+        let auth_result = run_github_script_command_for_delivery_target(
+            repo_root,
+            &push_url,
+            &["auth", "write-status"],
+        );
+        if auth_result.is_ok() {
             return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::GhAuth,
                 ParallelModeCapabilityState::Ready,
@@ -188,8 +237,14 @@ impl GithubAutomationAdapter {
         ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhAuth,
             ParallelModeCapabilityState::Degraded,
-            "GitHub automation is not authenticated for this workspace",
-            Some("verify gh auth token, AKRA_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN, or local git GitHub credentials".to_string()),
+            format!(
+                "GitHub automation is not authenticated for this workspace: {}",
+                auth_result.expect_err("failed authentication result should contain an error")
+            ),
+            Some(
+                "verify trusted gh auth token or AKRA_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN"
+                    .to_string(),
+            ),
         )
     }
 
@@ -203,15 +258,14 @@ impl GithubAutomationAdapter {
     fn find_open_pull_request(
         &self,
         repo_root: &str,
+        credential_redacted_push_url: &str,
         base_branch: &str,
         head_branch: &str,
     ) -> Result<Option<GithubAutomationPullRequest>> {
-        let script_path = github_script_path();
-        let script_path = script_path.to_string_lossy().into_owned();
-        let output = run_command(
-            "bash",
+        let output = run_github_script_command_for_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
             &[
-                script_path.as_str(),
                 "pr",
                 "list",
                 "--state",
@@ -221,9 +275,8 @@ impl GithubAutomationAdapter {
                 "--head",
                 head_branch,
                 "--json",
-                "number,url,state,baseRefName,headRefName,isDraft",
+                "number,url,state,baseRefName,headRefName,headRefOid,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup,approvedReviewCommitOids",
             ],
-            repo_root,
         )?;
         /*
         PR lookup은 application port가 노출하는 compact field만 요청한다.
@@ -241,14 +294,110 @@ impl GithubAutomationAdapter {
 impl GithubAutomationPort for GithubAutomationAdapter {
     fn inspect_capabilities(&self, repo_root: &str) -> GithubAutomationCapabilities {
         let push_remote = Self::inspect_push_remote(repo_root);
-        let gh_binary = Self::inspect_gh_binary();
+        let gh_binary = Self::inspect_gh_binary(repo_root);
         let gh_auth = Self::inspect_gh_auth(&gh_binary, repo_root);
         GithubAutomationCapabilities::new(push_remote, gh_binary, gh_auth)
+    }
+
+    fn repository_identity(&self, repo_root: &str) -> Result<String> {
+        let push_remote = configured_push_remote_name(repo_root)?;
+        self.repository_identity_for_remote(repo_root, &push_remote)
+    }
+
+    fn repository_identity_for_remote(&self, repo_root: &str, push_remote: &str) -> Result<String> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.repository_identity_for_push_url(repo_root, push_remote, &push_url)
+    }
+
+    fn credential_redacted_push_url_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+    ) -> Result<String> {
+        let raw_push_url =
+            run_git_stdout(repo_root, &["remote", "get-url", "--push", push_remote])?;
+        let push_url = match credential_redacted_canonical_github_push_url(&raw_push_url) {
+            Some(push_url) => push_url,
+            #[cfg(test)]
+            None if is_test_local_push_url(&raw_push_url) => raw_push_url.trim().to_string(),
+            None => {
+                return Err(anyhow!(
+                    "configured push remote `{push_remote}` does not have a supported credential-redactable GitHub push URL"
+                ));
+            }
+        };
+        if !push_url.starts_with("https://github.com/") {
+            #[cfg(test)]
+            if is_test_local_push_url(&push_url) {
+                return Ok(push_url);
+            }
+            bail!(
+                "configured push remote `{push_remote}` must use credential-free GitHub HTTPS for autonomous delivery"
+            );
+        }
+        Ok(push_url)
+    }
+
+    fn repository_identity_for_push_url(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+    ) -> Result<String> {
+        validate_credential_redacted_push_url(credential_redacted_push_url)?;
+        parse_github_repository_identity(credential_redacted_push_url).ok_or_else(|| {
+            anyhow!("frozen push URL does not identify a supported GitHub repository")
+        })
+    }
+
+    fn repository_visibility(&self, repo_root: &str) -> Result<GithubRepositoryVisibility> {
+        let push_remote = configured_push_remote_name(repo_root)?;
+        self.repository_visibility_for_remote(repo_root, &push_remote)
+    }
+
+    fn repository_visibility_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+    ) -> Result<GithubRepositoryVisibility> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.repository_visibility_for_push_url(repo_root, push_remote, &push_url)
+    }
+
+    fn repository_visibility_for_push_url(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+    ) -> Result<GithubRepositoryVisibility> {
+        match run_github_script_command_for_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
+            &["repo", "visibility"],
+        )?
+        .trim()
+        {
+            "private" => Ok(GithubRepositoryVisibility::Private),
+            "internal" => Ok(GithubRepositoryVisibility::Internal),
+            "public" => Ok(GithubRepositoryVisibility::Public),
+            _ => bail!("GitHub repository visibility response was unknown"),
+        }
     }
 
     fn push_branch(
         &self,
         repo_root: &str,
+        branch_name: &str,
+        force_with_lease: bool,
+    ) -> Result<()> {
+        let push_remote = configured_push_remote_name(repo_root)?;
+        self.push_branch_to_remote(repo_root, &push_remote, branch_name, force_with_lease)
+    }
+
+    fn push_branch_to_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
         branch_name: &str,
         force_with_lease: bool,
     ) -> Result<()> {
@@ -258,23 +407,71 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         rebased distributor recovery는 자신이 방금 검증한 branch만 rewrite하므로 force-with-lease를 쓴다.
         force push가 필요하지만, 다른 actor가 remote를 이동시킨 경우에는 lease가 실패해 안전하게 멈춘다.
         */
-        let push_remote = configured_push_remote_name(repo_root);
+        run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        let commit_ref = format!("{branch_name}^{{commit}}");
+        let commit_sha = run_git_stdout(repo_root, &["rev-parse", "--verify", &commit_ref])?;
+        let refspec = format!("{commit_sha}:refs/heads/{branch_name}");
         if force_with_lease {
-            run_git(
-                repo_root,
-                &[
-                    "push",
-                    "--force-with-lease",
-                    push_remote.as_str(),
+            let expected_remote_head = self
+                .remote_branch_head_for_delivery_target(
+                    repo_root,
+                    push_remote,
+                    &push_url,
                     branch_name,
-                ],
+                )?
+                .ok_or_else(|| anyhow!("force-with-lease target branch is absent"))?;
+            let lease =
+                format!("--force-with-lease=refs/heads/{branch_name}:{expected_remote_head}");
+            run_git_to_delivery_target(
+                repo_root,
+                &push_url,
+                &["push", &lease, FROZEN_GITHUB_REMOTE_NAME, &refspec],
             )
         } else {
-            run_git(
+            run_git_to_delivery_target(
                 repo_root,
-                &["push", "-u", push_remote.as_str(), branch_name],
+                &push_url,
+                &["push", FROZEN_GITHUB_REMOTE_NAME, &refspec],
             )
         }
+    }
+
+    fn push_frozen_commit_to_branch(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        source_commit_sha: &str,
+        branch_name: &str,
+    ) -> Result<()> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.push_frozen_commit_to_delivery_target(
+            repo_root,
+            push_remote,
+            &push_url,
+            source_commit_sha,
+            branch_name,
+        )
+    }
+
+    fn push_frozen_commit_to_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        source_commit_sha: &str,
+        branch_name: &str,
+    ) -> Result<()> {
+        // The source side of this refspec is the immutable queue OID rather than
+        // a mutable local branch. A commit appended after queueing therefore
+        // cannot be published even if the branch moves between validation and
+        // `git push` process creation.
+        let refspec = format!("{source_commit_sha}:refs/heads/{branch_name}");
+        run_git_to_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
+            &["push", FROZEN_GITHUB_REMOTE_NAME, refspec.as_str()],
+        )
     }
 
     /*
@@ -293,7 +490,56 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         title: &str,
         body: &str,
     ) -> Result<GithubAutomationPullRequest> {
-        if let Some(existing) = self.find_open_pull_request(repo_root, base_branch, head_branch)? {
+        let push_remote = configured_push_remote_name(repo_root)?;
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, &push_remote)?;
+        self.ensure_pull_request_for_delivery_target(
+            repo_root,
+            &push_remote,
+            &push_url,
+            base_branch,
+            head_branch,
+            title,
+            body,
+        )
+    }
+
+    fn ensure_pull_request_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        base_branch: &str,
+        head_branch: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<GithubAutomationPullRequest> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.ensure_pull_request_for_delivery_target(
+            repo_root,
+            push_remote,
+            &push_url,
+            base_branch,
+            head_branch,
+            title,
+            body,
+        )
+    }
+
+    fn ensure_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+        base_branch: &str,
+        head_branch: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<GithubAutomationPullRequest> {
+        if let Some(existing) = self.find_open_pull_request(
+            repo_root,
+            credential_redacted_push_url,
+            base_branch,
+            head_branch,
+        )? {
             return Ok(existing);
         }
 
@@ -302,14 +548,11 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         timeout이나 transient wrapper failure 뒤 caller가 재시도해도 같은 branch pair에 중복 review surface를 만들지 않고
         기존 PR record를 받아야 한다.
         */
-        let script_path = github_script_path();
-        let script_path = script_path.to_string_lossy().into_owned();
         let title_file = TemporaryTextFile::new("github-pr-title", title)?;
         let title_file_path = title_file.path().to_string_lossy().into_owned();
         let body_file = TemporaryTextFile::new("github-pr-body", body)?;
         let body_file_path = body_file.path().to_string_lossy().into_owned();
         let create_args = vec![
-            script_path.clone(),
             "pr".to_string(),
             "create".to_string(),
             "--base".to_string(),
@@ -322,17 +565,11 @@ impl GithubAutomationPort for GithubAutomationAdapter {
             body_file_path,
         ];
         let create_arg_refs = create_args.iter().map(String::as_str).collect::<Vec<_>>();
-        let create_output = run_command_with_label(
-            "bash",
-            &create_arg_refs,
-            &pull_request_create_command_label(
-                script_path.as_str(),
-                base_branch,
-                head_branch,
-                title,
-                body,
-            ),
+        let create_output = run_github_script_command_with_label_for_delivery_target(
             repo_root,
+            credential_redacted_push_url,
+            &create_arg_refs,
+            &pull_request_create_command_label(base_branch, head_branch, title, body),
         )?;
 
         /*
@@ -340,7 +577,12 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         wrapper는 URL을 출력할 수도, 나중에 structured payload를 출력할 수도, 유용한 값을 출력하지 않을 수도 있다.
         distributor에 돌려줄 number/base/head/draft field의 source of truth는 GitHub에 다시 조회한 JSON이다.
         */
-        if let Some(existing) = self.find_open_pull_request(repo_root, base_branch, head_branch)? {
+        if let Some(existing) = self.find_open_pull_request(
+            repo_root,
+            credential_redacted_push_url,
+            base_branch,
+            head_branch,
+        )? {
             return Ok(existing);
         }
         if let Some(pr_number) = parse_pull_request_number_from_url(&create_output) {
@@ -348,7 +590,12 @@ impl GithubAutomationPort for GithubAutomationAdapter {
             URL parsing은 흔한 CLI success shape를 위한 recovery path다.
             그래도 inspect_pull_request를 통과시켜 ordinary lookup과 같은 JSON-to-port mapping으로 반환 값을 만든다.
             */
-            return self.inspect_pull_request(repo_root, pr_number);
+            return self.inspect_pull_request_for_delivery_target(
+                repo_root,
+                push_remote,
+                credential_redacted_push_url,
+                pr_number,
+            );
         }
 
         Err(anyhow!(
@@ -361,78 +608,1121 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         repo_root: &str,
         pr_number: u64,
     ) -> Result<GithubAutomationPullRequest> {
+        let push_remote = configured_push_remote_name(repo_root)?;
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, &push_remote)?;
+        self.inspect_pull_request_for_delivery_target(repo_root, &push_remote, &push_url, pr_number)
+    }
+
+    fn inspect_pull_request_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        pr_number: u64,
+    ) -> Result<GithubAutomationPullRequest> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.inspect_pull_request_for_delivery_target(repo_root, push_remote, &push_url, pr_number)
+    }
+
+    fn inspect_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        pr_number: u64,
+    ) -> Result<GithubAutomationPullRequest> {
         /*
         inspect는 creation fallback이나 이후 delivery check에서 쓰는 authoritative read path다.
         PR lookup과 같은 compact field set을 요청하므로, caller는 PR을 어떤 경로로 찾았는지와 무관하게 같은 port shape를 본다.
         */
-        let script_path = github_script_path();
-        let script_path = script_path.to_string_lossy().into_owned();
-        let output = run_command(
-            "bash",
+        let output = run_github_script_command_for_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
             &[
-                script_path.as_str(),
                 "pr",
                 "view",
                 &pr_number.to_string(),
                 "--json",
-                "number,url,state,baseRefName,headRefName,isDraft",
+                "number,url,state,baseRefName,headRefName,headRefOid,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup,approvedReviewCommitOids",
             ],
-            repo_root,
         )?;
         let pull_request = serde_json::from_str::<GithubPullRequestJson>(&output)
             .with_context(|| format!("failed to parse `gh pr view` output for PR #{pr_number}"))?;
         Ok(pull_request.into())
     }
 
-    fn push_integration_branch(&self, repo_root: &str, branch_name: &str) -> Result<()> {
+    fn push_integration_branch(
+        &self,
+        repo_root: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+    ) -> Result<()> {
+        let push_remote = configured_push_remote_name(repo_root)?;
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, &push_remote)?;
+        self.push_integration_branch_to_delivery_target(
+            repo_root,
+            &push_remote,
+            &push_url,
+            branch_name,
+            expected_old_commit_sha,
+        )
+    }
+
+    fn push_integration_branch_to_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+    ) -> Result<()> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.push_integration_branch_to_delivery_target(
+            repo_root,
+            push_remote,
+            &push_url,
+            branch_name,
+            expected_old_commit_sha,
+        )
+    }
+
+    fn push_integration_branch_to_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+    ) -> Result<()> {
         /*
         integration branch는 이미 distributor worktree에서 합성된 결과다.
         upstream setup 없이 push하는 이유는 최종 integration이 계속 explicit branch/PR record를 통해 진행되어야 하기 때문이다.
         slot branch처럼 operator의 일상 작업 branch로 취급하지 않는다.
         */
-        let push_remote = configured_push_remote_name(repo_root);
-        run_git(repo_root, &["push", push_remote.as_str(), branch_name])
+        if !matches!(expected_old_commit_sha.len(), 40 | 64)
+            || !expected_old_commit_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("integration push expected-old OID is invalid");
+        }
+        run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
+        let local_result_commit_sha = run_git_stdout(repo_root, &["rev-parse", "HEAD^{commit}"])?;
+        if run_git(
+            repo_root,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                expected_old_commit_sha,
+                local_result_commit_sha.as_str(),
+            ],
+        )
+        .is_err()
+        {
+            bail!("local integration result is not a descendant of the frozen remote base");
+        }
+        let target_ref = format!("refs/heads/{branch_name}");
+        let force_with_lease = format!("--force-with-lease={target_ref}:{expected_old_commit_sha}");
+        let target_refspec = format!("{local_result_commit_sha}:{target_ref}");
+        run_git_to_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
+            &[
+                "push",
+                force_with_lease.as_str(),
+                FROZEN_GITHUB_REMOTE_NAME,
+                target_refspec.as_str(),
+            ],
+        )
     }
 
     fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> Result<()> {
+        let push_remote = configured_push_remote_name(repo_root)?;
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, &push_remote)?;
+        self.close_pull_request_for_delivery_target(repo_root, &push_remote, &push_url, pr_number)
+    }
+
+    fn close_pull_request_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        pr_number: u64,
+    ) -> Result<()> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.close_pull_request_for_delivery_target(repo_root, push_remote, &push_url, pr_number)
+    }
+
+    fn close_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        pr_number: u64,
+    ) -> Result<()> {
         /*
         close는 raw `gh` 대신 Akra wrapper에 위임한다.
         PR 생성/조회와 같은 script를 쓰면 write identity, token selection, repo-specific GitHub policy가 한 경계에 머문다.
         */
-        let script_path = github_script_path();
-        let script_path = script_path.to_string_lossy().into_owned();
-        run_command(
-            "bash",
-            &[script_path.as_str(), "pr", "close", &pr_number.to_string()],
+        run_github_script_command_for_delivery_target(
             repo_root,
+            credential_redacted_push_url,
+            &["pr", "close", &pr_number.to_string()],
         )?;
         Ok(())
     }
+
+    fn remote_branch_head(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        branch_name: &str,
+    ) -> Result<Option<String>> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.remote_branch_head_for_delivery_target(repo_root, push_remote, &push_url, branch_name)
+    }
+
+    fn remote_branch_head_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+    ) -> Result<Option<String>> {
+        let remote_ref = format!("refs/heads/{branch_name}");
+        let output = run_git_network_command_stdout(
+            repo_root,
+            credential_redacted_push_url,
+            &[
+                "ls-remote",
+                "--heads",
+                FROZEN_GITHUB_REMOTE_NAME,
+                remote_ref.as_str(),
+            ],
+        );
+        match output {
+            Ok(output) => Ok(output.split_whitespace().next().map(str::to_string)),
+            Err(error) if error.to_string().contains("command exited without output") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn fetch_branch_to_tracking_ref_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+        tracking_ref: &str,
+    ) -> Result<String> {
+        fetch_branch_to_tracking_ref_isolated(
+            repo_root,
+            credential_redacted_push_url,
+            branch_name,
+            tracking_ref,
+        )
+    }
+
+    fn delete_branch_if_unchanged(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        branch_name: &str,
+        expected_sha: &str,
+    ) -> Result<bool> {
+        let push_url = self.credential_redacted_push_url_for_remote(repo_root, push_remote)?;
+        self.delete_branch_if_unchanged_for_delivery_target(
+            repo_root,
+            push_remote,
+            &push_url,
+            branch_name,
+            expected_sha,
+        )
+    }
+
+    fn delete_branch_if_unchanged_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_sha: &str,
+    ) -> Result<bool> {
+        let Some(remote_head) = self.remote_branch_head_for_delivery_target(
+            repo_root,
+            push_remote,
+            credential_redacted_push_url,
+            branch_name,
+        )?
+        else {
+            return Ok(true);
+        };
+        if remote_head != expected_sha {
+            return Ok(false);
+        }
+        let lease = format!("--force-with-lease=refs/heads/{branch_name}:{expected_sha}");
+        let delete_refspec = format!(":refs/heads/{branch_name}");
+        run_git_to_delivery_target(
+            repo_root,
+            credential_redacted_push_url,
+            &[
+                "push",
+                lease.as_str(),
+                FROZEN_GITHUB_REMOTE_NAME,
+                delete_refspec.as_str(),
+            ],
+        )?;
+        Ok(true)
+    }
 }
 
-fn github_script_path() -> PathBuf {
-    installed_github_script_path()
-        .filter(|path| path.is_file())
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GITHUB_SCRIPT_RELATIVE_PATH)
+struct TrustedGithubExecutables {
+    bash: PathBuf,
+    git: PathBuf,
+    gh: Option<PathBuf>,
+    path: OsString,
+}
+
+impl TrustedGithubExecutables {
+    fn resolve(repo_root: &str) -> Result<Self> {
+        let directories = trusted_executable_directories(repo_root)?;
+        for tool in REQUIRED_GITHUB_HELPER_TOOLS {
+            resolve_trusted_executable(&directories, tool, repo_root).with_context(|| {
+                format!("trusted GitHub helper dependency `{tool}` is unavailable")
+            })?;
+        }
+        let bash = resolve_trusted_executable(&directories, "bash", repo_root)
+            .context("trusted bash interpreter is unavailable")?;
+        let git = resolve_trusted_executable(&directories, "git", repo_root)
+            .context("trusted git executable is unavailable")?;
+        let gh = resolve_trusted_executable(&directories, "gh", repo_root).ok();
+        let path = std::env::join_paths(&directories)
+            .context("trusted GitHub executable PATH could not be constructed")?;
+        Ok(Self {
+            bash,
+            git,
+            gh,
+            path,
         })
+    }
+
+    fn configure_minimal_environment(&self, command: &mut Command) {
+        command
+            .env("PATH", &self.path)
+            .env_remove("BASH_ENV")
+            .env_remove("ENV")
+            .env_remove("CDPATH")
+            .env_remove("GLOBIGNORE")
+            .env_remove("SHELLOPTS")
+            .env_remove("PROMPT_COMMAND");
+    }
 }
 
-fn installed_github_script_path() -> Option<PathBuf> {
-    std::env::current_exe().ok().and_then(|path| {
-        path.parent()
-            .map(|parent| parent.join(GITHUB_SCRIPT_RELATIVE_PATH))
-    })
+fn trusted_executable_directories(repo_root: &str) -> Result<Vec<PathBuf>> {
+    #[cfg(unix)]
+    let candidates = [
+        "/usr/bin",
+        "/bin",
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/opt/local/bin",
+        "/run/current-system/sw/bin",
+    ];
+    #[cfg(windows)]
+    let candidates = [
+        r"C:\Program Files\Git\bin",
+        r"C:\Program Files\Git\usr\bin",
+        r"C:\Windows\System32",
+    ];
+
+    let mut candidates_present = Vec::new();
+    for candidate in candidates {
+        let candidate = Path::new(candidate);
+        if candidate.is_dir() {
+            candidates_present.push(candidate.to_path_buf());
+        }
+    }
+    if candidates_present.is_empty() {
+        bail!("no trusted system executable directory is available")
+    }
+    let candidate_path = std::env::join_paths(candidates_present)
+        .context("trusted system executable candidates could not be joined")?;
+    let trusted_path =
+        crate::trusted_executable::sanitized_path(&candidate_path, Path::new(repo_root))?;
+    Ok(std::env::split_paths(&trusted_path).collect())
 }
 
-fn configured_push_remote_name(repo_root: &str) -> String {
+fn untrusted_executable_roots(repo_root: &str) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for path in [
+        PathBuf::from(repo_root),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+    ] {
+        let canonical = fs::canonicalize(&path).unwrap_or(path);
+        if !roots.contains(&canonical) {
+            roots.push(canonical.clone());
+        }
+        if let Some(parent) = canonical.parent()
+            && !roots.iter().any(|root| root == parent)
+        {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    roots
+}
+
+fn resolve_trusted_executable(
+    directories: &[PathBuf],
+    name: &str,
+    repo_root: &str,
+) -> Result<PathBuf> {
+    #[cfg(windows)]
+    let names = [name.to_string(), format!("{name}.exe")];
+    #[cfg(not(windows))]
+    let names = [name.to_string()];
+
+    for directory in directories {
+        for name in &names {
+            let candidate = directory.join(name);
+            let Ok(canonical) =
+                crate::trusted_executable::validate_absolute(&candidate, Path::new(repo_root))
+            else {
+                continue;
+            };
+            if crate::trusted_executable::validate_native_executable(&canonical).is_err() {
+                continue;
+            }
+            return Ok(canonical);
+        }
+    }
+    bail!("trusted executable `{name}` was not found")
+}
+
+fn github_helper_source() -> &'static [u8] {
+    #[cfg(test)]
+    if let Some(source) = TEST_GITHUB_HELPER_SOURCE.with(|source| *source.borrow()) {
+        return source;
+    }
+    EMBEDDED_GITHUB_HELPER
+}
+
+#[cfg(test)]
+fn test_github_log_directory() -> PathBuf {
+    std::env::temp_dir().join(format!("codex-exec-loop-fake-gh-{}", std::process::id()))
+}
+
+fn configured_push_remote_name(repo_root: &str) -> Result<String> {
     let env_value = std::env::var(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR).ok();
     let config_value = run_git_stdout(
         repo_root,
         &["config", "--get", AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY],
     )
     .ok();
-    resolve_github_push_remote_name(env_value.as_deref(), config_value.as_deref())
+    resolve_github_push_remote_name_strict(env_value.as_deref(), config_value.as_deref())
+        .map_err(|detail| anyhow!(detail))
+}
+
+fn run_github_script_command_for_delivery_target(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+    args: &[&str],
+) -> Result<String> {
+    let command_label = format!("embedded gh-akra {}", args.join(" "));
+    run_github_script_command_with_label_for_delivery_target(
+        repo_root,
+        credential_redacted_push_url,
+        args,
+        &command_label,
+    )
+}
+
+fn run_github_script_command_with_label_for_delivery_target(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+    args: &[&str],
+    command_label: &str,
+) -> Result<String> {
+    let network_context =
+        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+    run_github_script_command_in_network_context(&network_context, args, command_label)
+}
+
+fn run_github_script_command_in_network_context(
+    network_context: &IsolatedGithubNetworkContext,
+    args: &[&str],
+    command_label: &str,
+) -> Result<String> {
+    let mut command = Command::new(&network_context.executables.bash);
+    command.env_clear();
+    network_context.configure_command(&mut command);
+    network_context
+        .executables
+        .configure_minimal_environment(&mut command);
+    #[cfg(test)]
+    command.env("AKRA_TEST_GITHUB_LOG_DIR", test_github_log_directory());
+    command
+        .current_dir(&network_context.repo_root)
+        .args(["--noprofile", "--norc", "-s", "--"])
+        .args(args)
+        .env(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, FROZEN_GITHUB_REMOTE_NAME);
+    let output =
+        subprocess::command_output_with_input(&mut command, command_label, github_helper_source())
+            .with_context(|| format!("failed to run `{command_label}` for frozen GitHub target"))?;
+    if !output.status.success() {
+        bail!(
+            "{command_label} failed for frozen GitHub target: {}",
+            command_error_detail(&output)
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+struct IsolatedGithubNetworkContext {
+    root: PathBuf,
+    repo_root: PathBuf,
+    home: PathBuf,
+    temp: PathBuf,
+    common_objects: PathBuf,
+    credentials: GithubNetworkCredentials,
+    executables: TrustedGithubExecutables,
+    network_environment: TrustedGithubNetworkEnvironment,
+}
+
+impl IsolatedGithubNetworkContext {
+    fn new(source_repo_root: &str, credential_redacted_push_url: &str) -> Result<Self> {
+        validate_credential_redacted_push_url(credential_redacted_push_url)?;
+        let executables = TrustedGithubExecutables::resolve(source_repo_root)?;
+        let network_environment = TrustedGithubNetworkEnvironment::resolve(source_repo_root)?;
+        let credentials = GithubNetworkCredentials::resolve(source_repo_root, &executables);
+        let root = create_private_temp_directory("akra-github-network")?;
+        let repo_root = root.join("repo");
+        let git_dir = repo_root.join(".git");
+        let home = root.join("home");
+        let temp = root.join("tmp");
+        let objects = git_dir.join("objects");
+        let objects_info = objects.join("info");
+        let refs = git_dir.join("refs");
+        let refs_heads = refs.join("heads");
+        fs::create_dir_all(&objects_info)?;
+        fs::create_dir_all(&refs_heads)?;
+        fs::create_dir_all(&home)?;
+        fs::create_dir_all(&temp)?;
+        for directory in [
+            &repo_root,
+            &git_dir,
+            &objects,
+            &objects_info,
+            &refs,
+            &refs_heads,
+            &home,
+            &temp,
+        ] {
+            secure_private_directory(directory)?;
+        }
+
+        let common_objects = validated_source_common_objects(source_repo_root)?;
+        let common_objects_label = common_objects.to_string_lossy();
+        if common_objects_label.chars().any(char::is_control) {
+            bail!("source repository object directory is not safe for an isolated Git context");
+        }
+
+        let push_url = git_config_value(credential_redacted_push_url)?;
+        let config = format!(
+            "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n\tlogallrefupdates = false\n[http]\n\tfollowRedirects = false\n[remote \"{FROZEN_GITHUB_REMOTE_NAME}\"]\n\turl = \"{push_url}\"\n[credential]\n\thelper = \"!sh -c 'test \\\"$1\\\" = get || exit 0; printf \\\"username=%s\\\\npassword=%s\\\\n\\\" \\\"${{AKRA_FROZEN_GITHUB_LOGIN:-x-access-token}}\\\" \\\"${{AKRA_FROZEN_GITHUB_TOKEN:-}}\\\"' -\"\n\tuseHttpPath = true\n"
+        );
+        write_private_file(&git_dir.join("config"), &config)?;
+        write_private_file(
+            &git_dir.join("HEAD"),
+            "ref: refs/heads/akra-frozen-network\n",
+        )?;
+        write_private_file(
+            &git_dir.join("objects/info/alternates"),
+            &format!("{common_objects_label}\n"),
+        )?;
+
+        Ok(Self {
+            root,
+            repo_root,
+            home,
+            temp,
+            common_objects,
+            credentials,
+            executables,
+            network_environment,
+        })
+    }
+
+    fn configure_command(&self, command: &mut Command) {
+        command
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_CONFIG_HOME", &self.home)
+            .env("TMPDIR", &self.temp)
+            .env("TMP", &self.temp)
+            .env("TEMP", &self.temp)
+            .env("GIT_OBJECT_DIRECTORY", &self.common_objects)
+            .env_remove("AKRA_GITHUB_LOGIN")
+            .env_remove("AKRA_GITHUB_TOKEN")
+            .env_remove("GH_REPO")
+            .env_remove("GH_HOST")
+            .env_remove("GH_CONFIG_DIR")
+            .env_remove("GH_TOKEN")
+            .env_remove("GH_ENTERPRISE_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GITHUB_ENTERPRISE_TOKEN")
+            .env_remove(FROZEN_GITHUB_TOKEN_ENV_VAR)
+            .env_remove(FROZEN_GITHUB_LOGIN_ENV_VAR)
+            .env("GH_HOST", "github.com");
+        if let Some(token) = self.credentials.token.as_ref() {
+            command
+                .env("AKRA_GITHUB_TOKEN", token)
+                .env(FROZEN_GITHUB_TOKEN_ENV_VAR, token);
+        }
+        if let Some(login) = self.credentials.login.as_ref() {
+            command
+                .env("AKRA_GITHUB_LOGIN", login)
+                .env(FROZEN_GITHUB_LOGIN_ENV_VAR, login);
+        }
+        self.network_environment.configure_command(command);
+    }
+}
+
+impl Drop for IsolatedGithubNetworkContext {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+struct GithubNetworkCredentials {
+    token: Option<OsString>,
+    login: Option<OsString>,
+}
+
+#[derive(Debug, Default)]
+struct TrustedGithubNetworkEnvironment {
+    variables: Vec<(&'static str, OsString)>,
+}
+
+impl TrustedGithubNetworkEnvironment {
+    fn resolve(repo_root: &str) -> Result<Self> {
+        let mut variables = Vec::new();
+        if let Some(proxy) = resolve_environment_alias("HTTPS_PROXY", "https_proxy")? {
+            validate_https_proxy(&proxy)?;
+            variables.push(("HTTPS_PROXY", proxy));
+        }
+        if let Some(no_proxy) = resolve_environment_alias("NO_PROXY", "no_proxy")? {
+            validate_no_proxy(&no_proxy)?;
+            variables.push(("NO_PROXY", no_proxy));
+        }
+
+        let untrusted_roots = untrusted_executable_roots(repo_root);
+        for (name, directory) in [
+            ("SSL_CERT_FILE", false),
+            ("CURL_CA_BUNDLE", false),
+            ("GIT_SSL_CAINFO", false),
+            ("SSL_CERT_DIR", true),
+            ("GIT_SSL_CAPATH", true),
+        ] {
+            let Some(value) = std::env::var_os(name).filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            let canonical = validate_trusted_ca_path(name, &value, directory, &untrusted_roots)?;
+            let forwarded_name = match name {
+                "GIT_SSL_CAINFO" => "AKRA_TRUSTED_GIT_SSL_CAINFO",
+                "GIT_SSL_CAPATH" => "AKRA_TRUSTED_GIT_SSL_CAPATH",
+                other => other,
+            };
+            variables.push((forwarded_name, canonical.into_os_string()));
+        }
+        Ok(Self { variables })
+    }
+
+    fn configure_command(&self, command: &mut Command) {
+        for (name, value) in &self.variables {
+            command.env(name, value);
+        }
+    }
+}
+
+fn resolve_environment_alias(upper: &'static str, lower: &'static str) -> Result<Option<OsString>> {
+    let upper_value = std::env::var_os(upper).filter(|value| !value.is_empty());
+    let lower_value = std::env::var_os(lower).filter(|value| !value.is_empty());
+    match (upper_value, lower_value) {
+        (Some(upper_value), Some(lower_value)) if upper_value != lower_value => {
+            bail!("conflicting `{upper}` and `{lower}` values are not safe to inherit")
+        }
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn validate_https_proxy(value: &OsString) -> Result<()> {
+    let value = value.to_str().context("HTTPS proxy must be valid UTF-8")?;
+    if value.chars().any(char::is_control) || value.chars().any(char::is_whitespace) {
+        bail!("HTTPS proxy contains whitespace or a control character")
+    }
+    let remainder = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .context("HTTPS proxy must be an absolute HTTP(S) URL")?;
+    let authority = remainder.split('/').next().unwrap_or_default();
+    if authority.is_empty()
+        || authority.contains('@')
+        || authority.contains('?')
+        || authority.contains('#')
+        || !authority.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '-' | '_' | ':' | '[' | ']')
+        })
+    {
+        bail!("HTTPS proxy authority is invalid or contains credentials")
+    }
+    if remainder
+        .strip_prefix(authority)
+        .is_some_and(|suffix| !matches!(suffix, "" | "/"))
+    {
+        bail!("HTTPS proxy URL must not contain a path, query, or fragment")
+    }
+    Ok(())
+}
+
+fn validate_no_proxy(value: &OsString) -> Result<()> {
+    let value = value.to_str().context("NO_PROXY must be valid UTF-8")?;
+    if value.is_empty()
+        || value.chars().any(char::is_control)
+        || value.chars().any(char::is_whitespace)
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '-' | '_' | ':' | ',' | '*' | '[' | ']')
+        })
+    {
+        bail!("NO_PROXY contains an unsupported character")
+    }
+    Ok(())
+}
+
+fn validate_trusted_ca_path(
+    name: &str,
+    value: &OsString,
+    directory: bool,
+    untrusted_roots: &[PathBuf],
+) -> Result<PathBuf> {
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        bail!("{name} must be an absolute path")
+    }
+    let canonical = fs::canonicalize(path)
+        .with_context(|| format!("failed to resolve trusted CA path `{}`", path.display()))?;
+    if untrusted_roots
+        .iter()
+        .any(|root| canonical == *root || canonical.starts_with(root))
+    {
+        bail!("{name} must not reference repository- or pool-controlled data")
+    }
+    let metadata = fs::metadata(&canonical).with_context(|| {
+        format!(
+            "failed to inspect trusted CA path `{}`",
+            canonical.display()
+        )
+    })?;
+    if metadata.is_dir() != directory || metadata.is_file() == directory {
+        bail!("{name} has the wrong filesystem type")
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let owner = metadata.uid();
+        // SAFETY: geteuid has no preconditions and does not retain pointers.
+        let current = unsafe { libc::geteuid() };
+        if (!matches!(owner, 0) && owner != current) || metadata.mode() & 0o022 != 0 {
+            bail!("{name} ownership or permissions are unsafe")
+        }
+    }
+    Ok(canonical)
+}
+
+impl GithubNetworkCredentials {
+    fn resolve(repo_root: &str, executables: &TrustedGithubExecutables) -> Self {
+        let token = ["AKRA_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+            .into_iter()
+            .find_map(|name| safe_secret(std::env::var_os(name)))
+            .or_else(|| github_cli_auth_token(executables));
+        let login = safe_login(std::env::var_os("AKRA_GITHUB_LOGIN")).or_else(|| {
+            run_git_stdout(repo_root, &["config", "--get", "akra.githubLogin"])
+                .ok()
+                .and_then(|value| safe_login(Some(value.into())))
+        });
+        Self { token, login }
+    }
+}
+
+fn github_cli_auth_token(executables: &TrustedGithubExecutables) -> Option<OsString> {
+    let gh = executables.gh.as_ref()?;
+    let mut command = Command::new(gh);
+    command.env_clear();
+    executables.configure_minimal_environment(&mut command);
+    for name in ["HOME", "USERPROFILE", "XDG_CONFIG_HOME"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+        .args(["auth", "token", "--hostname", "github.com"])
+        .stdin(Stdio::null())
+        .env("GH_HOST", "github.com");
+    let output = subprocess::command_output(&mut command, "gh auth token").ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    safe_secret(Some(
+        String::from_utf8(output.stdout)
+            .ok()?
+            .trim()
+            .to_string()
+            .into(),
+    ))
+}
+
+fn safe_secret(value: Option<OsString>) -> Option<OsString> {
+    let value = value?;
+    let text = value.to_str()?;
+    (!text.is_empty() && !text.chars().any(char::is_whitespace)).then_some(value)
+}
+
+fn safe_login(value: Option<OsString>) -> Option<OsString> {
+    let value = value?;
+    let text = value.to_str()?;
+    (!text.is_empty()
+        && text.len() <= 128
+        && text
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '[' | ']')))
+    .then_some(value)
+}
+
+fn validate_credential_redacted_push_url(value: &str) -> Result<()> {
+    #[cfg(test)]
+    if is_test_local_push_url(value) {
+        return Ok(());
+    }
+    if !value.starts_with("https://github.com/")
+        || credential_redacted_canonical_github_push_url(value).as_deref() != Some(value)
+    {
+        bail!("frozen push URL is not a credential-redacted canonical GitHub URL");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn is_test_local_push_url(value: &str) -> bool {
+    !value.chars().any(char::is_control) && Path::new(value).is_absolute()
+}
+
+fn validated_source_common_objects(repo_root: &str) -> Result<PathBuf> {
+    let common_git_dir = PathBuf::from(run_git_stdout(
+        repo_root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?);
+    if !common_git_dir.is_absolute() {
+        bail!("source repository common Git directory is not absolute");
+    }
+    let common_metadata = fs::symlink_metadata(&common_git_dir)
+        .context("failed to inspect source repository common Git directory")?;
+    if !common_metadata.is_dir() || common_metadata.file_type().is_symlink() {
+        bail!("source repository common Git directory must be a real directory");
+    }
+    let canonical_common_git_dir = fs::canonicalize(&common_git_dir)
+        .context("failed to resolve source repository common Git directory")?;
+    let objects_path = canonical_common_git_dir.join("objects");
+    let objects_metadata = fs::symlink_metadata(&objects_path)
+        .context("failed to inspect source repository object directory")?;
+    if !objects_metadata.is_dir() || objects_metadata.file_type().is_symlink() {
+        bail!("source repository object directory must be a real directory");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        // SAFETY: geteuid has no preconditions and does not retain pointers.
+        if objects_metadata.uid() != unsafe { libc::geteuid() } {
+            bail!("source repository object directory must be owned by the current user");
+        }
+    }
+    #[cfg(windows)]
+    validate_owned_windows_directory(&objects_path)?;
+    let canonical_objects = fs::canonicalize(&objects_path)
+        .context("failed to resolve source repository object directory")?;
+    if canonical_objects.parent() != Some(canonical_common_git_dir.as_path()) {
+        bail!("source repository object directory escaped its common Git directory");
+    }
+    Ok(canonical_objects)
+}
+
+#[cfg(windows)]
+fn validate_owned_windows_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use crate::private_fs::{
+        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+        WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
+        validate_windows_path_identity,
+    };
+
+    let directory = OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "failed to inspect Windows object directory `{}`",
+                path.display()
+            )
+        })?;
+    validate_windows_path_identity(path, &directory, true)
+}
+
+fn create_private_temp_directory(prefix: &str) -> Result<PathBuf> {
+    let base = trusted_temp_directory_base()?;
+    for _ in 0..32_u32 {
+        let mut random = [0_u8; 16];
+        OsRng.fill_bytes(&mut random);
+        let nonce = random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = base.join(format!("{prefix}-{nonce}"));
+        #[allow(unused_mut)]
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&path) {
+            Ok(()) => {
+                secure_private_directory(&path)?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error).context("failed to create private temporary root"),
+        }
+    }
+    bail!("failed to allocate a unique private temporary root")
+}
+
+#[cfg(unix)]
+fn trusted_temp_directory_base() -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+
+    let base =
+        fs::canonicalize("/tmp").context("trusted system temporary directory is unavailable")?;
+    let metadata =
+        fs::metadata(&base).context("failed to inspect trusted system temporary directory")?;
+    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o1000 == 0 {
+        bail!("system temporary directory must be a root-owned sticky directory")
+    }
+    Ok(base)
+}
+
+#[cfg(windows)]
+fn trusted_temp_directory_base() -> Result<PathBuf> {
+    let local_app_data = crate::private_fs::windows_local_app_data_path()?;
+    let akra = local_app_data.join("Akra");
+    let base = akra.join("trusted-temp");
+    for directory in [&akra, &base] {
+        match fs::create_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to create trusted temp base `{}`",
+                        directory.display()
+                    )
+                });
+            }
+        }
+        secure_private_directory(directory)?;
+    }
+    Ok(base)
+}
+
+fn write_private_file(path: &Path, contents: &str) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("failed to create isolated Git file `{}`", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("failed to write isolated Git file `{}`", path.display()))?;
+    file.flush()
+        .with_context(|| format!("failed to flush isolated Git file `{}`", path.display()))?;
+    secure_private_file(path)
+}
+
+#[cfg(unix)]
+fn secure_private_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect private directory `{}`", path.display()))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("private directory must be a real directory")
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to secure private directory `{}`", path.display()))?;
+    validate_private_directory(path)
+}
+
+#[cfg(unix)]
+fn secure_private_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect private file `{}`", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("private file must be a real regular file")
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to secure private file `{}`", path.display()))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .with_context(|| format!("failed to reopen private file `{}`", path.display()))?;
+    validate_private_file_identity(path, &file)
+}
+
+#[cfg(unix)]
+fn validate_private_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to validate private directory `{}`", path.display()))?;
+    // SAFETY: geteuid has no preconditions and does not retain pointers.
+    let current = unsafe { libc::geteuid() };
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != current
+        || metadata.mode() & 0o777 != 0o700
+    {
+        bail!("private directory ownership, type, or permissions are unsafe")
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_private_file_identity(path: &Path, file: &File) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let path_metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to validate private file `{}`", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .with_context(|| format!("failed to inspect opened private file `{}`", path.display()))?;
+    // SAFETY: geteuid has no preconditions and does not retain pointers.
+    let current = unsafe { libc::geteuid() };
+    if !path_metadata.is_file()
+        || path_metadata.file_type().is_symlink()
+        || path_metadata.uid() != current
+        || opened_metadata.uid() != current
+        || path_metadata.mode() & 0o777 != 0o600
+        || opened_metadata.mode() & 0o777 != 0o600
+        || path_metadata.nlink() != 1
+        || opened_metadata.nlink() != 1
+        || path_metadata.dev() != opened_metadata.dev()
+        || path_metadata.ino() != opened_metadata.ino()
+    {
+        bail!("private file must be an unchanged owner-private single-link regular file")
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn secure_private_directory(path: &Path) -> Result<()> {
+    secure_private_windows_path(path, true)
+}
+
+#[cfg(windows)]
+fn secure_private_file(path: &Path) -> Result<()> {
+    secure_private_windows_path(path, false)
+}
+
+#[cfg(windows)]
+fn validate_private_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use crate::private_fs::{
+        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+        WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
+        validate_windows_path_identity, validate_windows_private_owner_and_acl,
+    };
+    let directory = OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .with_context(|| format!("failed to validate private directory `{}`", path.display()))?;
+    validate_windows_path_identity(path, &directory, true)?;
+    validate_windows_private_owner_and_acl(path, &directory)
+}
+
+#[cfg(windows)]
+fn validate_private_file_identity(path: &Path, file: &File) -> Result<()> {
+    use crate::private_fs::{
+        validate_windows_path_identity, validate_windows_private_owner_and_acl,
+        windows_file_link_count,
+    };
+    validate_windows_path_identity(path, file, false)?;
+    validate_windows_private_owner_and_acl(path, file)?;
+    if windows_file_link_count(file)? != 1 {
+        bail!("private file must have exactly one link")
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn secure_private_windows_path(path: &Path, directory: bool) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use crate::private_fs::{
+        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+        WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL, WINDOWS_WRITE_DAC,
+        set_windows_private_acl, validate_windows_path_identity,
+        validate_windows_private_owner_and_acl,
+    };
+
+    let file = OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL | WINDOWS_WRITE_DAC)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(
+            WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT
+                | if directory {
+                    WINDOWS_FILE_FLAG_BACKUP_SEMANTICS
+                } else {
+                    0
+                },
+        )
+        .open(path)
+        .with_context(|| format!("failed to secure private Windows path `{}`", path.display()))?;
+    validate_windows_path_identity(path, &file, directory)?;
+    set_windows_private_acl(&file, directory)?;
+    validate_windows_private_owner_and_acl(path, &file)?;
+    validate_windows_path_identity(path, &file, directory)
+}
+
+fn git_config_value(value: &str) -> Result<String> {
+    if value.chars().any(char::is_control) {
+        bail!("isolated Git config value contains a control character");
+    }
+    Ok(value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 struct TemporaryTextFile {
@@ -483,14 +1773,13 @@ impl Drop for TemporaryTextFile {
 }
 
 fn pull_request_create_command_label(
-    script_path: &str,
     base_branch: &str,
     head_branch: &str,
     title: &str,
     body: &str,
 ) -> String {
     format!(
-        "bash {script_path} pr create --base {base_branch} --head {head_branch} --title-file {} --body-file {}",
+        "embedded gh-akra pr create --base {base_branch} --head {head_branch} --title-file {} --body-file {}",
         redacted_argument_label(title),
         redacted_argument_label(body)
     )
@@ -515,8 +1804,26 @@ struct GithubPullRequestJson {
     base_ref_name: String,
     #[serde(rename = "headRefName")]
     head_ref_name: String,
+    #[serde(default, rename = "headRefOid")]
+    head_ref_oid: Option<String>,
     #[serde(rename = "isDraft")]
     is_draft: bool,
+    #[serde(default, rename = "reviewDecision")]
+    review_decision: Option<String>,
+    #[serde(default, rename = "mergeStateStatus")]
+    merge_state_status: Option<String>,
+    #[serde(default, rename = "statusCheckRollup")]
+    status_check_rollup: Option<Vec<GithubStatusCheckJson>>,
+    #[serde(default, rename = "approvedReviewCommitOids")]
+    approved_review_commit_oids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubStatusCheckJson {
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
 }
 
 impl From<GithubPullRequestJson> for GithubAutomationPullRequest {
@@ -525,14 +1832,35 @@ impl From<GithubPullRequestJson> for GithubAutomationPullRequest {
         이 conversion은 GitHub camelCase JSON과 application port의 provider-neutral record 사이 membrane이다.
         mapping을 여기 고정하면 distributor나 readiness code가 `baseRefName` 같은 provider field에 직접 의존하지 않는다.
         */
-        GithubAutomationPullRequest::new(
+        let required_checks_passed = value.status_check_rollup.as_ref().map(|checks| {
+            !checks.is_empty()
+                && checks.iter().all(|check| {
+                    check
+                        .conclusion
+                        .as_deref()
+                        .or(check.state.as_deref())
+                        .is_some_and(|state| {
+                            matches!(
+                                state.to_ascii_uppercase().as_str(),
+                                "SUCCESS" | "NEUTRAL" | "SKIPPED"
+                            )
+                        })
+                })
+        });
+        let mut pull_request = GithubAutomationPullRequest::new(
             value.number,
             value.url,
             value.state,
             value.base_ref_name,
             value.head_ref_name,
             value.is_draft,
-        )
+        );
+        pull_request.review_decision = value.review_decision;
+        pull_request.merge_state_status = value.merge_state_status;
+        pull_request.required_checks_passed = required_checks_passed;
+        pull_request.head_commit_sha = value.head_ref_oid;
+        pull_request.approved_review_commit_shas = value.approved_review_commit_oids;
+        pull_request
     }
 }
 
@@ -554,6 +1882,156 @@ fn run_git(repo_root: &str, args: &[&str]) -> Result<()> {
         repo_root,
         command_error_detail(&output)
     )
+}
+
+fn run_git_to_delivery_target(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+    args: &[&str],
+) -> Result<()> {
+    let network_context =
+        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+    #[cfg(test)]
+    let allow_test_local = is_test_local_push_url(credential_redacted_push_url);
+    #[cfg(not(test))]
+    let allow_test_local = false;
+    verify_github_write_identity_in_network_context(&network_context, allow_test_local)?;
+    let output = run_git_command_in_network_context(&network_context, args)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "git {} failed for frozen GitHub target: {}",
+        args.join(" "),
+        command_error_detail(&output)
+    )
+}
+
+fn run_git_network_command_stdout(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+    args: &[&str],
+) -> Result<String> {
+    let output = run_git_network_command(repo_root, credential_redacted_push_url, args)?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed for frozen GitHub target: {}",
+            args.join(" "),
+            command_error_detail(&output)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn run_git_network_command(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+    args: &[&str],
+) -> Result<Output> {
+    let network_context =
+        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+    run_git_command_in_network_context(&network_context, args)
+}
+
+fn run_git_command_in_network_context(
+    network_context: &IsolatedGithubNetworkContext,
+    args: &[&str],
+) -> Result<Output> {
+    let mut command = git_subprocess::command_with_program(
+        network_context.executables.git.as_os_str(),
+        args.iter().copied(),
+    );
+    command.env_clear();
+    network_context.configure_command(&mut command);
+    network_context
+        .executables
+        .configure_minimal_environment(&mut command);
+    configure_noninteractive_git_environment(&mut command);
+    command.current_dir(&network_context.repo_root);
+    let command_label = format!("git {}", args.join(" "));
+    subprocess::command_output(&mut command, &command_label)
+        .with_context(|| format!("failed to run `{command_label}` for frozen GitHub target"))
+}
+
+fn fetch_branch_to_tracking_ref_isolated(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+    branch_name: &str,
+    tracking_ref: &str,
+) -> Result<String> {
+    run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
+    run_git(repo_root, &["check-ref-format", tracking_ref])?;
+    let network_context =
+        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+    let fetched_ref = "refs/heads/akra-frozen-fetch-result";
+    let fetch_refspec = format!("+refs/heads/{branch_name}:{fetched_ref}");
+    let output = run_git_command_in_network_context(
+        &network_context,
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            FROZEN_GITHUB_REMOTE_NAME,
+            &fetch_refspec,
+        ],
+    )?;
+    if !output.status.success() {
+        bail!(
+            "git fetch failed for frozen GitHub target: {}",
+            command_error_detail(&output)
+        );
+    }
+    let commit_ref = format!("{fetched_ref}^{{commit}}");
+    let output = run_git_command_in_network_context(
+        &network_context,
+        &["rev-parse", "--verify", &commit_ref],
+    )?;
+    if !output.status.success() {
+        bail!("frozen GitHub target fetch did not produce a commit");
+    }
+    let commit_sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !matches!(commit_sha.len(), 40 | 64)
+        || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("frozen GitHub target fetch produced an invalid commit OID");
+    }
+
+    let expected_old = run_git_stdout(repo_root, &["rev-parse", "--verify", tracking_ref])
+        .unwrap_or_else(|_| "0".repeat(commit_sha.len()));
+    run_git(
+        repo_root,
+        &["update-ref", tracking_ref, &commit_sha, &expected_old],
+    )?;
+    Ok(commit_sha)
+}
+
+fn verify_github_write_identity_for_delivery_target(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+) -> Result<()> {
+    #[cfg(test)]
+    if is_test_local_push_url(credential_redacted_push_url) {
+        return Ok(());
+    }
+    let network_context =
+        IsolatedGithubNetworkContext::new(repo_root, credential_redacted_push_url)?;
+    verify_github_write_identity_in_network_context(&network_context, false)
+}
+
+fn verify_github_write_identity_in_network_context(
+    network_context: &IsolatedGithubNetworkContext,
+    allow_test_local: bool,
+) -> Result<()> {
+    if allow_test_local {
+        return Ok(());
+    }
+    run_github_script_command_in_network_context(
+        network_context,
+        &["auth", "write-status"],
+        "embedded gh-akra auth write-status",
+    )
+    .map(|_| ())
+    .context("GitHub write identity verification failed before frozen-target git push")
 }
 
 fn run_git_stdout(repo_root: &str, args: &[&str]) -> Result<String> {
@@ -610,14 +2088,51 @@ fn run_process_with_label(
     terminal prompt를 막아 credential/network gap이 supervisor lane을 멈춰 세우는 interactive wait가 아니라
     일반 command failure로 드러나게 한다.
     */
-    let mut command = Command::new(program);
+    let directories = trusted_executable_directories(repo_root)?;
+    let executable = resolve_trusted_executable(&directories, program, repo_root)
+        .with_context(|| format!("trusted `{program}` executable is unavailable"))?;
+    let safe_path = std::env::join_paths(&directories)
+        .context("trusted local Git executable PATH could not be constructed")?;
+    let mut command = git_subprocess::command_for_program(
+        executable.to_string_lossy().as_ref(),
+        args.iter().copied(),
+    );
     command
         .current_dir(repo_root)
-        .args(args)
         .stdin(Stdio::null())
+        .env("PATH", safe_path)
         .env("GIT_TERMINAL_PROMPT", "0");
+    remove_github_credentials(&mut command);
     subprocess::command_output(&mut command, command_label)
         .with_context(|| format!("failed to run `{command_label}` in {repo_root}"))
+}
+
+fn configure_noninteractive_git_environment(command: &mut Command) {
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_EDITOR", ":")
+        .env("GIT_SEQUENCE_EDITOR", ":")
+        .env("GCM_INTERACTIVE", "Never")
+        .env("GCM_GUI_PROMPT", "0");
+}
+
+fn remove_github_credentials(command: &mut Command) {
+    for name in [
+        "AKRA_GITHUB_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        FROZEN_GITHUB_TOKEN_ENV_VAR,
+        FROZEN_GITHUB_LOGIN_ENV_VAR,
+    ] {
+        command.env_remove(name);
+    }
 }
 
 fn command_error_detail(output: &Output) -> String {
@@ -627,14 +2142,72 @@ fn command_error_detail(output: &Output) -> String {
     */
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !stderr.is_empty() {
-        return stderr;
+        return sanitize_command_output(&stderr);
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !stdout.is_empty() {
-        return stdout;
+        return sanitize_command_output(&stdout);
     }
 
     "command exited without output".to_string()
+}
+
+fn sanitize_command_output(value: &str) -> String {
+    let mut sanitized = value.to_string();
+    redact_url_userinfo(&mut sanitized);
+    redact_bearer_tokens(&mut sanitized);
+    for prefix in ["ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_"] {
+        redact_prefixed_token(&mut sanitized, prefix);
+    }
+    sanitized
+}
+
+fn redact_url_userinfo(value: &mut String) {
+    let mut search_from = 0;
+    while let Some(relative_scheme) = value[search_from..].find("://") {
+        let authority_start = search_from + relative_scheme + 3;
+        let authority_end = value[authority_start..]
+            .find(|ch: char| ch == '/' || ch.is_whitespace())
+            .map(|offset| authority_start + offset)
+            .unwrap_or(value.len());
+        if let Some(relative_at) = value[authority_start..authority_end].rfind('@') {
+            let at = authority_start + relative_at;
+            value.replace_range(authority_start..at, "[redacted]");
+            search_from = authority_start + "[redacted]@".len();
+        } else {
+            search_from = authority_end;
+        }
+    }
+}
+
+fn redact_bearer_tokens(value: &mut String) {
+    let mut search_from = 0;
+    loop {
+        let lower = value.to_ascii_lowercase();
+        let Some(relative_match) = lower[search_from..].find("bearer ") else {
+            break;
+        };
+        let token_start = search_from + relative_match + "bearer ".len();
+        let token_end = value[token_start..]
+            .find(char::is_whitespace)
+            .map(|offset| token_start + offset)
+            .unwrap_or(value.len());
+        value.replace_range(token_start..token_end, "[redacted]");
+        search_from = token_start + "[redacted]".len();
+    }
+}
+
+fn redact_prefixed_token(value: &mut String, prefix: &str) {
+    let mut search_from = 0;
+    while let Some(relative_match) = value[search_from..].find(prefix) {
+        let token_start = search_from + relative_match;
+        let token_end = value[token_start..]
+            .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .map(|offset| token_start + offset)
+            .unwrap_or(value.len());
+        value.replace_range(token_start..token_end, "[redacted-token]");
+        search_from = token_start + "[redacted-token]".len();
+    }
 }
 
 fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
@@ -668,17 +2241,22 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        GithubAutomationAdapter, GithubPullRequestJson, TemporaryTextFile,
-        parse_pull_request_number_from_url, run_command, run_git, run_git_stdout,
+        EMBEDDED_GITHUB_HELPER, FROZEN_GITHUB_REMOTE_NAME, GithubAutomationAdapter,
+        GithubPullRequestJson, IsolatedGithubNetworkContext, TEST_GITHUB_HELPER_SOURCE,
+        TemporaryTextFile, TrustedGithubNetworkEnvironment, fetch_branch_to_tracking_ref_isolated,
+        github_helper_source, parse_pull_request_number_from_url, run_command, run_git,
+        run_git_command_in_network_context, run_git_stdout,
+        run_github_script_command_for_delivery_target, sanitize_command_output,
+        trusted_executable_directories,
     };
 
     use crate::application::port::outbound::github_automation_port::{
         AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, GithubAutomationPort,
         GithubAutomationPullRequest,
     };
-    use crate::domain::parallel_mode::{
-        ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    };
+    #[cfg(unix)]
+    use crate::domain::parallel_mode::ParallelModeCapabilitySnapshot;
+    use crate::domain::parallel_mode::{ParallelModeCapabilityKey, ParallelModeCapabilityState};
     use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
 
     #[test]
@@ -690,7 +2268,12 @@ mod tests {
             "state": "OPEN",
             "baseRefName": "prerelease",
             "headRefName": "feature/test-coverage",
-            "isDraft": false
+            "headRefOid": "0123456789abcdef",
+            "isDraft": false,
+            "reviewDecision": "APPROVED",
+            "mergeStateStatus": "CLEAN",
+            "statusCheckRollup": [{"conclusion": "SUCCESS"}],
+            "approvedReviewCommitOids": ["0123456789abcdef"]
             }))
             .expect("GitHub PR JSON fixture should deserialize")
             .into();
@@ -704,6 +2287,17 @@ mod tests {
         assert_eq!(pull_request.base_branch, "prerelease");
         assert_eq!(pull_request.head_branch, "feature/test-coverage");
         assert!(!pull_request.is_draft);
+        assert_eq!(pull_request.review_decision.as_deref(), Some("APPROVED"));
+        assert_eq!(pull_request.merge_state_status.as_deref(), Some("CLEAN"));
+        assert_eq!(pull_request.required_checks_passed, Some(true));
+        assert_eq!(
+            pull_request.head_commit_sha.as_deref(),
+            Some("0123456789abcdef")
+        );
+        assert_eq!(
+            pull_request.approved_review_commit_shas,
+            ["0123456789abcdef"]
+        );
     }
 
     #[test]
@@ -726,6 +2320,385 @@ mod tests {
                 "https://github.com/RefinedStone/codex-exec-loop/pull/1681/"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn empty_status_check_rollup_is_not_a_vacuous_success() {
+        let pull_request: GithubAutomationPullRequest =
+            serde_json::from_value::<GithubPullRequestJson>(json!({
+                "number": 7,
+                "url": "https://github.com/acme/repo/pull/7",
+                "state": "OPEN",
+                "baseRefName": "prerelease",
+                "headRefName": "feature/test",
+                "headRefOid": "abc123",
+                "isDraft": false,
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN",
+                "statusCheckRollup": []
+            }))
+            .expect("empty status rollup fixture should deserialize")
+            .into();
+
+        assert_eq!(pull_request.required_checks_passed, Some(false));
+    }
+
+    #[test]
+    fn subprocess_diagnostics_redact_credentials_and_github_tokens() {
+        let sanitized = sanitize_command_output(
+            "fatal: https://user:secret@github.com/acme/repo.git Authorization: Bearer top-secret ghp_abcdefghijklmnopqrstuvwxyz github_pat_1234567890",
+        );
+
+        assert!(!sanitized.contains("user:secret"));
+        assert!(!sanitized.contains("top-secret"));
+        assert!(!sanitized.contains("ghp_"));
+        assert!(!sanitized.contains("github_pat_"));
+        assert!(sanitized.contains("https://[redacted]@github.com/acme/repo.git"));
+        assert!(sanitized.contains("Bearer [redacted]"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_helper_and_trusted_path_ignore_repository_controlled_executables() {
+        let _lock = github_script_lock()
+            .lock()
+            .expect("GitHub test environment lock should not be poisoned");
+        let fixture = GitFixture::new("github-embedded-helper-boundary");
+        let scripts = fixture.repo.join("scripts");
+        let bin = fixture.repo.join("bin");
+        fs::create_dir_all(&scripts).expect("repository script directory should be created");
+        fs::create_dir_all(&bin).expect("repository bin directory should be created");
+        let marker = fixture
+            .repo
+            .parent()
+            .expect("fixture repo should have a parent")
+            .join("host-token-exfiltration-marker");
+        fs::write(
+            scripts.join("gh-akra.sh"),
+            format!(
+                "#!/bin/sh\nprintf '%s' \"${{AKRA_GITHUB_TOKEN:-}}\" > '{}'\n",
+                marker.display()
+            ),
+        )
+        .expect("hostile repository helper should be written");
+        for program in ["bash", "sh", "git", "curl", "gh", "python3"] {
+            write_token_exfiltrator(&bin.join(program), &marker);
+        }
+
+        let trusted_directories = trusted_executable_directories(path_str(&fixture.repo))
+            .expect("trusted helper directories should resolve");
+        let canonical_bin = fs::canonicalize(&bin).expect("repository bin should canonicalize");
+        assert!(
+            trusted_directories
+                .iter()
+                .all(|directory| directory != &canonical_bin),
+            "repository executable directory must stay outside the fixed helper search path"
+        );
+
+        assert_eq!(github_helper_source(), EMBEDDED_GITHUB_HELPER);
+        assert!(!marker.exists());
+
+        const TRUSTED_PROBE: &[u8] = br#"#!/usr/bin/env bash
+set -euo pipefail
+git --version >/dev/null
+curl --version >/dev/null
+python3 -c 'print("trusted")' >/dev/null
+if command -v gh >/dev/null 2>&1; then gh --version >/dev/null; fi
+printf '%s\n' 'trusted-helper-executed'
+"#;
+        let _helper_guard = TestGithubHelperGuard::install(TRUSTED_PROBE);
+        let _token_guard = EnvVarGuard::set("AKRA_GITHUB_TOKEN", "host-secret-token");
+        let _gh_token_guard = EnvVarGuard::remove("GH_TOKEN");
+        let _github_token_guard = EnvVarGuard::remove("GITHUB_TOKEN");
+
+        let output = run_github_script_command_for_delivery_target(
+            path_str(&fixture.repo),
+            path_str(&fixture.remote),
+            &["probe"],
+        )
+        .expect("trusted helper runtime should ignore repository PATH entries");
+        assert_eq!(output, "trusted-helper-executed");
+        assert!(!output.contains("host-secret-token"));
+        assert!(
+            !marker.exists(),
+            "repository-controlled helper or executable must never receive the token"
+        );
+    }
+
+    #[test]
+    fn embedded_helper_bytes_match_the_reviewed_digest() {
+        use sha2::{Digest, Sha256};
+
+        let digest = Sha256::digest(EMBEDDED_GITHUB_HELPER)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            digest,
+            "f989b231ccea19c816f10060ad9ccaa9b2d78f0fe3f4edba4560d842ef873735"
+        );
+        assert_eq!(EMBEDDED_GITHUB_HELPER.len(), 37_704);
+    }
+
+    #[test]
+    fn trusted_network_environment_accepts_credential_free_proxy_and_rejects_unsafe_inputs() {
+        let _lock = github_script_lock()
+            .lock()
+            .expect("GitHub test environment lock should not be poisoned");
+        let fixture = GitFixture::new("github-network-environment");
+        let _lower_proxy = EnvVarGuard::remove("https_proxy");
+        let _upper_proxy = EnvVarGuard::set("HTTPS_PROXY", "https://proxy.example:8443/");
+        let _lower_no_proxy = EnvVarGuard::remove("no_proxy");
+        let _upper_no_proxy = EnvVarGuard::set("NO_PROXY", "localhost,127.0.0.1,.internal");
+        let environment = TrustedGithubNetworkEnvironment::resolve(path_str(&fixture.repo))
+            .expect("credential-free proxy settings should be accepted");
+        let mut command = Command::new("ignored");
+        command.env_clear();
+        environment.configure_command(&mut command);
+        let configured = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(configured.iter().any(|(name, value)| {
+            name == "HTTPS_PROXY" && value.as_deref() == Some("https://proxy.example:8443/")
+        }));
+        assert!(configured.iter().any(|(name, value)| {
+            name == "NO_PROXY" && value.as_deref() == Some("localhost,127.0.0.1,.internal")
+        }));
+
+        drop(_upper_proxy);
+        let _unsafe_proxy = EnvVarGuard::set("HTTPS_PROXY", "https://user:secret@proxy.example");
+        let proxy_error = TrustedGithubNetworkEnvironment::resolve(path_str(&fixture.repo))
+            .expect_err("proxy credentials must fail closed");
+        assert!(proxy_error.to_string().contains("credentials"));
+
+        drop(_unsafe_proxy);
+        let repository_ca = fixture.repo.join("repository-ca.pem");
+        fs::write(&repository_ca, "not a trusted CA\n")
+            .expect("repository CA fixture should be written");
+        let _ca = EnvVarGuard::set("SSL_CERT_FILE", path_str(&repository_ca));
+        let ca_error = TrustedGithubNetworkEnvironment::resolve(path_str(&fixture.repo))
+            .expect_err("repository-controlled CA file must fail closed");
+        assert!(
+            ca_error
+                .to_string()
+                .contains("repository- or pool-controlled")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_network_context_ignores_hostile_repository_transport_config() {
+        let _guard = github_script_lock()
+            .lock()
+            .expect("GitHub test environment lock should not be poisoned");
+        let fixture = GitFixture::new("github-network-config-isolation");
+        let fixture_root = fixture
+            .repo
+            .parent()
+            .expect("fixture repo should have a parent");
+        let marker = fixture_root.join("hostile-helper-marker");
+        let redirected = fixture_root.join("redirected.git");
+        git_in(fixture_root, &["init", "--bare", path_str(&redirected)]);
+        git(
+            &fixture.repo,
+            &[
+                "config",
+                "credential.helper",
+                &format!("!touch {}", marker.display()),
+            ],
+        );
+        git(
+            &fixture.repo,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", redirected.display()),
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        git(
+            &fixture.repo,
+            &[
+                "config",
+                "http.https://github.com.proxy",
+                "http://127.0.0.1:9",
+            ],
+        );
+        git(
+            &fixture.repo,
+            &[
+                "config",
+                "core.sshCommand",
+                &format!("touch {}", marker.display()),
+            ],
+        );
+
+        let context = IsolatedGithubNetworkContext::new(
+            path_str(&fixture.repo),
+            "https://github.com/acme/widgets.git",
+        )
+        .expect("isolated network context should be created");
+        let output = run_git_command_in_network_context(
+            &context,
+            &["remote", "get-url", "--push", FROZEN_GITHUB_REMOTE_NAME],
+        )
+        .expect("isolated remote URL should resolve");
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "https://github.com/acme/widgets.git"
+        );
+        let helper =
+            run_git_command_in_network_context(&context, &["config", "--get", "credential.helper"])
+                .expect("controlled credential helper should be readable");
+        let helper = String::from_utf8_lossy(&helper.stdout);
+        assert!(helper.contains("AKRA_FROZEN_GITHUB_TOKEN"));
+        assert!(!helper.contains("touch"));
+        let redirects = run_git_command_in_network_context(
+            &context,
+            &["config", "--get", "http.followRedirects"],
+        )
+        .expect("isolated redirect policy should be readable");
+        assert!(redirects.status.success());
+        assert_eq!(String::from_utf8_lossy(&redirects.stdout).trim(), "false");
+        assert!(!marker.exists());
+        let mut routed_command = Command::new("sh");
+        routed_command
+            .env("AKRA_GITHUB_LOGIN", "attacker")
+            .env("GH_REPO", "attacker/redirected")
+            .env("GH_HOST", "enterprise.invalid")
+            .env("GH_CONFIG_DIR", marker.as_os_str());
+        context.configure_command(&mut routed_command);
+        let routed_environment = routed_command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            routed_environment
+                .iter()
+                .any(|(key, value)| { key == "GH_REPO" && value.is_none() })
+        );
+        assert!(
+            routed_environment
+                .iter()
+                .any(|(key, value)| { key == "GH_CONFIG_DIR" && value.is_none() })
+        );
+        assert!(
+            routed_environment
+                .iter()
+                .any(|(key, value)| { key == "GH_HOST" && value.as_deref() == Some("github.com") })
+        );
+        assert!(routed_environment.iter().any(|(key, value)| {
+            key == "AKRA_GITHUB_LOGIN" && value.as_deref() != Some("attacker")
+        }));
+        let config = fs::read_to_string(context.repo_root.join(".git/config"))
+            .expect("isolated config should be readable");
+        assert!(!config.contains("ghp_"));
+        assert!(!config.contains("fixture-token"));
+
+        let root = context.root.clone();
+        drop(context);
+        assert!(!root.exists(), "isolated network context should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_network_context_rejects_symlinked_source_object_directory() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = GitFixture::new("github-network-object-symlink");
+        let git_dir = PathBuf::from(git_stdout(
+            &fixture.repo,
+            &["rev-parse", "--path-format=absolute", "--git-dir"],
+        ));
+        let objects = git_dir.join("objects");
+        let redirected_objects = fixture
+            .repo
+            .parent()
+            .expect("fixture repo should have a parent")
+            .join("redirected-objects");
+        fs::rename(&objects, &redirected_objects).expect("fixture object directory should move");
+        symlink(&redirected_objects, &objects).expect("object directory symlink should be created");
+
+        let error = IsolatedGithubNetworkContext::new(
+            path_str(&fixture.repo),
+            "https://github.com/acme/widgets.git",
+        )
+        .err()
+        .expect("symlinked source object directory must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("object directory must be a real directory")
+        );
+    }
+
+    #[test]
+    fn isolated_fetch_keeps_previously_unseen_objects_in_the_source_repository() {
+        let fixture = GitFixture::new("github-network-fetch-objects");
+        git(&fixture.repo, &["push", "origin", "main"]);
+        let fixture_root = fixture
+            .repo
+            .parent()
+            .expect("fixture repo should have a parent");
+        let publisher = fixture_root.join("publisher");
+        git_in(
+            fixture_root,
+            &["clone", path_str(&fixture.remote), path_str(&publisher)],
+        );
+        git(&publisher, &["checkout", "-b", "main", "origin/main"]);
+        git(&publisher, &["config", "user.name", "Publisher"]);
+        git(
+            &publisher,
+            &["config", "user.email", "publisher@example.com"],
+        );
+        fs::write(publisher.join("remote-only.txt"), "remote only\n")
+            .expect("remote-only fixture should write");
+        git(&publisher, &["add", "remote-only.txt"]);
+        git(&publisher, &["commit", "-m", "Remote-only commit"]);
+        git(&publisher, &["push", "origin", "main"]);
+        let remote_only_sha = git_stdout(&publisher, &["rev-parse", "HEAD"]);
+        assert!(
+            !Command::new("git")
+                .current_dir(&fixture.repo)
+                .args(["cat-file", "-e", &format!("{remote_only_sha}^{{commit}}")])
+                .status()
+                .expect("git cat-file should launch")
+                .success(),
+            "source repository must not already contain the remote-only object"
+        );
+
+        let fetched_sha = fetch_branch_to_tracking_ref_isolated(
+            path_str(&fixture.repo),
+            path_str(&fixture.remote),
+            "main",
+            "refs/remotes/origin/isolated-fetch-proof",
+        )
+        .expect("isolated fetch should import the remote-only object");
+
+        assert_eq!(fetched_sha, remote_only_sha);
+        assert_eq!(
+            git_stdout(
+                &fixture.repo,
+                &["rev-parse", "refs/remotes/origin/isolated-fetch-proof"]
+            ),
+            remote_only_sha
+        );
+        git(
+            &fixture.repo,
+            &["cat-file", "-e", &format!("{remote_only_sha}^{{commit}}")],
         );
     }
 
@@ -772,9 +2745,9 @@ mod tests {
         )
         .expect_err("spawn failure should keep command context");
         assert!(
-            missing_program
-                .to_string()
-                .contains("failed to run `__codex_exec_loop_missing_program__")
+            missing_program.to_string().contains(
+                "trusted `__codex_exec_loop_missing_program__` executable is unavailable"
+            )
         );
     }
 
@@ -794,11 +2767,9 @@ mod tests {
 
         assert_eq!(missing.key, ParallelModeCapabilityKey::PushRemote);
         assert_eq!(missing.state, ParallelModeCapabilityState::Degraded);
-        assert!(
-            missing
-                .detail
-                .contains("push remote `origin` is not configured")
-        );
+        assert!(missing.detail.contains(
+            "push remote `origin` is not a credential-free GitHub HTTPS delivery target"
+        ));
         assert!(missing.next_action.is_some());
     }
 
@@ -844,6 +2815,9 @@ mod tests {
 
     #[test]
     fn push_remote_capability_uses_repo_configured_remote() {
+        let _guard = github_script_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _env_guard = EnvVarGuard::set(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "");
         let fixture = GitFixture::new("github-automation-configured-remote-capability");
         git(&fixture.repo, &["remote", "rename", "origin", "upstream"]);
@@ -860,6 +2834,7 @@ mod tests {
         assert!(capability.next_action.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn gh_auth_capability_degrades_when_command_surface_is_not_ready() {
         let gh_binary = ParallelModeCapabilitySnapshot::new(
@@ -882,15 +2857,6 @@ mod tests {
                 "https://github.com/acme/widgets.git",
             ],
         );
-
-        let bin_dir = fixture
-            .repo
-            .parent()
-            .expect("fixture repo should have a parent")
-            .join("bin");
-        fs::create_dir_all(&bin_dir).expect("fake gh bin directory should be created");
-        write_fake_gh(&bin_dir, 9);
-        let _path_guard = PathEnvGuard::prepend(&bin_dir);
         let _akra_token_guard = EnvVarGuard::set("AKRA_GITHUB_TOKEN", "");
         let _gh_token_guard = EnvVarGuard::set("GH_TOKEN", "");
         let _github_token_guard = EnvVarGuard::set("GITHUB_TOKEN", "");
@@ -916,7 +2882,9 @@ mod tests {
             ParallelModeCapabilityState::Degraded => {
                 assert!(
                     capability.detail.contains("not authenticated")
-                        || capability.detail.contains("wrapper script is missing")
+                        || capability
+                            .detail
+                            .contains("trusted GitHub automation runtime")
                 );
                 assert!(capability.next_action.is_some());
             }
@@ -926,7 +2894,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn gh_capabilities_use_cli_when_gh_is_on_path() {
+    fn gh_capabilities_ignore_repo_parent_cli_outside_trusted_system_locations() {
         let _guard = github_script_lock()
             .lock()
             .expect("github script fixture lock should not be poisoned");
@@ -940,45 +2908,40 @@ mod tests {
                 "https://github.com/acme/widgets.git",
             ],
         );
+        git(
+            &fixture.repo,
+            &["config", "akra.githubLogin", "RefinedStone"],
+        );
+        git(
+            &fixture.repo,
+            &[
+                "config",
+                "credential.helper",
+                "!f() { cat >/dev/null; printf 'username=RefinedStone\\npassword=fixture-token\\n'; }; f",
+            ],
+        );
         let bin_dir = fixture
             .repo
             .parent()
             .expect("fixture repo should have a parent")
             .join("bin");
         fs::create_dir_all(&bin_dir).expect("fake gh bin directory should be created");
-        write_fake_gh(&bin_dir, 0);
-        write_fake_curl_json(&bin_dir, "{\"login\":\"RefinedStone\"}");
-        let _path_guard = PathEnvGuard::prepend(&bin_dir);
-        let _token_guard = EnvVarGuard::set("AKRA_GITHUB_TOKEN", "fixture-token");
-        let _gh_token_guard = EnvVarGuard::set("GH_TOKEN", "");
-        let _github_token_guard = EnvVarGuard::set("GITHUB_TOKEN", "");
-
-        let gh_binary = GithubAutomationAdapter::inspect_gh_binary();
+        let marker = bin_dir.join("executed");
+        write_token_exfiltrator(&bin_dir.join("gh"), &marker);
+        write_token_exfiltrator(&bin_dir.join("curl"), &marker);
+        let gh_binary = GithubAutomationAdapter::inspect_gh_binary(path_str(&fixture.repo));
 
         assert_eq!(gh_binary.key, ParallelModeCapabilityKey::GhBinary);
         assert_eq!(gh_binary.state, ParallelModeCapabilityState::Ready);
-        assert!(gh_binary.detail.contains("gh found at"));
-
-        let gh_auth = GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&fixture.repo));
-        assert_eq!(gh_auth.key, ParallelModeCapabilityKey::GhAuth);
-        assert_eq!(gh_auth.state, ParallelModeCapabilityState::Ready);
-
-        drop(_token_guard);
-        write_fake_gh(&bin_dir, 9);
-        let failed_auth =
-            GithubAutomationAdapter::inspect_gh_auth(&gh_binary, path_str(&fixture.repo));
-        assert_eq!(failed_auth.key, ParallelModeCapabilityKey::GhAuth);
-        match failed_auth.state {
-            ParallelModeCapabilityState::Ready => {
-                assert!(failed_auth.detail.contains("authentication succeeded"));
-                assert!(failed_auth.next_action.is_none());
-            }
-            ParallelModeCapabilityState::Degraded => {
-                assert!(failed_auth.detail.contains("not authenticated"));
-                assert!(failed_auth.next_action.is_some());
-            }
-            other => panic!("unexpected gh auth capability state: {other:?}"),
-        }
+        assert!(
+            !gh_binary
+                .detail
+                .contains(bin_dir.to_string_lossy().as_ref())
+        );
+        assert!(
+            !marker.exists(),
+            "repository parent CLI must not be executed"
+        );
     }
 
     #[test]
@@ -1009,8 +2972,9 @@ mod tests {
         let _guard = github_script_lock()
             .lock()
             .expect("github script fixture lock should not be poisoned");
-        let script_path = install_fake_github_script();
-        let repo = unique_temp_dir("github-automation-pr-lifecycle");
+        let _script_path = install_fake_github_script();
+        let fixture = GitFixture::new("github-automation-pr-lifecycle");
+        let repo = fixture.repo;
         let adapter = GithubAutomationAdapter::new();
 
         let existing = adapter
@@ -1038,7 +3002,7 @@ mod tests {
             .expect("create URL fallback should inspect created PR");
         assert_eq!(created.number, 42);
         assert_eq!(created.base_branch, "prerelease");
-        let create_args = read_fake_gh_args(&repo);
+        let create_args = read_fake_gh_args();
         assert!(create_args.iter().any(|arg| arg == "--title-file"));
         assert!(create_args.iter().any(|arg| arg == "--body-file"));
         assert!(!create_args.iter().any(|arg| arg == "--title"));
@@ -1146,7 +3110,36 @@ mod tests {
             .expect_err("PR close command failure should be reported");
         assert!(close_failure.to_string().contains("close denied"));
 
-        let _ = fs::remove_file(script_path);
+        remove_fake_github_script();
+    }
+
+    #[test]
+    fn pull_request_wrapper_is_pinned_to_the_repo_configured_push_remote() {
+        let _guard = github_script_lock()
+            .lock()
+            .expect("github script fixture lock should not be poisoned");
+        let _env_guard = EnvVarGuard::set(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "");
+        let _script_path = install_fake_github_script();
+        let fixture = GitFixture::new("github-automation-wrapper-push-remote");
+        git(&fixture.repo, &["remote", "rename", "origin", "upstream"]);
+        git(
+            &fixture.repo,
+            &["config", AKRA_GITHUB_PUSH_REMOTE_CONFIG_KEY, "upstream"],
+        );
+        let adapter = GithubAutomationAdapter::new();
+
+        adapter
+            .ensure_pull_request(
+                path_str(&fixture.repo),
+                "prerelease",
+                "feature/existing",
+                "Existing",
+                "body",
+            )
+            .expect("wrapper lookup should use the configured remote");
+
+        assert_eq!(read_fake_gh_remote(), FROZEN_GITHUB_REMOTE_NAME);
+        remove_fake_github_script();
     }
 
     #[test]
@@ -1154,8 +3147,9 @@ mod tests {
         let _guard = github_script_lock()
             .lock()
             .expect("github script fixture lock should not be poisoned");
-        let script_path = install_fake_github_script();
-        let repo = unique_temp_dir("github-automation-pr-timeout");
+        let _script_path = install_fake_github_script();
+        let fixture = GitFixture::new("github-automation-pr-timeout");
+        let repo = fixture.repo;
         let adapter = GithubAutomationAdapter::new();
         let _timeout_guard = EnvVarGuard::set(SUBPROCESS_TIMEOUT_ENV, "1");
         let sensitive_title = "Create Timeout Private Title";
@@ -1189,7 +3183,7 @@ mod tests {
         assert!(!error_text.contains(sensitive_title));
         assert!(!error_text.contains(sensitive_body));
 
-        let _ = fs::remove_file(script_path);
+        remove_fake_github_script();
     }
 
     #[test]
@@ -1232,7 +3226,11 @@ mod tests {
             .push_branch(path_str(&fixture.repo), "main", true)
             .expect("force-with-lease push should publish rewritten branch");
         adapter
-            .push_integration_branch(path_str(&fixture.repo), "main")
+            .push_integration_branch(
+                path_str(&fixture.repo),
+                "main",
+                &git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
+            )
             .expect("integration push should use the same local origin");
 
         assert_eq!(
@@ -1243,6 +3241,9 @@ mod tests {
 
     #[test]
     fn push_methods_publish_local_branches_to_repo_configured_remote() {
+        let _guard = github_script_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _env_guard = EnvVarGuard::set(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "");
         let fixture = GitFixture::new("github-automation-configured-remote-push");
         let adapter = GithubAutomationAdapter::new();
@@ -1256,12 +3257,136 @@ mod tests {
             .push_branch(path_str(&fixture.repo), "main", false)
             .expect("branch push should publish to configured remote");
         adapter
-            .push_integration_branch(path_str(&fixture.repo), "main")
+            .push_integration_branch(
+                path_str(&fixture.repo),
+                "main",
+                &git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
+            )
             .expect("integration push should use the configured remote");
 
         assert_eq!(
             git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
             git_stdout(&fixture.repo, &["rev-parse", "main"])
+        );
+    }
+
+    #[test]
+    fn frozen_commit_push_does_not_publish_a_later_local_branch_tip() {
+        let fixture = GitFixture::new("github-automation-frozen-source-push");
+        let adapter = GithubAutomationAdapter::new();
+        let frozen_commit = git_stdout(&fixture.repo, &["rev-parse", "HEAD"]);
+
+        fs::write(fixture.repo.join("README.md"), "drifted\n")
+            .expect("drift fixture should be writable");
+        git(&fixture.repo, &["add", "README.md"]);
+        git(&fixture.repo, &["commit", "-m", "Unreviewed later commit"]);
+        let drifted_commit = git_stdout(&fixture.repo, &["rev-parse", "HEAD"]);
+        assert_ne!(frozen_commit, drifted_commit);
+
+        adapter
+            .push_frozen_commit_to_branch(
+                path_str(&fixture.repo),
+                "origin",
+                &frozen_commit,
+                "agent/frozen-result",
+            )
+            .expect("exact frozen refspec should publish");
+
+        assert_eq!(
+            git_stdout(
+                &fixture.remote,
+                &["rev-parse", "refs/heads/agent/frozen-result"]
+            ),
+            frozen_commit
+        );
+        assert_eq!(
+            git_stdout(&fixture.repo, &["rev-parse", "HEAD"]),
+            drifted_commit
+        );
+    }
+
+    #[test]
+    fn integration_push_exact_lease_rejects_a_remote_race() {
+        let fixture = GitFixture::new("github-automation-integration-race");
+        let adapter = GithubAutomationAdapter::new();
+        adapter
+            .push_branch(path_str(&fixture.repo), "main", false)
+            .expect("initial integration branch should publish");
+        let expected_old = git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]);
+
+        fs::write(fixture.repo.join("RESULT.md"), "reviewed result\n")
+            .expect("reviewed result fixture should write");
+        git(&fixture.repo, &["add", "RESULT.md"]);
+        git(
+            &fixture.repo,
+            &["commit", "-m", "Reviewed integration result"],
+        );
+        let reviewed_result = git_stdout(&fixture.repo, &["rev-parse", "HEAD"]);
+
+        git(&fixture.repo, &["checkout", "--detach", &expected_old]);
+        fs::write(fixture.repo.join("RACE.md"), "concurrent result\n")
+            .expect("race fixture should write");
+        git(&fixture.repo, &["add", "RACE.md"]);
+        git(&fixture.repo, &["commit", "-m", "Concurrent remote result"]);
+        git(
+            &fixture.repo,
+            &["push", "--force", "origin", "HEAD:refs/heads/main"],
+        );
+        let raced_remote = git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]);
+        git(&fixture.repo, &["checkout", "--detach", &reviewed_result]);
+
+        let error = adapter
+            .push_integration_branch_to_remote(
+                path_str(&fixture.repo),
+                "origin",
+                "main",
+                &expected_old,
+            )
+            .expect_err("exact force-with-lease must reject a moved remote");
+
+        assert!(error.to_string().contains("git push"));
+        assert_eq!(
+            git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
+            raced_remote
+        );
+    }
+
+    #[test]
+    fn integration_push_rejects_a_local_result_outside_the_frozen_base_history() {
+        let fixture = GitFixture::new("github-automation-integration-ancestry");
+        let adapter = GithubAutomationAdapter::new();
+        adapter
+            .push_branch(path_str(&fixture.repo), "main", false)
+            .expect("initial integration branch should publish");
+        let expected_old = git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]);
+
+        git(&fixture.repo, &["checkout", "--orphan", "unrelated-result"]);
+        git(&fixture.repo, &["rm", "-rf", "."]);
+        fs::write(fixture.repo.join("UNRELATED.md"), "unrelated\n")
+            .expect("unrelated result fixture should write");
+        git(&fixture.repo, &["add", "UNRELATED.md"]);
+        git(
+            &fixture.repo,
+            &["commit", "-m", "Unrelated integration result"],
+        );
+
+        let error = adapter
+            .push_integration_branch_to_remote(
+                path_str(&fixture.repo),
+                "origin",
+                "main",
+                &expected_old,
+            )
+            .expect_err("unrelated local result must not be pushed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("not a descendant of the frozen remote base")
+        );
+        assert_eq!(
+            git_stdout(&fixture.remote, &["rev-parse", "refs/heads/main"]),
+            expected_old
         );
     }
 
@@ -1325,23 +3450,18 @@ mod tests {
     }
 
     fn github_script_lock() -> &'static Mutex<()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        &LOCK
+        crate::test_utils::process_environment_mutex()
     }
 
-    fn install_fake_github_script() -> PathBuf {
-        let script_path = fake_github_script_path();
-        let script_dir = script_path
-            .parent()
-            .expect("fake github script path should have a parent");
-        fs::create_dir_all(script_dir).expect("fake github script directory should be created");
-        fs::write(
-            &script_path,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-args="$*"
-if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
-  printf '%s\n' "$@" > .fake-gh-last-args
+    fn install_fake_github_script() -> TestGithubHelperGuard {
+        let source: &'static [u8] = br#"#!/usr/bin/env bash
+	set -euo pipefail
+	args="$*"
+	log_dir="${AKRA_TEST_GITHUB_LOG_DIR:?}"
+	mkdir -p "${log_dir}"
+	printf '%s\n' "${AKRA_GITHUB_PUSH_REMOTE:-}" > "${log_dir}/last-remote"
+	if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
+	  printf '%s\n' "$@" > "${log_dir}/last-args"
   case " $* " in
     *" --title-file "*) ;;
     *)
@@ -1358,14 +3478,17 @@ if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
   esac
 fi
 case "$args" in
-  "auth status")
+  "auth status"|"auth write-status")
     exit 0
+    ;;
+  "repo visibility")
+    printf '%s\n' 'private'
     ;;
   pr\ list*feature/existing*)
     printf '%s\n' '[{"number":41,"url":"https://github.example/pull/41","state":"OPEN","baseRefName":"prerelease","headRefName":"feature/existing","isDraft":false}]'
     ;;
-  pr\ list*feature/race*)
-    if [[ -f .fake-gh-race-created ]]; then
+	  pr\ list*feature/race*)
+	    if [[ -f "${log_dir}/race-created" ]]; then
       printf '%s\n' '[{"number":43,"url":"https://github.example/pull/43","state":"OPEN","baseRefName":"prerelease","headRefName":"feature/race","isDraft":false}]'
     else
       printf '%s\n' '[]'
@@ -1381,8 +3504,8 @@ case "$args" in
   pr\ list*)
     printf '%s\n' '[]'
     ;;
-  pr\ create*feature/race*)
-    touch .fake-gh-race-created
+	  pr\ create*feature/race*)
+	    touch "${log_dir}/race-created"
     printf '%s\n' 'created without url'
     ;;
   pr\ create*feature/new*)
@@ -1421,125 +3544,71 @@ case "$args" in
     exit 12
     ;;
 esac
-"#,
-        )
-        .expect("fake github script should be written");
-        script_path
+"#;
+        TestGithubHelperGuard::install(source)
     }
 
     fn remove_fake_github_script() {
-        let _ = fs::remove_file(fake_github_script_path());
+        TEST_GITHUB_HELPER_SOURCE.with(|slot| {
+            slot.replace(None);
+        });
+        let _ = fs::remove_dir_all(fake_github_log_dir());
     }
 
-    fn read_fake_gh_args(repo: &Path) -> Vec<String> {
-        fs::read_to_string(repo.join(".fake-gh-last-args"))
+    struct TestGithubHelperGuard;
+
+    impl TestGithubHelperGuard {
+        fn install(source: &'static [u8]) -> Self {
+            TEST_GITHUB_HELPER_SOURCE.with(|slot| {
+                assert!(slot.replace(Some(source)).is_none());
+            });
+            Self
+        }
+    }
+
+    impl Drop for TestGithubHelperGuard {
+        fn drop(&mut self) {
+            TEST_GITHUB_HELPER_SOURCE.with(|slot| {
+                slot.replace(None);
+            });
+            let _ = fs::remove_dir_all(fake_github_log_dir());
+        }
+    }
+
+    fn read_fake_gh_args() -> Vec<String> {
+        fs::read_to_string(fake_github_log_dir().join("last-args"))
             .expect("fake github script should record create arguments")
             .lines()
             .map(str::to_string)
             .collect()
     }
 
-    fn fake_github_script_path() -> PathBuf {
-        std::env::current_exe()
-            .expect("test binary path should be available")
-            .parent()
-            .expect("test binary should have a parent")
-            .join("scripts")
-            .join("gh-akra.sh")
+    fn read_fake_gh_remote() -> String {
+        fs::read_to_string(fake_github_log_dir().join("last-remote"))
+            .expect("fake github script should record the pinned remote")
+            .trim()
+            .to_string()
+    }
+
+    fn fake_github_log_dir() -> PathBuf {
+        super::test_github_log_directory()
     }
 
     #[cfg(unix)]
-    fn write_fake_gh(bin_dir: &Path, auth_status_exit_code: i32) {
-        let gh_path = bin_dir.join("gh");
+    fn write_token_exfiltrator(path: &Path, marker: &Path) {
         fs::write(
-            &gh_path,
+            path,
             format!(
-                r#"#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$*" == "auth status" ]]; then
-  exit {auth_status_exit_code}
-fi
-if [[ "$*" == "auth token" ]]; then
-  if [[ {auth_status_exit_code} -eq 0 ]]; then
-    printf '%s\n' 'fixture-token'
-    exit 0
-  fi
-  exit {auth_status_exit_code}
-fi
-printf 'unexpected fake gh args: %s\n' "$*" >&2
-exit 66
-"#
+                "#!/bin/sh\nprintf '%s' \"${{AKRA_GITHUB_TOKEN:-${{GH_TOKEN:-${{GITHUB_TOKEN:-}}}}}}\" > '{}'\nexit 91\n",
+                marker.display()
             ),
         )
-        .expect("fake gh should be written");
-        let mut permissions = fs::metadata(&gh_path)
-            .expect("fake gh metadata should be readable")
+        .expect("hostile executable should be written");
+        let mut permissions = fs::metadata(path)
+            .expect("hostile executable metadata should be readable")
             .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&gh_path, permissions).expect("fake gh should be executable");
-    }
-
-    #[cfg(unix)]
-    fn write_fake_curl_json(bin_dir: &Path, body: &str) {
-        let curl_path = bin_dir.join("curl");
-        fs::write(
-            &curl_path,
-            format!(
-                r#"#!/usr/bin/env bash
-set -euo pipefail
-stdin_payload="$(cat)"
-output_path="$(printf '%s\n' "$stdin_payload" | awk -F'"' '/^output = "/ {{ print $2; exit }}')"
-if [[ -z "$output_path" ]]; then
-  printf '%s\n' 'missing output path' >&2
-  exit 67
-fi
-cat > "$output_path" <<'EOF'
-{body}
-EOF
-printf '%s' '200'
-"#,
-                body = body
-            ),
-        )
-        .expect("fake curl should be written");
-        let mut permissions = fs::metadata(&curl_path)
-            .expect("fake curl metadata should be readable")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&curl_path, permissions).expect("fake curl should be executable");
-    }
-
-    #[cfg(unix)]
-    struct PathEnvGuard {
-        previous: Option<std::ffi::OsString>,
-    }
-
-    #[cfg(unix)]
-    impl PathEnvGuard {
-        fn prepend(directory: &Path) -> Self {
-            let previous = std::env::var_os("PATH");
-            let mut paths = vec![directory.to_path_buf()];
-            if let Some(path) = &previous {
-                paths.extend(std::env::split_paths(path));
-            }
-            let joined_path = std::env::join_paths(paths).expect("test PATH should join");
-            unsafe {
-                std::env::set_var("PATH", joined_path);
-            }
-            Self { previous }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for PathEnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.previous {
-                    Some(path) => std::env::set_var("PATH", path),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-        }
+        fs::set_permissions(path, permissions).expect("hostile executable should be executable");
     }
 
     struct EnvVarGuard {
@@ -1552,6 +3621,14 @@ printf '%s' '200'
             let previous = std::env::var_os(key);
             unsafe {
                 std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
             }
             Self { key, previous }
         }

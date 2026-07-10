@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-native-assets-${{ github.ref }}
@@ -21,13 +21,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch trusted release branch
+        shell: bash
+        run: >-
+          git fetch --no-tags origin
+          +refs/heads/prerelease:refs/remotes/origin/prerelease
 
       - name: Check tag matches Cargo.toml
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/validate_native_release_version.sh --tag "${GITHUB_REF_NAME}"
+          bash scripts/validate_native_release_version.sh \
+            --tag "${GITHUB_REF_NAME}" \
+            --release-commit "${GITHUB_SHA}" \
+            --allowed-ref refs/remotes/origin/prerelease
 
   build-native-assets:
     name: Build ${{ matrix.label }}
@@ -49,10 +61,17 @@ jobs:
             label: macos-aarch64
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
         with:
           targets: ${{ matrix.target }}
 
@@ -62,6 +81,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH="${source_date_epoch}"
           output="$(bash scripts/package_native_release.sh --target "${{ matrix.target }}")"
           printf '%s\n' "${output}"
 
@@ -96,10 +117,13 @@ jobs:
 
           bash scripts/verify_native_release.sh \
             --archive "${{ steps.package.outputs.archive }}" \
-            --bundle-dir "${{ steps.package.outputs.bundle_dir }}"
+            --bundle-dir "${{ steps.package.outputs.bundle_dir }}" \
+            --version "${GITHUB_REF_NAME}" \
+            --target "${{ matrix.target }}" \
+            --profile release
 
       - name: Upload release payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-release-${{ matrix.label }}
           if-no-files-found: error
@@ -111,14 +135,34 @@ jobs:
     name: Publish GitHub Release Assets
     needs:
       - build-native-assets
+      - publish-npm
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
       - name: Download packaged assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
           pattern: native-release-*
           merge-multiple: true
+
+      - name: Reverify downloaded release assets
+        shell: bash
+        run: >-
+          node npm/scripts/verify-native-release-assets.mjs
+          --release-assets-dir release-assets
+          --version "${GITHUB_REF_NAME}"
 
       - name: Create or update release
         env:
@@ -127,78 +171,56 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          tag="${GITHUB_REF_NAME}"
-          title="codex-exec-loop-native ${tag}"
-
-          mapfile -t files < <(find release-assets -maxdepth 1 -type f | sort)
-          if [[ "${#files[@]}" -eq 0 ]]; then
-            echo "No release files were downloaded from the build jobs." >&2
-            exit 1
-          fi
-
-          if gh release view "${tag}" --repo "${GH_REPO}" >/dev/null 2>&1; then
-            gh release upload "${tag}" "${files[@]}" --repo "${GH_REPO}" --clobber
-          else
-            gh release create "${tag}" "${files[@]}" \
-              --repo "${GH_REPO}" \
-              --title "${title}" \
-              --notes "Automated native/npm release for ${tag}."
-          fi
-
-          gh release view "${tag}" --repo "${GH_REPO}" --json url --jq '.url'
+          bash .github/scripts/publish-release-assets.sh \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${GH_REPO}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --title "codex-exec-loop-native ${GITHUB_REF_NAME}" \
+            --notes "Automated native/npm release for ${GITHUB_REF_NAME}." \
+            --asset-dir release-assets
 
   publish-npm:
     name: Publish npm Package
     needs:
       - build-native-assets
-      - publish-release
     runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Check npm publish configuration
-        id: npm_config
+      - name: Recheck npm release authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
-            echo "configured=false" >> "${GITHUB_OUTPUT}"
-            echo "NPM_TOKEN secret is not configured; skipping npm publish."
-            exit 0
-          fi
-
-          if ! npm_user="$(npm whoami 2>/tmp/npm-whoami.err)"; then
-            printf '%s\n' \
-              "NPM_TOKEN is configured but npm authentication failed." \
-              "Replace the repository secret with an npm automation token that can publish @refinedstone/akra." >&2
-            cat /tmp/npm-whoami.err >&2
-            exit 1
-          fi
-
-          echo "npm authenticated as ${npm_user}"
-          echo "configured=true" >> "${GITHUB_OUTPUT}"
+        run: bash scripts/validate_npm_release_auth.sh
 
       - name: Download packaged assets
-        if: ${{ steps.npm_config.outputs.configured == 'true' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
           pattern: native-release-*
           merge-multiple: true
 
+      - name: Reverify downloaded npm inputs
+        shell: bash
+        run: >-
+          node npm/scripts/verify-native-release-assets.mjs
+          --release-assets-dir release-assets
+          --version "${GITHUB_REF_NAME}"
+
       - name: Stage npm packages
-        if: ${{ steps.npm_config.outputs.configured == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -209,64 +231,53 @@ jobs:
             --version "${GITHUB_REF_NAME}"
 
       - name: Publish platform packages
-        if: ${{ steps.npm_config.outputs.configured == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-
-          package_name() {
-            node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.name);' "$1"
-          }
-
-          package_version() {
-            node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.version);' "$1"
-          }
-
-          publish_if_missing() {
-            local package_dir="$1"
-            local name
-            local version
-
-            name="$(package_name "${package_dir}")"
-            version="$(package_version "${package_dir}")"
-
-            if npm view "${name}@${version}" version >/dev/null 2>&1; then
-              echo "Skipping ${name}@${version}; version already exists on npm."
-              return 0
-            fi
-
-            if ! npm publish "${package_dir}" --access public; then
-              printf '%s\n' \
-                "npm publish failed for ${name}@${version}." \
-                "Check that NPM_TOKEN has publish access to @refinedstone/akra in the npm registry." \
-                "If this is a corrected republish, create a new tag version because npm versions are immutable." >&2
-              exit 1
-            fi
-          }
-
-          publish_if_missing "npm/dist/publish/platforms/@refinedstone/akra-linux-x64"
-          publish_if_missing "npm/dist/publish/platforms/@refinedstone/akra-darwin-arm64"
-          publish_if_missing "npm/dist/publish/platforms/@refinedstone/akra-win32-x64"
+          release_version="${GITHUB_REF_NAME#v}"
+          package_dirs=(
+            npm/dist/publish/platforms/@refinedstone/akra-linux-x64
+            npm/dist/publish/platforms/@refinedstone/akra-darwin-arm64
+            npm/dist/publish/platforms/@refinedstone/akra-win32-x64
+          )
+          package_suffixes=(linux-x64 darwin-arm64 win32-x64)
+          for index in "${!package_dirs[@]}"; do
+            package_dir="${package_dirs[${index}]}"
+            expected_version="${release_version}-${package_suffixes[${index}]}"
+            env -u NODE_AUTH_TOKEN bash .github/scripts/verify-tag-target.sh \
+              --repo "${GITHUB_REPOSITORY}" \
+              --tag "${GITHUB_REF_NAME}" \
+              --expected-commit "${GITHUB_SHA}"
+            env -u GH_TOKEN node npm/scripts/publish-package.mjs \
+              --package-dir "${package_dir}" \
+              --expected-version "${expected_version}" \
+              --tag platform
+            env -u NODE_AUTH_TOKEN bash .github/scripts/verify-tag-target.sh \
+              --repo "${GITHUB_REPOSITORY}" \
+              --tag "${GITHUB_REF_NAME}" \
+              --expected-commit "${GITHUB_SHA}"
+          done
 
       - name: Publish main package
-        if: ${{ steps.npm_config.outputs.configured == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-
-          package_dir="npm/dist/publish/main"
-          package_name="$(node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.name);' "${package_dir}")"
-          package_version="$(node -e 'const fs = require("fs"); const path = require("path"); const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")); console.log(pkg.version);' "${package_dir}")"
-
-          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
-            echo "Skipping ${package_name}@${package_version}; version already exists on npm."
-            exit 0
-          fi
-
-          if ! npm publish "${package_dir}" --access public; then
-            printf '%s\n' \
-              "npm publish failed for ${package_name}@${package_version}." \
-              "Check that NPM_TOKEN has publish access to @refinedstone/akra in the npm registry." \
-              "If this is a corrected republish, create a new tag version because npm versions are immutable." >&2
-            exit 1
-          fi
+          release_version="${GITHUB_REF_NAME#v}"
+          env -u NODE_AUTH_TOKEN bash .github/scripts/verify-tag-target.sh \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --expected-commit "${GITHUB_SHA}"
+          env -u GH_TOKEN node npm/scripts/publish-package.mjs \
+            --package-dir npm/dist/publish/main \
+            --expected-version "${release_version}" \
+            --tag latest
+          env -u NODE_AUTH_TOKEN bash .github/scripts/verify-tag-target.sh \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --expected-commit "${GITHUB_SHA}"

@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-use super::readiness::{command_succeeds, run_command};
+use super::readiness::command_succeeds;
 use super::{
     AGENT_BRANCH_TRUNCATION_HASH_LEN, AKRA_AGENT_BRANCH_PREFIX, MAX_AGENT_BRANCH_SLUG_LEN,
-    push_remote_name,
+    try_push_remote_name,
 };
 
 /*
@@ -21,7 +21,7 @@ pub(super) fn allocate_agent_branch_name(
     task_slug: &str,
     task_id: &str,
     task_title: &str,
-) -> String {
+) -> Result<String, String> {
     // task_slug는 계획 시스템이 준 짧은 이름이라 가장 읽기 좋고, 없으면 id와
     // title을 차례로 축약한다. 이 순서가 lease 파일, PR branch, pool board의 표시명을 맞춘다.
     let sanitized_slug = sanitize_task_slug(task_slug)
@@ -30,12 +30,12 @@ pub(super) fn allocate_agent_branch_name(
         .unwrap_or_else(|| "task".to_string());
     // remote branch 목록은 루프 밖에서 한 번만 읽는다. allocation 중 같은 프로세스가
     // 만든 local branch 충돌은 `branch_exists`가 잡고, 이미 원격에 있던 이름은 이 set이 잡는다.
-    let remote_branch_names = remote_agent_branch_names(repo_root, slot_id);
+    let remote_branch_names = remote_agent_branch_names(repo_root, slot_id)?;
     let mut collision_index = 1usize;
     loop {
         let candidate = build_agent_branch_name(slot_id, &sanitized_slug, collision_index);
         if agent_branch_name_is_available(repo_root, &candidate, &remote_branch_names) {
-            return candidate;
+            return Ok(candidate);
         }
         collision_index += 1;
     }
@@ -188,65 +188,39 @@ remote branch lookup은 두 경로를 합친다. remote tracking refs는 이미 
 origin 상태이고, live ls-remote는 아직 fetch되지 않은 원격 branch까지 확인한다. 둘을 합쳐야
 오래된 local tracking 정보와 최신 remote reality 사이의 틈에서 branch 이름 충돌이 생기지 않는다.
 */
-fn remote_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
-    let mut branch_names = remote_tracking_agent_branch_names(repo_root, slot_id);
-    branch_names.extend(remote_live_agent_branch_names(repo_root, slot_id));
-    branch_names
+fn remote_agent_branch_names(repo_root: &str, slot_id: &str) -> Result<BTreeSet<String>, String> {
+    remote_tracking_agent_branch_names(repo_root, slot_id)
 }
 
-fn remote_tracking_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
+fn remote_tracking_agent_branch_names(
+    repo_root: &str,
+    slot_id: &str,
+) -> Result<BTreeSet<String>, String> {
     // tracking ref는 `refs/remotes/<push-remote>/...` 형태라 실제 branch name으로
     // 비교하려면 remote prefix를 제거하고 `akra-agent/<slot>/...` 형태로 되돌려야 한다.
-    let push_remote = push_remote_name(repo_root);
+    let push_remote = try_push_remote_name(repo_root)?;
     let refs_prefix = format!("refs/remotes/{push_remote}/{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
     let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
-    run_command(
-        "git",
-        [
-            "-C",
-            repo_root,
-            "for-each-ref",
-            "--format=%(refname)",
-            refs_prefix.as_str(),
-        ],
-        None,
+    let mut command = crate::git_subprocess::command([
+        "-C",
+        repo_root,
+        "for-each-ref",
+        "--format=%(refname)",
+        refs_prefix.as_str(),
+    ]);
+    let output = crate::subprocess::command_output(
+        &mut command,
+        "git for-each-ref <configured-agent-prefix>",
     )
-    .map(|output| {
-        output
-            .lines()
-            .filter_map(|line| line.strip_prefix(&refs_prefix))
-            .map(|suffix| format!("{branch_prefix}{suffix}"))
-            .collect()
-    })
-    .unwrap_or_default()
-}
-
-fn remote_live_agent_branch_names(repo_root: &str, slot_id: &str) -> BTreeSet<String> {
-    let refs_prefix = "refs/heads/";
-    let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
-    let push_remote = push_remote_name(repo_root);
-    // ls-remote에는 full ref glob을 넘기고, 결과는 full ref로 돌아오므로 아래에서
-    // `refs/heads/`만 제거해 local branch name과 같은 좌표계로 맞춘다.
-    let pattern = format!("refs/heads/{branch_prefix}*");
-    run_command(
-        "git",
-        [
-            "-C",
-            repo_root,
-            "ls-remote",
-            "--heads",
-            push_remote.as_str(),
-            pattern.as_str(),
-        ],
-        None,
-    )
-    .map(|output| {
-        output
-            .lines()
-            .filter_map(|line| line.split_whitespace().nth(1))
-            .filter_map(|remote_ref| remote_ref.strip_prefix(refs_prefix))
-            .map(str::to_string)
-            .collect()
-    })
-    .unwrap_or_default()
+    .map_err(|error| {
+        format!("configured push remote refs could not be inspected safely: {error}")
+    })?;
+    if !output.status.success() {
+        return Err("configured push remote refs could not be inspected safely".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix(&refs_prefix))
+        .map(|suffix| format!("{branch_prefix}{suffix}"))
+        .collect())
 }

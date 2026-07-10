@@ -66,7 +66,7 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :reviews  :queue  :directions  :turns <number|infinite>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 const MODEL_USAGE: &str = "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults.";
@@ -145,8 +145,8 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Turns,
         primary_name: ":turns",
         aliases: &[":turns", ":auto-turns"],
-        suggestion_detail: "auto turn budget",
-        buffered_hint: "Type `:turns <number|infinite>` to set the auto-follow turn budget.",
+        suggestion_detail: "auto-follow opt-in; off or 0 disables",
+        buffered_hint: "Type `:turns <positive|infinite>` to enable auto-follow, or `:turns off` to disable it.",
         execution_status: None,
         requires_argument: true,
     },
@@ -216,7 +216,7 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
     InlineShellCommandSpec {
         command: InlineShellCommand::Reset,
         primary_name: ":reset",
-        aliases: &[":reset"],
+        aliases: &[":r", ":reset"],
         suggestion_detail: "planning reset",
         buffered_hint: RESET_USAGE,
         execution_status: None,
@@ -265,9 +265,12 @@ impl InlineShellCommandInput {
                 "directions",
             ),
             InlineShellCommand::Turns => match self.argument() {
-                Some(value) => {
-                    format!("Press Enter to set the auto-follow turn budget to `{value}`.")
+                Some(value) if value.eq_ignore_ascii_case("off") || value == "0" => {
+                    "Press Enter to disable auto-follow.".to_string()
                 }
+                Some(value) => format!(
+                    "Press Enter to explicitly enable auto-follow with turn budget `{value}`."
+                ),
                 None => self.command.spec().buffered_hint.to_string(),
             },
             InlineShellCommand::Model => model_argument_hint(self.argument()),
@@ -385,7 +388,7 @@ impl InlineShellCommand {
 
         // A bare colon opens the full command palette; partial tokens filter by
         // aliases but arguments deliberately close suggestions.
-        INLINE_SHELL_COMMAND_SPECS
+        let mut matching_specs: Vec<_> = INLINE_SHELL_COMMAND_SPECS
             .iter()
             .filter(|spec| {
                 prefix == ":"
@@ -394,6 +397,15 @@ impl InlineShellCommand {
                         .iter()
                         .any(|alias| alias.starts_with(prefix.as_str()))
             })
+            .collect();
+        if prefix != ":" {
+            // Exact aliases win over longer prefix matches. This preserves the
+            // established `:r` reset shortcut after `:reviews` joined the
+            // catalog, while still exposing both commands for discovery.
+            matching_specs.sort_by_key(|spec| !spec.aliases.contains(&prefix.as_str()));
+        }
+        matching_specs
+            .into_iter()
             .map(|spec| spec.command)
             .collect()
     }
@@ -447,7 +459,7 @@ impl InlineShellCommand {
             InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Reviews => ":reviews",
             InlineShellCommand::Directions => ":directions",
-            InlineShellCommand::Turns => ":turns <number|infinite>",
+            InlineShellCommand::Turns => ":turns <positive|infinite|off>",
             InlineShellCommand::Stop => ":stop",
             InlineShellCommand::Model => ":model",
             InlineShellCommand::View => ":view [simple|medium|detail]",

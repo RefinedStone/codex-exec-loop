@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { PLATFORM_CONFIGS } from "../lib/platform.js";
+import {
+  cleanupVerifiedReleaseAssets,
+  extractVerifiedArchive,
+  verifyReleaseAssets,
+} from "./verify-native-release-assets.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,8 +65,10 @@ function copyDir(sourceDir, destinationDir) {
       copyDir(sourcePath, destinationPath);
       continue;
     }
-
-    fs.copyFileSync(sourcePath, destinationPath);
+    if (!entry.isFile() || entry.isSymbolicLink()) {
+      throw new Error(`Refusing unsafe runtime asset: ${sourcePath}`);
+    }
+    fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL);
   }
 }
 
@@ -74,43 +80,34 @@ function copyRuntimeAssets(bundleRoot, vendorDir) {
     "skills",
   );
   if (!fs.existsSync(runtimeSkillAssets)) {
-    throw new Error(`Bundled runtime skill assets are missing: ${runtimeSkillAssets}`);
+    throw new Error(
+      `Bundled runtime skill assets are missing: ${runtimeSkillAssets}`,
+    );
   }
   copyDir(
     runtimeSkillAssets,
     path.join(vendorDir, "assets", "app-server", "skills"),
   );
-}
-
-function findArchive(releaseAssetsDir, targetTriple) {
-  const suffix = `${targetTriple}.tar.gz`;
-  const archiveName = fs
-    .readdirSync(releaseAssetsDir)
-    .find(
-      (entry) =>
-        entry.endsWith(suffix) && !entry.endsWith(".tar.gz.sha256"),
-    );
-
-  if (!archiveName) {
-    throw new Error(`Missing release archive for ${targetTriple}`);
+  const notices = path.join(bundleRoot, "THIRD_PARTY_NOTICES");
+  if (!fs.existsSync(notices) || !fs.lstatSync(notices).isDirectory()) {
+    throw new Error(`Bundled third-party notices are missing: ${notices}`);
   }
-
-  return path.join(releaseAssetsDir, archiveName);
-}
-
-function extractArchive(archivePath, outputDir) {
-  execFileSync("tar", ["-xzf", archivePath, "-C", outputDir]);
-
-  const entries = fs
-    .readdirSync(outputDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory());
-  if (entries.length !== 1) {
+  const fontNotice = path.join(notices, "Galmuri-OFL.txt");
+  if (!fs.existsSync(fontNotice)) {
+    throw new Error(`Required third-party notice is missing: ${fontNotice}`);
+  }
+  const fontNoticeStat = fs.lstatSync(fontNotice);
+  if (
+    !fontNoticeStat.isFile() ||
+    fontNoticeStat.isSymbolicLink() ||
+    fontNoticeStat.nlink !== 1 ||
+    fontNoticeStat.size <= 0
+  ) {
     throw new Error(
-      `Expected exactly one root directory after extracting ${archivePath}`,
+      `Required third-party notice must be a nonempty single-link regular file: ${fontNotice}`,
     );
   }
-
-  return path.join(outputDir, entries[0].name);
+  copyDir(notices, path.join(vendorDir, "THIRD_PARTY_NOTICES"));
 }
 
 function writeJson(filePath, value) {
@@ -118,7 +115,7 @@ function writeJson(filePath, value) {
 }
 
 function stagePlatformPackage({
-  archivePath,
+  verifiedArchive,
   outDir,
   packageVersion,
   config,
@@ -128,13 +125,19 @@ function stagePlatformPackage({
   );
 
   try {
-    const bundleRoot = extractArchive(archivePath, extractDir);
+    const bundleRoot = extractVerifiedArchive(verifiedArchive, extractDir);
     const sourceBinaryPath = path.join(bundleRoot, config.binaryName);
-    if (!fs.existsSync(sourceBinaryPath)) {
+    if (
+      !fs.existsSync(sourceBinaryPath) ||
+      !fs.lstatSync(sourceBinaryPath).isFile()
+    ) {
       throw new Error(`Bundled binary is missing: ${sourceBinaryPath}`);
     }
     const sourceScriptsPath = path.join(bundleRoot, "scripts");
-    if (!fs.existsSync(sourceScriptsPath)) {
+    if (
+      !fs.existsSync(sourceScriptsPath) ||
+      !fs.lstatSync(sourceScriptsPath).isDirectory()
+    ) {
       throw new Error(`Bundled runtime scripts are missing: ${sourceScriptsPath}`);
     }
 
@@ -150,7 +153,11 @@ function stagePlatformPackage({
     ensureDir(vendorDir);
 
     const destinationBinaryPath = path.join(vendorDir, config.binaryName);
-    fs.copyFileSync(sourceBinaryPath, destinationBinaryPath);
+    fs.copyFileSync(
+      sourceBinaryPath,
+      destinationBinaryPath,
+      fs.constants.COPYFILE_EXCL,
+    );
     if (config.os !== "win32") {
       fs.chmodSync(destinationBinaryPath, 0o755);
     }
@@ -214,37 +221,47 @@ function stageMainPackage({ outDir, packageVersion }) {
   writeJson(path.join(mainDir, "package.json"), basePackageJson);
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const packageVersion = normalizeVersion(args.version);
   const releaseAssetsDir = path.resolve(process.cwd(), args.releaseAssetsDir);
   const outDir = path.resolve(process.cwd(), args.outDir);
+  const verifiedArchives = await verifyReleaseAssets(releaseAssetsDir, args.version);
 
-  fs.rmSync(outDir, { recursive: true, force: true });
-  ensureDir(outDir);
+  try {
+    fs.rmSync(outDir, { recursive: true, force: true });
+    ensureDir(outDir);
 
-  for (const config of PLATFORM_CONFIGS) {
-    const archivePath = findArchive(releaseAssetsDir, config.targetTriple);
-    stagePlatformPackage({
-      archivePath,
-      outDir: path.join(outDir, "platforms"),
-      packageVersion,
-      config,
-    });
-  }
+    for (const config of PLATFORM_CONFIGS) {
+      stagePlatformPackage({
+        verifiedArchive: verifiedArchives.get(config.targetTriple),
+        outDir: path.join(outDir, "platforms"),
+        packageVersion,
+        config,
+      });
+    }
 
-  stageMainPackage({ outDir, packageVersion });
+    stageMainPackage({ outDir, packageVersion });
 
-  console.log(`main_package_dir=${path.join(outDir, "main")}`);
-  for (const config of PLATFORM_CONFIGS) {
-    console.log(
-      `platform_package_dir_${config.packageVersionSuffix}=${path.join(
-        outDir,
-        "platforms",
-        config.packageAlias,
-      )}`,
-    );
+    console.log(`main_package_dir=${path.join(outDir, "main")}`);
+    for (const config of PLATFORM_CONFIGS) {
+      console.log(
+        `platform_package_dir_${config.packageVersionSuffix}=${path.join(
+          outDir,
+          "platforms",
+          config.packageAlias,
+        )}`,
+      );
+    }
+  } catch (error) {
+    fs.rmSync(outDir, { recursive: true, force: true });
+    throw error;
+  } finally {
+    cleanupVerifiedReleaseAssets(verifiedArchives);
   }
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

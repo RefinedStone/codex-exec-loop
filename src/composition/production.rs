@@ -1,11 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
 
 use crate::adapter::outbound::app_server::{AppServerPlanningWorkerAdapter, CodexAppServerAdapter};
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::db::{
+    SqlitePlanningAuthorityAdapter, SqliteTelegramGlobalRunnerLeaseAdapter,
+};
+use crate::adapter::outbound::filesystem::{
+    FilesystemParallelAgentProfileRepositoryAdapter, FilesystemPlanningWorkspaceAdapter,
+};
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::github::{GithubAutomationAdapter, GithubReviewPollerAdapter};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
@@ -14,6 +18,7 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
 };
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::port::outbound::parallel_agent_profile_repository_port::ParallelAgentProfileRepositoryPort;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
@@ -21,8 +26,11 @@ use crate::application::port::outbound::planning_worker_port::PlanningWorkerPort
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
 use crate::application::port::outbound::telegram_bot_port::TelegramBotPort;
+use crate::application::port::outbound::telegram_global_runner_lease_port::TelegramGlobalRunnerLeasePort;
+use crate::application::port::outbound::telegram_update_ledger_port::TelegramUpdateLedgerPort;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 use crate::application::service::parallel_mode::{
     ParallelModeService, control_plane::ParallelModeControlPlaneComposition,
 };
@@ -42,6 +50,7 @@ pub(crate) struct ProductionAdminApplication {
     pub(crate) facade: Arc<PlanningAdminFacadeService>,
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
     pub(crate) app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    pub(crate) parallel_agent_profile_service: ParallelAgentProfileService,
     #[allow(dead_code)]
     pub(crate) review_center_read_service: ReviewCenterReadService,
 }
@@ -49,6 +58,8 @@ pub(crate) struct ProductionAdminApplication {
 pub(crate) struct ProductionTelegramApplication {
     pub(crate) control_service: PlanningControlService,
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    pub(crate) telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
+    pub(crate) telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
     #[allow(dead_code)]
     pub(crate) review_center_read_service: ReviewCenterReadService,
 }
@@ -70,7 +81,10 @@ struct ProductionSharedPorts {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
+    parallel_agent_profile_repository_port: Arc<dyn ParallelAgentProfileRepositoryPort>,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
+    telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
+    telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
 }
 
 pub(crate) fn build_planning_services() -> PlanningServices {
@@ -78,35 +92,52 @@ pub(crate) fn build_planning_services() -> PlanningServices {
     planning_services_from_ports(&ports)
 }
 
+pub(crate) fn build_planning_services_for_workspace(workspace_dir: &str) -> PlanningServices {
+    let capture_enabled = app_server_prompt_logging_enabled();
+    maintain_prompt_logs_best_effort(workspace_dir, capture_enabled);
+    let ports = build_shared_ports_for_prompt_logging(capture_enabled);
+    planning_services_from_ports(&ports)
+}
+
 pub(crate) fn build_planning_control_service(workspace_dir: String) -> PlanningControlService {
+    let planning = build_planning_services_for_workspace(&workspace_dir);
     PlanningControlService::new(Arc::new(PlanningControlFacadeService::new(
         workspace_dir,
-        build_planning_services(),
+        planning,
     )))
 }
 
-pub(crate) fn build_parallel_mode_control_plane_composition() -> ParallelModeControlPlaneComposition
-{
-    let ports = build_shared_ports();
+pub(crate) fn build_parallel_mode_control_plane_composition(
+    workspace_dir: &str,
+) -> ParallelModeControlPlaneComposition {
+    let capture_enabled = app_server_prompt_logging_enabled();
+    maintain_prompt_logs_best_effort(workspace_dir, capture_enabled);
+    let ports = build_shared_ports_for_prompt_logging(capture_enabled);
     let planning = planning_services_from_ports(&ports);
+    let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
     parallel_mode_control_plane_from_parts(
         planning,
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
+        parallel_agent_profile_service,
     )
 }
 
 pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminApplication {
-    let ports = build_shared_ports();
+    let capture_enabled = app_server_prompt_logging_enabled();
+    maintain_prompt_logs_best_effort(&workspace_dir, capture_enabled);
+    let ports = build_shared_ports_for_prompt_logging(capture_enabled);
     let planning = planning_services_from_ports(&ports);
     let review_center_read_service = ReviewCenterReadService::new(
         workspace_dir.clone(),
         ports.review_center_repository_port.clone(),
     );
+    let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
     let parallel_mode_control_plane = Arc::new(parallel_mode_control_plane_from_parts(
         planning.clone(),
         ports.planning_authority_port.clone(),
         ports.parallel_agent_worker_port.clone(),
+        parallel_agent_profile_service.clone(),
     ));
     let facade = Arc::new(PlanningAdminFacadeService::from_planning_with_authority(
         workspace_dir,
@@ -119,13 +150,17 @@ pub(crate) fn build_admin_application(workspace_dir: String) -> ProductionAdminA
         facade,
         parallel_mode_control_plane,
         app_server_prompt_log_port: ports.app_server_prompt_log_port,
+        parallel_agent_profile_service,
         review_center_read_service,
     }
 }
 
 pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTelegramApplication {
-    let ports = build_shared_ports();
+    let capture_enabled = app_server_prompt_logging_enabled();
+    maintain_prompt_logs_best_effort(&workspace_dir, capture_enabled);
+    let ports = build_shared_ports_for_prompt_logging(capture_enabled);
     let planning = planning_services_from_ports(&ports);
+    let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
     let review_center_read_service = ReviewCenterReadService::new(
         workspace_dir.clone(),
         ports.review_center_repository_port.clone(),
@@ -138,10 +173,13 @@ pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTel
         planning,
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
+        parallel_agent_profile_service,
     ));
     ProductionTelegramApplication {
         control_service,
         parallel_mode_control_plane,
+        telegram_update_ledger_port: ports.telegram_update_ledger_port,
+        telegram_global_runner_lease_port: ports.telegram_global_runner_lease_port,
         review_center_read_service,
     }
 }
@@ -150,22 +188,30 @@ pub(crate) fn build_telegram_bot_port(token: String) -> Arc<dyn TelegramBotPort>
     Arc::new(CurlTelegramBotAdapter::new(token))
 }
 
+pub(crate) fn resolve_active_planning_workspace_root(workspace_dir: &str) -> PathBuf {
+    SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir)
+}
+
 pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiApplicationServices {
-    let ports = build_shared_ports();
-    let startup_service = StartupService::new(ports.app_server_adapter.clone());
-    let session_service = SessionService::new(ports.app_server_adapter.clone());
     let workspace_dir = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| ".".to_string());
+    let capture_enabled = app_server_prompt_logging_enabled();
+    maintain_prompt_logs_best_effort(&workspace_dir, capture_enabled);
+    let ports = build_shared_ports_for_prompt_logging(capture_enabled);
+    let startup_service = StartupService::new(ports.app_server_adapter.clone());
+    let session_service = SessionService::new(ports.app_server_adapter.clone());
     let review_center_read_service =
         ReviewCenterReadService::new(workspace_dir, ports.review_center_repository_port.clone());
     let conversation_service = ConversationService::new(ports.app_server_adapter.clone())
         .with_review_center_read_service(review_center_read_service.clone());
     let planning = planning_services_from_ports(&ports);
+    let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
     let parallel_mode_control_plane = parallel_mode_control_plane_from_parts(
         planning,
         ports.planning_authority_port,
         ports.parallel_agent_worker_port,
+        parallel_agent_profile_service,
     );
     ProductionNativeTuiApplicationServices {
         startup_service,
@@ -173,6 +219,23 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
         conversation_service,
         review_center_read_service,
         parallel_mode_control_plane,
+    }
+}
+
+fn maintain_prompt_logs_best_effort(workspace_dir: &str, capture_enabled: bool) {
+    let result = if capture_enabled {
+        SqlitePlanningAuthorityAdapter::purge_expired_app_server_prompt_interaction_records(
+            workspace_dir,
+        )
+    } else {
+        SqlitePlanningAuthorityAdapter::clear_app_server_prompt_interaction_records(workspace_dir)
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            error_chars = error.to_string().chars().count(),
+            capture_enabled,
+            "app-server prompt-log privacy cleanup failed"
+        );
     }
 }
 
@@ -200,10 +263,11 @@ pub(crate) fn discover_github_review_poller_service_for_current_branch(
     Ok(Some((target, GithubReviewPollerService::new(port))))
 }
 
-fn build_prompt_log_port(
+fn build_prompt_log_port_for_setting(
     planning_authority_adapter: Arc<SqlitePlanningAuthorityAdapter>,
+    enabled: bool,
 ) -> Arc<dyn AppServerPromptLogPort> {
-    if app_server_prompt_logging_enabled() {
+    if enabled {
         planning_authority_adapter
     } else {
         Arc::new(NoopAppServerPromptLogPort)
@@ -211,11 +275,15 @@ fn build_prompt_log_port(
 }
 
 fn app_server_prompt_logging_enabled() -> bool {
-    std::env::var(AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR)
-        .ok()
-        .as_deref()
-        .and_then(parse_bool_env_flag)
-        .unwrap_or(false)
+    app_server_prompt_logging_enabled_from_value(
+        std::env::var(AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn app_server_prompt_logging_enabled_from_value(value: Option<&str>) -> bool {
+    value.and_then(parse_bool_env_flag).unwrap_or(false)
 }
 
 fn parse_bool_env_flag(value: &str) -> Option<bool> {
@@ -227,15 +295,27 @@ fn parse_bool_env_flag(value: &str) -> Option<bool> {
 }
 
 fn build_shared_ports() -> ProductionSharedPorts {
+    build_shared_ports_for_prompt_logging(app_server_prompt_logging_enabled())
+}
+
+fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> ProductionSharedPorts {
     let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let planning_authority_port: Arc<dyn PlanningAuthorityPort> =
         planning_authority_adapter.clone();
-    let app_server_prompt_log_port = build_prompt_log_port(planning_authority_adapter.clone());
+    let app_server_prompt_log_port = build_prompt_log_port_for_setting(
+        planning_authority_adapter.clone(),
+        prompt_logging_enabled,
+    );
     let app_server_adapter = app_server_adapter(app_server_prompt_log_port.clone());
     let planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort> =
         planning_authority_adapter.clone();
     let review_center_repository_port: Arc<dyn ReviewCenterRepositoryPort> =
         planning_authority_adapter.clone();
+    let telegram_global_adapter = Arc::new(SqliteTelegramGlobalRunnerLeaseAdapter::new());
+    let telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort> =
+        telegram_global_adapter.clone();
+    let telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort> =
+        telegram_global_adapter;
     let planning_workspace_port: Arc<dyn PlanningWorkspacePort> =
         Arc::new(FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(
             planning_authority_adapter.clone(),
@@ -244,6 +324,8 @@ fn build_shared_ports() -> ProductionSharedPorts {
         AppServerPlanningWorkerAdapter::new(app_server_adapter.clone()),
     );
     let parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort> = app_server_adapter.clone();
+    let parallel_agent_profile_repository_port: Arc<dyn ParallelAgentProfileRepositoryPort> =
+        Arc::new(FilesystemParallelAgentProfileRepositoryAdapter::new());
     ProductionSharedPorts {
         app_server_adapter,
         planning_authority_port,
@@ -252,7 +334,10 @@ fn build_shared_ports() -> ProductionSharedPorts {
         planning_workspace_port,
         planning_worker_port,
         parallel_agent_worker_port,
+        parallel_agent_profile_repository_port,
         app_server_prompt_log_port,
+        telegram_update_ledger_port,
+        telegram_global_runner_lease_port,
     }
 }
 
@@ -265,16 +350,24 @@ fn planning_services_from_ports(ports: &ProductionSharedPorts) -> PlanningServic
     )
 }
 
+fn parallel_agent_profile_service_from_ports(
+    ports: &ProductionSharedPorts,
+) -> ParallelAgentProfileService {
+    ParallelAgentProfileService::new(ports.parallel_agent_profile_repository_port.clone())
+}
+
 fn parallel_mode_control_plane_from_parts(
     planning: PlanningServices,
     planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
+    parallel_agent_profile_service: ParallelAgentProfileService,
 ) -> ParallelModeControlPlaneComposition {
     let parallel_mode_service = ParallelModeService::new(
         planning_authority_port,
         github_automation_port(),
         Arc::new(GitParallelModeRuntimeAdapter::new()),
-    );
+    )
+    .with_parallel_agent_profile_service(parallel_agent_profile_service);
     ParallelModeControlPlaneComposition::new(
         parallel_mode_service,
         planning,
@@ -305,7 +398,6 @@ mod tests {
     use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
     use crate::application::service::planning::{PlanningControlCommand, PlanningControlRequest};
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempWorkspace {
@@ -337,40 +429,8 @@ mod tests {
         }
     }
 
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: Option<&str>) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.previous {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
-
-    fn prompt_log_env_lock() -> &'static Mutex<()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        &LOCK
-    }
     fn sample_prompt_record(workspace_dir: &str) -> AppServerPromptInteractionRecord {
+        let now = chrono::Utc::now().to_rfc3339();
         AppServerPromptInteractionRecord {
             sequence: 0,
             interaction_id: "interaction-1".to_string(),
@@ -391,8 +451,8 @@ mod tests {
             )],
             output_items: Vec::new(),
             error_message: None,
-            started_at: "2026-07-09T00:00:00Z".to_string(),
-            completed_at: "2026-07-09T00:00:01Z".to_string(),
+            started_at: now.clone(),
+            completed_at: now,
         }
     }
 
@@ -453,25 +513,105 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_plain_workspace_production_flow_initializes_edits_and_resets_private_authority() {
+        use crate::application::service::planning::PlanningResetTarget;
+
+        let workspace = TempWorkspace::new("windows-plain-planning-flow");
+        assert!(
+            !workspace.path().join(".git").exists(),
+            "fixture must remain a plain non-Git directory"
+        );
+        let workspace_dir = workspace.path().display().to_string();
+        let planning = build_planning_services();
+
+        assert!(
+            !planning
+                .workspace
+                .has_planning_workspace(&workspace_dir)
+                .expect("empty Windows authority should inspect")
+        );
+        planning
+            .workspace
+            .initialize_simple_workspace(&workspace_dir)
+            .expect("plain Windows planning should initialize through private SQLite");
+        assert!(
+            planning
+                .workspace
+                .has_planning_workspace(&workspace_dir)
+                .expect("initialized Windows authority should inspect")
+        );
+        assert!(
+            planning
+                .workspace
+                .has_planning_candidate_workspace(&workspace_dir)
+                .expect("Windows candidate read should use the private authority")
+        );
+
+        let staged = planning
+            .workspace
+            .stage_simple_mode_draft(&workspace_dir)
+            .expect("plain Windows draft should stage through private SQLite");
+        let mut editor = planning
+            .workspace
+            .load_manual_editor_session(&workspace_dir, &staged.draft_name)
+            .expect("plain Windows draft should load through private SQLite");
+        assert_eq!(editor.editable_files.len(), 1);
+        editor.editable_files[0]
+            .body
+            .push_str("\nWindows private-authority edit.\n");
+        planning
+            .workspace
+            .save_draft_editor_files(&workspace_dir, &editor.draft_name, &editor.editable_files)
+            .expect("plain Windows draft edit should persist through private SQLite");
+        let reloaded = planning
+            .workspace
+            .load_manual_editor_session(&workspace_dir, &editor.draft_name)
+            .expect("edited Windows draft should reload");
+        assert!(
+            reloaded.editable_files[0]
+                .body
+                .contains("Windows private-authority edit")
+        );
+
+        planning
+            .workspace
+            .reset_workspace(&workspace_dir, PlanningResetTarget::All)
+            .expect("plain Windows full reset should commit through one authority transaction");
+        let stale_draft_error = planning
+            .workspace
+            .load_manual_editor_session(&workspace_dir, &editor.draft_name)
+            .expect_err("full reset must remove staged Windows draft rows");
+        assert!(stale_draft_error.to_string().contains("does not exist"));
+        assert!(
+            planning
+                .workspace
+                .has_planning_workspace(&workspace_dir)
+                .expect("reset Windows authority should remain initialized")
+        );
+        assert!(
+            !workspace.path().join(".codex-exec-loop").exists(),
+            "private-authority flow must not fall back to full-path planning writes"
+        );
+    }
+
     #[test]
     fn production_composition_disables_prompt_logging_by_default() {
-        let _lock = prompt_log_env_lock()
-            .lock()
-            .expect("prompt log env mutex should not be poisoned");
-        let _guard = EnvVarGuard::set(AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR, None);
         let workspace = TempWorkspace::new("prompt-log-default");
         let workspace_dir = workspace.path().display().to_string();
-        let admin = build_admin_application(workspace_dir.clone());
+        let prompt_log = build_prompt_log_port_for_setting(
+            Arc::new(SqlitePlanningAuthorityAdapter::new()),
+            app_server_prompt_logging_enabled_from_value(None),
+        );
 
-        admin
-            .app_server_prompt_log_port
+        prompt_log
             .append_app_server_prompt_interaction(
                 &workspace_dir,
                 sample_prompt_record(&workspace_dir),
             )
             .expect("noop prompt log should accept writes");
-        let snapshot = admin
-            .app_server_prompt_log_port
+        let snapshot = prompt_log
             .load_recent_app_server_prompt_interactions(&workspace_dir, 10)
             .expect("noop prompt log should load empty snapshots");
 
@@ -480,23 +620,20 @@ mod tests {
 
     #[test]
     fn production_composition_enables_prompt_logging_when_opted_in() {
-        let _lock = prompt_log_env_lock()
-            .lock()
-            .expect("prompt log env mutex should not be poisoned");
-        let _guard = EnvVarGuard::set(AKRA_APP_SERVER_PROMPT_LOG_ENV_VAR, Some("1"));
         let workspace = TempWorkspace::new("prompt-log-enabled");
         let workspace_dir = workspace.path().display().to_string();
-        let admin = build_admin_application(workspace_dir.clone());
+        let prompt_log = build_prompt_log_port_for_setting(
+            Arc::new(SqlitePlanningAuthorityAdapter::new()),
+            app_server_prompt_logging_enabled_from_value(Some("1")),
+        );
 
-        admin
-            .app_server_prompt_log_port
+        prompt_log
             .append_app_server_prompt_interaction(
                 &workspace_dir,
                 sample_prompt_record(&workspace_dir),
             )
             .expect("sqlite prompt log should persist writes");
-        let snapshot = admin
-            .app_server_prompt_log_port
+        let snapshot = prompt_log
             .load_recent_app_server_prompt_interactions(&workspace_dir, 10)
             .expect("sqlite prompt log should load stored records");
 
@@ -505,5 +642,114 @@ mod tests {
             snapshot.records[0].input_items[0].content,
             "sensitive prompt"
         );
+    }
+
+    #[test]
+    fn production_compositions_clear_all_prompt_logs_when_capture_is_disabled() {
+        let workspace = TempWorkspace::new("prompt-log-disabled-startup-purge");
+        let workspace_dir = workspace.path().display().to_string();
+        SqlitePlanningAuthorityAdapter::append_app_server_prompt_interaction_record(
+            &workspace_dir,
+            sample_prompt_record(&workspace_dir),
+        )
+        .expect("prompt log schema should initialize");
+        let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+            &workspace_dir,
+        )
+        .expect("authority location should resolve");
+        let connection = rusqlite::Connection::open(&location.authority_store_path)
+            .expect("authority store should open for expired fixture insertion");
+        connection
+            .execute(
+                "INSERT INTO app_server_prompt_interactions
+                 (interaction_id, session_kind, operation, status, started_at, completed_at, content_json)
+                 VALUES (?1, 'main', 'turn', 'completed', ?2, ?2, '{}')",
+                rusqlite::params!["expired-startup-record", "2000-01-01T00:00:00Z"],
+            )
+            .expect("expired fixture should insert");
+        drop(connection);
+
+        let _application = build_admin_application(workspace_dir.clone());
+
+        let connection = rusqlite::Connection::open(&location.authority_store_path)
+            .expect("authority store should reopen after admin composition");
+        let expired_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM app_server_prompt_interactions WHERE interaction_id = ?1",
+                ["expired-startup-record"],
+                |row| row.get(0),
+            )
+            .expect("expired record count should load");
+        assert_eq!(expired_count, 0);
+        let retained_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM app_server_prompt_interactions",
+                [],
+                |row| row.get(0),
+            )
+            .expect("disabled prompt record count should load");
+        assert_eq!(retained_count, 0);
+
+        connection
+            .execute(
+                "INSERT INTO app_server_prompt_interactions
+                 (interaction_id, session_kind, operation, status, started_at, completed_at, content_json)
+                 VALUES (?1, 'main', 'turn', 'completed', ?2, ?2, '{}')",
+                rusqlite::params!["expired-parallel-tick-record", "2000-01-01T00:00:00Z"],
+            )
+            .expect("parallel-tick expired fixture should insert");
+        drop(connection);
+
+        let _control_plane = build_parallel_mode_control_plane_composition(&workspace_dir);
+
+        let connection = rusqlite::Connection::open(&location.authority_store_path)
+            .expect("authority store should reopen after parallel-tick composition");
+        let expired_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM app_server_prompt_interactions WHERE interaction_id = ?1",
+                ["expired-parallel-tick-record"],
+                |row| row.get(0),
+            )
+            .expect("parallel-tick expired record count should load");
+        assert_eq!(expired_count, 0);
+        drop(connection);
+
+        SqlitePlanningAuthorityAdapter::append_app_server_prompt_interaction_record(
+            &workspace_dir,
+            sample_prompt_record(&workspace_dir),
+        )
+        .expect("CLI planning prompt fixture should append");
+        let _planning = build_planning_services_for_workspace(&workspace_dir);
+        let connection = rusqlite::Connection::open(&location.authority_store_path)
+            .expect("authority store should reopen after workspace planning composition");
+        let retained_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM app_server_prompt_interactions",
+                [],
+                |row| row.get(0),
+            )
+            .expect("workspace planning prompt count should load");
+        assert_eq!(retained_count, 0);
+    }
+
+    #[test]
+    fn enabled_prompt_log_maintenance_preserves_unexpired_records() {
+        let workspace = TempWorkspace::new("prompt-log-enabled-startup-retention");
+        let workspace_dir = workspace.path().display().to_string();
+        SqlitePlanningAuthorityAdapter::append_app_server_prompt_interaction_record(
+            &workspace_dir,
+            sample_prompt_record(&workspace_dir),
+        )
+        .expect("prompt log fixture should append");
+
+        maintain_prompt_logs_best_effort(&workspace_dir, true);
+
+        let snapshot =
+            SqlitePlanningAuthorityAdapter::load_recent_app_server_prompt_interaction_records(
+                &workspace_dir,
+                10,
+            )
+            .expect("enabled prompt records should remain readable");
+        assert_eq!(snapshot.records.len(), 1);
     }
 }

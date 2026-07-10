@@ -8,9 +8,62 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
 use super::store::upsert_authority_metadata;
 use super::{SqlitePlanningAuthorityAdapter, open_authority_connection};
 
-const RETAINED_PROMPT_INTERACTION_COUNT: i64 = 200;
+const RETAINED_PROMPT_INTERACTION_COUNT: i64 = 100;
+const RETAINED_PROMPT_INTERACTION_DAYS: i64 = 7;
 
 impl SqlitePlanningAuthorityAdapter {
+    pub(crate) fn clear_app_server_prompt_interaction_records(
+        workspace_dir: &str,
+    ) -> Result<usize> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open app-server prompt log cleanup transaction")?;
+        let deleted = transaction
+            .execute("DELETE FROM app_server_prompt_interactions", [])
+            .context("failed to clear disabled app-server prompt log records")?;
+        transaction
+            .execute(
+                "DELETE FROM authority_metadata WHERE key = 'last_app_server_prompt_log_at'",
+                [],
+            )
+            .context("failed to clear disabled app-server prompt log metadata")?;
+        transaction
+            .commit()
+            .context("failed to commit app-server prompt log cleanup transaction")?;
+        Ok(deleted)
+    }
+
+    pub(crate) fn purge_expired_app_server_prompt_interaction_records(
+        workspace_dir: &str,
+    ) -> Result<usize> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let expired = connection
+            .execute(
+                "DELETE FROM app_server_prompt_interactions
+                 WHERE datetime(completed_at) IS NULL
+                    OR datetime(completed_at) < datetime('now', ?1)
+                    OR datetime(completed_at) > datetime('now')",
+                params![format!("-{RETAINED_PROMPT_INTERACTION_DAYS} days")],
+            )
+            .context("failed to expire app-server prompt log records")?;
+        let excess = connection
+            .execute(
+                "DELETE FROM app_server_prompt_interactions
+                 WHERE sequence NOT IN (
+                     SELECT sequence
+                     FROM app_server_prompt_interactions
+                     ORDER BY sequence DESC
+                     LIMIT ?1
+                 )",
+                params![RETAINED_PROMPT_INTERACTION_COUNT],
+            )
+            .context("failed to trim app-server prompt log records")?;
+        Ok(expired.saturating_add(excess))
+    }
+
     pub(crate) fn append_app_server_prompt_interaction_record(
         workspace_dir: &str,
         record: AppServerPromptInteractionRecord,
@@ -20,6 +73,7 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open app-server prompt log transaction")?;
+        let record = record.into_bounded();
         let content_json = serde_json::to_string(&record)
             .context("failed to serialize app-server prompt log record")?;
 
@@ -46,6 +100,15 @@ impl SqlitePlanningAuthorityAdapter {
         transaction
             .execute(
                 "DELETE FROM app_server_prompt_interactions
+                 WHERE datetime(completed_at) IS NULL
+                    OR datetime(completed_at) < datetime('now', ?1)
+                    OR datetime(completed_at) > datetime('now')",
+                params![format!("-{RETAINED_PROMPT_INTERACTION_DAYS} days")],
+            )
+            .context("failed to expire app-server prompt log records")?;
+        transaction
+            .execute(
+                "DELETE FROM app_server_prompt_interactions
                  WHERE sequence NOT IN (
                      SELECT sequence
                      FROM app_server_prompt_interactions
@@ -65,6 +128,7 @@ impl SqlitePlanningAuthorityAdapter {
         workspace_dir: &str,
         limit: usize,
     ) -> Result<AppServerPromptInteractionSnapshot> {
+        Self::purge_expired_app_server_prompt_interaction_records(workspace_dir)?;
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
         let bounded_limit = i64::try_from(limit.clamp(1, 200)).unwrap_or(200);
@@ -99,6 +163,10 @@ impl SqlitePlanningAuthorityAdapter {
 }
 
 impl AppServerPromptLogPort for SqlitePlanningAuthorityAdapter {
+    fn is_enabled(&self) -> bool {
+        true
+    }
+
     fn append_app_server_prompt_interaction(
         &self,
         workspace_dir: &str,

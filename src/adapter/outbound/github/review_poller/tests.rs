@@ -14,7 +14,7 @@ use crate::application::port::outbound::github_review_poller_port::GithubReviewP
 use crate::domain::github_review::{GithubPullRequestActivityKind, GithubPullRequestTarget};
 
 /*
-review poller adapter는 GitHub REST API, local git origin, local GitHub credential 위치를 domain
+review poller adapter는 GitHub REST API, configured git push remote, local GitHub credential 위치를 domain
 snapshot으로 바꾸는 outbound boundary다. 이 테스트 파일은 네트워크를 실제로 치지 않고도 "입력
 문자열/JSON이 어떤 domain shape로 정규화되는가"를 고정한다.
 */
@@ -51,6 +51,7 @@ fn local_credential_constructor_prefers_trimmed_environment_token() {
         ("AKRA_GITHUB_TOKEN", Some("  env-token-123  ")),
         ("GH_TOKEN", Some("ignored-gh-token")),
         ("GITHUB_TOKEN", Some("ignored-github-token")),
+        ("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN", None),
     ]);
 
     let adapter = GithubReviewPollerAdapter::from_local_github_credentials(Path::new("."))
@@ -60,7 +61,7 @@ fn local_credential_constructor_prefers_trimmed_environment_token() {
 }
 
 #[test]
-fn local_credential_constructor_falls_back_to_repo_named_token() {
+fn local_credential_constructor_rejects_removed_legacy_scan_even_when_a_named_file_exists() {
     let _guard = env_lock()
         .lock()
         .expect("environment fixture lock should not be poisoned");
@@ -68,7 +69,18 @@ fn local_credential_constructor_falls_back_to_repo_named_token() {
         ("AKRA_GITHUB_TOKEN", None),
         ("GH_TOKEN", None),
         ("GITHUB_TOKEN", None),
+        ("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN", Some("1")),
     ]);
+    let fake_gh_root = unique_temp_dir("review-poller-from-local-named-failed-gh");
+    fs::create_dir_all(&fake_gh_root).expect("fake gh root should be created");
+    let gh_program = write_executable_script(
+        &fake_gh_root,
+        "gh",
+        r#"#!/bin/sh
+set -eu
+exit 2
+"#,
+    );
     let repo_root = init_git_repo("review-poller-from-local-named-credential");
     run_git(&repo_root, &["config", "credential.helper", ""]);
     fs::write(
@@ -77,11 +89,92 @@ fn local_credential_constructor_falls_back_to_repo_named_token() {
     )
     .expect("named credential fixture should be written");
 
-    let adapter = GithubReviewPollerAdapter::from_local_github_credentials(&repo_root)
-        .expect("repo-local named token should build adapter");
+    let error =
+        GithubReviewPollerAdapter::read_local_github_token_with_gh_program(&repo_root, &gh_program)
+            .expect_err("removed legacy credential scanning must fail closed");
 
-    assert_eq!(adapter.token, "named-token-123");
+    assert!(error.to_string().contains("no longer supported"));
+    assert!(!error.to_string().contains("named-token-123"));
+    let _ = fs::remove_dir_all(&fake_gh_root);
     let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn local_credential_constructor_does_not_scan_named_files_by_default() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let _env = EnvVarGuard::apply(&[
+        ("AKRA_GITHUB_TOKEN", None),
+        ("GH_TOKEN", None),
+        ("GITHUB_TOKEN", None),
+        ("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN", None),
+    ]);
+    let fake_gh_root = unique_temp_dir("review-poller-default-no-direct-scan-gh");
+    fs::create_dir_all(&fake_gh_root).expect("fake gh root should be created");
+    let gh_program = write_executable_script(
+        &fake_gh_root,
+        "gh",
+        r#"#!/bin/sh
+set -eu
+exit 2
+"#,
+    );
+    let repo_root = init_git_repo("review-poller-default-no-direct-scan");
+    run_git(&repo_root, &["config", "credential.helper", ""]);
+    fs::write(
+        repo_root.join(".git/akra-github-credentials"),
+        "must-not-be-read\n",
+    )
+    .expect("named credential fixture should be written");
+
+    let error = match GithubReviewPollerAdapter::read_local_github_token_with_gh_program(
+        &repo_root,
+        &gh_program,
+    ) {
+        Ok(_) => panic!("direct credential files must be ignored without explicit opt-in"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains("trusted gh auth was unavailable")
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("direct credential-file scanning")
+    );
+    assert!(!error.to_string().contains("must-not-be-read"));
+    let _ = fs::remove_dir_all(&fake_gh_root);
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn local_credential_constructor_rejects_any_removed_legacy_scan_value_without_echoing_it() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let secret_value = "not-a-boolean-secret-value";
+    let _env = EnvVarGuard::apply(&[
+        ("AKRA_GITHUB_TOKEN", Some("token-must-not-be-echoed")),
+        ("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN", Some(secret_value)),
+    ]);
+
+    let error = match GithubReviewPollerAdapter::from_local_github_credentials(Path::new(
+        "/sensitive/credential/path-must-not-be-echoed",
+    )) {
+        Ok(_) => panic!("removed legacy scan configuration must fail closed"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+
+    assert!(message.contains("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN"));
+    assert!(message.contains("no longer supported"));
+    assert!(!message.contains(secret_value));
+    assert!(!message.contains("token-must-not-be-echoed"));
+    assert!(!message.contains("path-must-not-be-echoed"));
 }
 
 #[test]
@@ -93,10 +186,11 @@ fn local_credential_constructor_falls_back_to_gh_auth_token() {
         ("AKRA_GITHUB_TOKEN", None),
         ("GH_TOKEN", None),
         ("GITHUB_TOKEN", None),
+        ("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN", None),
     ]);
     let root = unique_temp_dir("review-poller-from-local-gh-token");
     fs::create_dir_all(&root).expect("fixture root should be created");
-    write_executable_script(
+    let gh_program = write_executable_script(
         &root,
         "gh",
         r#"#!/bin/sh
@@ -104,17 +198,17 @@ set -eu
 printf 'gh-local-token\n'
 "#,
     );
-    let _path = PathEnvGuard::prepend(&root);
-
-    let adapter = GithubReviewPollerAdapter::from_local_github_credentials(&root)
-        .expect("gh auth token should build adapter");
+    let token =
+        GithubReviewPollerAdapter::read_local_github_token_with_gh_program(&root, &gh_program)
+            .expect("gh auth token should load");
+    let adapter = GithubReviewPollerAdapter::new(token);
 
     assert_eq!(adapter.token, "gh-local-token");
     let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
-fn local_credential_constructor_falls_back_to_git_credential_fill() {
+fn local_credential_constructor_never_executes_repository_credential_helper() {
     let _guard = env_lock()
         .lock()
         .expect("environment fixture lock should not be poisoned");
@@ -122,10 +216,11 @@ fn local_credential_constructor_falls_back_to_git_credential_fill() {
         ("AKRA_GITHUB_TOKEN", None),
         ("GH_TOKEN", None),
         ("GITHUB_TOKEN", None),
+        ("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN", None),
     ]);
     let fake_gh_root = unique_temp_dir("review-poller-from-local-failed-gh");
     fs::create_dir_all(&fake_gh_root).expect("fake gh root should be created");
-    write_executable_script(
+    let gh_program = write_executable_script(
         &fake_gh_root,
         "gh",
         r#"#!/bin/sh
@@ -133,8 +228,8 @@ set -eu
 exit 2
 "#,
     );
-    let _path = PathEnvGuard::prepend(&fake_gh_root);
     let repo_root = init_git_repo("review-poller-from-local-git-credential");
+    let marker_path = repo_root.join("credential-helper-ran");
     run_git(
         &repo_root,
         &[
@@ -149,21 +244,77 @@ exit 2
         &[
             "config",
             "credential.helper",
-            "!f() { cat >/dev/null; printf 'username=octo\\npassword=git-fill-local-token\\n'; }; f",
+            &format!(
+                "!f() {{ : > '{}'; printf 'username=octo\\npassword=must-not-load\\n'; }}; f",
+                marker_path.display()
+            ),
         ],
     );
 
-    let adapter = GithubReviewPollerAdapter::from_local_github_credentials(&repo_root)
-        .expect("git credential fill token should build adapter");
+    let error =
+        GithubReviewPollerAdapter::read_local_github_token_with_gh_program(&repo_root, &gh_program)
+            .expect_err("repository credential helpers must not participate in token discovery");
 
-    assert_eq!(adapter.token, "git-fill-local-token");
+    assert!(
+        error
+            .to_string()
+            .contains("trusted gh auth was unavailable")
+    );
+    assert!(
+        !marker_path.exists(),
+        "credential.helper command was executed"
+    );
     let _ = fs::remove_dir_all(&fake_gh_root);
     let _ = fs::remove_dir_all(&repo_root);
 }
 
 #[test]
+fn repository_path_cannot_replace_review_poller_gh_or_curl() {
+    let repo_root = init_git_repo("review-poller-hostile-path");
+    let repo_bin = repo_root.join("bin");
+    fs::create_dir_all(&repo_bin).expect("repository bin should be created");
+    let marker_path = repo_root.join("hostile-program-ran");
+    let script = format!(
+        "#!/bin/sh\nset -eu\n: > '{}'\nprintf 'attacker-token\\n'\n",
+        marker_path.display()
+    );
+    write_executable_script(&repo_bin, "gh", &script);
+    write_executable_script(&repo_bin, "curl", &script);
+    let original_path = std::env::var_os("PATH").expect("PATH should be available");
+    let hostile_path = std::env::join_paths(
+        std::iter::once(repo_bin.clone()).chain(std::env::split_paths(&original_path)),
+    )
+    .expect("hostile PATH should join");
+    let token_error =
+        crate::trusted_executable::resolve_native_from_path("gh", &hostile_path, &repo_root)
+            .expect_err("repository gh must make trusted discovery fail closed");
+    assert!(
+        token_error
+            .to_string()
+            .contains("PATH selected an unsafe `gh` executable")
+    );
+
+    let adapter = GithubReviewPollerAdapter::new_for_workspace_with_path(
+        "host-token",
+        &repo_root,
+        &hostile_path,
+    );
+    assert!(adapter.curl_resolution_error.is_some());
+    let request_error = adapter
+        .fetch_object::<serde_json::Value>("/rate_limit")
+        .expect_err("repository curl must make requests fail closed");
+    assert!(
+        request_error
+            .to_string()
+            .contains("trusted curl executable")
+    );
+    assert!(!marker_path.exists(), "repository gh or curl was executed");
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
 fn parses_repository_full_name_from_github_ssh_origin() {
-    // production repo origin은 SSH 형식일 수 있다. poller는 이 값을 GitHub API endpoint의
+    // production repo remote는 SSH 형식일 수 있다. poller는 이 값을 GitHub API endpoint의
     // `{owner}/{repo}` segment로 바꿔야 PR lookup과 activity fetch를 수행할 수 있다.
     // SSH transport detail은 local git 경계에서 끝나고 domain target에는 repository identity만 남는다.
     let repository =
@@ -194,6 +345,20 @@ fn parses_repository_full_name_from_github_credentialed_https_origin() {
     .expect("credentialed HTTPS repository should parse");
 
     assert_eq!(repository, "acme/widgets");
+}
+
+#[test]
+fn repository_parse_errors_do_not_echo_credentialed_remote_urls() {
+    let sensitive_origin =
+        "https://greg:token-must-not-be-echoed@github.com/acme/widgets/extra.git";
+
+    let error = GithubReviewPollerAdapter::parse_repository_full_name(sensitive_origin)
+        .expect_err("multi-segment repository identity should be rejected");
+    let message = error.to_string();
+
+    assert!(message.contains("failed to parse GitHub repository identity"));
+    assert!(!message.contains("token-must-not-be-echoed"));
+    assert!(!message.contains(sensitive_origin));
 }
 
 #[test]
@@ -426,7 +591,11 @@ fn read_first_non_empty_line_trims_blank_lines_and_rejects_empty_files() {
     fs::write(&empty_path, "\n  \n").expect("empty fixture should be written");
     let error = GithubReviewPollerAdapter::read_first_non_empty_line(&empty_path)
         .expect_err("blank credential file should fail");
-    assert!(error.to_string().contains("missing token line"));
+    assert!(
+        error
+            .to_string()
+            .contains("legacy GitHub credential file has no usable token line")
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -441,13 +610,17 @@ fn parse_helpers_reject_malformed_repository_and_credentials() {
     assert!(
         unsupported
             .to_string()
-            .contains("unsupported GitHub origin URL")
+            .contains("unsupported GitHub remote URL")
     );
 
     let malformed =
         GithubReviewPollerAdapter::parse_repository_full_name("https://github.com/acme.git")
             .expect_err("owner/repo path should be required");
-    assert!(malformed.to_string().contains("failed to parse repository"));
+    assert!(
+        malformed
+            .to_string()
+            .contains("failed to parse GitHub repository identity")
+    );
 
     let empty_token =
         GithubReviewPollerAdapter::parse_github_credential_token("https://octo-user:@github.com")
@@ -541,6 +714,125 @@ esac
 }
 
 #[test]
+fn find_current_branch_uses_configured_upstream_without_origin() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let _env = EnvVarGuard::apply(&[("AKRA_GITHUB_PUSH_REMOTE", None)]);
+    let repo_root = init_git_repo("review-poller-configured-upstream");
+    run_git(
+        &repo_root,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    run_git(&repo_root, &["config", "akra.githubPushRemote", "upstream"]);
+
+    let repository = GithubReviewPollerAdapter::resolve_repository_full_name(&repo_root)
+        .expect("configured upstream should resolve without an origin remote");
+
+    assert_eq!(repository, "acme/widgets");
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn configured_upstream_prevents_fork_origin_repository_mismatch() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let _env = EnvVarGuard::apply(&[("AKRA_GITHUB_PUSH_REMOTE", None)]);
+    let repo_root = init_git_repo("review-poller-fork-origin-mismatch");
+    run_git(
+        &repo_root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/fork-owner/widgets.git",
+        ],
+    );
+    run_git(
+        &repo_root,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    run_git(&repo_root, &["config", "akra.githubPushRemote", "upstream"]);
+
+    let repository = GithubReviewPollerAdapter::resolve_repository_full_name(&repo_root)
+        .expect("review polling should use the configured delivery remote");
+
+    assert_eq!(repository, "acme/widgets");
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn missing_or_invalid_push_remote_never_falls_back_to_origin() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let _env = EnvVarGuard::apply(&[("AKRA_GITHUB_PUSH_REMOTE", None)]);
+    let repo_root = init_git_repo("review-poller-missing-push-remote");
+    run_git(
+        &repo_root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/fork-owner/widgets.git",
+        ],
+    );
+    run_git(&repo_root, &["config", "akra.githubPushRemote", "upstream"]);
+
+    let missing = GithubReviewPollerAdapter::resolve_repository_full_name(&repo_root)
+        .expect_err("a missing configured remote must not fall back to origin");
+    assert!(
+        missing
+            .to_string()
+            .contains("push remote `upstream` is not available")
+    );
+
+    run_git(
+        &repo_root,
+        &["config", "akra.githubPushRemote", "../origin"],
+    );
+    let invalid = GithubReviewPollerAdapter::resolve_repository_full_name(&repo_root)
+        .expect_err("an invalid configured remote must not fall back to origin");
+    assert!(
+        invalid
+            .to_string()
+            .contains("akra.githubPushRemote is invalid")
+    );
+    assert!(!invalid.to_string().contains("../origin"));
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn default_origin_must_exist_for_review_repository_discovery() {
+    let _guard = env_lock()
+        .lock()
+        .expect("environment fixture lock should not be poisoned");
+    let _env = EnvVarGuard::apply(&[("AKRA_GITHUB_PUSH_REMOTE", None)]);
+    let repo_root = init_git_repo("review-poller-no-origin");
+
+    let error = GithubReviewPollerAdapter::resolve_repository_full_name(&repo_root)
+        .expect_err("missing default origin should fail closed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("push remote `origin` is not available")
+    );
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
 fn run_git_command_reports_git_stderr_for_invalid_repository() {
     // git failure context should retain stderr so the UI can explain broken origin/worktree state
     // instead of surfacing a bare exit code.
@@ -569,9 +861,7 @@ fn gh_auth_token_reader_uses_cli_output_and_ignores_empty_or_failed_status() {
         .expect("environment fixture lock should not be poisoned");
     let root = unique_temp_dir("review-poller-gh-auth-token");
     fs::create_dir_all(&root).expect("fixture root should be created");
-    let _path = PathEnvGuard::prepend(&root);
-
-    write_executable_script(
+    let mut gh_program = write_executable_script(
         &root,
         "gh",
         r#"#!/bin/sh
@@ -579,11 +869,15 @@ set -eu
 printf '  gh-token-123  \n'
 "#,
     );
-    let token = GithubReviewPollerAdapter::read_gh_auth_token(&root)
-        .expect("gh auth token command should be handled");
+    let token = GithubReviewPollerAdapter::read_gh_auth_token_with_program(
+        &root,
+        &gh_program,
+        std::time::Duration::from_secs(1),
+    )
+    .expect("gh auth token command should be handled");
     assert_eq!(token.as_deref(), Some("gh-token-123"));
 
-    write_executable_script(
+    gh_program = write_executable_script(
         &root,
         "gh",
         r#"#!/bin/sh
@@ -591,11 +885,15 @@ set -eu
 printf '\n'
 "#,
     );
-    let empty = GithubReviewPollerAdapter::read_gh_auth_token(&root)
-        .expect("empty gh token should not fail");
+    let empty = GithubReviewPollerAdapter::read_gh_auth_token_with_program(
+        &root,
+        &gh_program,
+        std::time::Duration::from_secs(1),
+    )
+    .expect("empty gh token should not fail");
     assert_eq!(empty, None);
 
-    write_executable_script(
+    gh_program = write_executable_script(
         &root,
         "gh",
         r#"#!/bin/sh
@@ -603,72 +901,14 @@ set -eu
 exit 2
 "#,
     );
-    let failed = GithubReviewPollerAdapter::read_gh_auth_token(&root)
-        .expect("failed gh token command should be ignored");
+    let failed = GithubReviewPollerAdapter::read_gh_auth_token_with_program(
+        &root,
+        &gh_program,
+        std::time::Duration::from_secs(1),
+    )
+    .expect("failed gh token command should be ignored");
     assert_eq!(failed, None);
     let _ = fs::remove_dir_all(&root);
-}
-
-#[test]
-fn git_credential_fill_reads_password_and_keeps_query_shapes_stable() {
-    let repo_root = init_git_repo("review-poller-git-credential-fill");
-    run_git(
-        &repo_root,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/acme/widgets.git",
-        ],
-    );
-    run_git(
-        &repo_root,
-        &[
-            "config",
-            "credential.helper",
-            "!f() { cat >/dev/null; printf 'username=octo\\npassword=filled-token-123\\n'; }; f",
-        ],
-    );
-
-    let queries = GithubReviewPollerAdapter::git_credential_queries(Some("acme/widgets"));
-    assert_eq!(queries.len(), 2);
-    assert!(queries[0].contains("path=acme/widgets"));
-    assert_eq!(
-        GithubReviewPollerAdapter::git_credential_queries(None),
-        vec!["protocol=https\nhost=github.com\n\n".to_string()]
-    );
-
-    let token = GithubReviewPollerAdapter::read_git_credential_fill_token(&repo_root)
-        .expect("git credential fill should not fail");
-
-    assert_eq!(token.as_deref(), Some("filled-token-123"));
-    assert_eq!(
-        GithubReviewPollerAdapter::parse_git_credential_password("username=octo\npassword=\n"),
-        None
-    );
-    let _ = fs::remove_dir_all(&repo_root);
-}
-
-#[test]
-fn git_credential_fill_returns_none_for_missing_or_failed_helpers() {
-    let repo_root = init_git_repo("review-poller-git-credential-fill-none");
-    run_git(&repo_root, &["config", "credential.helper", ""]);
-
-    let missing = GithubReviewPollerAdapter::read_git_credential_fill_token(&repo_root)
-        .expect("missing credential helper should not fail");
-    assert_eq!(missing, None);
-
-    run_git(
-        &repo_root,
-        &["config", "credential.helper", "!f() { exit 1; }; f"],
-    );
-    let failed = GithubReviewPollerAdapter::run_git_credential_fill(
-        &repo_root,
-        "protocol=https\nhost=github.com\n\n",
-    )
-    .expect("failed credential helper should be ignored");
-    assert_eq!(failed, None);
-    let _ = fs::remove_dir_all(&repo_root);
 }
 
 #[test]
@@ -808,7 +1048,7 @@ fn windows_git_credential_candidates_stay_on_current_user_profile() {
 }
 
 #[test]
-fn local_credential_constructor_falls_back_to_windows_current_user_when_names_differ() {
+fn local_credential_constructor_does_not_restore_windows_file_scanning_with_legacy_flag() {
     let _guard = env_lock()
         .lock()
         .expect("environment fixture lock should not be poisoned");
@@ -830,6 +1070,7 @@ fn local_credential_constructor_falls_back_to_windows_current_user_when_names_di
         ("AKRA_GITHUB_TOKEN", None),
         ("GH_TOKEN", None),
         ("GITHUB_TOKEN", None),
+        ("AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN", Some("1")),
         ("HOME", Some(home_root.to_string_lossy().as_ref())),
         (
             "USERPROFILE",
@@ -840,7 +1081,7 @@ fn local_credential_constructor_falls_back_to_windows_current_user_when_names_di
     ]);
     let fake_gh_root = unique_temp_dir("review-poller-from-local-windows-failed-gh");
     fs::create_dir_all(&fake_gh_root).expect("fake gh root should be created");
-    write_executable_script(
+    let gh_program = write_executable_script(
         &fake_gh_root,
         "gh",
         r#"#!/bin/sh
@@ -848,7 +1089,6 @@ set -eu
 exit 2
 "#,
     );
-    let _path = PathEnvGuard::prepend(&fake_gh_root);
     let repo_root = init_git_repo("review-poller-from-local-windows-credential");
     run_git(&repo_root, &["config", "credential.helper", ""]);
     let users_root = unique_temp_dir("review-poller-from-local-windows-users");
@@ -872,11 +1112,12 @@ exit 2
     )
     .expect("current-user credential fixture should be written");
 
-    let token =
-        GithubReviewPollerAdapter::read_local_github_token_for_root(&repo_root, &users_root)
-            .expect("windows current-user credential should satisfy local fallback order");
+    let error =
+        GithubReviewPollerAdapter::read_local_github_token_with_gh_program(&repo_root, &gh_program)
+            .expect_err("legacy flag must not restore Windows credential-file scanning");
 
-    assert_eq!(token, "akra-token-123");
+    assert!(error.to_string().contains("no longer supported"));
+    assert!(!error.to_string().contains("akra-token-123"));
     let _ = fs::remove_dir_all(&fake_gh_root);
     let _ = fs::remove_dir_all(&repo_root);
     let _ = fs::remove_dir_all(&users_root);
@@ -896,7 +1137,11 @@ fn windows_home_resolution_covers_absent_permission_and_error_edges() {
     fs::write(&file_root, "not a directory").expect("file fixture should be written");
     let error = GithubReviewPollerAdapter::resolve_current_user_windows_home(&file_root, "akra")
         .expect_err("non-directory users root should report read_dir failure");
-    assert!(error.to_string().contains("failed to read"));
+    assert!(
+        error
+            .to_string()
+            .contains("failed to inspect legacy Windows credential profiles")
+    );
     let _ = fs::remove_file(&file_root);
 
     let users_root = unique_temp_dir("review-poller-windows-users-permission");
@@ -980,6 +1225,36 @@ exit 22
 
     assert!(error.to_string().contains("github api request failed"));
     assert!(error.to_string().contains("api denied"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn expired_activity_budget_fails_before_spawning_curl() {
+    let root = unique_temp_dir("review-poller-expired-activity-budget");
+    fs::create_dir_all(&root).expect("fixture root should be created");
+    let marker = root.join("curl-ran");
+    let script = write_executable_script(
+        &root,
+        "fake-curl",
+        &format!(
+            "#!/bin/sh\nset -eu\n: > '{}'\nprintf '{{}}'\n",
+            marker.display()
+        ),
+    );
+    let adapter = fake_adapter(&script);
+    let budget = super::GithubActivityLoadBudget {
+        deadline: std::time::Instant::now(),
+    };
+
+    let error = adapter
+        .fetch_object_with_budget::<serde_json::Value>("/rate_limit", Some(budget))
+        .expect_err("expired aggregate budget must fail closed before curl spawn");
+
+    assert!(error.to_string().contains("aggregate deadline"));
+    assert!(
+        !marker.exists(),
+        "curl must not run after aggregate deadline"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -1117,6 +1392,51 @@ esac
     let log = fs::read_to_string(&log_path).expect("curl log should be readable");
     assert!(log.contains("page=1"));
     assert!(log.contains("page=2"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn fetch_paginated_array_fails_closed_when_every_allowed_page_is_full() {
+    let root = unique_temp_dir("review-poller-pagination-budget");
+    fs::create_dir_all(&root).expect("fixture root should be created");
+    let full_page = (1..=100)
+        .map(|number| format!(r#"{{ "number": {number} }}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(root.join("full-page.json"), format!("[{full_page}]"))
+        .expect("full page fixture should be written");
+    let log_path = root.join("curl.log");
+    let script = write_executable_script(
+        &root,
+        "fake-curl",
+        &format!(
+            r#"#!/bin/sh
+set -eu
+cat >/dev/null
+last=""
+for arg in "$@"; do
+  last="$arg"
+done
+printf '%s\n' "$last" >> "{log}"
+cat "{root}/full-page.json"
+"#,
+            log = log_path.display(),
+            root = root.display()
+        ),
+    );
+    let adapter = fake_adapter(&script);
+
+    let error = adapter
+        .fetch_paginated_array::<PullRequestLocatorResponse>("/repos/acme/widgets/pulls")
+        .expect_err("an exact-full-page stream must fail instead of returning a partial snapshot");
+
+    assert!(error.to_string().contains("pagination remained full"));
+    assert!(error.to_string().contains("refusing an incomplete"));
+    let request_count = fs::read_to_string(&log_path)
+        .expect("curl log should be readable")
+        .lines()
+        .count();
+    assert_eq!(request_count, super::MAX_PAGINATED_PAGES);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -1305,15 +1625,16 @@ fn write_executable_script(root: &Path, name: &str, body: &str) -> PathBuf {
 fn fake_adapter(curl_path: &Path) -> GithubReviewPollerAdapter {
     GithubReviewPollerAdapter {
         curl_path: curl_path.display().to_string(),
+        curl_resolution_error: None,
         api_base_url: "https://api.test".to_string(),
         user_agent: "akra-test".to_string(),
         token: "secret-token".to_string(),
+        subprocess_timeout: std::time::Duration::from_secs(1),
     }
 }
 
 fn env_lock() -> &'static Mutex<()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    &LOCK
+    crate::test_utils::process_environment_mutex()
 }
 
 struct EnvVarGuard {
@@ -1346,36 +1667,6 @@ impl Drop for EnvVarGuard {
                     Some(value) => std::env::set_var(key, value),
                     None => std::env::remove_var(key),
                 }
-            }
-        }
-    }
-}
-
-struct PathEnvGuard {
-    previous: Option<std::ffi::OsString>,
-}
-
-impl PathEnvGuard {
-    fn prepend(directory: &Path) -> Self {
-        let previous = std::env::var_os("PATH");
-        let mut paths = vec![directory.to_path_buf()];
-        if let Some(path) = &previous {
-            paths.extend(std::env::split_paths(path));
-        }
-        let joined_path = std::env::join_paths(paths).expect("test PATH should join");
-        unsafe {
-            std::env::set_var("PATH", joined_path);
-        }
-        Self { previous }
-    }
-}
-
-impl Drop for PathEnvGuard {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.previous {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
             }
         }
     }

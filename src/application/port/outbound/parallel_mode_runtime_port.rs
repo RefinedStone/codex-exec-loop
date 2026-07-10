@@ -3,6 +3,44 @@
 // 흩뿌리지 않고, filesystem 의미가 있는 값은 처음부터 path 타입으로 전달한다.
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelWorkerCommitDisposition {
+    Created,
+    Existing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelWorkerCommitOutcome {
+    pub commit_sha: String,
+    pub disposition: ParallelWorkerCommitDisposition,
+}
+
+impl ParallelWorkerCommitOutcome {
+    pub fn created(commit_sha: impl Into<String>) -> Self {
+        Self {
+            commit_sha: commit_sha.into(),
+            disposition: ParallelWorkerCommitDisposition::Created,
+        }
+    }
+
+    pub fn existing(commit_sha: impl Into<String>) -> Self {
+        Self {
+            commit_sha: commit_sha.into(),
+            disposition: ParallelWorkerCommitDisposition::Existing,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelWorkerCommitRequest<'a> {
+    pub workspace_directory: &'a str,
+    pub expected_branch_name: &'a str,
+    pub expected_base_commit_sha: &'a str,
+    pub expected_head_commit_sha: &'a str,
+    pub commit_message: &'a str,
+    pub commit_timestamp: &'a str,
+}
+
 // `ParallelModeRuntimePort`는 parallel mode application service가 OS, git, gh, filesystem에
 // 닿는 작은 capability를 묶은 runtime boundary이다. pool/readiness/distributor/slot lifecycle은
 // 이 trait만 보고 실행 환경을 관찰하거나 파일을 수정하므로, 테스트에서는 fake runtime으로 command
@@ -54,6 +92,16 @@ pub trait ParallelModeRuntimePort: Send + Sync {
     // polling은 gh auth가 없으면 진행할 수 없으므로 readiness가 이 primitive를 사용한다.
     fn gh_auth_status(&self, repo_root: Option<&str>) -> bool;
 
+    // A parallel model session runs without Git metadata write access. After a clean
+    // TurnCompleted event, the host owns the bounded local-only staging and commit step.
+    // Runtime adapters must fail closed unless they implement the full guarded operation.
+    fn prepare_parallel_worker_commit(
+        &self,
+        _request: ParallelWorkerCommitRequest<'_>,
+    ) -> Result<ParallelWorkerCommitOutcome, String> {
+        Err("host-owned parallel worker commit is unavailable in this runtime".to_string())
+    }
+
     // audit/log/lease timestamp에 쓸 현재 시간을 runtime에서 제공한다. 테스트 fake는 deterministic
     // timestamp를 돌려 snapshot과 persisted lease fixture를 안정화할 수 있다.
     fn current_timestamp(&self) -> String;
@@ -73,19 +121,76 @@ pub trait ParallelModeRuntimePort: Send + Sync {
     // `std::io::Result`를 그대로 보존한다.
     fn ensure_directory_exists(&self, path: &Path) -> std::io::Result<()>;
 
-    // directory entries를 path 목록으로 읽는다. pool board/reconcile은 이 목록을 domain slot 상태로 매핑한다.
-    fn read_dir_paths(&self, path: &Path) -> std::io::Result<Vec<PathBuf>>;
+    // Pool-local runtime mirrors are security-sensitive host metadata. The adapter must anchor
+    // every relative path beneath the pinned pool root, reject links and shared objects, and
+    // install a complete private file atomically. Callers never construct temporary paths.
+    fn write_runtime_mirror_atomic(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+        body: &str,
+    ) -> std::io::Result<()>;
 
-    // lease/session detail 같은 UTF-8 text 파일을 읽는다.
-    fn read_to_string(&self, path: &Path) -> std::io::Result<String>;
+    // Reads use the same pinned-root and object-identity checks as writes. A missing mirror is
+    // represented explicitly; malformed or unsafe filesystem objects remain errors.
+    fn read_runtime_mirror_optional(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+    ) -> std::io::Result<Option<String>>;
 
-    // lease/session detail text 파일을 쓴다. atomic write가 필요한 caller는 임시 파일과 rename을 조합한다.
-    fn write_string(&self, path: &Path, body: &str) -> std::io::Result<()>;
+    // Queue recovery needs a bounded snapshot of one private mirror directory. Returned paths
+    // are relative to that directory so no absolute attacker-controlled path crosses the port.
+    fn read_runtime_mirror_directory(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+    ) -> std::io::Result<Vec<(PathBuf, String)>>;
 
-    // temporary file을 최종 path로 교체하거나 slot marker를 이동할 때 사용하는 filesystem rename이다.
-    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    // Removal is idempotent for a missing mirror and never follows the leaf or any ancestor.
+    fn remove_runtime_mirror_file(&self, pool_root: &Path, relative: &Path) -> std::io::Result<()>;
 
-    // stale lease나 임시 파일을 삭제한다. 삭제 실패는 cleanup/reconcile 정책에서 판단해야 하므로
-    // io error를 숨기지 않는다.
-    fn remove_file(&self, path: &Path) -> std::io::Result<()>;
+    // Lease cleanup may remove a missing mirror or the exact serialized generation it observed,
+    // but must preserve a replacement body installed for a newer slot lease.
+    fn remove_runtime_mirror_file_if_matches(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+        _expected_body: &str,
+    ) -> std::io::Result<bool> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "runtime mirror compare-and-delete is unavailable",
+        ))
+    }
+
+    // Recovery may recreate a missing non-authoritative mirror or advance the exact stale body it
+    // observed. The adapter must perform the optional-body comparison and replacement atomically.
+    fn compare_and_swap_runtime_mirror_file(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+        _expected_body: Option<&str>,
+        _replacement_body: Option<&str>,
+    ) -> std::io::Result<bool> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "runtime mirror optional compare-and-swap is unavailable",
+        ))
+    }
+
+    // Lifecycle rollback may restore the previous serialized snapshot only when the mirror still
+    // contains the exact next snapshot written by that transition.
+    fn replace_runtime_mirror_file_if_matches(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+        _expected_body: &str,
+        _replacement_body: &str,
+    ) -> std::io::Result<bool> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "runtime mirror compare-and-replace is unavailable",
+        ))
+    }
 }

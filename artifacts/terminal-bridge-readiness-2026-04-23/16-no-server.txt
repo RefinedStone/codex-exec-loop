@@ -1,2 +1,2 @@
-+ tmux -L akra-readiness-20260423 -f /dev/null list-sessions
++ tmux -L <socket> -f /dev/null list-sessions
 server exited unexpectedly

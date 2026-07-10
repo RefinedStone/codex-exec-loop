@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
 
-const CONFIG_RELATIVE_PATH: &[&str] = &[".akra", "parallel-agent-profiles.json"];
+use crate::application::port::outbound::parallel_agent_profile_repository_port::ParallelAgentProfileRepositoryPort;
+
 const AVATAR_CLASSES: &[&str] = &[
     "Artificer",
     "Scribe",
@@ -122,8 +123,10 @@ impl ParallelAgentProfileConfig {
     }
 
     pub fn enabled_profiles(&self) -> Vec<ParallelAgentProfile> {
-        self.validated()
-            .unwrap_or_default()
+        let Ok(config) = self.validated() else {
+            return Vec::new();
+        };
+        config
             .profiles
             .into_iter()
             .filter(|profile| profile.enabled)
@@ -147,7 +150,12 @@ impl ParallelAgentProfileConfig {
     }
 
     pub fn to_pretty_json(&self) -> String {
-        serde_json::to_string_pretty(&self.validated().unwrap_or_default())
+        self.validated()
+            .and_then(|config| {
+                serde_json::to_string_pretty(&config).map_err(|error| {
+                    format!("failed to serialize parallel agent profiles: {error}")
+                })
+            })
             .unwrap_or_else(|_| "{}".to_string())
     }
 }
@@ -160,32 +168,39 @@ pub fn parse_parallel_agent_profile_config_json(
     config.validated()
 }
 
-pub fn load_parallel_agent_profile_config(
-    workspace_dir: &str,
-) -> Result<ParallelAgentProfileConfig, String> {
-    let path = config_path(workspace_dir);
-    if !path.exists() {
-        return Ok(ParallelAgentProfileConfig::default());
-    }
-    let body = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read parallel agent profiles: {error}"))?;
-    parse_parallel_agent_profile_config_json(&body)
+#[derive(Clone)]
+pub struct ParallelAgentProfileService {
+    repository: Arc<dyn ParallelAgentProfileRepositoryPort>,
 }
 
-pub fn save_parallel_agent_profile_config(
-    workspace_dir: &str,
-    config: &ParallelAgentProfileConfig,
-) -> Result<(), String> {
-    let config = config.validated()?;
-    let path = config_path(workspace_dir);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create parallel agent profile dir: {error}"))?;
+impl ParallelAgentProfileService {
+    pub fn new(repository: Arc<dyn ParallelAgentProfileRepositoryPort>) -> Self {
+        Self { repository }
     }
-    let body = serde_json::to_string_pretty(&config)
-        .map_err(|error| format!("failed to serialize parallel agent profiles: {error}"))?;
-    fs::write(&path, format!("{body}\n"))
-        .map_err(|error| format!("failed to write parallel agent profiles: {error}"))
+
+    pub fn load_config(&self, workspace_dir: &str) -> Result<ParallelAgentProfileConfig, String> {
+        let Some(body) = self
+            .repository
+            .load_profile_config_json(workspace_dir)
+            .map_err(|error| format!("failed to read parallel agent profiles: {error:#}"))?
+        else {
+            return Ok(ParallelAgentProfileConfig::default());
+        };
+        parse_parallel_agent_profile_config_json(&body)
+    }
+
+    pub fn save_config(
+        &self,
+        workspace_dir: &str,
+        config: &ParallelAgentProfileConfig,
+    ) -> Result<(), String> {
+        let config = config.validated()?;
+        let body = serde_json::to_string_pretty(&config)
+            .map_err(|error| format!("failed to serialize parallel agent profiles: {error}"))?;
+        self.repository
+            .save_profile_config_json(workspace_dir, &format!("{body}\n"))
+            .map_err(|error| format!("failed to write parallel agent profiles: {error:#}"))
+    }
 }
 
 fn default_agent_profiles() -> Vec<ParallelAgentProfile> {
@@ -230,40 +245,41 @@ fn is_stable_agent_id(value: &str) -> bool {
         .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
 }
 
-fn config_path(workspace_dir: &str) -> PathBuf {
-    let mut path = Path::new(workspace_dir).to_path_buf();
-    for segment in CONFIG_RELATIVE_PATH {
-        path.push(segment);
-    }
-    path
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        ParallelAgentProfileConfig, load_parallel_agent_profile_config,
-        parse_parallel_agent_profile_config_json, save_parallel_agent_profile_config,
+        ParallelAgentProfileConfig, ParallelAgentProfileService,
+        parse_parallel_agent_profile_config_json,
     };
+    use crate::application::port::outbound::parallel_agent_profile_repository_port::ParallelAgentProfileRepositoryPort;
+    use anyhow::Result;
     use std::collections::BTreeSet;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{Arc, Mutex};
 
-    fn temp_workspace(label: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("akra-agent-profile-test-{label}-{unique}"));
-        fs::create_dir_all(&path).expect("temp workspace");
-        path
+    #[derive(Default)]
+    struct MemoryParallelAgentProfileRepository {
+        body: Mutex<Option<String>>,
+    }
+
+    impl ParallelAgentProfileRepositoryPort for MemoryParallelAgentProfileRepository {
+        fn load_profile_config_json(&self, _workspace_dir: &str) -> Result<Option<String>> {
+            Ok(self.body.lock().expect("memory profile lock").clone())
+        }
+
+        fn save_profile_config_json(&self, _workspace_dir: &str, body: &str) -> Result<()> {
+            *self.body.lock().expect("memory profile lock") = Some(body.to_string());
+            Ok(())
+        }
     }
 
     #[test]
     fn missing_profile_config_uses_default_agents() {
-        let temp = temp_workspace("missing");
+        let service = ParallelAgentProfileService::new(Arc::new(
+            MemoryParallelAgentProfileRepository::default(),
+        ));
 
-        let config = load_parallel_agent_profile_config(temp.to_str().unwrap())
+        let config = service
+            .load_config("workspace")
             .expect("missing config should load");
 
         assert!(config.profile_for_agent_id("agent-artificer").is_some());
@@ -271,15 +287,43 @@ mod tests {
     }
 
     #[test]
-    fn profile_config_round_trips_through_workspace_file() {
-        let temp = temp_workspace("round-trip");
-        let config = ParallelAgentProfileConfig::default();
+    fn legacy_profile_json_round_trips_through_repository_port() {
+        let repository = Arc::new(MemoryParallelAgentProfileRepository {
+            body: Mutex::new(Some(
+                r#"{
+                  "profiles": [
+                    {
+                      "agent_id": "legacy-agent",
+                      "display_name": "Legacy",
+                      "role": "Build",
+                      "persona_prompt": "Keep the legacy schema readable.",
+                      "avatar_class": "Artificer"
+                    }
+                  ]
+                }"#
+                .to_string(),
+            )),
+        });
+        let service = ParallelAgentProfileService::new(repository.clone());
 
-        save_parallel_agent_profile_config(temp.to_str().unwrap(), &config).expect("save config");
-        let loaded =
-            load_parallel_agent_profile_config(temp.to_str().unwrap()).expect("load config");
+        let loaded = service.load_config("workspace").expect("legacy config");
+        assert!(loaded.profiles[0].enabled);
+        assert!(loaded.profiles[0].capabilities.is_empty());
 
-        assert_eq!(loaded.enabled_profiles()[0].agent_id, "agent-artificer");
+        service
+            .save_config("workspace", &loaded)
+            .expect("save normalized config");
+        let reloaded = service.load_config("workspace").expect("reload config");
+
+        assert_eq!(reloaded, loaded);
+        assert!(
+            repository
+                .body
+                .lock()
+                .expect("memory profile lock")
+                .as_deref()
+                .is_some_and(|body| body.ends_with('\n'))
+        );
     }
 
     #[test]
@@ -307,5 +351,15 @@ mod tests {
         .expect_err("duplicate ids should fail");
 
         assert!(error.contains("duplicated"));
+    }
+
+    #[test]
+    fn invalid_in_memory_profiles_fail_closed_in_selection_and_rendering() {
+        let mut config = ParallelAgentProfileConfig::default();
+        config.profiles[1].agent_id = config.profiles[0].agent_id.clone();
+
+        assert!(config.enabled_profiles().is_empty());
+        assert!(config.select_available_profile(&BTreeSet::new()).is_none());
+        assert_eq!(config.to_pretty_json(), "{}");
     }
 }

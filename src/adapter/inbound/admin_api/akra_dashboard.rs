@@ -1,6 +1,6 @@
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::service::parallel_agent_profile::{
-    ParallelAgentProfileConfig, load_parallel_agent_profile_config,
+    ParallelAgentProfileConfig, ParallelAgentProfileService,
 };
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::PlanningAdminFacadeService;
@@ -14,7 +14,10 @@ use anyhow::Result;
 use chrono::Utc;
 use serde::Serialize;
 
+use crate::git_subprocess;
+
 const DASHBOARD_EVENT_LIMIT: usize = 20;
+const ADMIN_RUNTIME_MODE_LABEL: &str = "read-only projection";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +34,7 @@ pub(super) struct AkraAdminDashboardView {
     pub event_feed: EventFeedView,
     pub generated_at: String,
     pub generated_time_label: String,
-    pub automation_epoch: i64,
+    pub planning_revision: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,7 +146,7 @@ pub(super) struct SelectedTaskView {
     pub slot_id: String,
     pub branch_name: String,
     pub state: String,
-    pub progress_percent: u8,
+    pub progress_percent: Option<u8>,
     pub validation_summary: String,
     pub latest_summary: String,
     pub updated_at: String,
@@ -278,6 +281,7 @@ pub(super) struct GuildMetricsView {
 pub(super) fn build_akra_dashboard_view(
     planning_admin: &PlanningAdminFacadeService,
     parallel_mode_control_plane: &ParallelModeControlPlaneComposition,
+    parallel_agent_profile_service: &ParallelAgentProfileService,
 ) -> Result<AkraAdminDashboardView> {
     let workspace_dir = planning_admin.workspace_dir();
     let planning_projection = planning_admin.load_runtime_application_projection()?;
@@ -289,14 +293,15 @@ pub(super) fn build_akra_dashboard_view(
     let readiness = snapshot.readiness;
     let supervisor = snapshot.supervisor;
     let events = snapshot.events;
-    let agent_profiles =
-        load_parallel_agent_profile_config(workspace_dir).map_err(anyhow::Error::msg)?;
+    let agent_profiles = parallel_agent_profile_service
+        .load_config(workspace_dir)
+        .map_err(anyhow::Error::msg)?;
 
     let pool = map_pool(&supervisor);
     let agents = map_agents(&supervisor, &agent_profiles);
     let selected_task = map_selected_task(&supervisor);
     let distributor = map_distributor(&supervisor);
-    let automation_epoch = events
+    let planning_revision = events
         .entries
         .first()
         .map(|entry| entry.observed_planning_revision)
@@ -324,7 +329,7 @@ pub(super) fn build_akra_dashboard_view(
         workspace: AkraWorkspaceView {
             path: supervisor.workspace_path.clone(),
             branch: current_git_branch(workspace_dir),
-            mode: "parallel".to_string(),
+            mode: ADMIN_RUNTIME_MODE_LABEL.to_string(),
             readiness: readiness_label,
             readiness_notice: readiness_notice(&readiness).to_string(),
             blocked_action: blocked_action(&readiness, &pool).to_string(),
@@ -364,7 +369,7 @@ pub(super) fn build_akra_dashboard_view(
         event_feed,
         generated_at: generated_at.to_rfc3339(),
         generated_time_label: generated_at.format("%H:%M:%S").to_string(),
-        automation_epoch,
+        planning_revision,
     })
 }
 
@@ -481,7 +486,7 @@ fn map_selected_task(supervisor: &ParallelModeSupervisorSnapshot) -> Option<Sele
         slot_id: session.slot_id.clone(),
         branch_name: session.branch_name.clone(),
         state: session.state_label.clone(),
-        progress_percent: progress_percent(session.state_label.as_str()),
+        progress_percent: None,
         validation_summary: session.validation_summary.clone(),
         latest_summary: session.latest_summary.clone(),
         updated_at: session.updated_at.clone(),
@@ -672,7 +677,6 @@ fn map_campaign(
 }
 
 fn map_campaign_lane(agent: &AgentView) -> CampaignLaneView {
-    let progress = progress_percent(agent.lifecycle_state.as_str());
     CampaignLaneView {
         agent_id: agent.agent_id.clone(),
         slot_id: agent.slot_id.clone(),
@@ -682,7 +686,7 @@ fn map_campaign_lane(agent: &AgentView) -> CampaignLaneView {
         progress_label: agent.progress_label.clone(),
         summary: agent.latest_summary.clone(),
         severity: agent_status_severity(agent.status.as_str()).to_string(),
-        score_label: format!("stage {progress}/100"),
+        score_label: "stage 미집계".to_string(),
     }
 }
 
@@ -708,7 +712,7 @@ fn map_campaign_attempts(
                 timestamp: entry.timestamp.clone(),
                 summary: entry.summary.clone(),
                 severity: lifecycle_severity(entry.state_label.as_str()).to_string(),
-                score_label: format!("stage {}/100", progress_percent(entry.state_label.as_str())),
+                score_label: "stage 미집계".to_string(),
             })
             .collect();
         return (total, attempts);
@@ -1098,22 +1102,8 @@ fn agent_class_label(index: usize) -> &'static str {
     }
 }
 
-fn progress_label(state_label: &str) -> String {
-    format!("{}%", progress_percent(state_label))
-}
-
-fn progress_percent(state_label: &str) -> u8 {
-    match state_label {
-        "assigned" => 15,
-        "starting" => 25,
-        "running" => 45,
-        "reported_complete" => 65,
-        "ledger_refreshing" | "commit_ready" => 75,
-        "merge_queued" | "pushing" | "pr_pending" | "merge_pending" | "integrating" => 88,
-        "cleanup_pending" | "done" => 100,
-        "failed" | "official_refresh_recovery_needed" => 35,
-        _ => 10,
-    }
+fn progress_label(_state_label: &str) -> String {
+    "미집계".to_string()
 }
 
 fn event_icon(event_kind: &str) -> &'static str {
@@ -1140,10 +1130,8 @@ fn event_severity(event_kind: &str) -> &'static str {
 }
 
 fn current_git_branch(workspace_dir: &str) -> Option<String> {
-    std::process::Command::new("git")
-        .args(["-C", workspace_dir, "branch", "--show-current"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
+    let mut command = git_subprocess::command(["-C", workspace_dir, "branch", "--show-current"]);
+    crate::subprocess::command_output(&mut command, "git branch --show-current")
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
@@ -1164,6 +1152,11 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn admin_mode_label_does_not_claim_the_separate_tui_runtime_is_enabled() {
+        assert_eq!(ADMIN_RUNTIME_MODE_LABEL, "read-only projection");
+    }
 
     fn temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -1414,14 +1407,14 @@ mod tests {
         assert_eq!(agents.entries[0].display_name, "Alpha");
         assert_eq!(agents.entries[0].class_label, "Seer");
         assert_eq!(agents.entries[0].role_label, "Builder");
-        assert_eq!(agents.entries[0].progress_label, "75%");
+        assert_eq!(agents.entries[0].progress_label, "미집계");
         assert_eq!(agents.entries[0].bubble_label, "공식 승인");
         assert_eq!(agents.entries[1].display_name, "A02");
         assert_eq!(agents.entries[1].class_label, "Scribe");
         assert!(agents.entries[1].overload);
 
         assert_eq!(selected_task.task_id, "task-1");
-        assert_eq!(selected_task.progress_percent, 75);
+        assert_eq!(selected_task.progress_percent, None);
         assert_eq!(
             selected_task.trail,
             vec![
@@ -1461,7 +1454,7 @@ mod tests {
         assert_eq!(campaign.visible_attempt_count, 3);
         assert_eq!(campaign.signal_count, 9);
         assert!(campaign.summary.contains("2개 병렬 시도 진행 중"));
-        assert_eq!(campaign.lane_cards[0].score_label, "stage 75/100");
+        assert_eq!(campaign.lane_cards[0].score_label, "stage 미집계");
         assert_eq!(campaign.attempts[0].label, "시도 #3");
         assert_eq!(campaign.attempts[0].severity, "success");
         assert_eq!(campaign.intel_cards[0].severity, "danger");
@@ -1529,12 +1522,7 @@ mod tests {
         assert_eq!(agent_bubble("cleanup_pending"), "정리중");
         assert_eq!(agent_bubble("unknown"), "대기중");
 
-        assert_eq!(progress_percent("assigned"), 15);
-        assert_eq!(progress_percent("starting"), 25);
-        assert_eq!(progress_percent("cleanup_pending"), 100);
-        assert_eq!(progress_percent("failed"), 35);
-        assert_eq!(progress_percent("unknown"), 10);
-        assert_eq!(progress_label("running"), "45%");
+        assert_eq!(progress_label("running"), "미집계");
 
         assert_eq!(lifecycle_severity("failed"), "danger");
         assert_eq!(lifecycle_severity("integrating"), "warning");

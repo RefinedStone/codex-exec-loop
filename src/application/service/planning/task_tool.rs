@@ -492,6 +492,7 @@ mod tests {
             PlanningDirectionAuthorityCommit {
                 observed_planning_revision: None,
                 directions: &directions(),
+                authority_mutation_owner_token: None,
             },
         )
         .unwrap();

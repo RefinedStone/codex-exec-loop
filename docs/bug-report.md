@@ -2,6 +2,38 @@
 
 This document records a directory-by-directory audit of usage pitfalls, bugs, and logic gaps. Each section is completed after inspecting one directory only.
 
+## Current Revalidation
+
+Revalidated against `fix/native-platform-security-flow-hardening` on 2026-07-10. The detailed
+finding bodies below preserve the 2026-06 audit evidence and are not a statement that every issue
+is still present.
+
+| Current status | Finding IDs | Notes |
+| --- | --- | --- |
+| Resolved | `NPM-002..003`, `SCRIPTS-001`, `SCRIPTS-002`, `SCRIPTS-004`, `SCHEMA-001..003`, `TEMPLATES-001..003` | Concise npm failures, explicit platform docs, fail-closed script parsing/cleanup, schema bounds/provenance/formatting, offline admin assets, neutral health copy, and encoded draft routes are covered. |
+| Resolved | `GITHUB-001..004`, `TESTS-001..002`, `DOCS-003` | Required Node/admin checks, stable-only tags, authenticated npm-first release ordering with provenance, immutable npm/GitHub artifact verification, LF workflow policy, bounded npm wrapper signal escalation, and matching release docs are present. |
+| Resolved | `EXAMPLES-001..003`, `CODEX-LOOP-003`, `GEMINI-001..003` | Bundled bilingual prompt usage, repository/remote-write guardrails, DB authority follow-up guidance, and the shared Gemini/AGENTS delivery contract are present. |
+| Resolved | `DOCS-002`, `SRC-002..003` | Validation blocker status is surfaced; PR content uses private files/redacted labels and GitHub credential subprocesses use bounded waits. |
+| Resolved | `TESTS-003` | Crate-local dependency paths are collected from the Rust AST, test-only modules are excluded structurally, and non-path debt scans remove comments and literals before matching. |
+| Resolved | `ASSETS-002..003`, `ARTIFACTS-001..003`, `TMP-001..003` | Unused graphics and the scratch screenshot are removed; runtime graphics have one checked manifest; historical captures have provenance, a file manifest, sanitized identifiers, and plain-text escape tokens; `tmp/` is ignored and guarded. |
+| Security revalidation: resolved | `SECURITY-001..003` | App-server defaults to `on-request`/`workspace-write`; the main TUI provides bounded one-shot approvals while unattended workers decline; the child process environment is scrubbed unless exact `AKRA_APP_SERVER_PROCESS_ENVIRONMENT=all` is set, while exact `AKRA_APP_SERVER_API_KEY_AUTH=1` forwards only the two supported API-key variables; prompt logs and redacted traces are opt-in, bounded, and stored through private paths. |
+| Security revalidation: resolved | `SECURITY-004..006` | Admin requires a capability, an unpredictable exact `.localhost` Host, rejection of nonmatching Origin/Referer, and bounded sessions; integration branch/push remote are configurable; public and relaxed autonomous delivery require parent-process opt-ins; frozen remote, tracking, review-SHA, source-range, and integration proofs fail closed on drift. |
+| Security revalidation: resolved | `SECURITY-007..009` | A no-clobber Git common-dir incarnation shares authority across one repository's worktrees and moves while isolating same-path replacements; new Telegram and official refresh owners require process-start identity; continuation generation, automation epoch, protected-file CAS, and exact owner/order claim settlement linearize durable post-turn commits; hidden planning workers are read-only and locally interruptible; release bundles enforce exact `VERSION.txt` and complete `SHA256SUMS.txt` contracts. |
+| Security revalidation: resolved | `SECURITY-010` | Codex startup pins either a trusted native executable or a bounded supported npm launcher plus a separately pinned native Node interpreter. Native `git`, `gh`, `curl`, and `bash` are pinned for security-sensitive host/token operations; relative, hostile-first, repository/pool-controlled, unsafe-owner/ACL, arbitrary shell/batch, and unsupported interpreter paths fail closed. The embedded reviewed GitHub helper is delivered to pinned `bash --noprofile --norc -s --` over bounded stdin. |
+| Security revalidation: resolved | `SECURITY-011` | Disabled prompt capture invokes an all-row plus metadata clear on every production composition startup with authority-store `secure_delete=ON`; cleanup failure is warned and does not silently enable capture. Enabled capture alone retains at most 100 interactions for seven days, with bounded item/body capture. This is a local-at-rest retention boundary, not same-UID process isolation. |
+| Security revalidation: resolved | `SECURITY-012` | Pool mutations share a persistent repository-scoped OS lock under the private pinned root and revalidate lock/root identity. New slot leases use OS CSPRNG-backed exact 64-character lowercase hexadecimal generations; lease/session/lifecycle/distributor/cleanup writes use exact-generation CAS and event fencing. A lock-only first initialization stays fresh; missing/stale same-generation Unix mirrors are CAS-installed and rollback restores the exact observed body. Windows uses SQLite authority only. |
+| Security revalidation: resolved | `SECURITY-013` | Effective repository-local/worktree executable Git config keys are audited with bounded NUL-delimited name-only reads before host-owned worktree, checkout, reset, cherry-pick, and commit mutations. Filter, merge/diff/textconv, alternate-ref, unsafe worktree redirection, archive, mergetool, and difftool command surfaces block without evaluating or reporting values; verified normal submodule worktree metadata remains supported. Remote delivery uses a frozen credential-free HTTPS target and an owner-private isolated Git config/object/network context. |
+| Security revalidation: resolved | `SECURITY-014` | Interactive approval accepts only explicit `Y`; `Enter` is inert. The receipt deadline, timeout, interrupt, disconnect, bounded-channel saturation, malformed payload, and unattended surface all fail closed, with deadline/interrupt rechecked immediately before an accept response. |
+| Security revalidation: resolved | `SECURITY-015` | GitHub credentials come only from explicit token variables or trusted `gh auth token`; the removed legacy scan flag fails closed and repository/global credential helpers or credential files are not read. Review HTTP work has aggregate deadline, pagination, item, byte, response-file, HTTPS, and no-redirect bounds. Hostile executable tests inject an explicit PATH into the resolver instead of mutating the test process, and the default-parallel 2,098-test library run is green. |
+| Security residuals | `SECURITY-LIMITS` | Same-UID adversarial races still require OS isolation; Linux marker-clearing full daemonization requires cgroup/PID-namespace containment and macOS is process-group-only; `process-environment=all` is intentionally high risk; server-side tag protection closes the remaining release tag race, and npm publication is irreversible. Linux local aggregate validation is complete. Native Windows/macOS validation and the real-terminal `0/4` matrix remain separate gates: Linux/pure parser tests and cross-compilation do not close them. |
+| Open: measured validation | `DOCS-001` | The terminal baseline remains `0/4` required passes. Only real terminal captures can close it. |
+| Publication-time gate | `DOCS-004` | The old metrics are explicitly archival and metric-bearing draft prose was removed. A fresh, dated command result is still mandatory immediately before publication. |
+
+`SECURITY-001..015` and `SECURITY-LIMITS` are identifiers for the 2026-07 revalidation only. They do
+not rewrite or renumber the preserved 2026-06 finding bodies below. Local Linux aggregate tests,
+lint, Node/admin validation, and dependency audit are complete; supported-host, real-terminal, and
+PR CI evidence remain independent gates.
+
 ## Progress
 
 | Directory | Status | Completed at | Notes |
@@ -667,6 +699,14 @@ bash scripts/validate_native_release_version.sh --tag 1.3.3
 - Evidence scans: `rg -n "Command::new|gh|draft_name|csrf|token|wait_with_output|\\.output\\(" src`.
 - Line evidence captured with `nl -ba` for the files cited below.
 - The audit did not inspect other top-level directories in this pass.
+
+Current revalidation note: the `SRC-002..003` evidence and test-gap text below is the preserved
+2026-06 snapshot. The named branch no longer executes the tracked `scripts/gh-akra.sh` path or sends
+PR bodies in argv; it streams the embedded reviewed helper to pinned native Bash over bounded stdin.
+Production review credential discovery no longer invokes repository `credential.helper`, and pinned
+native `gh`/`curl` calls use the shared bounded subprocess and minimal trusted environment. The
+current implementation status is summarized by `SECURITY-010` and remains aggregate-validation
+pending as stated above.
 
 ### Findings
 

@@ -8,16 +8,19 @@ use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptLogPort,
     AppServerPromptOutputRecord,
 };
+use crate::application::port::outbound::github_automation_port::GithubRepositoryVisibility;
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::{
     ParallelModeRuntimeEventLogPort, ParallelModeRuntimeEventLogRequest,
 };
 use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDistributorDeliveryTarget,
     PlanningAuthorityDistributorQueueRecord, PlanningAuthorityDocumentCommit,
     PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityOfficialRefreshRecoveryStatus,
     PlanningAuthorityPort,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
+    PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
@@ -25,6 +28,9 @@ use crate::application::port::outbound::planning_workspace_port::{
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
+};
+use crate::application::port::outbound::telegram_update_ledger_port::{
+    TelegramRunnerLeaseClaimDecision, TelegramUpdateLedgerPort,
 };
 use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
 use crate::domain::parallel_mode::{
@@ -37,14 +43,28 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
-    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
-    QueueIdlePolicy, TaskActor, TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance,
-    TaskStatus,
+    PlanningAuthorityLocation, PriorityQueueProjection, PriorityQueueSkippedTask,
+    PriorityQueueTask, QueueIdleConfig, QueueIdlePolicy, TaskActor, TaskAuthorityDocument,
+    TaskDefinition, TaskMutationProvenance, TaskStatus,
 };
+use chrono::Utc;
+use rusqlite::OptionalExtension;
+use std::sync::{Arc, Barrier};
 
 use super::{
-    DISTRIBUTOR_QUEUE_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY, open_authority_connection,
+    ADMIN_FILE_SYNC_CLAIM_KIND, ADMIN_TASK_MUTATION_CLAIM_KIND, DISTRIBUTOR_QUEUE_CLAIM_KIND,
+    OFFICIAL_REFRESH_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY, open_authority_connection,
     task_authority_rows::replace_task_authority_tables,
+};
+#[cfg(windows)]
+use super::{
+    WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT, WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ,
+    WINDOWS_GENERIC_WRITE, WINDOWS_READ_CONTROL, WINDOWS_WRITE_DAC,
+};
+#[cfg(any(unix, windows))]
+use super::{
+    authority_store_sidecar_path, prepare_private_authority_sidecar_files,
+    secure_opened_private_authority_sidecar_file,
 };
 
 // 테스트마다 SQLite namespace를 분리하는 workspace directory를 만든다. adapter가 workspace path를
@@ -62,6 +82,20 @@ fn temp_workspace(prefix: &str) -> String {
     // 실패는 테스트 환경 문제이므로 expect로 즉시 드러낸다.
     std::fs::create_dir_all(&path).expect("workspace should create");
     path.display().to_string()
+}
+
+#[cfg(any(unix, windows))]
+fn authority_location_for_store(store_path: &std::path::Path) -> PlanningAuthorityLocation {
+    let runtime_dir = store_path
+        .parent()
+        .expect("test authority store should have a runtime parent");
+    PlanningAuthorityLocation {
+        workspace_root: runtime_dir.display().to_string(),
+        canonical_repo_root: runtime_dir.display().to_string(),
+        repository_identity: runtime_dir.display().to_string(),
+        runtime_dir: runtime_dir.display().to_string(),
+        authority_store_path: store_path.display().to_string(),
+    }
 }
 fn run_git_command(repo_root: &std::path::Path, args: &[&str]) {
     let output = std::process::Command::new("git")
@@ -114,11 +148,639 @@ fn temp_git_repo_with_linked_worktree(prefix: &str) -> (String, String) {
     )
 }
 
+fn seed_git_checkout(repo_root: &std::path::Path) {
+    std::fs::create_dir_all(repo_root).expect("seed checkout should create");
+    run_git_command(repo_root, &["init", "-b", "prerelease"]);
+    run_git_command(repo_root, &["config", "user.name", "Akra Test"]);
+    run_git_command(
+        repo_root,
+        &["config", "user.email", "akra-test@example.com"],
+    );
+    std::fs::write(repo_root.join("README.md"), "seed\n").expect("seed file should write");
+    run_git_command(repo_root, &["add", "README.md"]);
+    run_git_command(repo_root, &["commit", "-m", "seed repo"]);
+}
+
+fn sibling_bare_backed_worktrees(prefix: &str) -> (String, String, String, String) {
+    let fixture_root = std::path::PathBuf::from(temp_workspace(prefix));
+    let seed = fixture_root.join("seed");
+    seed_git_checkout(&seed);
+
+    let mut worktrees = Vec::new();
+    for label in ["a", "b"] {
+        let bare_repo = fixture_root.join(format!("repo-{label}.git"));
+        run_git_command(
+            &fixture_root,
+            &[
+                "clone",
+                "--bare",
+                seed.to_string_lossy().as_ref(),
+                bare_repo.to_string_lossy().as_ref(),
+            ],
+        );
+        let worktree = fixture_root.join(format!("bare-worktree-{label}"));
+        run_git_command(
+            &bare_repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &format!("feature/bare-{label}"),
+                worktree.to_string_lossy().as_ref(),
+                "prerelease",
+            ],
+        );
+        let sibling_worktree = fixture_root.join(format!("bare-worktree-{label}-sibling"));
+        run_git_command(
+            &bare_repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &format!("feature/bare-{label}-sibling"),
+                sibling_worktree.to_string_lossy().as_ref(),
+                "prerelease",
+            ],
+        );
+        worktrees.push((
+            worktree.display().to_string(),
+            sibling_worktree.display().to_string(),
+        ));
+    }
+    let (workspace_a, sibling_a) = worktrees.remove(0);
+    let (workspace_b, sibling_b) = worktrees.remove(0);
+    (workspace_a, sibling_a, workspace_b, sibling_b)
+}
+
+fn sibling_separate_git_dir_worktrees(prefix: &str) -> (String, String, String, String) {
+    let fixture_root = std::path::PathBuf::from(temp_workspace(prefix));
+    let mut worktrees = Vec::new();
+    for label in ["a", "b"] {
+        let checkout = fixture_root.join(format!("checkout-{label}"));
+        let git_dir = fixture_root.join(format!("metadata-{label}.git"));
+        std::fs::create_dir_all(&checkout).expect("separate-git-dir checkout should create");
+        run_git_command(
+            &checkout,
+            &[
+                "init",
+                "-b",
+                "prerelease",
+                "--separate-git-dir",
+                git_dir.to_string_lossy().as_ref(),
+            ],
+        );
+        run_git_command(&checkout, &["config", "user.name", "Akra Test"]);
+        run_git_command(
+            &checkout,
+            &["config", "user.email", "akra-test@example.com"],
+        );
+        std::fs::write(checkout.join("README.md"), "seed\n")
+            .expect("separate checkout seed should write");
+        run_git_command(&checkout, &["add", "README.md"]);
+        run_git_command(&checkout, &["commit", "-m", "seed repo"]);
+
+        let worktree = fixture_root.join(format!("separate-worktree-{label}"));
+        run_git_command(
+            &checkout,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &format!("feature/separate-{label}"),
+                worktree.to_string_lossy().as_ref(),
+                "prerelease",
+            ],
+        );
+        worktrees.push((
+            checkout.display().to_string(),
+            worktree.display().to_string(),
+        ));
+    }
+    let (checkout_a, worktree_a) = worktrees.remove(0);
+    let (checkout_b, worktree_b) = worktrees.remove(0);
+    (checkout_a, worktree_a, checkout_b, worktree_b)
+}
+
+fn prompt_interaction_record(
+    workspace_dir: &str,
+    interaction_id: &str,
+) -> AppServerPromptInteractionRecord {
+    let completed_at = Utc::now().to_rfc3339();
+    AppServerPromptInteractionRecord {
+        sequence: 0,
+        interaction_id: interaction_id.to_string(),
+        session_kind: "main".to_string(),
+        operation: "turn".to_string(),
+        status: "completed".to_string(),
+        workspace_dir: workspace_dir.to_string(),
+        thread_id: Some("thread-isolation".to_string()),
+        turn_id: Some("turn-isolation".to_string()),
+        service_name: None,
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: Some("repository-private prompt".to_string()),
+        input_items: vec![AppServerPromptInputRecord::new(
+            "text",
+            "turn input",
+            "repository-private input",
+        )],
+        output_items: vec![AppServerPromptOutputRecord::new(
+            "output-isolation",
+            Some("final".to_string()),
+            "repository-private output",
+        )],
+        error_message: None,
+        started_at: completed_at.clone(),
+        completed_at,
+    }
+}
+
+fn assert_repository_authority_isolated(workspace_a: &str, workspace_b: &str) {
+    let location_a =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace_a)
+            .expect("repository A authority location should resolve");
+    let location_b =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace_b)
+            .expect("repository B authority location should resolve");
+    assert_ne!(
+        location_a.repository_identity,
+        location_b.repository_identity
+    );
+    assert_ne!(
+        location_a.authority_store_path, location_b.authority_store_path,
+        "different Git common dirs must never share an authority DB"
+    );
+
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+    adapter
+        .commit_task_authority_snapshot(
+            workspace_a,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &task_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("repository A task authority should persist");
+    SqlitePlanningAuthorityAdapter::stage_repo_scoped_draft_files(
+        workspace_a,
+        "private-draft",
+        &[PlanningDraftFileRecord {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            body: "repository A draft".to_string(),
+        }],
+    )
+    .expect("repository A draft should persist");
+    adapter
+        .append_app_server_prompt_interaction(
+            workspace_a,
+            prompt_interaction_record(workspace_a, "repository-a-prompt"),
+        )
+        .expect("repository A prompt should persist");
+    assert_eq!(
+        adapter
+            .try_acquire_runner_lease(workspace_a, "bot-id:repository-isolation", "runner-a", 300)
+            .expect("repository A Telegram lease should acquire"),
+        TelegramRunnerLeaseClaimDecision::Acquired
+    );
+
+    assert!(
+        adapter
+            .load_task_authority_snapshot(workspace_b)
+            .expect("repository B task authority should inspect")
+            .is_none(),
+        "task data must not cross repository identities"
+    );
+    assert!(
+        SqlitePlanningAuthorityAdapter::load_repo_scoped_draft_files(workspace_b, "private-draft",)
+            .is_err(),
+        "draft data must not cross repository identities"
+    );
+    assert!(
+        adapter
+            .load_recent_app_server_prompt_interactions(workspace_b, 10)
+            .expect("repository B prompt log should inspect")
+            .records
+            .is_empty(),
+        "prompt data must not cross repository identities"
+    );
+    assert_eq!(
+        adapter
+            .try_acquire_runner_lease(workspace_b, "bot-id:repository-isolation", "runner-b", 300)
+            .expect("repository B Telegram lease should be independent"),
+        TelegramRunnerLeaseClaimDecision::Acquired,
+        "Telegram data must not cross repository identities"
+    );
+}
+
+fn assert_worktrees_share_repository_authority(workspace_a: &str, workspace_b: &str) {
+    let location_a =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace_a)
+            .expect("first worktree authority location should resolve");
+    let location_b =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace_b)
+            .expect("second worktree authority location should resolve");
+    assert_eq!(
+        location_a.repository_identity,
+        location_b.repository_identity
+    );
+    assert_eq!(
+        location_a.authority_store_path, location_b.authority_store_path,
+        "worktrees backed by one Git common dir must share one authority DB"
+    );
+}
+
 fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
     let location =
         SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace_dir)
             .expect("authority location should resolve");
     open_authority_connection(&location).expect("authority db should open")
+}
+
+#[test]
+fn authority_schema_migrates_v7_and_v8_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8] {
+        let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
+        let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+            &workspace_dir,
+        )
+        .expect("authority location should resolve");
+        let connection = open_authority_connection(&location).expect("current store should open");
+        let v8_objects = if legacy_version == 7 {
+            "DROP INDEX idx_telegram_update_inbox_stream_state_id;
+             DROP TABLE telegram_update_inbox;
+             DROP TABLE telegram_update_runner_leases;
+             DROP TABLE telegram_update_streams;
+             DROP TABLE retired_planning_tasks;"
+        } else {
+            ""
+        };
+        connection
+            .execute_batch(&format!(
+                "{v8_objects}
+                 DROP TABLE planning_file_sync_baselines;
+                 INSERT OR REPLACE INTO active_documents (relative_path, content)
+                 VALUES ('legacy.md', 'legacy body');
+                 UPDATE authority_metadata SET value = '{legacy_version}'
+                 WHERE key = 'schema_version';"
+            ))
+            .expect("legacy schema fixture should install");
+        drop(connection);
+
+        let migrated = open_authority_connection(&location).expect("legacy store should migrate");
+        let version: String = migrated
+            .query_row(
+                "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("migrated version should load");
+        assert_eq!(version, "9");
+        assert_eq!(
+            migrated
+                .query_row(
+                    "SELECT content FROM active_documents WHERE relative_path = 'legacy.md'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("legacy authority row should survive migration"),
+            "legacy body"
+        );
+        let expected_objects = if legacy_version == 7 {
+            vec![
+                ("table", "retired_planning_tasks"),
+                ("table", "telegram_update_streams"),
+                ("table", "telegram_update_runner_leases"),
+                ("table", "telegram_update_inbox"),
+                ("index", "idx_telegram_update_inbox_stream_state_id"),
+                ("table", "planning_file_sync_baselines"),
+            ]
+        } else {
+            vec![("table", "planning_file_sync_baselines")]
+        };
+        for (object_type, object_name) in expected_objects {
+            assert!(
+                migrated
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2",
+                        (object_type, object_name),
+                        |_| Ok(()),
+                    )
+                    .optional()
+                    .expect("migrated schema object should inspect")
+                    .is_some(),
+                "{object_type} `{object_name}` should be recreated from v{legacy_version}"
+            );
+        }
+    }
+
+    for unsupported_version in ["6", "10", "not-a-version"] {
+        let workspace_dir = temp_workspace("schema-reject-unsupported");
+        let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+            &workspace_dir,
+        )
+        .expect("authority location should resolve");
+        let connection = open_authority_connection(&location).expect("current store should open");
+        connection
+            .execute(
+                "UPDATE authority_metadata SET value = ?1 WHERE key = 'schema_version'",
+                [unsupported_version],
+            )
+            .expect("unsupported version fixture should install");
+        drop(connection);
+        let error = open_authority_connection(&location)
+            .expect_err("unsupported authority schema must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported authority-store schema version")
+        );
+    }
+
+    let workspace_dir = temp_workspace("schema-reject-missing-version");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    connection
+        .execute(
+            "DELETE FROM authority_metadata WHERE key = 'schema_version'",
+            [],
+        )
+        .expect("schema version should delete");
+    drop(connection);
+    let error =
+        open_authority_connection(&location).expect_err("missing schema marker must fail closed");
+    assert!(error.to_string().contains("schema version is missing"));
+}
+
+#[test]
+fn authority_store_rejects_foreign_mode_and_repository_bindings() {
+    for (metadata_key, foreign_value, expected_error) in [
+        ("mode", "foreign-store", "unsupported authority-store mode"),
+        (
+            "repository_identity",
+            "/foreign/repository.git",
+            "bound to a different repository identity",
+        ),
+    ] {
+        let workspace_dir = temp_workspace(&format!("foreign-binding-{metadata_key}"));
+        let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+            &workspace_dir,
+        )
+        .expect("authority location should resolve");
+        let connection = open_authority_connection(&location).expect("authority store should open");
+        connection
+            .execute(
+                "UPDATE authority_metadata SET value = ?2 WHERE key = ?1",
+                (metadata_key, foreign_value),
+            )
+            .expect("foreign authority marker should install");
+        drop(connection);
+
+        let error = open_authority_connection(&location)
+            .expect_err("a foreign authority identity must fail closed before schema mutation");
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected foreign marker error: {error:#}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_repository_migrates_legacy_canonical_root_binding_in_place() {
+    let (workspace_dir, _) = temp_git_repo_with_linked_worktree("legacy-repository-binding");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("ordinary repository location should resolve");
+    let connection = open_authority_connection(&location).expect("authority store should open");
+    connection
+        .execute(
+            "DELETE FROM authority_metadata WHERE key = 'repository_identity'",
+            [],
+        )
+        .expect("repository identity should be removed for legacy fixture");
+    drop(connection);
+
+    let reopened = open_authority_connection(&location)
+        .expect("legacy canonical-root binding should migrate in place");
+    assert_eq!(
+        reopened
+            .query_row(
+                "SELECT value FROM authority_metadata WHERE key = 'repository_identity'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("migrated repository identity should load"),
+        location.repository_identity
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_does_not_adopt_an_unmarked_nonempty_sqlite_database() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("foreign-unmarked-database"));
+    let store = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+    std::fs::create_dir_all(store.parent().expect("store parent should exist"))
+        .expect("foreign database parent should create");
+    let foreign = rusqlite::Connection::open(&store).expect("foreign SQLite database should open");
+    foreign
+        .execute_batch("CREATE TABLE foreign_customer_data (secret TEXT NOT NULL);")
+        .expect("foreign schema should install");
+    drop(foreign);
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o600))
+        .expect("foreign database should use private fixture permissions");
+
+    let error = open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("an unmarked non-empty database must not be mutated into an Akra store");
+    assert!(error.to_string().contains("cannot be adopted"));
+    let inspection = rusqlite::Connection::open(&store).expect("foreign database should reopen");
+    assert_eq!(
+        inspection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'foreign_customer_data'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("foreign table should remain inspectable"),
+        1
+    );
+    assert_eq!(
+        inspection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'authority_metadata'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("Akra marker absence should remain inspectable"),
+        0,
+        "rejection must occur before Akra creates any schema"
+    );
+}
+
+#[test]
+fn authority_schema_migration_rolls_back_additive_ddl_when_version_update_fails() {
+    let workspace_dir = temp_workspace("schema-migration-rollback");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    connection
+        .execute_batch(
+            "DROP TABLE planning_file_sync_baselines;
+             UPDATE authority_metadata SET value = '8' WHERE key = 'schema_version';
+             CREATE TRIGGER fail_schema_migration_version
+             BEFORE UPDATE OF value ON authority_metadata
+             WHEN OLD.key = 'schema_version'
+             BEGIN
+                 SELECT RAISE(FAIL, 'forced schema version failure');
+             END;",
+        )
+        .expect("failing migration fixture should install");
+    drop(connection);
+
+    let error = open_authority_connection(&location)
+        .expect_err("forced schema metadata failure should abort migration");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to update authority metadata")
+    );
+    let raw = rusqlite::Connection::open(&location.authority_store_path)
+        .expect("raw authority store should open for rollback inspection");
+    assert!(
+        raw.query_row(
+            "SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = 'planning_file_sync_baselines'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .expect("rolled-back table should inspect")
+        .is_none(),
+        "failed migration must roll back additive DDL"
+    );
+}
+
+#[test]
+fn authority_connection_busy_timeout_waits_for_a_short_write_lock() {
+    let workspace_dir = temp_workspace("busy-timeout-short-lock");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let stream_key = "bot-id:810001";
+    let initial_owner = "runner-initial";
+    assert_eq!(
+        adapter
+            .try_acquire_runner_lease(&workspace_dir, stream_key, initial_owner, 300)
+            .expect("initial Telegram lease should create the authority schema"),
+        TelegramRunnerLeaseClaimDecision::Acquired
+    );
+    assert!(
+        adapter
+            .release_runner_lease(&workspace_dir, stream_key, initial_owner)
+            .expect("initial Telegram lease should release")
+    );
+
+    let lock_connection = authority_connection(&workspace_dir);
+    lock_connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("fixture write lock should acquire");
+    let (started_sender, started_receiver) = std::sync::mpsc::channel();
+    let worker_workspace = workspace_dir.clone();
+    let worker = std::thread::spawn(move || {
+        started_sender
+            .send(())
+            .expect("busy-timeout worker start should publish");
+        let started_at = std::time::Instant::now();
+        let result = SqlitePlanningAuthorityAdapter::new().try_acquire_runner_lease(
+            &worker_workspace,
+            stream_key,
+            "runner-after-short-lock",
+            300,
+        );
+        (result, started_at.elapsed())
+    });
+    started_receiver
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("busy-timeout worker should start");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    lock_connection
+        .execute_batch("COMMIT")
+        .expect("fixture write lock should release");
+
+    let (result, elapsed) = worker.join().expect("busy-timeout worker should join");
+    assert_eq!(
+        result.expect("adapter write should wait for the short lock"),
+        TelegramRunnerLeaseClaimDecision::Acquired
+    );
+    assert!(
+        elapsed >= std::time::Duration::from_millis(150),
+        "adapter write returned before the fixture lock was released: {elapsed:?}"
+    );
+}
+
+#[test]
+fn authority_connection_busy_timeout_preserves_context_when_the_lock_outlives_it() {
+    let workspace_dir = temp_workspace("busy-timeout-expired-lock");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let stream_key = "bot-id:810002";
+    let initial_owner = "runner-initial";
+    assert_eq!(
+        adapter
+            .try_acquire_runner_lease(&workspace_dir, stream_key, initial_owner, 300)
+            .expect("initial Telegram lease should create the authority schema"),
+        TelegramRunnerLeaseClaimDecision::Acquired
+    );
+    assert!(
+        adapter
+            .release_runner_lease(&workspace_dir, stream_key, initial_owner)
+            .expect("initial Telegram lease should release")
+    );
+
+    let lock_connection = authority_connection(&workspace_dir);
+    lock_connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("fixture write lock should acquire");
+    let started_at = std::time::Instant::now();
+    let error = adapter
+        .try_acquire_runner_lease(&workspace_dir, stream_key, "runner-timeout", 300)
+        .expect_err("a write lock beyond the configured timeout should fail");
+    let elapsed = started_at.elapsed();
+    lock_connection
+        .execute_batch("ROLLBACK")
+        .expect("fixture write lock should release after timeout");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("failed to open Telegram runner lease transaction")
+            || message.contains("failed to initialize authority-store schema")
+            || message.contains("failed to open authority-store schema migration transaction"),
+        "adapter context should be retained: {message}"
+    );
+    assert!(
+        message.contains("database is locked") || message.contains("database table is locked"),
+        "SQLite lock cause should be retained: {message}"
+    );
+    assert!(
+        elapsed >= std::time::Duration::from_secs(4),
+        "busy timeout failed too quickly: {elapsed:?}"
+    );
 }
 
 fn set_claim_timestamp(workspace_dir: &str, claim_kind: &str, scope_key: &str, claimed_at: &str) {
@@ -132,6 +794,22 @@ fn set_claim_timestamp(workspace_dir: &str, claim_kind: &str, scope_key: &str, c
         )
         .expect("runtime claim timestamp should update");
     assert_eq!(changed_rows, 1);
+}
+
+fn runtime_claim_owner_and_timestamp(
+    workspace_dir: &str,
+    claim_kind: &str,
+    scope_key: &str,
+) -> (String, String) {
+    authority_connection(workspace_dir)
+        .query_row(
+            "SELECT owner_token, claimed_at
+             FROM runtime_claims
+             WHERE claim_kind = ?1 AND scope_key = ?2",
+            (claim_kind, scope_key),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("runtime claim should exist")
 }
 
 fn set_authority_metadata(workspace_dir: &str, key: &str, value: &str) {
@@ -224,6 +902,34 @@ fn insert_pending_dispatch_command_row(
         .expect("pending dispatch command row should insert");
 }
 
+fn insert_complete_pending_dispatch_command_row(
+    workspace_dir: &str,
+    command: &ParallelModeDispatchCommandSnapshot,
+) {
+    let payload_json =
+        serde_json::to_string(command).expect("dispatch command payload should serialize");
+    authority_connection(workspace_dir)
+        .execute(
+            "INSERT INTO runtime_dispatch_commands
+                (command_id, command_kind, trigger, command_state, queue_head_signature,
+                 epoch_id, created_at, updated_at, owner_token, content)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                command.command_id,
+                command.kind.label(),
+                command.trigger.label(),
+                ParallelModeDispatchCommandState::Pending.label(),
+                command.queue_head_signature,
+                command.epoch_id.map(|value| value as i64),
+                command.created_at,
+                command.updated_at,
+                command.owner_token,
+                payload_json,
+            ],
+        )
+        .expect("complete pending dispatch command row should insert");
+}
+
 fn assert_error_contains<T>(result: anyhow::Result<T>, expected: &str) {
     let Err(error) = result else {
         panic!("expected error containing `{expected}`");
@@ -259,6 +965,10 @@ fn review_center_repository_port_round_trips_workspace_scoped_data() {
     assert_ne!(
         location_a.workspace_root, location_b.workspace_root,
         "linked worktrees should keep distinct workspace roots"
+    );
+    assert_eq!(
+        location_a.repository_identity, location_b.repository_identity,
+        "linked worktrees in the same repo should share one repository identity"
     );
 
     let mut thread_review = ReviewCenterThreadProjection::new(
@@ -339,6 +1049,273 @@ fn review_center_repository_port_round_trips_workspace_scoped_data() {
             .is_empty(),
         "workspace B should stay isolated from workspace A history rows even in the shared repo DB"
     );
+}
+
+#[test]
+fn sibling_bare_backed_worktrees_have_isolated_repository_authority() {
+    let (workspace_a, sibling_a, workspace_b, sibling_b) =
+        sibling_bare_backed_worktrees("bare-repository-authority-isolation");
+    assert_worktrees_share_repository_authority(&workspace_a, &sibling_a);
+    assert_worktrees_share_repository_authority(&workspace_b, &sibling_b);
+    assert_repository_authority_isolated(&workspace_a, &workspace_b);
+}
+
+#[test]
+fn sibling_separate_git_dir_worktrees_have_isolated_repository_authority() {
+    let (checkout_a, workspace_a, checkout_b, workspace_b) =
+        sibling_separate_git_dir_worktrees("separate-git-dir-authority-isolation");
+    assert_worktrees_share_repository_authority(&checkout_a, &workspace_a);
+    assert_worktrees_share_repository_authority(&checkout_b, &workspace_b);
+    assert_repository_authority_isolated(&workspace_a, &workspace_b);
+}
+
+#[test]
+fn repository_incarnation_is_stable_across_restart_and_move_but_not_clone() {
+    let fixture_root = std::path::PathBuf::from(temp_workspace("repository-incarnation-move"));
+    let original = fixture_root.join("original");
+    seed_git_checkout(&original);
+
+    let first = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+        original.to_string_lossy().as_ref(),
+    )
+    .expect("initial repository incarnation should resolve");
+    let restarted = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+        original.to_string_lossy().as_ref(),
+    )
+    .expect("repository incarnation should survive another resolver instance");
+    assert_eq!(first.repository_identity, restarted.repository_identity);
+    assert_eq!(first.authority_store_path, restarted.authority_store_path);
+
+    let moved = fixture_root.join("moved-and-renamed");
+    std::fs::rename(&original, &moved).expect("repository including common dir should move");
+    let moved_location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+        moved.to_string_lossy().as_ref(),
+    )
+    .expect("moved repository incarnation should resolve");
+    assert_eq!(
+        first.repository_identity,
+        moved_location.repository_identity
+    );
+    assert_eq!(
+        first.authority_store_path,
+        moved_location.authority_store_path
+    );
+    assert_ne!(
+        first.canonical_repo_root,
+        moved_location.canonical_repo_root
+    );
+
+    let cloned = fixture_root.join("fresh-clone");
+    run_git_command(
+        &fixture_root,
+        &[
+            "clone",
+            moved.to_string_lossy().as_ref(),
+            cloned.to_string_lossy().as_ref(),
+        ],
+    );
+    let clone_location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+        cloned.to_string_lossy().as_ref(),
+    )
+    .expect("fresh clone incarnation should resolve");
+    assert_ne!(
+        first.repository_identity,
+        clone_location.repository_identity
+    );
+    assert_ne!(
+        first.authority_store_path,
+        clone_location.authority_store_path
+    );
+}
+
+#[test]
+fn same_path_repository_reinitialization_cannot_adopt_previous_authority() {
+    let fixture_root = std::path::PathBuf::from(temp_workspace("repository-incarnation-reinit"));
+    let repo_root = fixture_root.join("repo");
+    seed_git_checkout(&repo_root);
+    let workspace = repo_root.display().to_string();
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let original =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
+            .expect("original repository incarnation should resolve");
+
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let queue_projection = PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    };
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &task_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("original task authority should persist");
+    SqlitePlanningAuthorityAdapter::stage_repo_scoped_draft_files(
+        &workspace,
+        "previous-incarnation",
+        &[PlanningDraftFileRecord {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            body: "previous incarnation draft".to_string(),
+        }],
+    )
+    .expect("original draft should persist");
+    adapter
+        .append_app_server_prompt_interaction(
+            &workspace,
+            prompt_interaction_record(&workspace, "previous-incarnation-prompt"),
+        )
+        .expect("original prompt should persist");
+
+    std::fs::remove_dir_all(repo_root.join(".git")).expect("original Git metadata should remove");
+    seed_git_checkout(&repo_root);
+    let replacement =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace)
+            .expect("replacement repository incarnation should resolve");
+    assert_ne!(
+        original.repository_identity,
+        replacement.repository_identity
+    );
+    assert_ne!(
+        original.authority_store_path,
+        replacement.authority_store_path
+    );
+    let original_project = std::path::Path::new(&original.runtime_dir)
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .expect("original project namespace should be UTF-8");
+    let replacement_project = std::path::Path::new(&replacement.runtime_dir)
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .expect("replacement project namespace should be UTF-8");
+    assert!(
+        replacement_project.starts_with(&format!("{original_project}-")),
+        "occupied legacy namespace should remain a readable prefix but be isolated"
+    );
+    assert!(
+        std::path::Path::new(&original.authority_store_path).is_file(),
+        "old authority remains quarantined for explicit operator recovery"
+    );
+    assert!(
+        adapter
+            .load_task_authority_snapshot(&workspace)
+            .expect("replacement task authority should inspect")
+            .is_none(),
+        "replacement repo must not inherit tasks"
+    );
+    assert!(
+        SqlitePlanningAuthorityAdapter::load_repo_scoped_draft_files(
+            &workspace,
+            "previous-incarnation",
+        )
+        .is_err(),
+        "replacement repo must not inherit staged drafts"
+    );
+    assert!(
+        adapter
+            .load_recent_app_server_prompt_interactions(&workspace, 10)
+            .expect("replacement prompt log should inspect")
+            .records
+            .is_empty(),
+        "replacement repo must not inherit prompt logs"
+    );
+}
+
+#[test]
+fn concurrent_repository_incarnation_creation_converges_on_one_identity() {
+    let fixture_root = std::path::PathBuf::from(temp_workspace("repository-incarnation-race"));
+    let repo_root = fixture_root.join("repo");
+    seed_git_checkout(&repo_root);
+    let workspace = std::sync::Arc::new(repo_root.display().to_string());
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let handles = (0..8)
+        .map(|_| {
+            let workspace = std::sync::Arc::clone(&workspace);
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+                    workspace.as_str(),
+                )
+                .expect("concurrent repository incarnation should resolve")
+            })
+        })
+        .collect::<Vec<_>>();
+    let locations = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("resolver thread should join"))
+        .collect::<Vec<_>>();
+    for location in &locations[1..] {
+        assert_eq!(
+            locations[0].repository_identity,
+            location.repository_identity
+        );
+        assert_eq!(
+            locations[0].authority_store_path,
+            location.authority_store_path
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_incarnation_marker_rejects_links_and_permissive_files() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    const VALID_MARKER: &str = concat!(
+        "akra-repository-incarnation-v1\n",
+        "id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        "project=fixture-0123456789ab\n",
+    );
+
+    for fixture in ["symlink", "hardlink", "permissive"] {
+        let fixture_root =
+            std::path::PathBuf::from(temp_workspace(&format!("repository-marker-{fixture}")));
+        let repo_root = fixture_root.join("repo");
+        seed_git_checkout(&repo_root);
+        let marker = repo_root
+            .join(".git")
+            .join(super::workspace_paths::REPOSITORY_INCARNATION_MARKER_FILE_NAME);
+        let target = fixture_root.join("marker-target");
+        std::fs::write(&target, VALID_MARKER).expect("marker target should write");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+            .expect("marker target should be private");
+        match fixture {
+            "symlink" => symlink(&target, &marker).expect("marker symlink should create"),
+            "hardlink" => {
+                std::fs::hard_link(&target, &marker).expect("marker hard link should create")
+            }
+            "permissive" => {
+                std::fs::write(&marker, VALID_MARKER).expect("marker should write");
+                std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o644))
+                    .expect("marker should become permissive");
+            }
+            _ => unreachable!(),
+        }
+        let before = std::fs::read(&target).expect("marker target should inspect");
+        assert!(
+            SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+                repo_root.to_string_lossy().as_ref(),
+            )
+            .is_err(),
+            "{fixture} marker must fail closed"
+        );
+        assert_eq!(
+            std::fs::read(&target).expect("marker target should remain readable"),
+            before,
+            "marker validation must not mutate a linked target"
+        );
+    }
 }
 
 #[test]
@@ -467,6 +1444,9 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
                 task_authority: &baseline_task_authority,
                 queue_projection: &baseline_queue_projection,
                 result_output_markdown: "# Result Output\n\nBaseline",
+                active_document_mutations: &[],
+                retired_task_ids: &[],
+                authority_mutation_owner_token: None,
             },
         )
         .expect("baseline authority documents should commit");
@@ -521,6 +1501,9 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
                 task_authority: &changed_task_authority,
                 queue_projection: &changed_queue_projection,
                 result_output_markdown: "# Result Output\n\nChanged",
+                active_document_mutations: &[],
+                retired_task_ids: &[],
+                authority_mutation_owner_token: None,
             },
         ),
         "failed to store active document `.codex-exec-loop/planning/result-output.md`",
@@ -544,6 +1527,184 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
         reloaded_workspace.result_output_markdown.as_deref(),
         Some("# Result Output\n\nBaseline")
     );
+}
+
+#[test]
+fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks() {
+    let workspace_dir = temp_workspace("authority-document-support-retirement");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let directions = test_direction_catalog(&["direction-a"]);
+    let baseline_tasks = task_authority_for_direction("task-retired", "direction-a");
+    let queue = empty_test_queue_projection();
+    let baseline_support = [PlanningAuthorityActiveDocumentMutation::Replace {
+        relative_path: ".codex-exec-loop/planning/prompts/old.md",
+        body: "old prompt",
+    }];
+    let baseline = adapter
+        .commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: None,
+                directions: &directions,
+                task_authority: &baseline_tasks,
+                queue_projection: &queue,
+                result_output_markdown: "# Result Output\n\nOld\n",
+                active_document_mutations: &baseline_support,
+                retired_task_ids: &[],
+                authority_mutation_owner_token: None,
+            },
+        )
+        .expect("baseline documents should commit");
+    let PlanningTaskAuthorityCommitResult::Committed {
+        planning_revision: baseline_revision,
+        ..
+    } = baseline
+    else {
+        panic!("baseline documents should commit");
+    };
+    let dispatch_block = ParallelModeTaskDispatchBlockSnapshot::new(
+        "task-retired",
+        "2026-07-10T00:00:00Z",
+        "2026-07-10T00:01:00Z",
+        ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+    );
+    adapter
+        .upsert_runtime_task_dispatch_block(&workspace_dir, &dispatch_block)
+        .expect("terminal runtime residue should persist before retirement");
+
+    let empty_tasks = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let support_rewrite = [
+        PlanningAuthorityActiveDocumentMutation::RemoveEntry {
+            relative_path: ".codex-exec-loop/planning/prompts",
+        },
+        PlanningAuthorityActiveDocumentMutation::Replace {
+            relative_path: ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+            body: "new prompt",
+        },
+    ];
+    let retired_task_ids = vec!["task-retired".to_string()];
+    install_failing_delete_trigger(
+        &workspace_dir,
+        "active_documents",
+        "fail_support_document_delete",
+    );
+    let failed = adapter.commit_planning_authority_documents(
+        &workspace_dir,
+        PlanningAuthorityDocumentCommit {
+            observed_planning_revision: Some(baseline_revision),
+            directions: &directions,
+            task_authority: &empty_tasks,
+            queue_projection: &queue,
+            result_output_markdown: "# Result Output\n\nNew\n",
+            active_document_mutations: &support_rewrite,
+            retired_task_ids: &retired_task_ids,
+            authority_mutation_owner_token: None,
+        },
+    );
+    assert_error_contains(failed, "forced delete failure");
+    let after_failure = adapter
+        .load_planning_authority_documents(&workspace_dir)
+        .expect("authority should reload after rollback")
+        .expect("authority should remain present");
+    assert_eq!(after_failure.planning_revision, baseline_revision);
+    assert_eq!(after_failure.task_authority, baseline_tasks);
+    assert_eq!(
+        after_failure.result_output_markdown,
+        "# Result Output\n\nOld\n"
+    );
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            &workspace_dir,
+            ".codex-exec-loop/planning/prompts/old.md",
+        )
+        .expect("old support file should reload")
+        .as_deref(),
+        Some("old prompt")
+    );
+    let retired_after_failure: i64 = authority_connection(&workspace_dir)
+        .query_row(
+            "SELECT COUNT(*) FROM retired_planning_tasks WHERE task_id = 'task-retired'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("retirement rollback should inspect");
+    assert_eq!(retired_after_failure, 0);
+    assert_eq!(
+        adapter
+            .load_runtime_projections(&workspace_dir)
+            .expect("runtime residue should reload")
+            .task_dispatch_blocks,
+        vec![dispatch_block]
+    );
+
+    authority_connection(&workspace_dir)
+        .execute_batch("DROP TRIGGER fail_support_document_delete")
+        .expect("failure trigger should drop");
+    let committed = adapter
+        .commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: Some(baseline_revision),
+                directions: &directions,
+                task_authority: &empty_tasks,
+                queue_projection: &queue,
+                result_output_markdown: "# Result Output\n\nNew\n",
+                active_document_mutations: &support_rewrite,
+                retired_task_ids: &retired_task_ids,
+                authority_mutation_owner_token: None,
+            },
+        )
+        .expect("support and retirement rewrite should commit");
+    assert!(matches!(
+        committed,
+        PlanningTaskAuthorityCommitResult::Committed { changed: true, .. }
+    ));
+    assert!(
+        SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            &workspace_dir,
+            ".codex-exec-loop/planning/prompts/old.md",
+        )
+        .expect("removed support file should inspect")
+        .is_none()
+    );
+    assert_eq!(
+        SqlitePlanningAuthorityAdapter::load_active_planning_file(
+            &workspace_dir,
+            ".codex-exec-loop/planning/prompts/queue-idle-review.md",
+        )
+        .expect("new support file should reload")
+        .as_deref(),
+        Some("new prompt")
+    );
+    assert!(
+        adapter
+            .load_runtime_projections(&workspace_dir)
+            .expect("retired runtime residue should reload")
+            .task_dispatch_blocks
+            .is_empty()
+    );
+    let retired_after_success: i64 = authority_connection(&workspace_dir)
+        .query_row(
+            "SELECT COUNT(*) FROM retired_planning_tasks WHERE task_id = 'task-retired'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("retirement should inspect");
+    assert_eq!(retired_after_success, 1);
+    let late_lease = adapter
+        .upsert_runtime_slot_lease(
+            &workspace_dir,
+            &slot_lease_for_task(
+                "slot-retired",
+                "task-retired",
+                ParallelModeSlotLeaseState::Running,
+            ),
+        )
+        .expect_err("retired task must reject late runtime resurrection");
+    assert!(late_lease.to_string().contains("retired planning task"));
 }
 
 #[test]
@@ -577,8 +1738,8 @@ fn app_server_prompt_log_round_trips_recent_records() {
                     "done",
                 )],
                 error_message: None,
-                started_at: "2026-05-20T00:00:00Z".to_string(),
-                completed_at: "2026-05-20T00:00:01Z".to_string(),
+                started_at: Utc::now().to_rfc3339(),
+                completed_at: Utc::now().to_rfc3339(),
             },
         )
         .expect("prompt log should append");
@@ -595,6 +1756,909 @@ fn app_server_prompt_log_round_trips_recent_records() {
     assert_eq!(record.input_items[0].content, "implement task");
     assert_eq!(record.output_items[0].text, "done");
     assert_eq!(record.input_chars(), "implement task".chars().count());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
+            &workspace_dir,
+        )
+        .expect("authority location should resolve");
+        let runtime_mode = std::fs::metadata(&location.runtime_dir)
+            .expect("authority runtime metadata should load")
+            .permissions()
+            .mode()
+            & 0o777;
+        let store_mode = std::fs::metadata(&location.authority_store_path)
+            .expect("authority store metadata should load")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(runtime_mode, 0o700);
+        assert_eq!(store_mode, 0o600);
+        let connection = open_authority_connection(&location)
+            .expect("authority store should reopen for pragma inspection");
+        let secure_delete: i64 = connection
+            .query_row("PRAGMA secure_delete", [], |row| row.get(0))
+            .expect("secure_delete pragma should be readable");
+        assert_eq!(secure_delete, 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_rejects_parent_symlinks_without_touching_the_target() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-parent-symlink"));
+    let akra_home = fixture_root.join("home");
+    let projects = akra_home.join("projects");
+    let victim = fixture_root.join("victim");
+    std::fs::create_dir_all(&projects).expect("managed parent should create");
+    std::fs::create_dir_all(&victim).expect("victim directory should create");
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o750))
+        .expect("victim permissions should set");
+    std::fs::write(victim.join("sentinel"), b"unchanged").expect("victim sentinel should write");
+    symlink(&victim, projects.join("repo-deadbeef"))
+        .expect("malicious project symlink should create");
+
+    let store = projects
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+    let error = open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("parent symlink must be rejected");
+
+    assert!(error.to_string().contains("real directory"));
+    assert_eq!(
+        std::fs::read(victim.join("sentinel")).expect("victim sentinel should remain readable"),
+        b"unchanged"
+    );
+    assert!(
+        !victim.join("runtime").exists(),
+        "validation must fail before creating content through the symlink"
+    );
+    assert_eq!(
+        std::fs::metadata(&victim)
+            .expect("victim metadata should load")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o750,
+        "validation must not chmod the symlink target"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_does_not_change_akra_home_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-home-permissions"));
+    let akra_home = fixture_root.join("shared-home");
+    std::fs::create_dir(&akra_home).expect("AKRA_HOME fixture should create");
+    std::fs::set_permissions(&akra_home, std::fs::Permissions::from_mode(0o750))
+        .expect("AKRA_HOME fixture permissions should set");
+    let store = akra_home
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+
+    open_authority_connection(&authority_location_for_store(&store))
+        .expect("authority store below shared AKRA_HOME should open");
+
+    assert_eq!(
+        std::fs::metadata(&akra_home)
+            .expect("AKRA_HOME metadata should load")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o750,
+        "authority setup must not chmod the operator-selected AKRA_HOME"
+    );
+    for private_directory in [
+        akra_home.join("projects"),
+        akra_home.join("projects").join("repo-deadbeef"),
+        akra_home
+            .join("projects")
+            .join("repo-deadbeef")
+            .join("runtime"),
+    ] {
+        assert_eq!(
+            std::fs::metadata(&private_directory)
+                .expect("managed directory metadata should load")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "managed authority directory must remain private"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_rejects_replaceable_nonsticky_akra_home_without_creating_data() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture_root =
+        std::path::PathBuf::from(temp_workspace("authority-replaceable-home-permissions"));
+    let replaceable_parent = fixture_root.join("replaceable-parent");
+    let akra_home = replaceable_parent.join("akra-home");
+    std::fs::create_dir(&replaceable_parent).expect("replaceable parent fixture should create");
+    std::fs::set_permissions(&replaceable_parent, std::fs::Permissions::from_mode(0o777))
+        .expect("replaceable parent permissions should set");
+    std::fs::create_dir(&akra_home).expect("private AKRA_HOME fixture should create");
+    std::fs::set_permissions(&akra_home, std::fs::Permissions::from_mode(0o700))
+        .expect("private AKRA_HOME permissions should set");
+    let store = akra_home
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+
+    let error = open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("a storage root replaceable by another user must fail closed");
+    assert!(error.to_string().contains("writable"));
+    assert!(
+        !akra_home.join("projects").exists(),
+        "rejection must occur before creating private data below an unsafe root"
+    );
+    assert_eq!(
+        std::fs::metadata(&replaceable_parent)
+            .expect("unsafe parent metadata should remain readable")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o777,
+        "Akra must not chmod an operator-selected unsafe ancestor while rejecting it"
+    );
+    assert_eq!(
+        std::fs::metadata(&akra_home)
+            .expect("private root metadata should remain readable")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700,
+        "Akra must leave the selected storage root unchanged while rejecting its ancestor"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_rejects_symlinked_akra_home_without_creating_projects() {
+    use std::os::unix::fs::symlink;
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-home-symlink"));
+    let victim = fixture_root.join("victim");
+    std::fs::create_dir(&victim).expect("victim directory should create");
+    std::fs::write(victim.join("sentinel"), b"unchanged").expect("victim sentinel should write");
+    let akra_home = fixture_root.join("home-link");
+    symlink(&victim, &akra_home).expect("malicious AKRA_HOME symlink should create");
+    let store = akra_home
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+
+    open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("symlinked AKRA_HOME must be rejected");
+
+    assert_eq!(
+        std::fs::read(victim.join("sentinel")).expect("victim sentinel should remain readable"),
+        b"unchanged"
+    );
+    assert!(
+        !victim.join("projects").exists(),
+        "validation must reject AKRA_HOME before creating the managed root"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_rejects_final_symlinks_without_touching_the_target() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-file-symlink"));
+    let runtime = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime");
+    std::fs::create_dir_all(&runtime).expect("runtime directory should create");
+    let victim = fixture_root.join("victim.db");
+    std::fs::write(&victim, b"victim-content").expect("victim should write");
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o640))
+        .expect("victim permissions should set");
+    let store = runtime.join("planning-authority.db");
+    symlink(&victim, &store).expect("malicious store symlink should create");
+
+    open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("final symlink must be rejected");
+
+    assert_eq!(
+        std::fs::read(&victim).expect("victim should remain readable"),
+        b"victim-content"
+    );
+    assert_eq!(
+        std::fs::metadata(&victim)
+            .expect("victim metadata should load")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o640,
+        "validation must not chmod the symlink target"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_rejects_hardlinks_without_touching_the_target() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-file-hardlink"));
+    let runtime = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime");
+    std::fs::create_dir_all(&runtime).expect("runtime directory should create");
+    let victim = fixture_root.join("victim.db");
+    std::fs::write(&victim, b"victim-content").expect("victim should write");
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o640))
+        .expect("victim permissions should set");
+    let store = runtime.join("planning-authority.db");
+    std::fs::hard_link(&victim, &store).expect("malicious store hardlink should create");
+
+    let error = open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("hardlinked store must be rejected");
+
+    assert!(error.to_string().contains("one link"));
+    assert_eq!(
+        std::fs::read(&victim).expect("victim should remain readable"),
+        b"victim-content"
+    );
+    assert_eq!(
+        std::fs::metadata(&victim)
+            .expect("victim metadata should load")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o640,
+        "validation must reject the hardlink before chmod"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_rejects_preexisting_hardlinked_sqlite_sidecars_without_touching_the_victim() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let fixture_root = std::path::PathBuf::from(temp_workspace(&format!(
+            "authority-hardlinked-sidecar-{}",
+            suffix.trim_start_matches('-')
+        )));
+        let store = fixture_root
+            .join("home")
+            .join("projects")
+            .join("repo-deadbeef")
+            .join("runtime")
+            .join("planning-authority.db");
+        let location = authority_location_for_store(&store);
+        drop(open_authority_connection(&location).expect("authority store should initialize"));
+
+        let sidecar = authority_store_sidecar_path(&store, suffix);
+        if sidecar.exists() {
+            std::fs::remove_file(&sidecar).expect("clean test sidecar should be removable");
+        }
+        let victim = fixture_root.join(format!("victim{suffix}"));
+        std::fs::write(&victim, b"victim-content").expect("sidecar victim should write");
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o600))
+            .expect("sidecar victim should become private");
+        std::fs::hard_link(&victim, &sidecar).expect("hardlinked sidecar fixture should create");
+
+        let error = open_authority_connection(&location)
+            .expect_err("hardlinked SQLite sidecar must fail before SQLite can write it");
+        assert!(
+            error.to_string().contains("one link"),
+            "unexpected {suffix} rejection: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&victim).expect("sidecar victim should remain readable"),
+            b"victim-content"
+        );
+        assert_eq!(
+            std::fs::metadata(&victim)
+                .expect("sidecar victim metadata should load")
+                .nlink(),
+            2,
+            "rejection must not unlink the operator's victim fixture"
+        );
+        assert_eq!(
+            std::fs::metadata(&victim)
+                .expect("sidecar victim metadata should remain readable")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "rejection must happen before chmod or SQLite opens the hardlink"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_sidecar_retry_anchors_a_replacement_but_rejects_unsafe_replacements() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-sidecar-replacement"));
+    let store = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+    let location = authority_location_for_store(&store);
+    drop(open_authority_connection(&location).expect("authority store should initialize"));
+
+    let journal = authority_store_sidecar_path(&store, "-journal");
+    std::fs::write(&journal, b"old-journal").expect("old journal should write");
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600))
+        .expect("old journal should become private");
+    let old_journal = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&journal)
+        .expect("old journal should open");
+    std::fs::remove_file(&journal).expect("old journal should unlink");
+    std::fs::write(&journal, b"new-journal").expect("replacement journal should write");
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o640))
+        .expect("replacement journal fixture should be permissive");
+
+    assert!(
+        secure_opened_private_authority_sidecar_file(&journal, old_journal)
+            .expect("an unlinked descriptor should be a retryable replacement")
+            .is_none()
+    );
+    let anchors = prepare_private_authority_sidecar_files(&store)
+        .expect("the current legitimate replacement should anchor");
+    assert_eq!(anchors.len(), 1);
+    let anchored = anchors[0]
+        .metadata()
+        .expect("replacement anchor metadata should load");
+    let current = std::fs::metadata(&journal).expect("replacement path metadata should load");
+    assert_eq!(
+        (anchored.dev(), anchored.ino()),
+        (current.dev(), current.ino())
+    );
+    assert_eq!(current.permissions().mode() & 0o777, 0o600);
+    drop(anchors);
+    std::fs::remove_file(&journal).expect("legitimate replacement should remove");
+
+    for replacement_kind in ["symlink", "hardlink"] {
+        std::fs::write(&journal, b"old-journal").expect("old journal should rewrite");
+        std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600))
+            .expect("old journal should become private");
+        let old_journal = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&journal)
+            .expect("old journal should reopen");
+        std::fs::remove_file(&journal).expect("old journal should unlink again");
+        let victim = fixture_root.join(format!("{replacement_kind}-victim"));
+        std::fs::write(&victim, b"victim-content").expect("replacement victim should write");
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o600))
+            .expect("replacement victim should become private");
+        if replacement_kind == "symlink" {
+            symlink(&victim, &journal).expect("malicious sidecar symlink should create");
+        } else {
+            std::fs::hard_link(&victim, &journal)
+                .expect("malicious sidecar hardlink should create");
+        }
+
+        assert!(
+            secure_opened_private_authority_sidecar_file(&journal, old_journal)
+                .expect("the unlinked old descriptor should remain retryable")
+                .is_none()
+        );
+        prepare_private_authority_sidecar_files(&store)
+            .expect_err("the current unsafe replacement must fail closed");
+        assert_eq!(
+            std::fs::read(&victim).expect("replacement victim should remain readable"),
+            b"victim-content"
+        );
+        assert_eq!(
+            std::fs::metadata(&victim)
+                .expect("replacement victim metadata should load")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        std::fs::remove_file(&journal).expect("unsafe replacement should remove");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_open_survives_concurrent_delete_journal_churn() {
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-sidecar-churn"));
+    let store = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+    let location = authority_location_for_store(&store);
+    let initialized =
+        open_authority_connection(&location).expect("authority store should initialize");
+    initialized
+        .execute(
+            "INSERT OR REPLACE INTO authority_metadata (key, value) VALUES ('churn-sentinel', 'kept')",
+            [],
+        )
+        .expect("churn sentinel should initialize");
+    drop(initialized);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let writer_barrier = Arc::clone(&barrier);
+    let writer_store = store.clone();
+    let writer = std::thread::spawn(move || {
+        let connection =
+            rusqlite::Connection::open(writer_store).expect("journal churn connection should open");
+        connection
+            .busy_timeout(super::AUTHORITY_STORE_BUSY_TIMEOUT)
+            .expect("journal churn busy timeout should configure");
+        writer_barrier.wait();
+        for _ in 0..128 {
+            connection
+                .execute_batch(
+                    "BEGIN IMMEDIATE;
+                     UPDATE authority_metadata SET value = 'transient' WHERE key = 'churn-sentinel';
+                     ROLLBACK;",
+                )
+                .expect("journal churn transaction should roll back");
+        }
+    });
+
+    barrier.wait();
+    for _ in 0..128 {
+        let connection = open_authority_connection(&location)
+            .expect("secure authority open should tolerate legitimate journal replacement");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT value FROM authority_metadata WHERE key = 'churn-sentinel'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("churn sentinel should remain readable"),
+            "kept"
+        );
+    }
+    writer.join().expect("journal churn writer should finish");
+}
+
+#[cfg(windows)]
+#[test]
+fn authority_store_sidecar_retry_handles_delete_pending_and_rejects_hardlink_replacement() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-sidecar-replacement"));
+    let store = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+    let location = authority_location_for_store(&store);
+    drop(open_authority_connection(&location).expect("authority store should initialize"));
+
+    let journal = authority_store_sidecar_path(&store, "-journal");
+    std::fs::write(&journal, b"old-journal").expect("old journal should write");
+    let old_journal = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .access_mode(
+            WINDOWS_GENERIC_READ | WINDOWS_GENERIC_WRITE | WINDOWS_READ_CONTROL | WINDOWS_WRITE_DAC,
+        )
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(&journal)
+        .expect("old journal should open with delete sharing");
+    std::fs::remove_file(&journal).expect("old journal should become delete-pending");
+    assert!(
+        secure_opened_private_authority_sidecar_file(&journal, old_journal)
+            .expect("a delete-pending descriptor should be retryable")
+            .is_none()
+    );
+
+    std::fs::write(&journal, b"new-journal").expect("replacement journal should write");
+    let anchors = prepare_private_authority_sidecar_files(&store)
+        .expect("the legitimate replacement should anchor");
+    assert_eq!(anchors.len(), 1);
+    drop(anchors);
+    std::fs::remove_file(&journal).expect("legitimate replacement should remove");
+
+    let victim = fixture_root.join("hardlink-victim");
+    std::fs::write(&victim, b"victim-content").expect("hardlink victim should write");
+    std::fs::hard_link(&victim, &journal).expect("malicious sidecar hardlink should create");
+    prepare_private_authority_sidecar_files(&store)
+        .expect_err("the current hardlinked replacement must fail closed");
+    assert_eq!(
+        std::fs::read(&victim).expect("hardlink victim should remain readable"),
+        b"victim-content"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_store_migrates_wal_to_private_delete_journaling_without_data_loss() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-wal-migration"));
+    let store = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+    let location = authority_location_for_store(&store);
+    let connection =
+        open_authority_connection(&location).expect("authority store should initialize");
+    let wal_mode: String = connection
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .expect("test store should enter WAL mode");
+    assert_eq!(wal_mode.to_ascii_lowercase(), "wal");
+    connection
+        .execute(
+            "INSERT OR REPLACE INTO authority_metadata (key, value) VALUES ('wal-sentinel', 'kept')",
+            [],
+        )
+        .expect("WAL sentinel should commit");
+    drop(connection);
+
+    let reopened =
+        open_authority_connection(&location).expect("private open should checkpoint WAL safely");
+    let journal_mode: String = reopened
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .expect("journal mode should load");
+    assert_eq!(journal_mode.to_ascii_lowercase(), "delete");
+    assert_eq!(
+        reopened
+            .query_row(
+                "SELECT value FROM authority_metadata WHERE key = 'wal-sentinel'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("checkpointed WAL sentinel should survive"),
+        "kept"
+    );
+
+    reopened
+        .execute_batch(
+            "BEGIN IMMEDIATE;
+             UPDATE authority_metadata SET value = 'kept-again' WHERE key = 'wal-sentinel';",
+        )
+        .expect("rollback-journal transaction should start");
+    let journal = authority_store_sidecar_path(&store, "-journal");
+    let journal_metadata =
+        std::fs::metadata(&journal).expect("DELETE-mode write should create a rollback journal");
+    assert!(journal_metadata.is_file());
+    assert_eq!(journal_metadata.nlink(), 1);
+    assert_eq!(journal_metadata.permissions().mode() & 0o777, 0o600);
+    reopened
+        .execute_batch("ROLLBACK")
+        .expect("rollback-journal transaction should roll back");
+}
+
+#[cfg(windows)]
+#[test]
+fn authority_store_rejects_windows_junctions_without_touching_the_target() {
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-parent-junction"));
+    let projects = fixture_root.join("home").join("projects");
+    let victim = fixture_root.join("victim");
+    std::fs::create_dir_all(&projects).expect("managed parent should create");
+    std::fs::create_dir_all(&victim).expect("victim directory should create");
+    std::fs::write(victim.join("sentinel"), b"unchanged").expect("victim sentinel should write");
+    let junction = projects.join("repo-deadbeef");
+    let output = std::process::Command::new("cmd")
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            junction.to_string_lossy().as_ref(),
+            victim.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .expect("junction command should run");
+    assert!(
+        output.status.success(),
+        "junction should create: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let store = junction.join("runtime").join("planning-authority.db");
+    let error = open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("parent junction must be rejected");
+
+    assert!(error.to_string().contains("reparse point"));
+    assert_eq!(
+        std::fs::read(victim.join("sentinel")).expect("victim sentinel should remain readable"),
+        b"unchanged"
+    );
+    assert!(
+        !victim.join("runtime").exists(),
+        "validation must fail before creating content through the junction"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn authority_store_rejects_windows_hardlinks_without_touching_the_target() {
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-file-hardlink-windows"));
+    let runtime = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime");
+    std::fs::create_dir_all(&runtime).expect("runtime directory should create");
+    let victim = fixture_root.join("victim.db");
+    std::fs::write(&victim, b"victim-content").expect("victim should write");
+    let store = runtime.join("planning-authority.db");
+    std::fs::hard_link(&victim, &store).expect("malicious store hardlink should create");
+
+    open_authority_connection(&authority_location_for_store(&store))
+        .expect_err("hardlinked store must be rejected");
+
+    assert_eq!(
+        std::fs::read(&victim).expect("victim should remain readable"),
+        b"victim-content"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn authority_store_windows_private_acl_allows_valid_reopen() {
+    let fixture_root = std::path::PathBuf::from(temp_workspace("authority-private-acl-windows"));
+    let store = fixture_root
+        .join("home")
+        .join("projects")
+        .join("repo-deadbeef")
+        .join("runtime")
+        .join("planning-authority.db");
+    let location = authority_location_for_store(&store);
+
+    let connection = open_authority_connection(&location)
+        .expect("new Windows authority store should receive a private ACL");
+    drop(connection);
+    open_authority_connection(&location)
+        .expect("owner-only protected ACL should permit the same user to reopen the store");
+}
+
+#[test]
+fn app_server_prompt_log_expires_old_records_and_bounds_large_payloads() {
+    let workspace_dir = temp_workspace("prompt-log-retention");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let make_record = |interaction_id: &str, completed_at: String, content: String| {
+        AppServerPromptInteractionRecord {
+            sequence: 0,
+            interaction_id: interaction_id.to_string(),
+            session_kind: "main".to_string(),
+            operation: "turn".to_string(),
+            status: "completed".to_string(),
+            workspace_dir: workspace_dir.clone(),
+            thread_id: Some("thread".to_string()),
+            turn_id: Some("turn".to_string()),
+            service_name: None,
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: Some(content.clone()),
+            input_items: (0..20)
+                .map(|index| {
+                    AppServerPromptInputRecord::new("text", format!("input-{index}"), &content)
+                })
+                .collect(),
+            output_items: (0..20)
+                .map(|index| {
+                    AppServerPromptOutputRecord::new(
+                        format!("output-{index}"),
+                        Some("final".to_string()),
+                        &content,
+                    )
+                })
+                .collect(),
+            error_message: None,
+            started_at: completed_at.clone(),
+            completed_at,
+        }
+    };
+
+    let expired_secret = "AKRA_EXPIRED_PROMPT_SENTINEL_8f3c69f2";
+    let malformed_secret = "AKRA_MALFORMED_TIME_SENTINEL_b84c7061";
+    let future_secret = "AKRA_FUTURE_TIME_SENTINEL_1cf58f62";
+    adapter
+        .append_app_server_prompt_interaction(
+            &workspace_dir,
+            make_record(
+                "expired",
+                "2000-01-01T00:00:00Z".to_string(),
+                expired_secret.to_string(),
+            ),
+        )
+        .expect("expired prompt log append should remain valid");
+    adapter
+        .append_app_server_prompt_interaction(
+            &workspace_dir,
+            make_record(
+                "malformed-time",
+                "not-a-timestamp".repeat(2_000),
+                malformed_secret.to_string(),
+            ),
+        )
+        .expect("malformed timestamp record should be purged without retaining its payload");
+    adapter
+        .append_app_server_prompt_interaction(
+            &workspace_dir,
+            make_record(
+                "future-time",
+                "2999-01-01T00:00:00Z".to_string(),
+                future_secret.to_string(),
+            ),
+        )
+        .expect("future timestamp record should be purged without extending retention");
+    adapter
+        .append_app_server_prompt_interaction(
+            &workspace_dir,
+            make_record("bounded", Utc::now().to_rfc3339(), "한".repeat(20_000)),
+        )
+        .expect("bounded prompt log should append");
+
+    let snapshot = adapter
+        .load_recent_app_server_prompt_interactions(&workspace_dir, 10)
+        .expect("bounded prompt log should load");
+    assert_eq!(snapshot.records.len(), 1);
+    let record = &snapshot.records[0];
+    assert_eq!(record.interaction_id, "bounded");
+    assert_eq!(record.input_items.len(), 16);
+    assert_eq!(record.output_items.len(), 16);
+    assert_eq!(
+        record.input_items[0].content.chars().count(),
+        crate::application::port::outbound::app_server_prompt_log_port::APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS
+    );
+    assert!(record.input_items[0].content.ends_with("retention policy]"));
+
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let database_bytes = std::fs::read(&location.authority_store_path)
+        .expect("authority store bytes should be readable");
+    assert!(
+        !database_bytes
+            .windows(expired_secret.len())
+            .any(|window| window == expired_secret.as_bytes()),
+        "secure_delete must remove expired prompt bytes from SQLite pages"
+    );
+    for rejected_secret in [malformed_secret, future_secret] {
+        assert!(
+            !database_bytes
+                .windows(rejected_secret.len())
+                .any(|window| window == rejected_secret.as_bytes()),
+            "secure_delete must remove malformed or future-dated prompt bytes from SQLite pages"
+        );
+    }
+}
+
+#[test]
+fn disabling_app_server_prompt_log_securely_clears_retained_records() {
+    let workspace_dir = temp_workspace("prompt-log-disabled-clear");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let now = Utc::now().to_rfc3339();
+    let secret = "AKRA_DISABLED_PROMPT_SENTINEL_429c7785";
+    adapter
+        .append_app_server_prompt_interaction(
+            &workspace_dir,
+            AppServerPromptInteractionRecord {
+                sequence: 0,
+                interaction_id: "disabled-clear".to_string(),
+                session_kind: "main".to_string(),
+                operation: "turn".to_string(),
+                status: "completed".to_string(),
+                workspace_dir: workspace_dir.clone(),
+                thread_id: None,
+                turn_id: None,
+                service_name: None,
+                model: None,
+                reasoning_effort: None,
+                developer_instructions: Some(secret.to_string()),
+                input_items: vec![AppServerPromptInputRecord::new("text", "input", secret)],
+                output_items: vec![AppServerPromptOutputRecord::new("output", None, secret)],
+                error_message: None,
+                started_at: now.clone(),
+                completed_at: now,
+            },
+        )
+        .expect("prompt log fixture should append");
+
+    let deleted =
+        SqlitePlanningAuthorityAdapter::clear_app_server_prompt_interaction_records(&workspace_dir)
+            .expect("disabled prompt logs should clear");
+    assert_eq!(deleted, 1);
+
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("authority store should reopen");
+    let record_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM app_server_prompt_interactions",
+            [],
+            |row| row.get(0),
+        )
+        .expect("prompt record count should load");
+    let metadata_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM authority_metadata
+             WHERE key = 'last_app_server_prompt_log_at'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("prompt metadata count should load");
+    drop(connection);
+    assert_eq!(record_count, 0);
+    assert_eq!(metadata_count, 0);
+
+    let database_bytes = std::fs::read(&location.authority_store_path)
+        .expect("authority store bytes should be readable");
+    assert!(
+        !database_bytes
+            .windows(secret.len())
+            .any(|window| window == secret.as_bytes()),
+        "secure_delete must remove disabled prompt bytes from SQLite pages"
+    );
+}
+
+#[test]
+fn app_server_prompt_log_retains_only_the_newest_hundred_records() {
+    let workspace_dir = temp_workspace("prompt-log-count-retention");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    for index in 0..=100 {
+        let now = Utc::now().to_rfc3339();
+        adapter
+            .append_app_server_prompt_interaction(
+                &workspace_dir,
+                AppServerPromptInteractionRecord {
+                    sequence: 0,
+                    interaction_id: format!("interaction-{index}"),
+                    session_kind: "main".to_string(),
+                    operation: "turn".to_string(),
+                    status: "completed".to_string(),
+                    workspace_dir: workspace_dir.clone(),
+                    thread_id: None,
+                    turn_id: None,
+                    service_name: None,
+                    model: None,
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                    input_items: Vec::new(),
+                    output_items: Vec::new(),
+                    error_message: None,
+                    started_at: now.clone(),
+                    completed_at: now,
+                },
+            )
+            .expect("prompt log record should append");
+    }
+
+    let snapshot = adapter
+        .load_recent_app_server_prompt_interactions(&workspace_dir, 200)
+        .expect("retained prompt logs should load");
+    assert_eq!(snapshot.records.len(), 100);
+    assert_eq!(snapshot.records[0].interaction_id, "interaction-100");
+    assert_eq!(snapshot.records[99].interaction_id, "interaction-1");
 }
 
 #[test]
@@ -876,6 +2940,78 @@ fn active_workspace_artifact_removal_preserves_task_authority_snapshot() {
 }
 
 #[test]
+fn active_document_prefix_removal_treats_sql_wildcards_as_literal_path_text() {
+    let workspace_dir = temp_workspace("active-document-literal-prefix");
+    for (path, body) in [
+        (".codex-exec-loop/planning/prompts/a_b/target.md", "target"),
+        (
+            ".codex-exec-loop/planning/prompts/axb/preserved.md",
+            "preserved underscore neighbor",
+        ),
+        (
+            ".codex-exec-loop/planning/prompts/a%b/target.md",
+            "percent target",
+        ),
+        (
+            ".codex-exec-loop/planning/prompts/azzzb/preserved.md",
+            "preserved percent neighbor",
+        ),
+    ] {
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            &workspace_dir,
+            path,
+            Some(body),
+        )
+        .expect("active document should seed");
+    }
+
+    SqlitePlanningAuthorityAdapter::remove_active_planning_entry(
+        &workspace_dir,
+        ".codex-exec-loop/planning/prompts/a_b",
+    )
+    .expect("underscore path should remove literally");
+    SqlitePlanningAuthorityAdapter::remove_active_planning_entry(
+        &workspace_dir,
+        ".codex-exec-loop/planning/prompts/a%b",
+    )
+    .expect("percent path should remove literally");
+
+    for removed_path in [
+        ".codex-exec-loop/planning/prompts/a_b/target.md",
+        ".codex-exec-loop/planning/prompts/a%b/target.md",
+    ] {
+        assert!(
+            SqlitePlanningAuthorityAdapter::load_active_planning_file(
+                &workspace_dir,
+                removed_path,
+            )
+            .expect("removed document should inspect")
+            .is_none()
+        );
+    }
+    for (preserved_path, expected) in [
+        (
+            ".codex-exec-loop/planning/prompts/axb/preserved.md",
+            "preserved underscore neighbor",
+        ),
+        (
+            ".codex-exec-loop/planning/prompts/azzzb/preserved.md",
+            "preserved percent neighbor",
+        ),
+    ] {
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::load_active_planning_file(
+                &workspace_dir,
+                preserved_path,
+            )
+            .expect("neighbor document should inspect")
+            .as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn staged_draft_rows_do_not_mutate_active_workspace_or_task_authority_snapshot() {
     let workspace_dir = temp_workspace("draft-preserves-authority");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -1112,9 +3248,9 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
     assert_eq!(block.task_id, "task-1");
     assert_eq!(block.blocked_at, "2026-05-04T12:00:00+00:00");
     assert!(
-        adapter
+        !adapter
             .try_acquire_distributor_queue_claim(&workspace_dir, "queue-reset", "queue-owner-2")
-            .expect("queue claim should clear during runtime reset")
+            .expect("removed queue must not recreate an orphan claim")
     );
     assert_eq!(
         adapter
@@ -1122,6 +3258,114 @@ fn runtime_reset_preserves_latest_failed_start_dispatch_block_per_task() {
             .expect("official refresh claim should clear during runtime reset"),
         PlanningAuthorityOfficialRefreshClaimStatus::Acquired
     );
+}
+
+#[test]
+fn runtime_reset_preserves_admin_guards_for_guard_first_and_reset_first_orders() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let task_guard_workspace = temp_workspace("runtime-reset-task-guard-first");
+    let collision_task_ids = vec![OFFICIAL_REFRESH_SCOPE_KEY.to_string()];
+    adapter
+        .acquire_admin_task_mutation_guard(
+            &task_guard_workspace,
+            &collision_task_ids,
+            "task-guard-owner",
+        )
+        .expect("task guard should acquire before reset");
+    adapter
+        .clear_parallel_runtime_projections(&task_guard_workspace, "guard-first reset")
+        .expect("runtime reset should complete without deleting task guard");
+    let task_guard_count: i64 = authority_connection(&task_guard_workspace)
+        .query_row(
+            "SELECT COUNT(*) FROM runtime_claims WHERE claim_kind = ?1 AND scope_key = ?2",
+            (ADMIN_TASK_MUTATION_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY),
+            |row| row.get(0),
+        )
+        .expect("task guard should inspect after reset");
+    assert_eq!(
+        task_guard_count, 1,
+        "scope-key collision must not clear task guard"
+    );
+    let late_lease = adapter
+        .upsert_runtime_slot_lease(
+            &task_guard_workspace,
+            &slot_lease_for_task(
+                "slot-collision",
+                OFFICIAL_REFRESH_SCOPE_KEY,
+                ParallelModeSlotLeaseState::Leased,
+            ),
+        )
+        .expect_err("late lease must remain excluded after reset");
+    assert!(late_lease.to_string().contains("admin mutation guard"));
+    adapter
+        .release_admin_task_mutation_guard(
+            &task_guard_workspace,
+            &collision_task_ids,
+            "task-guard-owner",
+        )
+        .expect("task guard should release");
+
+    let file_guard_workspace = temp_workspace("runtime-reset-file-guard-first");
+    adapter
+        .acquire_admin_file_sync_guard(
+            &file_guard_workspace,
+            "file-guard-owner",
+            "export planning support files",
+        )
+        .expect("file guard should acquire before reset");
+    adapter
+        .clear_parallel_runtime_projections(&file_guard_workspace, "file guard reset")
+        .expect("runtime reset should preserve file guard");
+    let file_guard_count: i64 = authority_connection(&file_guard_workspace)
+        .query_row(
+            "SELECT COUNT(*) FROM runtime_claims WHERE claim_kind = ?1",
+            [ADMIN_FILE_SYNC_CLAIM_KIND],
+            |row| row.get(0),
+        )
+        .expect("file guard should inspect after reset");
+    assert_eq!(file_guard_count, 1);
+    let late_command = adapter
+        .enqueue_runtime_dispatch_command(&file_guard_workspace, &dispatch_command_snapshot(991))
+        .expect_err("late dispatch command must remain excluded after reset");
+    assert!(
+        late_command
+            .to_string()
+            .contains("admin authority mutation guard")
+    );
+    adapter
+        .release_admin_file_sync_guard(&file_guard_workspace, "file-guard-owner")
+        .expect("file guard should release");
+
+    let reset_first_workspace = temp_workspace("runtime-reset-first-guard");
+    adapter
+        .clear_parallel_runtime_projections(&reset_first_workspace, "reset first")
+        .expect("empty runtime reset should succeed");
+    adapter
+        .acquire_admin_file_sync_guard(
+            &reset_first_workspace,
+            "reset-first-owner",
+            "apply exported planning support files",
+        )
+        .expect("file guard should acquire after reset");
+    let late_queue = adapter
+        .upsert_runtime_distributor_queue_record(
+            &reset_first_workspace,
+            &queue_record_for_task(
+                "queue-reset-first",
+                "session-reset-first",
+                "task-reset-first",
+            ),
+        )
+        .expect_err("late queue must lose to reset-first guard");
+    assert!(
+        late_queue
+            .to_string()
+            .contains("admin authority mutation guard")
+    );
+    adapter
+        .release_admin_file_sync_guard(&reset_first_workspace, "reset-first-owner")
+        .expect("reset-first guard should release");
 }
 
 #[test]
@@ -1177,6 +3421,513 @@ fn runtime_dispatch_command_enqueue_claim_and_update_round_trips() {
     assert_eq!(
         snapshot.dispatch_commands[0].status_detail.as_deref(),
         Some("launched workers")
+    );
+}
+
+#[test]
+fn admin_file_sync_guard_and_nonterminal_dispatch_commands_are_mutually_exclusive() {
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let session_workspace = temp_workspace("file-sync-runtime-session-first");
+    adapter
+        .upsert_runtime_session_detail(
+            &session_workspace,
+            &running_session_detail(
+                "session-running",
+                "task-running",
+                "2026-05-08T00:00:00+00:00",
+            ),
+        )
+        .expect("running session should persist");
+    let session_error = adapter
+        .acquire_admin_file_sync_guard(
+            &session_workspace,
+            "operator-session",
+            "export planning support files",
+        )
+        .expect_err("running session must block file sync");
+    assert!(
+        session_error
+            .to_string()
+            .contains("session session-running is in_progress")
+    );
+
+    let command_workspace = temp_workspace("file-sync-runtime-command-first");
+    let command = dispatch_command_snapshot(91);
+    assert!(
+        adapter
+            .enqueue_runtime_dispatch_command(&command_workspace, &command)
+            .expect("pending command should enqueue")
+    );
+    let command_error = adapter
+        .acquire_admin_file_sync_guard(
+            &command_workspace,
+            "operator-command",
+            "apply exported planning support files",
+        )
+        .expect_err("pending command must block file sync");
+    assert!(command_error.to_string().contains("dispatch command"));
+
+    let guard_workspace = temp_workspace("file-sync-guard-first-dispatch");
+    adapter
+        .acquire_admin_file_sync_guard(
+            &guard_workspace,
+            "operator-first",
+            "export planning support files",
+        )
+        .expect("idle runtime should admit file sync guard");
+    let late_command = dispatch_command_snapshot(92);
+    let enqueue_error = adapter
+        .enqueue_runtime_dispatch_command(&guard_workspace, &late_command)
+        .expect_err("late enqueue must lose to file sync guard");
+    assert!(
+        enqueue_error
+            .to_string()
+            .contains("admin authority mutation guard")
+    );
+
+    insert_complete_pending_dispatch_command_row(&guard_workspace, &late_command);
+    let claim_error = adapter
+        .try_claim_next_runtime_dispatch_command(&guard_workspace, "dispatcher-late")
+        .expect_err("late dispatch claim must lose to file sync guard");
+    assert!(
+        claim_error
+            .to_string()
+            .contains("admin authority mutation guard")
+    );
+    let update_error = adapter
+        .update_runtime_dispatch_command(&guard_workspace, &late_command)
+        .expect_err("late nonterminal update must lose to file sync guard");
+    assert!(
+        update_error
+            .to_string()
+            .contains("admin authority mutation guard")
+    );
+
+    let mut terminal_command = late_command;
+    terminal_command.mark_canceled("operator file sync cleanup", "2026-05-08T00:01:00+00:00");
+    adapter
+        .update_runtime_dispatch_command(&guard_workspace, &terminal_command)
+        .expect("terminal cleanup update should remain available under file sync guard");
+    adapter
+        .release_admin_file_sync_guard(&guard_workspace, "operator-first")
+        .expect("file sync guard should release");
+}
+
+#[test]
+fn runtime_lease_first_blocks_authority_mutation_guard_after_barrier() {
+    let workspace_dir = temp_workspace("authority-guard-runtime-first");
+    let lease_persisted = Arc::new(Barrier::new(2));
+    let worker_workspace = workspace_dir.clone();
+    let worker_barrier = lease_persisted.clone();
+    let worker = std::thread::spawn(move || {
+        SqlitePlanningAuthorityAdapter::new()
+            .upsert_runtime_slot_lease(
+                &worker_workspace,
+                &slot_lease_for_task(
+                    "slot-runtime-first",
+                    "task-runtime-first",
+                    ParallelModeSlotLeaseState::Running,
+                ),
+            )
+            .expect("runtime-first lease should persist");
+        worker_barrier.wait();
+    });
+
+    lease_persisted.wait();
+    let error = SqlitePlanningAuthorityAdapter::new()
+        .acquire_admin_authority_mutation_guard(
+            &workspace_dir,
+            "direction-owner",
+            "upsert planning direction",
+        )
+        .expect_err("active runtime lease must fence direction mutation");
+    worker.join().expect("runtime-first worker should join");
+
+    assert!(
+        error
+            .to_string()
+            .contains("slot slot-runtime-first is running")
+    );
+}
+
+#[test]
+fn runtime_claim_first_blocks_authority_mutation_guard_after_barrier() {
+    let workspace_dir = temp_workspace("authority-guard-claim-first");
+    let claim_persisted = Arc::new(Barrier::new(2));
+    let worker_workspace = workspace_dir.clone();
+    let worker_barrier = claim_persisted.clone();
+    let worker = std::thread::spawn(move || {
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let refresh_order = adapter
+            .reserve_next_official_refresh_order(&worker_workspace)
+            .expect("claim-first refresh order should reserve");
+        assert_eq!(
+            adapter
+                .acquire_official_refresh_claim(&worker_workspace, refresh_order, "refresh-owner",)
+                .expect("claim-first refresh claim should acquire"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+        worker_barrier.wait();
+        refresh_order
+    });
+
+    claim_persisted.wait();
+    let error = SqlitePlanningAuthorityAdapter::new()
+        .acquire_admin_authority_mutation_guard(
+            &workspace_dir,
+            "direction-owner",
+            "delete planning direction",
+        )
+        .expect_err("active runtime claim must fence direction mutation");
+    let refresh_order = worker.join().expect("claim-first worker should join");
+
+    assert!(error.to_string().contains("official-refresh"), "{error}");
+    SqlitePlanningAuthorityAdapter::new()
+        .release_official_refresh_claim(&workspace_dir, refresh_order, "refresh-owner")
+        .expect("claim-first refresh claim should release");
+}
+
+#[test]
+fn authority_guard_first_fences_task_create_reassignment_and_runtime_lease() {
+    let workspace_dir = temp_workspace("authority-guard-first");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let baseline_authority = task_authority_for_direction("task-existing", "direction-a");
+    let queue_projection = empty_test_queue_projection();
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &baseline_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("baseline task authority should commit");
+    let refresh_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("official refresh order should reserve before the direction guard");
+    adapter
+        .acquire_admin_authority_mutation_guard(
+            &workspace_dir,
+            "direction-owner",
+            "upsert planning direction",
+        )
+        .expect("idle workspace should admit direction guard");
+
+    let attempts_started = Arc::new(Barrier::new(2));
+    let worker_workspace = workspace_dir.clone();
+    let worker_barrier = attempts_started.clone();
+    let worker = std::thread::spawn(move || {
+        worker_barrier.wait();
+        let worker_adapter = SqlitePlanningAuthorityAdapter::new();
+        let queue_projection = empty_test_queue_projection();
+        let mut created = task_authority_for_direction("task-existing", "direction-a");
+        created
+            .tasks
+            .push(authority_task("task-created", "direction-b"));
+        let create_error = worker_adapter
+            .commit_task_authority_snapshot(
+                &worker_workspace,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_authority: &created,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect_err("direction guard must block task creation");
+
+        let reassigned = task_authority_for_direction("task-existing", "direction-b");
+        let reassign_error = worker_adapter
+            .commit_task_authority_snapshot(
+                &worker_workspace,
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: None,
+                    task_authority: &reassigned,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect_err("direction guard must block task reassignment");
+
+        let lease_error = worker_adapter
+            .upsert_runtime_slot_lease(
+                &worker_workspace,
+                &slot_lease_for_task(
+                    "slot-late",
+                    "task-existing",
+                    ParallelModeSlotLeaseState::Leased,
+                ),
+            )
+            .expect_err("direction guard must block a late runtime lease");
+        let claim_error = worker_adapter
+            .acquire_official_refresh_claim(&worker_workspace, refresh_order, "late-refresh-owner")
+            .expect_err("direction guard must block a late runtime claim");
+        let active_document_error = SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            &worker_workspace,
+            RESULT_OUTPUT_FILE_PATH,
+            Some("late active document"),
+        )
+        .expect_err("direction guard must block a late active document write");
+        (
+            create_error.to_string(),
+            reassign_error.to_string(),
+            lease_error.to_string(),
+            claim_error.to_string(),
+            active_document_error.to_string(),
+        )
+    });
+
+    attempts_started.wait();
+    let (create_error, reassign_error, lease_error, claim_error, active_document_error) =
+        worker.join().expect("guard-first worker should join");
+    for error in [
+        &create_error,
+        &reassign_error,
+        &lease_error,
+        &claim_error,
+        &active_document_error,
+    ] {
+        assert!(error.contains("admin authority mutation guard"), "{error}");
+    }
+    adapter
+        .release_admin_authority_mutation_guard(&workspace_dir, "direction-owner")
+        .expect("direction guard should release");
+    let persisted = adapter
+        .load_task_authority_snapshot(&workspace_dir)
+        .expect("baseline task authority should reload")
+        .expect("baseline task authority should remain");
+    assert_eq!(persisted.task_authority, baseline_authority);
+}
+
+#[test]
+fn stale_direction_child_snapshot_cannot_admit_phantom_runtime_task() {
+    let workspace_dir = temp_workspace("authority-guard-phantom-child");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let empty_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let queue_projection = empty_test_queue_projection();
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &empty_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("empty baseline should commit");
+
+    let snapshot_taken = Arc::new(Barrier::new(2));
+    let phantom_started = Arc::new(Barrier::new(2));
+    let worker_workspace = workspace_dir.clone();
+    let worker_snapshot_barrier = snapshot_taken.clone();
+    let worker_phantom_barrier = phantom_started.clone();
+    let direction_worker = std::thread::spawn(move || {
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let stale_snapshot = adapter
+            .load_task_authority_snapshot(&worker_workspace)
+            .expect("direction child snapshot should load")
+            .expect("direction child snapshot should exist");
+        assert!(stale_snapshot.task_authority.tasks.is_empty());
+        worker_snapshot_barrier.wait();
+        worker_phantom_barrier.wait();
+        adapter
+            .acquire_admin_authority_mutation_guard(
+                &worker_workspace,
+                "stale-direction-owner",
+                "upsert planning direction",
+            )
+            .expect_err("new runtime child must fence the stale direction edit")
+            .to_string()
+    });
+
+    snapshot_taken.wait();
+    let phantom_authority = task_authority_for_direction("task-phantom", "direction-a");
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &phantom_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("phantom child task should commit after the stale snapshot");
+    adapter
+        .upsert_runtime_slot_lease(
+            &workspace_dir,
+            &slot_lease_for_task(
+                "slot-phantom",
+                "task-phantom",
+                ParallelModeSlotLeaseState::Running,
+            ),
+        )
+        .expect("phantom child runtime should start before direction guard acquisition");
+    phantom_started.wait();
+
+    let error = direction_worker
+        .join()
+        .expect("stale direction worker should join");
+    assert!(error.contains("slot slot-phantom is running"), "{error}");
+}
+
+#[test]
+fn stale_direction_catalog_conflicts_without_deleting_new_authority() {
+    let workspace_dir = temp_workspace("authority-guard-stale-direction-cas");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let direction_a = DirectionDefinition {
+        id: "direction-a".to_string(),
+        title: "Direction A".to_string(),
+        summary: "baseline direction".to_string(),
+        success_criteria: vec!["done".to_string()],
+        scope_hints: Vec::new(),
+        detail_doc_path: String::new(),
+        state: DirectionState::Active,
+    };
+    let baseline_directions = DirectionCatalogDocument {
+        version: 1,
+        queue_idle: QueueIdleConfig {
+            policy: QueueIdlePolicy::Stop,
+            prompt_path: String::new(),
+        },
+        directions: vec![direction_a.clone()],
+    };
+    let empty_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let empty_queue = empty_test_queue_projection();
+    let baseline_result = adapter
+        .commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: None,
+                directions: &baseline_directions,
+                task_authority: &empty_authority,
+                queue_projection: &empty_queue,
+                result_output_markdown: "# Result Output\n",
+                active_document_mutations: &[],
+                retired_task_ids: &[],
+                authority_mutation_owner_token: None,
+            },
+        )
+        .expect("baseline authority should commit");
+    let PlanningTaskAuthorityCommitResult::Committed {
+        planning_revision: baseline_revision,
+        ..
+    } = baseline_result
+    else {
+        panic!("baseline authority should commit");
+    };
+
+    let stale_snapshot_loaded = Arc::new(Barrier::new(2));
+    let concurrent_commit_finished = Arc::new(Barrier::new(2));
+    let worker_workspace = workspace_dir.clone();
+    let worker_loaded = stale_snapshot_loaded.clone();
+    let worker_commit_finished = concurrent_commit_finished.clone();
+    let worker = std::thread::spawn(move || {
+        let adapter = SqlitePlanningAuthorityAdapter::new();
+        let stale_snapshot = adapter
+            .load_direction_authority_snapshot(&worker_workspace)
+            .expect("stale direction snapshot should load")
+            .expect("stale direction snapshot should exist");
+        assert_eq!(stale_snapshot.planning_revision, baseline_revision);
+        worker_loaded.wait();
+        worker_commit_finished.wait();
+
+        adapter
+            .acquire_admin_authority_mutation_guard(
+                &worker_workspace,
+                "stale-direction-owner",
+                "edit stale direction catalog",
+            )
+            .expect("idle runtime should admit the operator guard");
+        let result = adapter
+            .commit_direction_authority_snapshot(
+                &worker_workspace,
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: Some(stale_snapshot.planning_revision),
+                    directions: &stale_snapshot.directions,
+                    authority_mutation_owner_token: Some("stale-direction-owner"),
+                },
+            )
+            .expect("stale direction commit should return a conflict");
+        adapter
+            .release_admin_authority_mutation_guard(&worker_workspace, "stale-direction-owner")
+            .expect("stale direction guard should release");
+        result
+    });
+
+    stale_snapshot_loaded.wait();
+    let changed_directions = DirectionCatalogDocument {
+        directions: vec![
+            direction_a,
+            DirectionDefinition {
+                id: "direction-b".to_string(),
+                title: "Direction B".to_string(),
+                summary: "concurrent direction".to_string(),
+                success_criteria: vec!["preserved".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            },
+        ],
+        ..baseline_directions
+    };
+    let changed_authority = task_authority_for_direction("task-b", "direction-b");
+    let concurrent_result = adapter
+        .commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: Some(baseline_revision),
+                directions: &changed_directions,
+                task_authority: &changed_authority,
+                queue_projection: &empty_queue,
+                result_output_markdown: "# Result Output\n\nConcurrent edit\n",
+                active_document_mutations: &[],
+                retired_task_ids: &[],
+                authority_mutation_owner_token: None,
+            },
+        )
+        .expect("concurrent authority should commit");
+    assert!(matches!(
+        concurrent_result,
+        PlanningTaskAuthorityCommitResult::Committed { changed: true, .. }
+    ));
+    concurrent_commit_finished.wait();
+
+    let stale_result = worker.join().expect("stale direction worker should join");
+    assert!(matches!(
+        stale_result,
+        PlanningTaskAuthorityCommitResult::Conflict {
+            observed_planning_revision,
+            current_planning_revision,
+        } if observed_planning_revision == baseline_revision
+            && current_planning_revision > baseline_revision
+    ));
+    let persisted_directions = adapter
+        .load_direction_authority_snapshot(&workspace_dir)
+        .expect("directions should reload")
+        .expect("directions should remain present");
+    assert!(
+        persisted_directions
+            .directions
+            .directions
+            .iter()
+            .any(|direction| direction.id == "direction-b")
+    );
+    let persisted_tasks = adapter
+        .load_task_authority_snapshot(&workspace_dir)
+        .expect("tasks should reload")
+        .expect("tasks should remain present");
+    assert!(
+        persisted_tasks
+            .task_authority
+            .tasks
+            .iter()
+            .any(|task| task.id == "task-b")
     );
 }
 
@@ -1528,9 +4279,9 @@ fn runtime_task_cleanup_removes_deleted_task_projections_only() {
     assert_eq!(snapshot.distributor_queue_records.len(), 1);
     assert_eq!(snapshot.distributor_queue_records[0].task_id, "task-kept");
     assert!(
-        adapter
+        !adapter
             .try_acquire_distributor_queue_claim(&workspace_dir, "queue-deleted", "owner-2")
-            .expect("deleted queue claim should be cleared")
+            .expect("deleted queue must not recreate an orphan claim")
     );
 }
 
@@ -1669,6 +4420,43 @@ fn malformed_runtime_projection_rows_report_row_specific_context() {
     assert!(
         format!("{slot_error:?}").contains("failed to deserialize runtime slot lease `slot-bad`")
     );
+
+    let generation_workspace = temp_workspace("runtime-bad-slot-generation");
+    let mut malformed_generation = serde_json::to_value(slot_lease(
+        "slot-generation",
+        ParallelModeSlotLeaseState::Leased,
+    ))
+    .expect("slot lease should serialize");
+    malformed_generation["lease_generation"] =
+        serde_json::Value::String("not-a-valid-generation".to_string());
+    authority_connection(&generation_workspace)
+        .execute(
+            "INSERT INTO runtime_slot_leases (slot_id, updated_at, content)
+             VALUES (?1, ?2, ?3)",
+            (
+                "slot-generation",
+                "2026-05-04T10:00:00+00:00",
+                serde_json::to_string(&malformed_generation)
+                    .expect("malformed generation payload should serialize"),
+            ),
+        )
+        .expect("malformed persisted generation row should insert");
+    let generation_error = adapter
+        .load_runtime_projections(&generation_workspace)
+        .expect_err("malformed persisted generation must fail projection load");
+    let generation_message = format!("{generation_error:?}");
+    assert!(generation_message.contains("slot-generation"));
+    assert!(generation_message.contains("64 lowercase hexadecimal"));
+
+    let mut rejected_upsert = slot_lease(
+        "slot-rejected-generation",
+        ParallelModeSlotLeaseState::Leased,
+    );
+    rejected_upsert.lease_generation = Some("short".to_string());
+    let upsert_error = adapter
+        .upsert_runtime_slot_lease(&generation_workspace, &rejected_upsert)
+        .expect_err("adapter must reject malformed generations before persistence");
+    assert!(format!("{upsert_error:?}").contains("invalid lease generation"));
 
     let session_workspace = temp_workspace("runtime-bad-session-json");
     authority_connection(&session_workspace)
@@ -1942,9 +4730,191 @@ fn official_refresh_claim_orders_are_enforced_by_authority_store() {
 }
 
 #[test]
+fn official_refresh_claim_cancel_preserves_order_and_requires_exact_owner() {
+    let workspace_dir = temp_workspace("official-refresh-claim-cancel");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let first_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("first order should reserve");
+    let second_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("second order should reserve");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, first_order, "first-owner")
+            .expect("first order should acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+
+    adapter
+        .cancel_official_refresh_claim(&workspace_dir, second_order, "first-owner")
+        .expect("wrong-order cancellation should be an idempotent no-op");
+    adapter
+        .cancel_official_refresh_claim(&workspace_dir, first_order, "wrong-owner")
+        .expect("wrong-owner cancellation should be an idempotent no-op");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, first_order, "replacement-owner")
+            .expect("the original owner should still fence the order"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+    );
+
+    adapter
+        .cancel_official_refresh_claim(&workspace_dir, first_order, "first-owner")
+        .expect("exact owner and order should cancel");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, first_order, "replacement-owner")
+            .expect("canceled order should be reacquirable"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, second_order, "second-owner")
+            .expect("later order should still wait"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+    );
+    adapter
+        .release_official_refresh_claim(&workspace_dir, first_order, "replacement-owner")
+        .expect("reacquired order should complete");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, second_order, "second-owner")
+            .expect("later order should run only after successful completion"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+}
+
+#[test]
+fn official_refresh_claim_heartbeat_and_live_process_fence_prevent_stale_takeover() {
+    let workspace_dir = temp_workspace("official-refresh-live-owner");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let refresh_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("refresh order should reserve");
+    let owner = format!(
+        "official-refresh-{}-{refresh_order}-live",
+        std::process::id()
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, &owner)
+            .expect("live owner should acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+
+    set_claim_timestamp(
+        &workspace_dir,
+        OFFICIAL_REFRESH_CLAIM_KIND,
+        OFFICIAL_REFRESH_SCOPE_KEY,
+        "2000-01-01T00:00:00+00:00",
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "competing-owner")
+            .expect("live stale owner should remain fenced"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Waiting
+    );
+    assert!(
+        adapter
+            .renew_official_refresh_claim(&workspace_dir, refresh_order, &owner)
+            .expect("exact owner should renew")
+    );
+    assert!(
+        !adapter
+            .renew_official_refresh_claim(&workspace_dir, refresh_order, "wrong-owner")
+            .expect("wrong owner renewal should be rejected")
+    );
+}
+
+#[test]
+fn official_refresh_stale_claim_is_reclaimed_after_owner_process_exits() {
+    #[cfg(unix)]
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .expect("short-lived Unix child should spawn");
+    #[cfg(windows)]
+    let mut child = std::process::Command::new("cmd")
+        .args(["/C", "exit", "0"])
+        .spawn()
+        .expect("short-lived Windows child should spawn");
+    let dead_pid = child.id();
+    child.wait().expect("short-lived child should exit");
+
+    let workspace_dir = temp_workspace("official-refresh-dead-owner");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let refresh_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("refresh order should reserve");
+    let owner = format!("official-refresh-{dead_pid}-{refresh_order}-dead");
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, &owner)
+            .expect("initial owner should acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+    set_claim_timestamp(
+        &workspace_dir,
+        OFFICIAL_REFRESH_CLAIM_KIND,
+        OFFICIAL_REFRESH_SCOPE_KEY,
+        "2000-01-01T00:00:00+00:00",
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "replacement-owner")
+            .expect("dead stale owner should be reclaimed"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+}
+
+#[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
+#[test]
+fn official_refresh_stale_claim_is_reclaimed_after_pid_reuse() {
+    let pid = std::process::id();
+    let current_start_identity = crate::process_liveness::process_start_identity(pid)
+        .expect("current process identity probe should succeed")
+        .expect("supported OS should expose process start identity");
+    let stale_start_identity = format!("{current_start_identity}-previous-lifetime");
+    let workspace_dir = temp_workspace("official-refresh-reused-pid-owner");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let refresh_order = adapter
+        .reserve_next_official_refresh_order(&workspace_dir)
+        .expect("refresh order should reserve");
+    let owner = format!(
+        "official-refresh-{pid}-{refresh_order}-crashed-process-start:{stale_start_identity}"
+    );
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, &owner)
+            .expect("old process lifetime should initially acquire"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+    set_claim_timestamp(
+        &workspace_dir,
+        OFFICIAL_REFRESH_CLAIM_KIND,
+        OFFICIAL_REFRESH_SCOPE_KEY,
+        "2000-01-01T00:00:00+00:00",
+    );
+
+    assert_eq!(
+        adapter
+            .acquire_official_refresh_claim(&workspace_dir, refresh_order, "replacement-owner")
+            .expect("same PID with a different start identity should be reclaimed"),
+        PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+    );
+}
+
+#[test]
 fn runtime_claim_release_and_stale_timestamp_edges_respect_claim_ownership() {
     let workspace_dir = temp_workspace("runtime-claim-release-edges");
     let adapter = SqlitePlanningAuthorityAdapter::new();
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &workspace_dir,
+            &queue_record_for_task("queue-claim", "session-claim", "task-claim"),
+        )
+        .expect("claimable queue record should persist");
 
     assert!(
         adapter
@@ -2010,6 +4980,103 @@ fn runtime_claim_release_and_stale_timestamp_edges_respect_claim_ownership() {
             .acquire_official_refresh_claim(&workspace_dir, refresh_order, "refresh-owner")
             .expect("advanced pointer should still mark old order completed"),
         PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted
+    );
+}
+
+#[test]
+fn distributor_queue_claim_renewal_is_owner_bound_after_stale_replacement() {
+    let workspace_dir = temp_workspace("runtime-claim-renewal-owner");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &workspace_dir,
+            &queue_record_for_task("queue-renew", "session-renew", "task-renew"),
+        )
+        .expect("renewable queue record should persist");
+
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-renew", "owner-initial")
+            .expect("initial queue claim should acquire")
+    );
+    set_claim_timestamp(
+        &workspace_dir,
+        DISTRIBUTOR_QUEUE_CLAIM_KIND,
+        "queue-renew",
+        "2999-01-01T00:00:00+00:00",
+    );
+    assert!(
+        adapter
+            .renew_distributor_queue_claim(&workspace_dir, "queue-renew", "owner-initial")
+            .expect("matching owner should renew its queue claim")
+    );
+    assert_ne!(
+        runtime_claim_owner_and_timestamp(
+            &workspace_dir,
+            DISTRIBUTOR_QUEUE_CLAIM_KIND,
+            "queue-renew",
+        )
+        .1,
+        "2999-01-01T00:00:00+00:00"
+    );
+
+    set_claim_timestamp(
+        &workspace_dir,
+        DISTRIBUTOR_QUEUE_CLAIM_KIND,
+        "queue-renew",
+        "2999-01-01T00:00:00+00:00",
+    );
+    assert!(
+        !adapter
+            .renew_distributor_queue_claim(&workspace_dir, "queue-renew", "owner-wrong")
+            .expect("wrong owner renewal should be rejected")
+    );
+    assert_eq!(
+        runtime_claim_owner_and_timestamp(
+            &workspace_dir,
+            DISTRIBUTOR_QUEUE_CLAIM_KIND,
+            "queue-renew",
+        ),
+        (
+            "owner-initial".to_string(),
+            "2999-01-01T00:00:00+00:00".to_string(),
+        )
+    );
+
+    set_claim_timestamp(
+        &workspace_dir,
+        DISTRIBUTOR_QUEUE_CLAIM_KIND,
+        "queue-renew",
+        "2000-01-01T00:00:00+00:00",
+    );
+    assert!(
+        adapter
+            .try_acquire_distributor_queue_claim(&workspace_dir, "queue-renew", "owner-replacement")
+            .expect("replacement owner should reclaim the stale queue claim")
+    );
+    let replacement_claim = runtime_claim_owner_and_timestamp(
+        &workspace_dir,
+        DISTRIBUTOR_QUEUE_CLAIM_KIND,
+        "queue-renew",
+    );
+    assert_eq!(replacement_claim.0, "owner-replacement");
+    assert!(
+        !adapter
+            .renew_distributor_queue_claim(&workspace_dir, "queue-renew", "owner-initial")
+            .expect("replaced owner renewal should be rejected")
+    );
+    assert_eq!(
+        runtime_claim_owner_and_timestamp(
+            &workspace_dir,
+            DISTRIBUTOR_QUEUE_CLAIM_KIND,
+            "queue-renew",
+        ),
+        replacement_claim
+    );
+    assert!(
+        adapter
+            .renew_distributor_queue_claim(&workspace_dir, "queue-renew", "owner-replacement")
+            .expect("replacement owner should retain its queue claim")
     );
 }
 
@@ -2206,9 +5273,9 @@ fn stale_distributor_claims_invalid_slots_pool_reset_and_zero_limit_events_are_p
     assert!(reset_snapshot.session_details.is_empty());
     assert!(reset_snapshot.distributor_queue_records.is_empty());
     assert!(
-        adapter
+        !adapter
             .try_acquire_distributor_queue_claim(&workspace_dir, "queue-reset", "owner-after-reset")
-            .expect("reset queue claim should be cleared")
+            .expect("reset queue must not recreate an orphan claim")
     );
 
     adapter
@@ -2360,13 +5427,13 @@ fn pool_reset_report_clears_only_successful_slots_and_reads_unfiltered_events() 
         "queue-blocked"
     );
     assert!(
-        adapter
+        !adapter
             .try_acquire_distributor_queue_claim(
                 &workspace_dir,
                 "queue-success",
                 "owner-success-after-reset",
             )
-            .expect("success queue claim should be cleared")
+            .expect("removed success queue must not recreate an orphan claim")
     );
     assert!(
         !adapter
@@ -2490,14 +5557,14 @@ fn runtime_task_cleanup_trims_deduplicates_and_clears_multiple_tasks() {
     assert!(!snapshot.invalid_slot_leases.contains("slot-b"));
     assert!(snapshot.invalid_slot_leases.contains("slot-c"));
     assert!(
-        adapter
+        !adapter
             .try_acquire_distributor_queue_claim(&workspace_dir, "queue-a", "owner-after")
-            .expect("task-a queue claim should clear")
+            .expect("removed task-a queue must not recreate a claim")
     );
     assert!(
-        adapter
+        !adapter
             .try_acquire_distributor_queue_claim(&workspace_dir, "queue-b", "owner-after")
-            .expect("task-b queue claim should clear")
+            .expect("removed task-b queue must not recreate a claim")
     );
     assert!(
         !adapter
@@ -3022,6 +6089,16 @@ fn runtime_projection_cleanup_error_contexts_report_sqlite_failures() {
     );
 
     let stale_queue_workspace = temp_workspace("runtime-cleanup-error-stale-queue-claim");
+    adapter
+        .upsert_runtime_distributor_queue_record(
+            &stale_queue_workspace,
+            &queue_record_for_task(
+                "queue-stale-delete",
+                "session-stale-delete",
+                "task-stale-delete",
+            ),
+        )
+        .expect("stale queue record should persist");
     assert!(
         adapter
             .try_acquire_distributor_queue_claim(
@@ -3124,6 +6201,49 @@ fn runtime_slot_removal_without_current_row_clears_invalid_marker_without_event(
             .runtime_events
             .iter()
             .any(|event| event.event_kind == "slot_lease_removed")
+    );
+}
+
+#[test]
+fn runtime_slot_compare_and_delete_preserves_replacement_generation() {
+    let workspace_dir = temp_workspace("runtime-slot-removal-cas");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let stale = slot_lease("slot-cas", ParallelModeSlotLeaseState::CleanupPending);
+    let mut replacement = stale.clone();
+    replacement.task_id = "replacement-task".to_string();
+    replacement.agent_id = "replacement-agent".to_string();
+    replacement.branch_name = "akra-agent/slot-cas/replacement".to_string();
+    replacement.leased_at = "2026-07-10T12:00:00+00:00".to_string();
+    replacement.state = ParallelModeSlotLeaseState::Leased;
+
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &stale)
+        .expect("stale lease should persist");
+    adapter
+        .upsert_runtime_slot_lease(&workspace_dir, &replacement)
+        .expect("replacement lease should persist");
+
+    assert!(
+        !adapter
+            .remove_runtime_slot_lease_if_matches(&workspace_dir, &stale)
+            .expect("stale compare-and-delete should be rejected")
+    );
+    let preserved = adapter
+        .load_runtime_projections(&workspace_dir)
+        .expect("replacement projection should remain");
+    assert_eq!(preserved.slot_leases.get("slot-cas"), Some(&replacement));
+
+    assert!(
+        adapter
+            .remove_runtime_slot_lease_if_matches(&workspace_dir, &replacement)
+            .expect("exact replacement compare-and-delete should succeed")
+    );
+    assert!(
+        !adapter
+            .load_runtime_projections(&workspace_dir)
+            .expect("removed projection should load")
+            .slot_leases
+            .contains_key("slot-cas")
     );
 }
 
@@ -3367,7 +6487,14 @@ fn queue_record_for_task(
         agent_id: "agent-1".to_string(),
         task_id: task_id.to_string(),
         task_title: "Task One".to_string(),
+        delivery_target: Some(PlanningAuthorityDistributorDeliveryTarget::new(
+            "origin",
+            "acme/widgets",
+            GithubRepositoryVisibility::Private,
+            "prerelease",
+        )),
         source_branch: "prerelease".to_string(),
+        source_base_commit_sha: "base".to_string(),
         source_commit_sha: "source".to_string(),
         branch_name: format!("akra-agent/slot-1/{task_id}"),
         worktree_path: "/tmp/worktree".to_string(),
@@ -3375,6 +6502,8 @@ fn queue_record_for_task(
         original_commit_sha: None,
         planning_refresh_state: "complete".to_string(),
         integration_state: "queued".to_string(),
+        integration_base_commit_sha: None,
+        integration_commit_sha: None,
         conflict_files: Vec::new(),
         recovery_note: None,
         validation_summary: "validation unavailable".to_string(),
@@ -3386,5 +6515,66 @@ fn queue_record_for_task(
         integration_note: "queued".to_string(),
         enqueued_at: "2026-05-04T10:00:00+00:00".to_string(),
         updated_at: "2026-05-04T10:00:00+00:00".to_string(),
+        retry_attempts: 0,
+        retry_not_before: None,
+    }
+}
+
+fn empty_test_queue_projection() -> PriorityQueueProjection {
+    PriorityQueueProjection {
+        next_task: None,
+        active_tasks: Vec::new(),
+        proposed_tasks: Vec::new(),
+        skipped_tasks: Vec::new(),
+    }
+}
+
+fn test_direction_catalog(direction_ids: &[&str]) -> DirectionCatalogDocument {
+    DirectionCatalogDocument {
+        version: 1,
+        queue_idle: QueueIdleConfig {
+            policy: QueueIdlePolicy::Stop,
+            prompt_path: String::new(),
+        },
+        directions: direction_ids
+            .iter()
+            .map(|direction_id| DirectionDefinition {
+                id: (*direction_id).to_string(),
+                title: format!("Direction {direction_id}"),
+                summary: "test direction".to_string(),
+                success_criteria: vec!["done".to_string()],
+                scope_hints: Vec::new(),
+                detail_doc_path: String::new(),
+                state: DirectionState::Active,
+            })
+            .collect(),
+    }
+}
+
+fn task_authority_for_direction(task_id: &str, direction_id: &str) -> TaskAuthorityDocument {
+    TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![authority_task(task_id, direction_id)],
+    }
+}
+
+fn authority_task(task_id: &str, direction_id: &str) -> TaskDefinition {
+    TaskDefinition {
+        id: task_id.to_string(),
+        direction_id: direction_id.to_string(),
+        direction_relation_note: "test direction relation".to_string(),
+        title: format!("Task {task_id}"),
+        description: "authority fence test task".to_string(),
+        status: TaskStatus::Ready,
+        base_priority: 50,
+        dynamic_priority_delta: 0,
+        priority_reason: String::new(),
+        depends_on: Vec::new(),
+        blocked_by: Vec::new(),
+        created_by: TaskActor::User,
+        last_updated_by: TaskActor::User,
+        source_turn_id: None,
+        provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+        updated_at: "2026-05-07T09:00:00Z".to_string(),
     }
 }

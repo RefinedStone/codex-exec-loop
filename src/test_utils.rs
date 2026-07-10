@@ -1,4 +1,12 @@
 use serde_json::Value;
+#[cfg(unix)]
+use std::sync::Mutex;
+
+#[cfg(unix)]
+pub(crate) fn process_environment_mutex() -> &'static Mutex<()> {
+    static PROCESS_ENVIRONMENT_MUTEX: Mutex<()> = Mutex::new(());
+    &PROCESS_ENVIRONMENT_MUTEX
+}
 
 pub(crate) fn json_payload_contains(value: &Value, needle: &str) -> bool {
     match value {

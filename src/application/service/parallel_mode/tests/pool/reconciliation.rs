@@ -1,5 +1,4 @@
 use super::*;
-use crate::application::service::parallel_mode::NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL;
 
 // pool directory가 아직 만들어지지 않은 상태는 장애가 아니라 초기 준비 상태다.
 // board builder는 slot을 임의로 만들지 않고 missing으로만 보고해야 하며, 이때
@@ -100,7 +99,14 @@ fn parallel_enable_reset_reports_unseedable_agent_branch_baseline() {
         .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
         .expect_err("agent branch should not seed the pool baseline");
 
-    assert_eq!(error, "pool baseline could not be created");
+    assert!(
+        error.starts_with("exact pool integration target could not be fetched safely:"),
+        "unexpected exact-fetch error: {error}"
+    );
+    assert!(
+        error.contains("couldn't find remote ref refs/heads/prerelease"),
+        "missing integration ref should remain explicit: {error}"
+    );
 }
 
 #[test]
@@ -146,12 +152,12 @@ fn reconcile_reports_unseedable_agent_branch_baseline() {
     assert_eq!(pool.blocked_slots, DEFAULT_POOL_SIZE);
     assert!(
         pool.reconcile_status
-            .contains("pool baseline could not be created")
+            .contains("test reconcile blocked / verified fixture target is unavailable")
     );
     assert!(
-        pool.slots
-            .iter()
-            .all(|slot| slot.worktree_label == "pool baseline is unavailable during reconcile")
+        pool.slots.iter().all(
+            |slot| slot.worktree_label == "test fixture pool integration target is unavailable"
+        )
     );
 }
 
@@ -223,11 +229,10 @@ fn detached_prerelease_slot_with_stale_rebase_head_counts_as_idle_baseline() {
     assert_eq!(pool.blocked_slots, 0);
 }
 
-// agent branch가 이미 `prerelease`에 merge된 뒤 lease mirror가 없으면 새 작업을
-// 배정하기 전에 cleanup이 필요한 상태다. board는 이를 blocked가 아니라
-// awaiting cleanup으로 분류해 자동 정리 대상임을 표현한다.
+// Even a currently integrated orphan cannot be called cleanup-ready by a
+// read-only board because the tracking ref has no fetch timestamp/proof.
 #[test]
-fn agent_branch_slot_is_marked_awaiting_cleanup() {
+fn read_only_board_blocks_integrated_orphan_without_fetch_proof() {
     let repo = TempGitRepo::new("cleanup-slot");
     repo.create_agent_slot(1, "task-one");
     let slot_path = repo.pool_root().join(slot_id(1));
@@ -246,10 +251,61 @@ fn agent_branch_slot_is_marked_awaiting_cleanup() {
     );
     let slot = &pool.slots[0];
 
-    assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
+    assert_eq!(slot.state, ParallelModePoolSlotState::Blocked);
     assert!(slot.branch_name.starts_with("akra-agent/slot-1/"));
-    assert_eq!(slot.owner_label, "cleanup pending");
-    assert_eq!(pool.awaiting_cleanup_slots, 1);
+    assert_eq!(slot.owner_label, "operator recovery");
+    assert_eq!(pool.awaiting_cleanup_slots, 0);
+    assert!(
+        slot.worktree_label
+            .contains("integration proof unavailable")
+    );
+}
+
+#[test]
+fn stale_tracking_ref_never_marks_remote_rolled_back_orphan_cleanup_ready() {
+    let repo = TempGitRepo::new("stale-read-only-cleanup-proof");
+    let slot_path = repo.create_agent_slot(1, "task-one");
+    let integration_base = repo.head_sha();
+    repo.commit_file_in_slot(&slot_path, "result.txt", "result\n", "agent result");
+    repo.merge_agent_slot_into_akra(&slot_path);
+    let origin = repo.create_bare_origin_remote();
+    run_git(
+        &origin,
+        &[
+            "update-ref",
+            local_standard_ref().as_str(),
+            &integration_base,
+        ],
+    );
+
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+    let read_only = build_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &repo.workspace_dir(),
+        Some(&readiness),
+    );
+    assert_eq!(read_only.slots[0].state, ParallelModePoolSlotState::Blocked);
+    assert!(
+        read_only.slots[0]
+            .worktree_label
+            .contains("integration proof unavailable")
+    );
+
+    let service = test_parallel_mode_service();
+    let reconciled = service
+        .reconcile_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness))
+        .pool;
+    assert_eq!(
+        reconciled.slots[0].state,
+        ParallelModePoolSlotState::Blocked
+    );
+    assert!(slot_path.join("result.txt").exists());
+    assert!(repo.branch_exists("akra-agent/slot-1/task-one"));
 }
 
 // lease 없이 남은 agent branch가 아직 merge되지 않았다면 자동으로 지우면 안 된다.
@@ -275,13 +331,13 @@ fn non_merged_agent_branch_without_lease_surfaces_operator_recovery_notice() {
     assert!(slot.branch_name.starts_with("akra-agent/slot-1/"));
     assert!(
         slot.worktree_label
-            .contains(NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL)
+            .contains("integration proof unavailable")
     );
     assert!(
         snapshot
             .pool
             .reconcile_status
-            .contains("next action: inspect the slot branch")
+            .contains("run a remote reconcile fetch before cleanup")
     );
     let notice = snapshot
         .top_notice
@@ -289,8 +345,8 @@ fn non_merged_agent_branch_without_lease_surfaces_operator_recovery_notice() {
         .expect("operator recovery notice should be surfaced");
     assert!(notice.contains("pool: blocked"));
     assert!(notice.contains("slot-1"));
-    assert!(notice.contains("not integrated into `prerelease`"));
-    assert!(notice.contains("next action: inspect the slot branch"));
+    assert!(notice.contains("remote integration proof is unavailable"));
+    assert!(notice.contains("run a remote reconcile fetch before cleanup"));
 }
 
 // board-only 경로는 사용자의 dirty baseline worktree를 고치지 않는다. detached
@@ -319,9 +375,7 @@ fn dirty_prerelease_baseline_slot_is_blocked_for_operator_recovery() {
     assert!(slot.worktree_label.contains("unstaged changes"));
 }
 
-// reconcile 경로는 idle detached baseline이 dirty해도 버릴 수 있는 cache로 본다.
-// 실제 작업 lease가 없는 재사용 slot은 reset되어 다시 seed baseline으로 돌아가야
-// 다음 agent에게 오염된 worktree가 배정되지 않는다.
+// lease가 없는 idle detached baseline도 dirty하면 operator-owned data로 보존한다.
 #[test]
 fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
     let repo = TempGitRepo::new("dirty-reusable-slot");
@@ -335,13 +389,13 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
         &repo.workspace_dir(),
     );
 
-    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert_eq!(pool.blocked_slots, 0);
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(pool.blocked_slots, 1);
     assert_eq!(
         fs::read_to_string(slot_path.join("README.md")).expect("README should be readable"),
-        "seed\n"
+        "dirty\n"
     );
-    assert!(!slot_path.join("scratch.tmp").exists());
+    assert!(slot_path.join("scratch.tmp").exists());
 }
 
 // 한 slot이 running인 동안에도 다른 idle baseline들은 표준 remote branch로 정리될 수
@@ -390,12 +444,12 @@ fn reconcile_resets_reusable_detached_slots_while_another_slot_is_running() {
     );
 
     assert_eq!(refreshed_pool.running_slots, 1);
-    assert_eq!(refreshed_pool.idle_slots, DEFAULT_POOL_SIZE - 1);
-    assert_eq!(refreshed_pool.blocked_slots, 0);
+    assert_eq!(refreshed_pool.idle_slots, DEFAULT_POOL_SIZE - 2);
+    assert_eq!(refreshed_pool.blocked_slots, 1);
     assert_eq!(
         fs::read_to_string(reusable_slot_path.join("README.md"))
             .expect("README should be readable"),
-        "seed\n"
+        "dirty\n"
     );
     assert_eq!(
         run_command(
@@ -474,8 +528,14 @@ fn parallel_entry_from_off_preserves_recent_leased_slot_with_invalid_timestamp()
         )
         .expect("slot lease should be acquired");
     lease.leased_at = "not-a-timestamp".to_string();
-    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &lease)
-        .expect("invalid timestamp lease should be persisted");
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("invalid timestamp lease should be persisted");
     let slot_path = PathBuf::from(lease.worktree_path.clone());
 
     let report = service
@@ -495,7 +555,7 @@ fn parallel_entry_from_off_preserves_recent_leased_slot_with_invalid_timestamp()
 }
 
 #[test]
-fn parallel_entry_reset_reloads_context_after_clean_split_brain_cleanup() {
+fn parallel_entry_reset_preserves_clean_split_brain_running_lease() {
     let repo = TempGitRepo::new("parallel-reset-clean-split-brain");
     let service = test_parallel_mode_service();
     let lease = service
@@ -516,12 +576,12 @@ fn parallel_entry_reset_reloads_context_after_clean_split_brain_cleanup() {
 
     let report = service
         .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
-        .expect("split-brain cleanup should refresh reset context");
+        .expect("split-brain running lease should remain protected");
 
-    assert_eq!(report.live_blocker_count(), 0);
-    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE);
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(report.succeeded_reset_slot_ids().contains(&lease.slot_id));
+    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE - 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(!report.succeeded_reset_slot_ids().contains(&lease.slot_id));
 }
 
 // TUI 프로세스에서 처음 `:parallel`을 켜는 초기 설정은 이전 실행의 stale
@@ -559,34 +619,20 @@ fn parallel_initial_setup_forces_live_running_slots_back_to_baseline() {
     );
 
     assert_eq!(report.policy, ParallelModePoolResetPolicy::ForceDisposable);
-    assert_eq!(report.live_blocker_count(), 0);
-    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE);
-    assert_eq!(snapshot.roster.active_count(), 0);
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(!slot_path.join("stale.txt").exists());
-    assert!(!slot_path.join("scratch.tmp").exists());
-    assert_eq!(current_branch(&slot_path), "HEAD");
-    assert_eq!(
-        run_command(
-            "git",
-            [
-                "-C",
-                slot_path.to_str().expect("slot path should be utf-8"),
-                "rev-parse",
-                "HEAD",
-            ],
-            None,
-        )
-        .expect("slot head should resolve"),
-        repo.head_sha()
-    );
+    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE - 1);
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(slot_path.join("stale.txt").exists());
+    assert!(slot_path.join("scratch.tmp").exists());
+    assert_eq!(current_branch(&slot_path), lease.branch_name);
 }
 
-// 초기 설정 전에 사용자가 pool worktree를 수동 삭제했더라도 durable runtime projection은
-// 같은 repo authority DB에 남을 수 있다. 첫 `:parallel`은 missing slot을 새로 만들기 전에
-// 이 stale lease/session/queue/dispatch command/block을 버려야 한다.
+// 초기 설정 전에 pool worktree가 사라졌더라도 durable Running lease를 stale로 추측해 지우면
+// 늦은 worker 결과나 교체 세대를 잃을 수 있다. ForceDisposable도 active lease와 연결된 runtime
+// projection은 보존하고 operator recovery 대상으로 남겨야 한다.
 #[test]
-fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing() {
+fn parallel_initial_setup_preserves_active_runtime_when_pool_worktree_is_missing() {
     let repo = TempGitRepo::new("parallel-initial-clears-missing-runtime");
     let service = test_parallel_mode_service();
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -617,7 +663,9 @@ fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing()
             agent_id: lease.agent_id.clone(),
             task_id: lease.task_id.clone(),
             task_title: lease.task_title.clone(),
+            delivery_target: None,
             source_branch: "prerelease".to_string(),
+            source_base_commit_sha: "base".to_string(),
             source_commit_sha: repo.head_sha(),
             branch_name: lease.branch_name.clone(),
             worktree_path: lease.worktree_path.clone(),
@@ -625,6 +673,8 @@ fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing()
             original_commit_sha: None,
             planning_refresh_state: "failed".to_string(),
             integration_state: "blocked".to_string(),
+            integration_base_commit_sha: None,
+            integration_commit_sha: None,
             conflict_files: Vec::new(),
             recovery_note: Some("stale queue from previous runtime".to_string()),
             validation_summary: "stale validation".to_string(),
@@ -636,6 +686,8 @@ fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing()
             integration_note: "stale blocked queue".to_string(),
             enqueued_at: "2026-05-08T08:55:15.467459643+00:00".to_string(),
             updated_at: "2026-05-08T09:10:40.820469463+00:00".to_string(),
+            retry_attempts: 0,
+            retry_not_before: None,
         },
     )
     .expect("stale distributor queue should persist");
@@ -671,7 +723,7 @@ fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing()
 
     let report = service
         .reset_pool_on_parallel_initial_setup_report(&repo.workspace_dir())
-        .expect("initial setup reset should clear stale runtime for missing slots");
+        .expect("initial setup reset should preserve active runtime for missing slots");
     let snapshot = service.reconcile_supervisor_snapshot(
         &repo.workspace_dir(),
         true,
@@ -687,16 +739,30 @@ fn parallel_initial_setup_clears_stale_runtime_when_pool_worktrees_are_missing()
             .expect("runtime projections should load");
 
     assert_eq!(report.policy, ParallelModePoolResetPolicy::ForceDisposable);
-    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE);
-    assert_eq!(snapshot.roster.active_count(), 0);
-    assert_eq!(snapshot.pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert!(runtime_projection.slot_leases.is_empty());
-    assert!(runtime_projection.session_details.is_empty());
-    assert!(runtime_projection.distributor_queue_records.is_empty());
-    assert!(runtime_projection.dispatch_commands.is_empty());
-    assert!(runtime_projection.task_dispatch_blocks.is_empty());
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(!repo.session_detail_path(&lease.session_key()).exists());
+    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.succeeded_reset_slot_count(), DEFAULT_POOL_SIZE - 1);
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert_eq!(snapshot.pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(snapshot.pool.blocked_slots, 1);
+    let persisted_lease = runtime_projection
+        .slot_leases
+        .get(&lease.slot_id)
+        .expect("active missing-worktree lease should remain");
+    assert!(persisted_lease.same_generation_as(&lease));
+    assert_eq!(persisted_lease.state, ParallelModeSlotLeaseState::Running);
+    assert!(!runtime_projection.session_details.is_empty());
+    assert!(!runtime_projection.distributor_queue_records.is_empty());
+    assert!(
+        runtime_projection.dispatch_commands.is_empty(),
+        "mode entry may cancel stale pending dispatch commands without deleting active lease ownership"
+    );
+    assert!(!runtime_projection.task_dispatch_blocks.is_empty());
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(repo.session_detail_path(&lease.session_key()).exists());
+    assert!(
+        !Path::new(&lease.worktree_path).exists(),
+        "reconcile must not recreate a missing worktree while its lease is active"
+    );
 }
 
 // Dirty tracked files in no-lease reusable slots must not stop off -> on pool reset. Git checkout
@@ -720,27 +786,13 @@ fn parallel_entry_from_off_forces_dirty_no_lease_slot_back_to_baseline() {
         .reset_pool_on_parallel_enable(&repo.workspace_dir())
         .expect("parallel enable reset should force dirty tracked slots back to baseline");
 
-    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
+    assert_eq!(reset_count, DEFAULT_POOL_SIZE - 1);
     assert!(!repo.slot_lease_path(1).exists());
     assert_eq!(
         fs::read_to_string(slot_path.join("README.md")).expect("readme should be readable"),
-        "seed\n"
+        "dirty local version\n"
     );
     assert_eq!(current_branch(&slot_path), "HEAD");
-    assert_eq!(
-        run_command(
-            "git",
-            [
-                "-C",
-                slot_path.to_str().expect("slot path should be utf-8"),
-                "rev-parse",
-                "HEAD",
-            ],
-            None,
-        )
-        .expect("slot head should resolve"),
-        repo.head_sha()
-    );
 }
 
 // Running lease는 slot worktree가 더 이상 해당 agent branch에 있지 않아도 자동 reset으로
@@ -788,7 +840,7 @@ fn parallel_entry_from_off_preserves_running_branch_drift_and_resets_idle_slots(
 // 이미 clean detached prerelease로 돌아와 있고 agent branch도 없다. 이 split-brain을
 // live slot으로 계속 보존하면 dispatcher가 capacity를 잃어 병렬 실행이 멈춘다.
 #[test]
-fn reconcile_releases_clean_baseline_split_brain_running_lease() {
+fn reconcile_preserves_clean_baseline_split_brain_running_lease() {
     let repo = TempGitRepo::new("reconcile-clean-baseline-split-brain");
     let service = test_parallel_mode_service();
     let lease = service
@@ -822,31 +874,76 @@ fn reconcile_releases_clean_baseline_split_brain_running_lease() {
     )
     .expect("stale session detail should be recorded");
 
-    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert_eq!(pool.blocked_slots, 0);
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(!runtime_projection.slot_leases.contains_key("slot-1"));
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(pool.blocked_slots, 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert_eq!(
+        runtime_projection
+            .slot_leases
+            .get("slot-1")
+            .map(|lease| lease.state),
+        Some(ParallelModeSlotLeaseState::Running)
+    );
     assert!(
         runtime_projection
             .task_dispatch_blocks
             .iter()
-            .any(|block| block.task_id == lease.task_id)
+            .all(|block| block.task_id != lease.task_id)
     );
-    assert_eq!(detail.state_label, "failed");
-    assert_eq!(detail.completion_state_label, "aborted");
-    assert!(
-        detail
-            .latest_summary
-            .contains("stale active lease reconciled")
-    );
+    assert_eq!(detail.state_label, "running");
+    assert_eq!(detail.completion_state_label, "in_progress");
 }
 
-// 실제 운영에서는 다른 PR이 prerelease를 전진시킨 뒤 slot worktree가 이전 clean
-// detached baseline commit에 남을 수 있다. agent branch가 이미 없어졌다면 그 commit은
-// 현재 prerelease에 포함된 clean baseline이므로 stale Running lease를 계속 보존하면
-// capacity가 영구히 줄어든다.
 #[test]
-fn reconcile_releases_clean_integrated_detached_split_brain_running_lease() {
+fn reconcile_split_brain_rejects_forged_user_branch_lease() {
+    let repo = TempGitRepo::new("split-brain-forged-user-branch");
+    let service = test_parallel_mode_service();
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(&lease.worktree_path);
+    run_git(&slot_path, &["checkout", "--detach", POOL_BASELINE_BRANCH]);
+    run_git(
+        &repo.repo_root,
+        &["branch", "user-preserved-branch", POOL_BASELINE_BRANCH],
+    );
+    run_git(
+        &repo.repo_root,
+        &["branch", "-D", lease.branch_name.as_str()],
+    );
+    let mut forged = lease.clone();
+    forged.branch_name = "user-preserved-branch".to_string();
+    forged.state = ParallelModeSlotLeaseState::CleanupPending;
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &forged,
+    )
+    .expect("forged split-brain lease should persist");
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert!(repo.branch_exists("user-preserved-branch"));
+    assert!(repo.slot_lease_path(1).exists());
+    assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Blocked);
+    assert_eq!(current_branch(&slot_path), "HEAD");
+    assert!(slot_path.join("README.md").exists());
+}
+
+// 다른 PR이 integration target을 전진시킨 뒤 slot worktree가 이전 clean detached
+// commit에 남아 있어도 ancestry만으로 현재 baseline이라고 간주하면 안 된다. stale
+// Running lease와 old HEAD를 보존해 operator가 split-brain 원인을 확인할 수 있게 한다.
+#[test]
+fn reconcile_preserves_clean_integrated_but_stale_detached_split_brain_lease() {
     let repo = TempGitRepo::new("reconcile-integrated-detached-split-brain");
     let service = test_parallel_mode_service();
     let lease = service
@@ -899,13 +996,13 @@ fn reconcile_releases_clean_integrated_detached_split_brain_running_lease() {
     .expect("refreshed slot head should resolve");
 
     assert_ne!(detached_head, repo.head_sha());
-    assert_eq!(refreshed_head, repo.head_sha());
-    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert_eq!(pool.blocked_slots, 0);
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(!runtime_projection.slot_leases.contains_key("slot-1"));
+    assert_eq!(refreshed_head, detached_head);
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(pool.blocked_slots, 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(runtime_projection.slot_leases.contains_key("slot-1"));
     assert!(
-        runtime_projection
+        !runtime_projection
             .task_dispatch_blocks
             .iter()
             .any(|block| block.task_id == lease.task_id)
@@ -990,8 +1087,14 @@ fn parallel_entry_from_off_resets_stale_startup_slots_even_when_another_slot_is_
         .expect("stale slot lease should be acquired");
     let stale_slot_path = PathBuf::from(stale_lease.worktree_path.clone());
     stale_lease.leased_at = "2020-01-01T00:00:00Z".to_string();
-    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &stale_lease)
-        .expect("stale lease should be persisted");
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &stale_lease,
+    )
+    .expect("stale lease should be persisted");
     record_assigned_session_detail(
         &adapter,
         &test_parallel_runtime(),
@@ -1017,20 +1120,19 @@ fn parallel_entry_from_off_resets_stale_startup_slots_even_when_another_slot_is_
         )),
     );
 
-    assert_eq!(report.live_blocker_count(), 1);
+    assert_eq!(report.live_blocker_count(), 2);
     assert!(
-        report
+        !report
             .succeeded_reset_slot_ids()
             .contains(&stale_lease.slot_id)
     );
-    assert_eq!(snapshot.roster.active_count(), 1);
-    assert!(!repo.slot_lease_path(2).exists());
+    assert_eq!(snapshot.roster.active_count(), 2);
+    assert!(repo.slot_lease_path(2).exists());
     assert!(
-        !repo
-            .session_detail_path(&stale_lease.session_key())
+        repo.session_detail_path(&stale_lease.session_key())
             .exists()
     );
-    assert!(!stale_slot_path.join("scratch.tmp").exists());
+    assert!(stale_slot_path.join("scratch.tmp").exists());
     assert!(repo.slot_lease_path(1).exists());
     assert!(running_slot_path.join("keep-running.tmp").exists());
 }
@@ -1049,8 +1151,14 @@ fn parallel_entry_from_off_resets_stale_startup_leases_and_slot_worktrees() {
         .expect("slot lease should be acquired");
     let slot_path = PathBuf::from(lease.worktree_path.clone());
     lease.leased_at = "2020-01-01T00:00:00Z".to_string();
-    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &lease)
-        .expect("stale lease should be persisted");
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("stale lease should be persisted");
     record_assigned_session_detail(
         &SqlitePlanningAuthorityAdapter::new(),
         &test_parallel_runtime(),
@@ -1075,13 +1183,11 @@ fn parallel_entry_from_off_resets_stale_startup_leases_and_slot_worktrees() {
         )),
     );
 
-    assert_eq!(reset_count, DEFAULT_POOL_SIZE);
-    assert_eq!(snapshot.roster.active_count(), 0);
-    assert!(snapshot.detail.session.is_none());
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(!repo.session_detail_path(&lease.session_key()).exists());
-    assert!(!slot_path.join("scratch.tmp").exists());
-    assert_eq!(current_branch(&slot_path), "HEAD");
+    assert_eq!(reset_count, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(repo.session_detail_path(&lease.session_key()).exists());
+    assert!(slot_path.join("scratch.tmp").exists());
 }
 
 // `:parallel` 진입 reset의 범위는 disposable pool runtime으로 한정된다. 기존
@@ -1163,11 +1269,10 @@ fn reconcile_provisions_missing_slots_into_idle_baselines() {
     }
 }
 
-// git worktree inventory에서 사라진 slot path라도 lease가 없으면 pool이 소유한
-// disposable residue다. reconcile은 남은 파일을 제거하고 같은 slot path를 clean
-// detached baseline worktree로 다시 만들어야 한다.
+// git worktree inventory에 없는 slot path는 lease가 없어도 Akra 소유라고 증명할 수 없다.
+// reconcile은 남은 파일을 보존하고 해당 slot을 operator recovery 대상으로 막아야 한다.
 #[test]
-fn reconcile_recreates_missing_slot_over_filesystem_residue() {
+fn reconcile_preserves_filesystem_residue_outside_worktree_inventory() {
     let repo = TempGitRepo::new("provision-over-residue");
     let residue_path = repo.pool_root().join(slot_id(1));
     fs::create_dir_all(&residue_path).expect("residue directory should be created");
@@ -1180,11 +1285,19 @@ fn reconcile_recreates_missing_slot_over_filesystem_residue() {
         &repo.workspace_dir(),
     );
 
-    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert_eq!(pool.blocked_slots, 0);
-    assert!(!residue_path.join("scratch.tmp").exists());
-    assert_eq!(current_branch(&residue_path), "HEAD");
-    assert_eq!(pool.slots[0].branch_name, "prerelease (detached)");
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(pool.blocked_slots, 1);
+    assert_eq!(
+        fs::read_to_string(residue_path.join("scratch.tmp"))
+            .expect("unowned residue must remain readable"),
+        "transient\n"
+    );
+    assert_eq!(pool.slots[0].branch_name, "unknown");
+    assert!(
+        pool.slots[0]
+            .worktree_label
+            .contains("directory exists outside git worktree inventory")
+    );
 }
 
 // worker launch가 중간에 사라져 Leased 상태만 오래 남으면 roster가 계속 active로
@@ -1201,8 +1314,14 @@ fn reconcile_releases_stale_leased_startup_slot() {
         )
         .expect("slot lease should be acquired");
     lease.leased_at = "2020-01-01T00:00:00Z".to_string();
-    SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(&repo.workspace_dir(), &lease)
-        .expect("stale lease should be persisted");
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("stale lease should be persisted");
     record_assigned_session_detail(
         &SqlitePlanningAuthorityAdapter::new(),
         &test_parallel_runtime(),
@@ -1236,6 +1355,52 @@ fn reconcile_releases_stale_leased_startup_slot() {
     );
 }
 
+#[test]
+fn reconcile_preserves_stale_startup_slot_when_dispatch_block_write_fails() {
+    let repo = TempGitRepo::new("stale-leased-startup-block-failure");
+    let service = test_parallel_mode_service();
+    let mut lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    lease.leased_at = "2020-01-01T00:00:00Z".to_string();
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("stale lease should be persisted");
+    install_runtime_insert_failure(
+        &repo,
+        "fail_reconciled_startup_dispatch_block",
+        "runtime_task_dispatch_blocks",
+    );
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.leased_slots, 1);
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert!(repo.slot_lease_path(1).exists());
+    assert!(repo.branch_exists(&lease.branch_name));
+    assert_eq!(
+        current_branch(&PathBuf::from(&lease.worktree_path)),
+        lease.branch_name
+    );
+    let runtime_projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should retain the active lease");
+    assert!(runtime_projection.slot_leases.contains_key("slot-1"));
+    assert!(runtime_projection.task_dispatch_blocks.is_empty());
+}
+
 // pool worktree는 repository 내부가 아니라 sibling `repo-akra-worktrees` 아래에 둔다.
 // 이렇게 해야 원본 checkout의 status와 nested worktree 탐색이 agent slot 파일들로
 // 오염되지 않는다.
@@ -1255,9 +1420,7 @@ fn pool_root_lives_in_repo_sibling_akra_worktrees_root() {
     );
 }
 
-// 사용자가 로컬 표준 branch를 지웠더라도 reconcile은 baseline ref를 먼저
-// 복구한 뒤 slot을 provision해야 한다. slot 생성과 branch 복구가 같은 흐름에서
-// 일어나야 이후 slot들이 모두 동일한 기준 commit을 바라본다.
+// local integration branch가 없어도 remote-tracking baseline만으로 slot을 provision한다.
 #[test]
 fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
     let repo = TempGitRepo::new("create-akra");
@@ -1269,19 +1432,14 @@ fn reconcile_creates_local_prerelease_branch_before_provisioning_slots() {
         &repo.workspace_dir(),
     );
 
-    assert!(repo.branch_exists(POOL_BASELINE_BRANCH));
+    assert!(!repo.branch_exists(POOL_BASELINE_BRANCH));
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert!(
-        pool.reconcile_status
-            .contains(&format!("created `{POOL_BASELINE_BRANCH}`"))
-    );
+    assert_eq!(pool.blocked_slots, 0);
 }
 
-// local baseline이 현재 작업 branch HEAD로 drift해도 reconcile은 현재 workspace가 아니라
-// 표준 remote branch를 authoritative baseline으로 삼아야 한다. 이 테스트는 pool slot이
-// 사용자의 feature HEAD에서 시작하는 회귀를 막는다.
+// local integration branch drift는 보존하되 remote-tracking baseline pool은 계속 사용할 수 있다.
 #[test]
-fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
+fn reconcile_blocks_drifted_local_prerelease_without_discarding_commits() {
     let repo = TempGitRepo::new("reset-akra");
     let origin_prerelease_head = run_command(
         "git",
@@ -1307,7 +1465,7 @@ fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
         &repo.workspace_dir(),
     );
 
-    assert_eq!(
+    assert_ne!(
         run_command(
             "git",
             [
@@ -1321,65 +1479,43 @@ fn reconcile_resets_drifted_local_prerelease_baseline_to_origin_prerelease() {
         .expect("prerelease should resolve"),
         origin_prerelease_head
     );
+    assert_eq!(pool.blocked_slots, 0);
     assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
 }
 
-// fresh repository처럼 local/remote 표준 branch가 모두 없으면 reconcile이 현재 작업 branch HEAD를
-// 표준 branch로 만들고 origin에 push해야 한다. 이 흐름이 `:parallel`의 첫 pool 생성 완충 장치다.
+// local/remote 표준 branch가 모두 없으면 reconcile은 현재 HEAD를 원격 target으로 승격하지 않는다.
+// operator가 integration branch를 명시적으로 만들기 전까지 pool 생성은 fail closed로 남아야 한다.
 #[test]
-fn reconcile_seeds_missing_standard_branch_from_current_head_and_pushes_origin() {
+fn reconcile_blocks_missing_remote_integration_branch_without_pushing_head() {
     let repo = TempGitRepo::new("seed-standard-branch");
     let origin_root = repo.create_bare_origin_remote();
     repo.delete_local_prerelease_branch();
     repo.delete_remote_standard_tracking_branch();
-    let expected_head = repo.head_sha();
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
         &test_parallel_runtime(),
         &repo.workspace_dir(),
     );
-    let remote_head = run_command(
-        "git",
-        [
-            "--git-dir",
-            origin_root.to_str().expect("origin root should be utf-8"),
-            "rev-parse",
-            &local_standard_ref(),
-        ],
-        None,
-    )
-    .expect("pushed standard branch should resolve in origin");
-
-    assert_eq!(remote_head, expected_head);
-    assert_eq!(
+    assert!(
         run_command(
             "git",
             [
-                "-C",
-                repo.repo_root.to_str().expect("repo root should be utf-8"),
+                "--git-dir",
+                origin_root.to_str().expect("origin root should be utf-8"),
                 "rev-parse",
-                POOL_BASELINE_BRANCH,
+                &local_standard_ref(),
             ],
             None,
         )
-        .expect("local standard branch should resolve"),
-        expected_head
+        .is_none(),
+        "reconcile must not create the remote integration branch"
     );
-    assert_eq!(
-        run_command(
-            "git",
-            [
-                "-C",
-                repo.repo_root.to_str().expect("repo root should be utf-8"),
-                "rev-parse",
-                &remote_standard_tracking_ref(),
-            ],
-            None,
-        )
-        .expect("remote tracking standard branch should resolve"),
-        expected_head
+    assert!(!repo.branch_exists(POOL_BASELINE_BRANCH));
+    assert_eq!(pool.blocked_slots, DEFAULT_POOL_SIZE);
+    assert!(
+        pool.reconcile_status
+            .contains("test reconcile blocked / verified fixture target is unavailable")
     );
-    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
 }
 
 // baseline ref가 이동하면 기존 clean detached slot들도 예전 commit에 떨어져 있을
@@ -1395,6 +1531,7 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     );
     assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
 
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
     repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance user branch");
     let refreshed_pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
@@ -1411,14 +1548,32 @@ fn reconcile_resets_clean_detached_slots_after_empty_prerelease_baseline_moves()
     }));
 }
 
-// Linked worktree git metadata can retain a stale index.lock after an interrupted
-// reset. Pool reconcile must clear that stale lock before resetting a disposable
-// detached baseline slot, otherwise `:parallel` remains blocked with lost capacity.
+// Linked worktree git metadata can retain an index.lock after an interrupted or
+// still-running Git operation. Age alone cannot prove that the lock is abandoned,
+// so reconcile must preserve it and leave the slot blocked for operator recovery.
 #[test]
-fn reconcile_resets_detached_slot_after_stale_worktree_index_lock() {
+fn reconcile_preserves_detached_slot_index_lock() {
     let repo = TempGitRepo::new("reset-stale-index-lock");
-    let slot_path = repo.create_detached_slot(1);
-    fs::write(slot_path.join("README.md"), "dirty\n").expect("slot file should be updated");
+    let initial_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
+    let slot_path = repo.pool_root().join(slot_id(1));
+    let initial_slot_head = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be utf-8"),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .expect("initial slot head should resolve");
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    repo.commit_on_current_branch("feature.txt", "new baseline\n", "advance baseline");
     let git_dir = run_command(
         "git",
         [
@@ -1439,9 +1594,9 @@ fn reconcile_resets_detached_slot_after_stale_worktree_index_lock() {
         &repo.workspace_dir(),
     );
 
-    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
-    assert_eq!(pool.blocked_slots, 0);
-    assert!(!index_lock_path.exists());
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(pool.blocked_slots, 1);
+    assert!(index_lock_path.exists());
     assert_eq!(
         run_command(
             "git",
@@ -1454,17 +1609,7 @@ fn reconcile_resets_detached_slot_after_stale_worktree_index_lock() {
             None,
         )
         .expect("slot head should resolve"),
-        run_command(
-            "git",
-            [
-                "-C",
-                repo.repo_root.to_str().expect("repo root should be utf-8"),
-                "rev-parse",
-                POOL_BASELINE_BRANCH,
-            ],
-            None,
-        )
-        .expect("prerelease should resolve")
+        initial_slot_head
     );
 }
 
@@ -1524,11 +1669,9 @@ fn reconcile_does_not_refresh_prerelease_from_agent_slot_workspace() {
     assert!(pool.blocked_slots > 0);
 }
 
-// merged agent slot은 cleanup pending 상태에서 reconcile이 완전히 회수할 수 있어야
-// 한다. untracked scratch 파일, agent branch, lease mirror가 모두 제거되고 slot이
-// detached 표준 branch idle 상태로 돌아오는 end-to-end cleanup 계약을 고정한다.
+// merged agent slot이라도 untracked data가 있으면 cleanup pending 상태로 보존한다.
 #[test]
-fn reconcile_cleans_merged_agent_slot_back_to_idle() {
+fn reconcile_preserves_merged_agent_slot_with_untracked_data() {
     let repo = TempGitRepo::new("cleanup-execution");
     let service = test_parallel_mode_service();
     let lease = service
@@ -1547,7 +1690,7 @@ fn reconcile_cleans_merged_agent_slot_back_to_idle() {
     service
         .mark_slot_cleanup_pending(&repo.workspace_dir(), &lease.slot_id, "agent-1")
         .expect("slot lease should transition to cleanup pending");
-    fs::write(slot_path.join("scratch.tmp"), "transient\n")
+    fs::write(slot_path.join("scratch.untracked"), "transient\n")
         .expect("untracked file should be written");
     let pool = reconcile_pool_board(
         &SqlitePlanningAuthorityAdapter::new(),
@@ -1556,10 +1699,8 @@ fn reconcile_cleans_merged_agent_slot_back_to_idle() {
     );
     let slot = &pool.slots[0];
 
-    assert_eq!(slot.state, ParallelModePoolSlotState::Idle);
-    assert!(slot.branch_name.starts_with(POOL_BASELINE_BRANCH));
-    assert!(!slot_path.join("scratch.tmp").exists());
-    assert!(!repo.branch_exists(&branch_name));
-    assert!(!repo.slot_lease_path(1).exists());
-    assert!(pool.reconcile_status.contains("cleaned 1"));
+    assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
+    assert!(slot_path.join("scratch.untracked").exists());
+    assert!(repo.branch_exists(&branch_name));
+    assert!(repo.slot_lease_path(1).exists());
 }

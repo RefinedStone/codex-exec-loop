@@ -22,6 +22,7 @@ pub enum ShellOverlay {
     Queue,
     DirectionsMaintenance,
     PlanningInit,
+    Approval,
 }
 
 // exit confirmation은 overlay stack 일부가 아니라 별도 focus guard다. 어떤 overlay event도 이를 닫을 수 있어야 한다.
@@ -114,6 +115,8 @@ pub enum ShellChromeEvent {
     QueueOverlayShown,
     DirectionsMaintenanceOverlayShown,
     PlanningInitOverlayShown,
+    ApprovalOverlayShown,
+    ApprovalOverlayClosed,
     StartupOverlayToggled,
     SessionsOverlayToggled {
         limit: usize,
@@ -151,6 +154,31 @@ pub fn reduce_shell_chrome(
     event: ShellChromeEvent,
 ) -> ShellChromeReduction {
     let mut effects = Vec::new();
+    if state.shell_overlay == ShellOverlay::Approval
+        && matches!(
+            &event,
+            ShellChromeEvent::StartupOverlayShown
+                | ShellChromeEvent::SessionsOverlayShown { .. }
+                | ShellChromeEvent::ModelSelectionOverlayShown
+                | ShellChromeEvent::ViewSelectionOverlayShown
+                | ShellChromeEvent::LanguageSelectionOverlayShown
+                | ShellChromeEvent::SupersessionOverlayShown
+                | ShellChromeEvent::ParallelPeekOverlayShown
+                | ShellChromeEvent::HelpOverlayShown
+                | ShellChromeEvent::ReviewsOverlayShown
+                | ShellChromeEvent::QueueOverlayShown
+                | ShellChromeEvent::DirectionsMaintenanceOverlayShown
+                | ShellChromeEvent::PlanningInitOverlayShown
+                | ShellChromeEvent::StartupOverlayToggled
+                | ShellChromeEvent::SessionsOverlayToggled { .. }
+                | ShellChromeEvent::SupersessionOverlayToggled
+                | ShellChromeEvent::OverlayClosed
+                | ShellChromeEvent::ExitConfirmationShown
+                | ShellChromeEvent::TransientChromeDismissed
+        )
+    {
+        return ShellChromeReduction { state, effects };
+    }
 
     match event {
         ShellChromeEvent::StartupCheckRequested => {
@@ -242,6 +270,15 @@ pub fn reduce_shell_chrome(
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::PlanningInit;
         }
+        ShellChromeEvent::ApprovalOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::Approval;
+        }
+        ShellChromeEvent::ApprovalOverlayClosed => {
+            if state.shell_overlay == ShellOverlay::Approval {
+                state.shell_overlay = ShellOverlay::Hidden;
+            }
+        }
         ShellChromeEvent::StartupOverlayToggled => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = if state.shell_overlay == ShellOverlay::Startup {
@@ -270,7 +307,9 @@ pub fn reduce_shell_chrome(
             }
         }
         ShellChromeEvent::OverlayClosed => {
-            state.shell_overlay = ShellOverlay::Hidden;
+            if state.shell_overlay != ShellOverlay::Approval {
+                state.shell_overlay = ShellOverlay::Hidden;
+            }
         }
         ShellChromeEvent::ExitConfirmationShown => {
             state.exit_confirmation_state = ExitConfirmationState::Visible;
@@ -281,7 +320,9 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::TransientChromeDismissed => {
             // conversation change는 transient chrome만 접고, 이미 cache된 startup/session data는 유지한다.
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
-            state.shell_overlay = ShellOverlay::Hidden;
+            if state.shell_overlay != ShellOverlay::Approval {
+                state.shell_overlay = ShellOverlay::Hidden;
+            }
         }
         ShellChromeEvent::SessionSelectionMoved { delta } => {
             // navigation은 full recent-session catalog가 있을 때만 적용된다. attach-only catalog는 selectable row가 없다.
@@ -606,6 +647,30 @@ mod tests {
         );
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::Supersession);
         assert!(reduced.effects.is_empty());
+    }
+    #[test]
+    fn approval_overlay_requires_its_explicit_close_event() {
+        let shown = reduce_shell_chrome(
+            ShellChromeState::new(),
+            ShellChromeEvent::ApprovalOverlayShown,
+        );
+        assert_eq!(shown.state.shell_overlay, ShellOverlay::Approval);
+
+        let generic_close = reduce_shell_chrome(shown.state, ShellChromeEvent::OverlayClosed);
+        assert_eq!(generic_close.state.shell_overlay, ShellOverlay::Approval);
+
+        let competing_overlay =
+            reduce_shell_chrome(generic_close.state, ShellChromeEvent::HelpOverlayShown);
+        assert_eq!(
+            competing_overlay.state.shell_overlay,
+            ShellOverlay::Approval
+        );
+
+        let closed = reduce_shell_chrome(
+            competing_overlay.state,
+            ShellChromeEvent::ApprovalOverlayClosed,
+        );
+        assert_eq!(closed.state.shell_overlay, ShellOverlay::Hidden);
     }
     fn sample_startup_diagnostics() -> Box<StartupReadySnapshot> {
         Box::new(StartupReadySnapshot::from_diagnostics(

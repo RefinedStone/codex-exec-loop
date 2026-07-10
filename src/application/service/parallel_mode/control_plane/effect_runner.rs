@@ -7,8 +7,9 @@ use serde_json::Value;
 use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgentWorkerPort;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
-    ParallelModeDispatchOrchestratorTickRequest, ParallelModeOrchestratorLoopEvent,
-    ParallelModeOrchestratorTrigger, ParallelModeService, distributor_integration_branch,
+    ParallelModeAutomationGuard, ParallelModeDispatchOrchestratorTickRequest,
+    ParallelModeOrchestratorLoopEvent, ParallelModeOrchestratorTrigger, ParallelModeService,
+    distributor_integration_branch_for_repo,
 };
 use crate::application::service::planning::PlanningServices;
 use crate::diagnostics::event_log;
@@ -32,6 +33,8 @@ pub enum ParallelModeControlPlaneLoadingStage {
 pub enum ParallelModeControlPlaneBackgroundEvent {
     EnterProgress {
         workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
         readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
         loading_stage: ParallelModeControlPlaneLoadingStage,
         status_text: String,
@@ -67,7 +70,12 @@ pub enum ParallelModeControlPlaneBackgroundEvent {
         event: ParallelModeControlPlaneWorkerEvent,
         has_actionable_queue_head: bool,
     },
-    ConversationRuntimeNotice(String),
+    ConversationRuntimeNotice {
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+        notice: String,
+    },
     OrchestratorTickCompleted {
         workspace_directory: String,
         epoch_id: u64,
@@ -91,6 +99,7 @@ where
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
     turn_service: ParallelModeTurnService,
     event_sink: S,
+    automation_guard: ParallelModeAutomationGuard,
 }
 
 impl<S> ParallelModeControlPlaneEffectRunner<S>
@@ -104,13 +113,52 @@ where
         turn_service: ParallelModeTurnService,
         event_sink: S,
     ) -> Self {
-        Self {
+        let automation_guard = ParallelModeAutomationGuard::default();
+        Self::new_with_automation_guard(
             parallel_mode_service,
             planning,
             worker_port,
             turn_service,
+            automation_guard,
             event_sink,
+        )
+    }
+
+    pub(crate) fn new_with_automation_guard(
+        parallel_mode_service: ParallelModeService,
+        planning: PlanningServices,
+        worker_port: Arc<dyn ParallelAgentWorkerPort>,
+        turn_service: ParallelModeTurnService,
+        automation_guard: ParallelModeAutomationGuard,
+        event_sink: S,
+    ) -> Self {
+        Self {
+            parallel_mode_service,
+            planning,
+            worker_port,
+            turn_service: turn_service.with_automation_guard(automation_guard.clone()),
+            event_sink,
+            automation_guard,
         }
+    }
+
+    pub(crate) fn activate_epoch(&self, workspace_directory: &str, epoch_id: u64) {
+        self.automation_guard
+            .activate(workspace_directory.to_string(), epoch_id);
+    }
+
+    pub(crate) fn cancel_epoch(&self, workspace_directory: &str) {
+        self.automation_guard.cancel(workspace_directory);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn automation_epoch_is_active(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+    ) -> bool {
+        self.automation_guard
+            .is_active(workspace_directory, epoch_id)
     }
 
     pub fn spawn_supervisor_snapshot_refresh(
@@ -123,8 +171,12 @@ where
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let event_sink = self.event_sink.clone();
+        let automation_guard = self.automation_guard.clone();
 
         thread::spawn(move || {
+            if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                return;
+            }
             event_log::emit_lazy("parallel_supervisor_refresh_started", || {
                 supervisor_refresh_started_payload(&workspace_directory, mode_enabled)
             });
@@ -163,14 +215,20 @@ where
     ) {
         let parallel_mode_service = self.parallel_mode_service.clone();
         let event_sink = self.event_sink.clone();
+        let automation_guard = self.automation_guard.clone();
 
         thread::spawn(move || {
+            if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                return;
+            }
             event_log::emit_lazy("parallel_orchestrator_retry_started", || {
                 orchestrator_retry_started_payload(&workspace_directory, &signature)
             });
-            let (blocked, notices) = match parallel_mode_service.run_orchestrator_tick(
+            let permit = automation_guard.permit(&workspace_directory, epoch_id);
+            let (blocked, notices) = match parallel_mode_service.run_orchestrator_tick_guarded(
                 &workspace_directory,
                 ParallelModeOrchestratorTrigger::ManualDispatch,
+                &permit,
             ) {
                 Ok(result) => (result.blocked, result.notices),
                 Err(error) => (
@@ -209,8 +267,12 @@ where
         let parallel_mode_service = self.parallel_mode_service.clone();
         let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
+        let automation_guard = self.automation_guard.clone();
 
         thread::spawn(move || {
+            if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                return;
+            }
             let planning_projection = planning
                 .runtime
                 .load_runtime_projection_or_invalid(&workspace_directory);
@@ -236,9 +298,14 @@ where
             let initial_pool_reset_completed = initial_pool_reset_required
                 && entry_plan.reset_scope == Some(ParallelModePoolResetScope::PoolOnly);
             let (supervisor_snapshot, status_text) = if readiness_snapshot.allows_parallel_mode() {
+                if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                    return;
+                }
                 event_sink.send_control_plane_event(
                     ParallelModeControlPlaneBackgroundEvent::EnterProgress {
                         workspace_directory: workspace_directory.clone(),
+                        epoch_id,
+                        effect_id,
                         readiness_snapshot: Some(readiness_snapshot.clone()),
                         loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
                         status_text:
@@ -249,6 +316,9 @@ where
                 let reset_result = if entry_plan.reset_scope
                     == Some(ParallelModePoolResetScope::PoolOnly)
                 {
+                    if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                        return;
+                    }
                     event_log::emit_lazy("parallel_pool_reset_started", || {
                         parallel_pool_reset_started_payload(
                             &workspace_directory,
@@ -300,7 +370,7 @@ where
                             };
                             Ok(format!(
                                 "reset {count} pool slot worktree(s) to {} after {entry_label}{live_suffix} / {}",
-                                distributor_integration_branch(),
+                                distributor_integration_branch_for_repo(&workspace_directory),
                                 ParallelModePoolResetScope::PoolOnly.status_detail()
                             ))
                         })
@@ -336,6 +406,9 @@ where
                         return;
                     }
                 };
+                if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                    return;
+                }
                 let supervisor_snapshot = parallel_mode_service.reconcile_supervisor_snapshot(
                     &workspace_directory,
                     true,
@@ -369,6 +442,9 @@ where
 
             let orchestrator_tick_signature =
                 parallel_mode_distributor_tick_signature(&supervisor_snapshot);
+            if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                return;
+            }
             event_sink.send_control_plane_event(ParallelModeControlPlaneBackgroundEvent::Entered {
                 workspace_directory,
                 epoch_id,
@@ -397,15 +473,26 @@ where
         let parallel_mode_turn_service = self.turn_service.clone();
         let planning = self.planning.clone();
         let event_sink = self.event_sink.clone();
+        let automation_guard = self.automation_guard.clone();
 
         thread::spawn(move || {
+            if !automation_guard.is_active(&workspace_directory, epoch_id) {
+                return;
+            }
             let (loop_event_tx, loop_event_rx) = mpsc::channel();
             let loop_event_sink = event_sink.clone();
             let loop_planning = planning.clone();
+            let loop_workspace_directory = workspace_directory.clone();
             thread::spawn(move || {
                 while let Ok(event) = loop_event_rx.recv() {
                     loop_event_sink.send_control_plane_event(
-                        background_event_from_parallel_loop_event(event, &loop_planning),
+                        background_event_from_parallel_loop_event(
+                            event,
+                            &loop_planning,
+                            &loop_workspace_directory,
+                            epoch_id,
+                            effect_id,
+                        ),
                     );
                 }
             });
@@ -641,10 +728,18 @@ fn parallel_pool_reset_completed_payload(
 fn background_event_from_parallel_loop_event(
     event: ParallelModeOrchestratorLoopEvent,
     planning: &PlanningServices,
+    workspace_directory: &str,
+    epoch_id: u64,
+    effect_id: ParallelModeControlPlaneEffectId,
 ) -> ParallelModeControlPlaneBackgroundEvent {
     match event {
         ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice) => {
-            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(notice)
+            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+                workspace_directory: workspace_directory.to_string(),
+                epoch_id,
+                effect_id,
+                notice,
+            }
         }
         ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => {
             let has_actionable_queue_head = planning

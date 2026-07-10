@@ -182,7 +182,7 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(rendered.contains("Akra  |  thread: new draft  |  turn: idle"));
     assert!(rendered.contains("input: draft"));
     assert!(!rendered.contains("auto: queue/idle"));
-    assert!(!rendered.contains("done: 0/20"));
+    assert!(!rendered.contains("done: off"));
     assert!(!rendered.contains("Plan ready"));
     assert!(!rendered.contains("parallel: off"));
     assert!(!rendered.contains("stable history should stay above the live region"));
@@ -472,7 +472,7 @@ fn inline_help_inspection_renders_command_help() {
     assert!(rendered.contains(":diag"));
     assert!(rendered.contains("diagnostics"));
     assert!(rendered.contains(":turns"));
-    assert!(rendered.contains("auto turn budget"));
+    assert!(rendered.contains("auto-follow opt-in; off or 0 disables"));
     assert!(!rendered.contains(":auto"));
     assert!(rendered.contains("Esc/Ctrl+C: close"));
     assert!(!rendered.contains("Shell commands: :diag  :parallel"));

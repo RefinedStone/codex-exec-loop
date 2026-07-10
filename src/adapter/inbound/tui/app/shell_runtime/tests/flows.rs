@@ -36,17 +36,15 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-static FLOW_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const FLOW_POOL_SIZE: usize = 3;
 const FLOW_POOL_BASELINE_BRANCH: &str = "prerelease";
 
 fn flow_test_guard() -> MutexGuard<'static, ()> {
-    FLOW_TEST_LOCK
-        .get_or_init(|| Mutex::new(()))
+    crate::test_utils::process_environment_mutex()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -153,7 +151,7 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
-        event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         let launch_index = self.launch_count.fetch_add(1, Ordering::SeqCst) + 1;
         self.requests
@@ -439,7 +437,10 @@ impl NativeFlowHarness {
                 "thread-1",
                 turn_id,
                 PostTurnEvaluationOutcome {
-                    provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
+                    provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
+                        .with_parallel_queue_signal(Some(
+                            ParallelModePostTurnQueueSignal::AutoFollowQueued,
+                        )),
                     runtime_projection: planning_projection,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
@@ -1176,7 +1177,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_once() {
     assert!(
         launch_request
             .developer_instructions
-            .contains("Do not push, open pull requests, merge"),
+            .contains("Do not commit, push, open pull requests, merge"),
         "worker developer instructions should keep distributor delivery out of the worker lane: {}",
         launch_request.developer_instructions
     );

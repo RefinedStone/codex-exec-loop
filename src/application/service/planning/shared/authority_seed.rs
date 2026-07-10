@@ -148,6 +148,7 @@ impl PlanningAuthoritySeedService {
                 PlanningDirectionAuthorityCommit {
                     observed_planning_revision: None,
                     directions: default_directions,
+                    authority_mutation_owner_token: None,
                 },
             )? {
             // A conflict means another seeder or admin flow committed first; the
@@ -247,10 +248,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after epoch")
             .as_nanos();
-        std::env::temp_dir()
-            .join(format!("akra-planning-seed-{label}-{nanos}"))
-            .display()
-            .to_string()
+        let path = std::env::temp_dir().join(format!("akra-planning-seed-{label}-{nanos}"));
+        std::fs::create_dir_all(&path).expect("planning seed workspace should be created");
+        path.display().to_string()
     }
     fn seed_service(
         workspace_port: Arc<dyn PlanningWorkspacePort>,

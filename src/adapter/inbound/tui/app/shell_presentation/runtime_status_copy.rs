@@ -183,7 +183,7 @@ mod tests {
         // 써야 사용자가 자동 후속 실행 한계를 다르게 읽지 않는다.
         assert_eq!(
             auto_follow_working_detail(&conversation),
-            "auto turn 2/infinite running / interrupt unsupported"
+            "auto turn 2/infinite running / interrupt runtime-native"
         );
         assert_eq!(
             auto_follow_prompt_status_line(&conversation, true).as_deref(),

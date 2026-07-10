@@ -88,7 +88,12 @@ impl GithubAutomationPort for ReadyGithubAutomationPort {
         ))
     }
 
-    fn push_integration_branch(&self, _repo_root: &str, _branch_name: &str) -> anyhow::Result<()> {
+    fn push_integration_branch(
+        &self,
+        _repo_root: &str,
+        _branch_name: &str,
+        _expected_old_commit_sha: &str,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -145,6 +150,62 @@ fn test_control_plane_handle() -> (
     );
     let service = super::controller::ParallelModeControlPlaneService::new(effect_runner);
     (ParallelModeControlPlaneHandle::new(service), rx)
+}
+
+#[test]
+fn disabling_parallel_mode_cancels_the_active_automation_epoch() {
+    let (handle, _rx) = test_control_plane_handle();
+    let workspace = unique_workspace("cancel-epoch");
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::OpenEpoch {
+        workspace_directory: workspace.clone(),
+    });
+    let epoch_id = handle
+        .current_epoch_id_for_workspace(&workspace)
+        .expect("opening an epoch should assign an id");
+    assert!(handle.automation_epoch_is_active(&workspace, epoch_id));
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: workspace.clone(),
+    });
+
+    assert!(!handle.automation_epoch_is_active(&workspace, epoch_id));
+}
+
+#[test]
+fn opening_another_workspace_cancels_the_superseded_automation_epoch() {
+    let (handle, _rx) = test_control_plane_handle();
+    let first_workspace = unique_workspace("first-epoch");
+    let second_workspace = unique_workspace("second-epoch");
+
+    let first_effect = handle.force_parallel_entry_in_flight_for_test(first_workspace.clone(), 1);
+    let first_epoch_id = handle
+        .current_epoch_id_for_workspace(&first_workspace)
+        .expect("first workspace should own an epoch");
+    assert!(handle.automation_epoch_is_active(&first_workspace, first_epoch_id));
+    let _ =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
+            workspace_directory: first_workspace.clone(),
+            epoch_id: first_epoch_id,
+            effect_id: first_effect,
+            readiness_snapshot: Some(ready_readiness(&first_workspace)),
+            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
+            status_text: "first workspace progress".to_string(),
+        });
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::OpenEpoch {
+        workspace_directory: second_workspace.clone(),
+    });
+    let second_epoch_id = handle
+        .current_epoch_id_for_workspace(&second_workspace)
+        .expect("second workspace should own an epoch");
+
+    assert!(!handle.automation_epoch_is_active(&first_workspace, first_epoch_id));
+    assert!(handle.automation_epoch_is_active(&second_workspace, second_epoch_id));
+    assert!(
+        handle.readiness_snapshot_for_test().is_none(),
+        "the new workspace must not inherit the old readiness cache"
+    );
 }
 
 fn ready_readiness(workspace_directory: &str) -> ParallelModeReadinessSnapshot {
@@ -817,7 +878,7 @@ fn worker_event_received_maps_notices_stream_failures_refreshes_and_wakes() {
         completed.events.as_slice(),
         [
             ParallelModeControlPlaneEvent::WorkerCompleted { .. },
-            ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice },
+            ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice, .. },
             ParallelModeControlPlaneEvent::EffectStarted { .. },
             ParallelModeControlPlaneEvent::OrchestratorWakeQueued { .. }
         ] if notice == "official completion refreshed"
@@ -841,7 +902,7 @@ fn worker_event_received_maps_notices_stream_failures_refreshes_and_wakes() {
         stream_failed.events.as_slice(),
         [
             ParallelModeControlPlaneEvent::WorkerStreamFailed { task_id, .. },
-            ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice },
+            ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice, .. },
             ParallelModeControlPlaneEvent::EffectStarted { .. }
         ] if task_id == "task-1" && notice == "stream failed"
     ));
@@ -907,22 +968,27 @@ fn unknown_effect_completion_reasons_cover_refresh_and_specific_kind_mismatches(
 #[test]
 fn controller_background_events_map_direct_notices_and_ignore_stale_completions() {
     let (handle, _rx) = test_control_plane_handle();
-    handle.force_mode_for_test(WORKSPACE, true);
+    let entry_effect_id = handle.force_parallel_entry_in_flight_for_test(WORKSPACE, 1);
 
     let notice = handle.handle_background_event(
-        ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(
-            "runtime notice".to_string(),
-        ),
+        ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: entry_effect_id,
+            notice: "runtime notice".to_string(),
+        },
     );
     assert!(matches!(
         notice.as_slice(),
-        [ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice }]
+        [ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice, .. }]
             if notice == "runtime notice"
     ));
 
     let inactive_progress =
         handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
             workspace_directory: "/other".to_string(),
+            epoch_id: 1,
+            effect_id: entry_effect_id,
             readiness_snapshot: Some(ready_readiness("/other")),
             loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
             status_text: "ignored".to_string(),
@@ -932,6 +998,8 @@ fn controller_background_events_map_direct_notices_and_ignore_stale_completions(
     let active_progress =
         handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
             workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: entry_effect_id,
             readiness_snapshot: None,
             loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
             status_text: "working".to_string(),
@@ -1031,6 +1099,56 @@ fn controller_background_events_map_direct_notices_and_ignore_stale_completions(
 }
 
 #[test]
+fn same_workspace_reenable_rejects_prior_epoch_entry_progress() {
+    let (handle, _rx) = test_control_plane_handle();
+    let first_effect = handle.force_parallel_entry_in_flight_for_test(WORKSPACE, 1);
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: WORKSPACE.to_string(),
+    });
+    let second_effect = handle.force_parallel_entry_in_flight_for_test(WORKSPACE, 2);
+    assert_ne!(first_effect, second_effect);
+
+    let stale =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: first_effect,
+            readiness_snapshot: Some(ready_readiness(WORKSPACE)),
+            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
+            status_text: "stale epoch one progress".to_string(),
+        });
+    assert!(stale.is_empty());
+    let stale_notice = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: first_effect,
+            notice: "stale epoch one notice".to_string(),
+        },
+    );
+    assert!(stale_notice.is_empty());
+
+    let current =
+        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 2,
+            effect_id: second_effect,
+            readiness_snapshot: Some(ready_readiness(WORKSPACE)),
+            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
+            status_text: "current epoch two progress".to_string(),
+        });
+    assert!(matches!(
+        current.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::EnterProgress {
+            epoch_id: 2,
+            effect_id,
+            status_text,
+            ..
+        }] if *effect_id == second_effect && status_text == "current epoch two progress"
+    ));
+}
+
+#[test]
 fn controller_orchestrator_tick_completion_covers_retry_status_paths() {
     let (unblocked_handle, unblocked_rx) = test_control_plane_handle();
     unblocked_handle.force_epoch_for_test(WORKSPACE, 1);
@@ -1061,7 +1179,7 @@ fn controller_orchestrator_tick_completion_covers_retry_status_paths() {
     );
     assert!(completed.iter().any(|event| matches!(
         event,
-        ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice }
+        ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice, .. }
             if notice == "retry completed"
     )));
     assert!(completed.iter().any(|event| matches!(
@@ -1072,7 +1190,7 @@ fn controller_orchestrator_tick_completion_covers_retry_status_paths() {
     )));
     assert!(completed.iter().any(|event| matches!(
         event,
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text == "parallel mode: distributor retry completed / notices: 1"
     )));
 
@@ -1133,7 +1251,7 @@ fn controller_orchestrator_tick_completion_covers_retry_status_paths() {
     );
     assert!(blocked.iter().any(|event| matches!(
         event,
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text == "parallel mode: distributor retry blocked / notices: 1"
     )));
 }
@@ -1170,7 +1288,7 @@ fn controller_dispatch_wake_completion_records_traceable_dispatch_state() {
     )));
     assert!(presented.iter().any(|event| matches!(
         event,
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text.starts_with("parallel mode: dispatch refreshed / trigger: ")
     )));
     assert_eq!(
@@ -1183,17 +1301,7 @@ fn controller_dispatch_wake_completion_records_traceable_dispatch_state() {
 fn controller_refresh_supervisor_uses_cached_readiness_and_applies_refreshed_snapshot() {
     let (handle, rx) = test_control_plane_handle();
     handle.force_mode_for_test(WORKSPACE, true);
-    let progress =
-        handle.handle_background_event(ParallelModeControlPlaneBackgroundEvent::EnterProgress {
-            workspace_directory: WORKSPACE.to_string(),
-            readiness_snapshot: Some(ready_readiness(WORKSPACE)),
-            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
-            status_text: "warming up".to_string(),
-        });
-    assert!(matches!(
-        progress.as_slice(),
-        [ParallelModeControlPlanePresentationEvent::EnterProgress { .. }]
-    ));
+    handle.force_readiness_snapshot_for_test(ready_readiness(WORKSPACE));
 
     let started = handle.handle_command(ParallelModeControlPlaneCommand::RefreshSupervisor {
         workspace_directory: WORKSPACE.to_string(),
@@ -1245,7 +1353,7 @@ fn controller_pending_dispatch_poll_runs_follow_up_tick_when_queue_is_empty() {
     );
     assert!(completed.iter().any(|event| matches!(
         event,
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text == "parallel mode: distributor retry completed / notices: 0"
     )));
 }
@@ -1264,7 +1372,7 @@ fn controller_deferred_dispatch_without_projection_records_traceable_queue_state
     });
     assert!(presented.iter().any(|event| matches!(
         event,
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text
                 == "parallel mode: dispatch deferred / entry loading or control-plane refresh is still in progress"
     )));
@@ -1279,18 +1387,7 @@ fn controller_deferred_dispatch_without_projection_records_traceable_queue_state
 fn effect_runner_spawns_traceable_refresh_tick_and_blocked_entry_events() {
     let (refresh_handle, refresh_rx) = test_control_plane_handle();
     refresh_handle.force_mode_for_test(WORKSPACE, true);
-    let progress = refresh_handle.handle_background_event(
-        ParallelModeControlPlaneBackgroundEvent::EnterProgress {
-            workspace_directory: WORKSPACE.to_string(),
-            readiness_snapshot: Some(ready_readiness(WORKSPACE)),
-            loading_stage: ParallelModeControlPlaneLoadingStage::ReconcilingPool,
-            status_text: "cached readiness".to_string(),
-        },
-    );
-    assert!(matches!(
-        progress.as_slice(),
-        [ParallelModeControlPlanePresentationEvent::EnterProgress { .. }]
-    ));
+    refresh_handle.force_readiness_snapshot_for_test(ready_readiness(WORKSPACE));
     assert!(
         refresh_handle
             .handle_command(ParallelModeControlPlaneCommand::RefreshSupervisor {
@@ -1374,7 +1471,7 @@ fn controller_inspect_supervisor_reconciles_pool_when_requested() {
     )));
     assert!(presented.iter().any(|event| matches!(
         event,
-        ParallelModeControlPlanePresentationEvent::StatusShown { status_text }
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text.starts_with("parallel readiness refreshed / state:")
     )));
 }

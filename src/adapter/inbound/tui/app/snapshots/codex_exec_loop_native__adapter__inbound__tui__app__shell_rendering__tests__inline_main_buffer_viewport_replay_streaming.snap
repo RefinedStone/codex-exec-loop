@@ -10,7 +10,7 @@ expression: rendered
 "                                                                                "
 "Akra  |  thread: new draft  |  turn: working  |  input: streaming               "
 "status: turn started                                                            "
-"◦ Working (0s • turn running / interrupt unsupported)                           "
+"◦ Working (0s • turn running / interrupt runtime-native)                        "
 "planning: stale  |  queue: queue head: rank 1 / terminal-bri...                 "
 "now: Implement shell planning status  |  next: Trim legacy shell code           "
 "proposed: none  |  blocked: Follow blocked review thread (blocked by tasks:     "

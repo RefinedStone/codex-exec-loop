@@ -104,6 +104,32 @@ and selected IDs, but it must not decide durable planning truth.
 - Keep command/effect/completion names explicit and boring.
 - Write architecture tests when a boundary is easy to regress.
 
+## Subprocess Containment
+
+External CLI processes use `src/subprocess.rs`; adapters must not bypass this boundary when they
+need bounded output, timeout, or descendant cleanup.
+
+- Linux creates a process group before exec and adds a cryptographically random inherited
+  containment marker. Cleanup performs a bounded `/proc` scan, freezes start-time-identified
+  members, then terminates them through pidfds. If pidfds are unavailable under an older kernel or
+  seccomp policy, it revalidates process start time immediately before `kill`. Procfs is required
+  and spawn fails closed when the leader identity cannot be captured. Environment reads are capped
+  at 2 MiB per process, 64 MiB in aggregate per scan, and 32,768 observed PIDs. Every procfs
+  operation shares the absolute 500 ms sweep deadline. A deadline or budget breach is a visible
+  cleanup failure, never an empty-tree result. The normal no-descendant path stops after its first
+  empty scan.
+- A Linux child that deliberately removes the marker and fully daemonizes after every observable
+  parent has exited is outside this userspace guarantee. Run genuinely hostile commands in a
+  delegated cgroup, PID namespace, VM, or equivalent kernel boundary.
+- macOS and other Unix targets have race-free process-group containment only. A child that calls
+  `setsid` can leave that group; spawn emits a diagnostic that names this limitation.
+- Windows creates the process suspended, assigns it to a kill-on-close Job, and resumes it only
+  after assignment. The internal spawn helper owns Windows creation flags and fails closed if Job
+  assignment or process-wide resume fails; callers must not preconfigure their own creation flags.
+
+Timeout and output-limit errors retain their primary error kind and append any containment cleanup
+failure. Drop remains best effort but emits a warning when cleanup cannot be completed.
+
 ## Verification
 
 Use these gates for boundary-sensitive work:

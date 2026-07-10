@@ -1,15 +1,18 @@
 use crate::application::port::outbound::app_server_prompt_log_port::AppServerPromptLogPort;
+use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::planning::{PlanningAdminFacadeService, PlanningResetTarget};
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::composition::production;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
-use axum::extract::Request;
-use axum::http::StatusCode;
+use axum::extract::{Request, State};
+use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use axum_extra::extract::CookieJar;
+use std::io::IsTerminal;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -26,6 +29,7 @@ mod api;
 mod forms;
 mod helpers;
 mod pages;
+mod security;
 mod static_assets;
 #[cfg(test)]
 mod tests;
@@ -33,8 +37,8 @@ mod views;
 
 use self::helpers::{
     ensure_csrf_cookie, internal_server_error, verify_draft_name_path, verify_header_csrf,
-    verify_local_admin_request,
 };
+use self::security::{AdminSecurityBootstrap, AdminSecurityConfig, verify_local_admin_request};
 
 const DEFAULT_PORT: u16 = 18442;
 #[derive(Clone)]
@@ -46,15 +50,16 @@ struct AdminAppState {
      */
     facade: Arc<PlanningAdminFacadeService>,
     parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    parallel_agent_profile_service: ParallelAgentProfileService,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     review_center_read_service: ReviewCenterReadService,
     graphic: AdminGraphicConfig,
+    security: AdminSecurityConfig,
 }
 
 #[derive(Clone)]
 struct AdminGraphicConfig {
     enabled: bool,
-    api_base_url: String,
     polling_interval_ms: u64,
 }
 
@@ -83,8 +88,6 @@ where
         .context("failed to resolve current directory for admin server")?
         .canonicalize()
         .context("failed to canonicalize current directory for admin server")?;
-    let workspace_dir = workspace_dir.display().to_string();
-    let state = build_admin_state(workspace_dir);
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, args.port))
         .await
         .with_context(|| format!("failed to bind admin server on 127.0.0.1:{}", args.port))?;
@@ -93,7 +96,30 @@ where
         .local_addr()
         .context("failed to read admin server local address")?
         .port();
-    println!("local planning admin server listening on http://127.0.0.1:{bound_port}");
+    let security = AdminSecurityBootstrap::from_env(bound_port)?;
+    let stdout_is_terminal = std::io::stdout().is_terminal();
+    let stderr_is_terminal = std::io::stderr().is_terminal();
+    if security.generated_capability_token.is_some() && !stdout_is_terminal && !stderr_is_terminal {
+        bail!(
+            "AKRA_ADMIN_TOKEN is required when the admin server is not attached to an interactive terminal"
+        );
+    }
+    let public_origin = security.config.public_origin();
+    let workspace_dir = workspace_dir.display().to_string();
+    let state = build_admin_state(workspace_dir, security.config);
+    println!("local planning admin server listening on {public_origin}");
+    if let Some(token) = security.generated_capability_token {
+        if stdout_is_terminal {
+            println!("admin capability token (keep private): {token}");
+        } else {
+            eprintln!("admin capability token (keep private): {token}");
+        }
+    }
+    if stdout_is_terminal || !stderr_is_terminal {
+        println!("admin login: {public_origin}/admin/login");
+    } else {
+        eprintln!("admin login: {public_origin}/admin/login");
+    }
 
     axum::serve(listener, build_router(state))
         .with_graceful_shutdown(shutdown_signal())
@@ -102,7 +128,7 @@ where
     Ok(())
 }
 
-fn build_admin_state(workspace_dir: String) -> AdminAppState {
+fn build_admin_state(workspace_dir: String, security: AdminSecurityConfig) -> AdminAppState {
     /*
      * Admin HTTP layer는 route와 transport contract만 소유한다.
      * app-server, sqlite authority, filesystem workspace, Git/GitHub runtime wiring은
@@ -112,9 +138,11 @@ fn build_admin_state(workspace_dir: String) -> AdminAppState {
     AdminAppState {
         facade: application.facade,
         parallel_mode_control_plane: application.parallel_mode_control_plane,
+        parallel_agent_profile_service: application.parallel_agent_profile_service,
         app_server_prompt_log_port: application.app_server_prompt_log_port,
         review_center_read_service: application.review_center_read_service,
         graphic: AdminGraphicConfig::from_env(),
+        security,
     }
 }
 
@@ -123,7 +151,6 @@ impl AdminGraphicConfig {
         let enabled = std::env::var("AKRA_ADMIN_GRAPHIC_ENABLED")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
-        let api_base_url = std::env::var("AKRA_ADMIN_API_BASE_URL").unwrap_or_default();
         let polling_interval_ms = std::env::var("AKRA_ADMIN_GRAPHIC_POLL_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -131,18 +158,80 @@ impl AdminGraphicConfig {
             .unwrap_or(10_000);
         Self {
             enabled,
-            api_base_url,
             polling_interval_ms,
         }
     }
 }
 
 async fn local_admin_request_guard(
+    State(state): State<AdminAppState>,
     request: Request,
     next: Next,
-) -> std::result::Result<Response, StatusCode> {
-    verify_local_admin_request(request.headers())?;
-    Ok(next.run(request).await)
+) -> Response {
+    if let Err(status) = verify_local_admin_request(request.headers(), &state.security) {
+        return harden_admin_response(status.into_response());
+    }
+
+    let path = request.uri().path();
+    let login_route = path == "/admin/login";
+    let authentication = (!login_route)
+        .then(|| state.security.authenticate_request(request.headers()))
+        .flatten();
+    if !login_route && authentication.is_none() {
+        return harden_admin_response(if path.starts_with("/api/") {
+            StatusCode::UNAUTHORIZED.into_response()
+        } else {
+            Redirect::to("/admin/login").into_response()
+        });
+    }
+
+    let refresh_cookie = (path != "/admin/logout")
+        .then(|| authentication.and_then(|auth| auth.refreshed_session_cookie()))
+        .flatten();
+    let mut response = next.run(request).await;
+    if let Some(cookie) = refresh_cookie {
+        response = (CookieJar::new().add(cookie), response).into_response();
+    }
+    harden_admin_response(response)
+}
+
+fn harden_admin_response(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        "cache-control",
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response.headers_mut().insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:",
+        ),
+    );
+    response
+        .headers_mut()
+        .entry("referrer-policy")
+        .or_insert(HeaderValue::from_static("no-referrer"));
+    response.headers_mut().insert(
+        "cross-origin-opener-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    response.headers_mut().insert(
+        "cross-origin-resource-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    response.headers_mut().insert(
+        "permissions-policy",
+        HeaderValue::from_static(
+            "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=()",
+        ),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+        .headers_mut()
+        .insert("x-frame-options", HeaderValue::from_static("DENY"));
+    response
 }
 
 fn build_router(state: AdminAppState) -> Router {
@@ -154,6 +243,11 @@ fn build_router(state: AdminAppState) -> Router {
      */
     Router::new()
         .route("/", get(pages::dashboard_page))
+        .route(
+            "/admin/login",
+            get(security::login_page).post(security::login_submit),
+        )
+        .route("/admin/logout", post(security::logout_submit))
         .route("/admin", get(pages::dashboard_page))
         .route("/admin/akra", get(pages::akra_dashboard_page))
         .route("/admin/akra/metrics", get(pages::akra_metrics_page))
@@ -166,6 +260,14 @@ fn build_router(state: AdminAppState) -> Router {
         .route(
             "/admin/assets/game/{asset_name}",
             get(static_assets::admin_game_asset),
+        )
+        .route(
+            "/admin/assets/scripts/{asset_name}",
+            get(static_assets::admin_script_asset),
+        )
+        .route(
+            "/admin/assets/fonts/{asset_name}",
+            get(static_assets::admin_font_asset),
         )
         .route("/admin/directions", get(pages::directions_page))
         .route("/admin/tasks", get(pages::tasks_page))
@@ -255,8 +357,11 @@ fn build_router(state: AdminAppState) -> Router {
             get(api::akra_distributor_api),
         )
         .route("/api/admin/akra/events", get(api::akra_events_api))
-        .with_state(state)
-        .layer(middleware::from_fn(local_admin_request_guard))
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state,
+            local_admin_request_guard,
+        ))
 }
 
 fn parse_reset_target(target: &str) -> std::result::Result<PlanningResetTarget, StatusCode> {

@@ -65,7 +65,7 @@ Keep mapping logic in adapters, not domain models.
 - `. "$HOME/.cargo/env" && cargo run -- planning-tool run [workspace_dir]`: run a structured planning task request from stdin
 - `. "$HOME/.cargo/env" && cargo run -- parallel-tick [workspace_dir]`: manually drive the parallel-mode distributor queue
 - `. "$HOME/.cargo/env" && cargo run -- admin [--port <port>]`: run the planning/admin web surface
-- `. "$HOME/.cargo/env" && cargo run -- telegram [--token <token>] [--allow-chat-id <chat_id>]...`: run the Telegram control plane
+- `. "$HOME/.cargo/env" && AKRA_TELEGRAM_BOT_TOKEN=<token> cargo run -- telegram [--allow-chat-id <chat_id>]... [--allow-user-id <user_id>]...`: run the Telegram control plane; group chats require both allowlists
 
 ## Style
 

@@ -69,6 +69,19 @@ impl NativeTuiApp {
                 queued_auto_prompt_available,
                 context.parallel_mode_post_turn_queue_signal,
             );
+        let stale_parallel_only_prompt = queued_auto_prompt_available
+            && !parallel_dispatch_consumed_auto_prompt
+            && matches!(
+                context.parallel_mode_post_turn_queue_signal,
+                Some(ParallelModePostTurnQueueSignal::AutoFollowQueued)
+            )
+            && !self.parallel_mode_enabled()
+            && !self.single_session_auto_follow_can_queue_next();
+        if stale_parallel_only_prompt {
+            suppress_conversation_runtime_auto_prompt(effects);
+            self.record_stale_parallel_only_continuation_cancelled();
+            return;
+        }
         let route = decide_post_turn_auto_prompt_route(PostTurnAutoPromptRouteRequest {
             queued_auto_prompt_available,
             parallel_dispatch_consumed_auto_prompt,
@@ -97,6 +110,20 @@ impl NativeTuiApp {
     fn record_auto_follow_parallel_dispatch(&mut self) {
         if let ConversationState::Ready(conversation) = &mut self.conversation_state {
             conversation.record_auto_follow_parallel_dispatch();
+        }
+    }
+
+    fn single_session_auto_follow_can_queue_next(&self) -> bool {
+        matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.auto_follow_state.can_queue_next()
+        )
+    }
+
+    fn record_stale_parallel_only_continuation_cancelled(&mut self) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.record_stale_parallel_only_continuation_cancelled();
         }
     }
 }

@@ -14,6 +14,8 @@ pub mod review_center_repository_port;
 pub mod interactive_turn_runtime_port;
 // parallel agent worker port는 병렬 lane에서 실제 agent 작업을 시작하는 경계다.
 pub mod parallel_agent_worker_port;
+// parallel agent profile repository port는 workspace별 agent profile JSON 저장 경계를 분리한다.
+pub mod parallel_agent_profile_repository_port;
 // parallel mode runtime event log port는 authority store의 변경 이벤트 feed를 읽는 경계다.
 pub mod parallel_mode_runtime_event_log_port;
 // parallel mode runtime port는 worktree와 branch 준비 같은 로컬 런타임 조작을 추상화한다.
@@ -32,3 +34,7 @@ pub mod session_catalog_port;
 pub mod startup_probe_port;
 // telegram bot port는 Telegram HTTP 호출을 bot runner의 테스트 가능한 경계로 만든다.
 pub mod telegram_bot_port;
+// Telegram global runner lease는 bot id별 update stream을 머신 전체에서 한 workspace에 묶는다.
+pub mod telegram_global_runner_lease_port;
+// telegram update ledger port는 workspace별 polling cursor와 명령 idempotency를 영속화한다.
+pub mod telegram_update_ledger_port;

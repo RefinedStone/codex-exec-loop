@@ -3,6 +3,14 @@
 // transport 세부사항을 소유하므로 공통 오류 타입인 `anyhow::Result`를 port 반환 계약으로 사용한다.
 use anyhow::Result;
 
+/// Extra wall-clock allowance used by the curl adapter beyond Telegram's long-poll timeout.
+pub const TELEGRAM_LONG_POLL_TRANSPORT_MARGIN_SECONDS: u64 = 15;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TelegramBotIdentity {
+    pub bot_id: u64,
+}
+
 // Poll request는 adapter가 Telegram Bot API의 getUpdates 호출로 변환할 입력 DTO이다. derive된
 // trait들은 service test에서 request 값을 비교하고, 실패 메시지에 cursor/batch 구조를 출력하게 해 준다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +56,9 @@ pub struct TelegramInboundMessage {
     // chat_id는 답장을 보낼 대상 채팅방이다. send_message request의 chat_id로 그대로 이어지는
     // inbound/outbound 연결점이다.
     pub chat_id: i64,
+    // sender_user_id is the stable Telegram account id. Group authorization
+    // requires it in addition to the shared chat id; service messages may omit it.
+    pub sender_user_id: Option<i64>,
     // text는 사용자가 보낸 명령 본문이다. Telegram message에는 사진이나 스티커처럼 text가 없는
     // event도 있으므로 Optional로 둔다.
     pub text: Option<String>,
@@ -100,6 +111,9 @@ impl TelegramSendMessageRequest {
 // 구현하므로, runner tests는 token/HTTP 없이 cursor 전진, allowed chat filtering, response send
 // 여부를 검증할 수 있다.
 pub trait TelegramBotPort: Send + Sync {
+    /// Authenticates the configured token without consuming or acknowledging update-stream data.
+    fn get_me(&self) -> Result<TelegramBotIdentity>;
+
     // `get_updates`는 Telegram update stream을 읽는 operation이다. request는 cursor와 batch
     // 정책을 담고, 결과는 adapter가 domain-safe DTO로 mapping한 update 목록이다.
     fn get_updates(&self, request: &TelegramPollRequest) -> Result<Vec<TelegramUpdate>>;

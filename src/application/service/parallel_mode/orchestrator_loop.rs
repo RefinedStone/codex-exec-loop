@@ -1,8 +1,11 @@
 use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-use crate::application::service::parallel_agent_profile::load_parallel_agent_profile_config;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWorkerCommitDisposition;
+use crate::application::service::conversation_runtime_event::{
+    ConversationStreamEvent, conversation_stream_channel,
+};
+use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningRuntimeProjection,
@@ -13,12 +16,12 @@ use crate::domain::parallel_mode::{
     ParallelModeAutomationTrigger, ParallelModeControlPlaneWorkerEvent,
     ParallelModeControlPlaneWorkerEventKind, ParallelModeDispatchCommandSnapshot,
     ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent,
-    ParallelModeSlotLeaseRequest, ParallelModeSupervisorSnapshot,
+    ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSupervisorSnapshot,
 };
 use chrono::Utc;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::Sender;
 use std::thread;
 
 use super::ParallelModeService;
@@ -50,6 +53,23 @@ pub enum ParallelModeOrchestratorLoopEvent {
 }
 
 impl ParallelModeService {
+    fn load_dispatch_agent_profiles(
+        &self,
+        workspace_directory: &str,
+    ) -> Result<ParallelAgentProfileConfig, String> {
+        if let Some(profile_service) = self.parallel_agent_profile_service.as_ref() {
+            return profile_service.load_config(workspace_directory);
+        }
+        #[cfg(test)]
+        {
+            Ok(ParallelAgentProfileConfig::default())
+        }
+        #[cfg(not(test))]
+        {
+            Err("parallel agent profile repository is not configured".to_string())
+        }
+    }
+
     pub fn enqueue_dispatch_commands_for_trigger(
         &self,
         workspace_dir: &str,
@@ -75,6 +95,31 @@ impl ParallelModeService {
             .runtime
             .load_runtime_projection_or_invalid(&workspace_directory);
         let readiness_snapshot = self.inspect_readiness(&workspace_directory, &planning_projection);
+
+        if !request
+            .turn_service
+            .automation_epoch_is_active(&workspace_directory, request.epoch_id)
+        {
+            let supervisor_snapshot = self.build_supervisor_snapshot(
+                &workspace_directory,
+                false,
+                Some(&readiness_snapshot),
+            );
+            let mut outcome = ParallelModeDispatchOutcome::new(
+                request.trigger,
+                workspace_directory.clone(),
+                request.epoch_id,
+            );
+            outcome.blocked_reason =
+                Some("parallel automation epoch closed before orchestrator dispatch".to_string());
+            outcome.status_copy_input = outcome.status_detail();
+            return ParallelModeDispatchOrchestratorTickResult {
+                workspace_directory,
+                readiness_snapshot,
+                supervisor_snapshot,
+                outcome,
+            };
+        }
 
         let (supervisor_snapshot, outcome) = if readiness_snapshot.allows_parallel_mode() {
             let enqueue_error = if let Some(enqueue_trigger) = request.enqueue_trigger {
@@ -290,6 +335,15 @@ fn dispatch_parallel_queue_pool(
     let epoch_id = context.epoch_id;
     let mut outcome =
         ParallelModeDispatchOutcome::new(trigger, workspace_directory.to_string(), epoch_id);
+    if !context
+        .turn_service
+        .automation_epoch_is_active(workspace_directory, epoch_id)
+    {
+        outcome.blocked_reason =
+            Some("parallel automation epoch closed before dispatch".to_string());
+        outcome.status_copy_input = outcome.status_detail();
+        return outcome;
+    }
 
     let dispatch_plan = match service.build_dispatch_plan(
         workspace_directory,
@@ -368,10 +422,33 @@ fn dispatch_parallel_queue_pool(
 
     let mut launched_titles = Vec::new();
     let mut blocked_details = Vec::new();
-    let agent_profiles =
-        load_parallel_agent_profile_config(workspace_directory).unwrap_or_default();
+    let agent_profiles = match service.load_dispatch_agent_profiles(workspace_directory) {
+        Ok(config) => config,
+        Err(error) => {
+            outcome.blocked_reason = Some(format!(
+                "parallel agent profile configuration is unavailable: {error}"
+            ));
+            outcome.status_copy_input = outcome.status_detail();
+            event_log::emit_lazy("parallel_dispatch_blocked", || {
+                serde_json::json!({
+                    "trigger": trigger.label(),
+                    "workspace": workspace_directory,
+                    "epoch_id": epoch_id,
+                    "blocked_reason": outcome.blocked_reason,
+                })
+            });
+            return outcome;
+        }
+    };
     let mut used_agent_ids = active_parallel_agent_ids(service, workspace_directory);
     for task in dispatch_plan.candidates {
+        if !context
+            .turn_service
+            .automation_epoch_is_active(workspace_directory, epoch_id)
+        {
+            blocked_details.push("parallel automation epoch closed during dispatch".to_string());
+            break;
+        }
         let selected_profile = agent_profiles.select_available_profile(&used_agent_ids);
         if let Some(profile) = selected_profile.as_ref() {
             used_agent_ids.insert(profile.agent_id.clone());
@@ -404,6 +481,21 @@ fn dispatch_parallel_queue_pool(
         };
         match service.acquire_slot_lease(workspace_directory, lease_request) {
             Ok(lease) => {
+                if !context
+                    .turn_service
+                    .automation_epoch_is_active(workspace_directory, epoch_id)
+                {
+                    let _ = context.turn_service.finalize_stream_completion(
+                        &lease.worktree_path,
+                        false,
+                        true,
+                        true,
+                        true,
+                    );
+                    blocked_details
+                        .push("parallel automation epoch closed before worker launch".to_string());
+                    break;
+                }
                 event_log::emit_lazy("parallel_dispatch_slot_lease_acquired", || {
                     serde_json::json!({
                         "trigger": trigger.label(),
@@ -428,6 +520,7 @@ fn dispatch_parallel_queue_pool(
                     developer_instructions: handoff.developer_instructions,
                     service_name: handoff.service_name,
                     handoff_task: handoff.task.clone(),
+                    expected_lease: lease,
                 };
                 spawn_parallel_dispatch_worker(
                     worker_request,
@@ -558,6 +651,8 @@ struct ParallelDispatchWorkerRequest {
     service_name: String,
     // handoff_task는 notice, completion contract, refresh prompt가 같은 task를 가리키게 하는 연결 키이다.
     handoff_task: PlanningTaskHandoff,
+    // launch 시점 lease identity와 frozen delivery target을 completion 전에 다시 검증한다.
+    expected_lease: ParallelModeSlotLeaseSnapshot,
 }
 
 // 스트림 이벤트는 순서대로 오지만, 최종 판단에는 "시작 전 실패", "실패 이벤트",
@@ -676,7 +771,7 @@ fn run_parallel_dispatch_worker(
     turn_service: ParallelModeTurnService,
     planning: PlanningServices,
 ) -> ParallelDispatchWorkerRunResult {
-    let (event_tx, event_rx) = mpsc::channel();
+    let (event_tx, event_rx) = conversation_stream_channel();
     let service_request = request.clone();
     event_log::emit_lazy("parallel_worker_stream_starting", || {
         parallel_worker_stream_starting_trace_payload(&request)
@@ -715,6 +810,10 @@ fn run_parallel_dispatch_worker(
             break;
         }
     }
+
+    // Disconnect the bounded stream before joining. This converts any invalid
+    // post-terminal producer send into a channel error instead of a blocked join.
+    drop(event_rx);
 
     match service_thread.join() {
         Ok(Ok(())) => {
@@ -800,8 +899,8 @@ fn run_parallel_dispatch_worker(
         ));
     }
 
-    let completion = turn_service.finalize_stream_completion(
-        &request.worktree_directory,
+    let completion = turn_service.finalize_stream_completion_for_lease(
+        &request.expected_lease,
         stream_state.saw_turn_started,
         stream_state.saw_failed_before_turn_started,
         stream_state.saw_failed_event,
@@ -828,8 +927,8 @@ fn run_parallel_dispatch_worker(
          * The planning ledger must not record an authoritative completion for a slot whose
          * app-server turn did not reach a clean terminal success.
          */
-        turn_service.mark_official_completion_failed(
-            &request.worktree_directory,
+        turn_service.mark_official_completion_failed_for_lease(
+            &request.expected_lease,
             "parallel worker stream failed before official completion refresh",
         );
         return if stream_state.saw_failed_before_turn_started {
@@ -845,8 +944,8 @@ fn run_parallel_dispatch_worker(
          * Keeping it explicit protects future changes that might add non-failed terminal
          * events without an official completion contract.
          */
-        turn_service.mark_official_completion_failed(
-            &request.worktree_directory,
+        turn_service.mark_official_completion_failed_for_lease(
+            &request.expected_lease,
             "parallel worker stream ended without a completed turn",
         );
         return ParallelDispatchWorkerRunResult::stream_failed(notices);
@@ -936,7 +1035,7 @@ fn sync_parallel_dispatch_worker_event(
     stream_state: &mut ParallelDispatchWorkerStreamState,
 ) -> Vec<String> {
     let mut notices = Vec::new();
-    let outcome = turn_service.sync_stream_event(&request.worktree_directory, event);
+    let outcome = turn_service.sync_stream_event_for_lease(&request.expected_lease, event);
     stream_state.saw_turn_started |= outcome.turn_started_observed;
     if let Some(notice) = outcome.runtime_notice {
         notices.push(notice);
@@ -988,6 +1087,19 @@ fn run_parallel_dispatch_official_completion(
     latest_main_reply: Option<&str>,
 ) -> ParallelDispatchOfficialCompletionOutcome {
     let mut notices = Vec::new();
+    if !turn_service.automation_epoch_is_active(
+        &request.planning_workspace_directory,
+        request.automation_epoch_id,
+    ) {
+        turn_service.mark_official_completion_failed_for_lease(
+            &request.expected_lease,
+            "parallel automation epoch closed before official completion refresh",
+        );
+        return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
+            "parallel official completion paused after mode was disabled / task: {}",
+            request.handoff_task.task_title
+        )]);
+    }
     event_log::emit_lazy("parallel_official_completion_started", || {
         parallel_official_completion_started_trace_payload(
             request,
@@ -996,10 +1108,59 @@ fn run_parallel_dispatch_official_completion(
         )
     });
 
+    // Commit preparation must not consume a durable refresh order. A blocked filter,
+    // empty result, or ref race leaves the slot inspectable without creating an order gap.
+    let host_commit = match turn_service.prepare_host_owned_worker_commit(&request.expected_lease) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let detail = format!("host-owned parallel worker commit failed: {error}");
+            turn_service
+                .mark_official_completion_failed_for_lease(&request.expected_lease, &detail);
+            event_log::emit_lazy("parallel_worker_host_commit_blocked", || {
+                serde_json::json!({
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "detail": &detail,
+                })
+            });
+            return ParallelDispatchOfficialCompletionOutcome::failed(vec![detail]);
+        }
+    };
+    let commit_action = match host_commit.disposition {
+        ParallelWorkerCommitDisposition::Created => "created",
+        ParallelWorkerCommitDisposition::Existing => "accepted_existing",
+    };
+    notices.push(format!(
+        "host-owned worker commit {commit_action} / commit: {}",
+        host_commit.commit_sha
+    ));
+    event_log::emit_lazy("parallel_worker_host_commit_prepared", || {
+        serde_json::json!({
+            "worktree": &request.worktree_directory,
+            "task_id": &request.handoff_task.task_id,
+            "commit_action": commit_action,
+            "commit_sha": &host_commit.commit_sha,
+        })
+    });
+    if !turn_service.automation_epoch_is_active(
+        &request.planning_workspace_directory,
+        request.automation_epoch_id,
+    ) {
+        turn_service.mark_official_completion_failed_for_lease(
+            &request.expected_lease,
+            "parallel automation epoch closed after host commit",
+        );
+        notices.push(format!(
+            "parallel official completion paused after host commit / task: {}",
+            request.handoff_task.task_title
+        ));
+        return ParallelDispatchOfficialCompletionOutcome::failed(notices);
+    }
+
     // Official completion refreshes are serialized by slot lease order, not by thread wake-up
     // timing. That preserves planning authority when multiple parallel workers finish together.
     let refresh_order = match turn_service
-        .reserve_official_completion_refresh_order(&request.worktree_directory)
+        .reserve_official_completion_refresh_order_for_lease(&request.expected_lease)
     {
         Ok(Some(order)) => order,
         Ok(None) => {
@@ -1016,7 +1177,7 @@ fn run_parallel_dispatch_official_completion(
             )]);
         }
         Err(error) => {
-            turn_service.mark_official_completion_failed(&request.worktree_directory, &error);
+            turn_service.mark_official_completion_failed_for_lease(&request.expected_lease, &error);
             event_log::emit_lazy("parallel_official_completion_blocked", || {
                 serde_json::json!({
                     "worktree": &request.worktree_directory,
@@ -1040,8 +1201,8 @@ fn run_parallel_dispatch_official_completion(
     let validation_summary =
         parallel_dispatch_validation_summary(&turn_completed.changed_planning_file_paths);
 
-    let completion_report = match turn_service.begin_official_completion(
-        &request.worktree_directory,
+    let completion_report = match turn_service.begin_official_completion_for_lease(
+        &request.expected_lease,
         &turn_completed.turn_id,
         Some(refresh_order),
         Some(latest_main_reply),
@@ -1063,7 +1224,7 @@ fn run_parallel_dispatch_official_completion(
             )]);
         }
         Err(error) => {
-            turn_service.mark_official_completion_failed(&request.worktree_directory, &error);
+            turn_service.mark_official_completion_failed_for_lease(&request.expected_lease, &error);
             event_log::emit_lazy("parallel_official_completion_blocked", || {
                 serde_json::json!({
                     "worktree": &request.worktree_directory,
@@ -1081,9 +1242,24 @@ fn run_parallel_dispatch_official_completion(
     };
 
     if let Some(notice) =
-        turn_service.mark_official_completion_refreshing(&request.worktree_directory)
+        turn_service.mark_official_completion_refreshing_for_lease(&request.expected_lease)
     {
         notices.push(notice);
+    }
+
+    if !turn_service.automation_epoch_is_active(
+        &request.planning_workspace_directory,
+        request.automation_epoch_id,
+    ) {
+        turn_service.mark_official_completion_failed_for_lease(
+            &request.expected_lease,
+            "parallel automation epoch closed before planning authority refresh",
+        );
+        notices.push(format!(
+            "parallel official completion paused before planning refresh / task: {}",
+            request.handoff_task.task_title
+        ));
+        return ParallelDispatchOfficialCompletionOutcome::failed(notices);
     }
 
     let worker_request = PlanningOfficialCompletionRefreshRequest {
@@ -1104,11 +1280,27 @@ fn run_parallel_dispatch_official_completion(
         .worker
         .refresh_queue_from_official_completion(worker_request);
 
+    if !turn_service.automation_epoch_is_active(
+        &request.planning_workspace_directory,
+        request.automation_epoch_id,
+    ) {
+        turn_service.mark_official_completion_failed_for_lease(
+            &request.expected_lease,
+            "parallel automation epoch closed during planning authority refresh",
+        );
+        notices.push(format!(
+            "parallel delivery paused after planning refresh / task: {}",
+            request.handoff_task.task_title
+        ));
+        return ParallelDispatchOfficialCompletionOutcome::failed(notices);
+    }
+
     let outcome = match worker_outcome {
         Ok(outcome) => outcome,
         Err(error) => {
             let detail = format!("parallel official completion refresh failed: {error}");
-            turn_service.mark_official_completion_failed(&request.worktree_directory, &detail);
+            turn_service
+                .mark_official_completion_failed_for_lease(&request.expected_lease, &detail);
             event_log::emit_lazy("parallel_official_completion_failed", || {
                 serde_json::json!({
                     "planning_workspace": &request.planning_workspace_directory,
@@ -1130,7 +1322,7 @@ fn run_parallel_dispatch_official_completion(
             .preview_detail()
             .unwrap_or("parallel official completion refresh requires planning repair")
             .to_string();
-        turn_service.mark_official_completion_failed(&request.worktree_directory, &detail);
+        turn_service.mark_official_completion_failed_for_lease(&request.expected_lease, &detail);
         event_log::emit_lazy("parallel_official_completion_blocked", || {
             serde_json::json!({
                 "planning_workspace": &request.planning_workspace_directory,
@@ -1158,7 +1350,7 @@ fn run_parallel_dispatch_official_completion(
          * failed keeps auto-follow from chaining on top of unavailable planning state.
          */
         let detail = "parallel official completion refresh left planning unavailable";
-        turn_service.mark_official_completion_failed(&request.worktree_directory, detail);
+        turn_service.mark_official_completion_failed_for_lease(&request.expected_lease, detail);
         event_log::emit_lazy("parallel_official_completion_blocked", || {
             serde_json::json!({
                 "planning_workspace": &request.planning_workspace_directory,
@@ -1181,10 +1373,14 @@ fn run_parallel_dispatch_official_completion(
         .as_deref()
         .map(|summary| format!("official ledger refresh succeeded: {summary}"))
         .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
-    notices.extend(turn_service.finalize_official_completion_success(
-        &request.worktree_directory,
-        &authority_refresh_outcome,
-    ));
+    notices.extend(
+        turn_service.finalize_official_completion_success_for_epoch_and_lease(
+            &request.expected_lease,
+            &request.planning_workspace_directory,
+            request.automation_epoch_id,
+            &authority_refresh_outcome,
+        ),
+    );
     event_log::emit_lazy("parallel_official_completion_succeeded", || {
         serde_json::json!({
             "planning_workspace": &request.planning_workspace_directory,
@@ -1285,27 +1481,34 @@ mod tests {
         parallel_runtime_event_for_dispatch_trigger,
         parallel_worker_agent_message_completed_trace_payload,
         parallel_worker_stream_starting_trace_payload,
-        parallel_worker_thread_started_trace_payload, run_parallel_dispatch_worker,
-        sync_parallel_dispatch_worker_event,
+        parallel_worker_thread_started_trace_payload, run_parallel_dispatch_official_completion,
+        run_parallel_dispatch_worker, sync_parallel_dispatch_worker_event,
     };
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
     use crate::application::port::outbound::github_automation_port::{
         GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+        GithubRepositoryVisibility,
     };
+    use crate::application::port::outbound::parallel_agent_profile_repository_port::ParallelAgentProfileRepositoryPort;
     use crate::application::port::outbound::parallel_agent_worker_port::{
         ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
     };
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::application::service::parallel_mode::ParallelModeService;
+    use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
     use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+    use crate::application::service::parallel_mode::{
+        ParallelModeAutomationGuard, ParallelModeService,
+    };
     use crate::application::service::planning::{PlanningServices, PlanningTaskHandoff};
     use crate::domain::parallel_mode::{
         ParallelModeAutomationTrigger, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
         ParallelModeCapabilityState, ParallelModeControlPlaneWorkerEventKind,
-        ParallelModeRuntimeEvent,
+        ParallelModeDeliveryTargetSnapshot, ParallelModeRepositoryVisibility,
+        ParallelModeRuntimeEvent, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
+        ParallelModeSlotLeaseState,
     };
     use crate::test_utils::json_payload_contains;
     use anyhow::{Result, anyhow};
@@ -1317,6 +1520,18 @@ mod tests {
 
     struct NoopGithubAutomationPort;
 
+    struct FailingParallelAgentProfileRepository;
+
+    impl ParallelAgentProfileRepositoryPort for FailingParallelAgentProfileRepository {
+        fn load_profile_config_json(&self, _workspace_dir: &str) -> Result<Option<String>> {
+            Err(anyhow!("profile repository rejected an unsafe path"))
+        }
+
+        fn save_profile_config_json(&self, _workspace_dir: &str, _body: &str) -> Result<()> {
+            Err(anyhow!("profile repository is read-only"))
+        }
+    }
+
     impl GithubAutomationPort for NoopGithubAutomationPort {
         fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
             GithubAutomationCapabilities::new(
@@ -1324,6 +1539,54 @@ mod tests {
                 ready_capability(ParallelModeCapabilityKey::GhBinary),
                 ready_capability(ParallelModeCapabilityKey::GhAuth),
             )
+        }
+
+        fn credential_redacted_push_url_for_remote(
+            &self,
+            _repo_root: &str,
+            _push_remote: &str,
+        ) -> Result<String> {
+            Ok("https://github.com/RefinedStone/codex-exec-loop.git".to_string())
+        }
+
+        fn repository_identity_for_push_url(
+            &self,
+            _repo_root: &str,
+            _push_remote: &str,
+            _credential_redacted_push_url: &str,
+        ) -> Result<String> {
+            Ok("RefinedStone/codex-exec-loop".to_string())
+        }
+
+        fn repository_visibility_for_push_url(
+            &self,
+            _repo_root: &str,
+            _push_remote: &str,
+            _credential_redacted_push_url: &str,
+        ) -> Result<GithubRepositoryVisibility> {
+            Ok(GithubRepositoryVisibility::Private)
+        }
+
+        fn fetch_branch_to_tracking_ref_for_delivery_target(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            _credential_redacted_push_url: &str,
+            _branch_name: &str,
+            tracking_ref: &str,
+        ) -> Result<String> {
+            let head = Command::new("git")
+                .current_dir(repo_root)
+                .args(["rev-parse", "HEAD"])
+                .output()?;
+            anyhow::ensure!(head.status.success(), "test repository HEAD is unavailable");
+            let commit_sha = String::from_utf8(head.stdout)?.trim().to_string();
+            let update = Command::new("git")
+                .current_dir(repo_root)
+                .args(["update-ref", tracking_ref, commit_sha.as_str()])
+                .output()?;
+            anyhow::ensure!(update.status.success(), "test tracking ref update failed");
+            Ok(commit_sha)
         }
 
         fn push_branch(
@@ -1368,7 +1631,12 @@ mod tests {
             ))
         }
 
-        fn push_integration_branch(&self, _repo_root: &str, _branch_name: &str) -> Result<()> {
+        fn push_integration_branch(
+            &self,
+            _repo_root: &str,
+            _branch_name: &str,
+            _expected_old_commit_sha: &str,
+        ) -> Result<()> {
             Ok(())
         }
 
@@ -1395,6 +1663,20 @@ mod tests {
             Arc::new(NoopGithubAutomationPort),
             Arc::new(GitParallelModeRuntimeAdapter::new()),
         )
+    }
+
+    #[test]
+    fn dispatch_profile_loading_propagates_repository_failure() {
+        let service = test_parallel_service(Arc::new(SqlitePlanningAuthorityAdapter::new()))
+            .with_parallel_agent_profile_service(ParallelAgentProfileService::new(Arc::new(
+                FailingParallelAgentProfileRepository,
+            )));
+
+        let error = service
+            .load_dispatch_agent_profiles("/tmp/profile-repository-failure")
+            .expect_err("unsafe profile repository failure must block dispatch");
+
+        assert!(error.contains("profile repository rejected an unsafe path"));
     }
 
     fn test_planning_services(authority: Arc<SqlitePlanningAuthorityAdapter>) -> PlanningServices {
@@ -1488,7 +1770,7 @@ mod tests {
         fn run_isolated_new_thread_stream(
             &self,
             _request: ParallelAgentWorkerStreamRequest<'_>,
-            event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
         ) -> Result<()> {
             let events = self
                 .events
@@ -1600,6 +1882,68 @@ mod tests {
     }
 
     #[test]
+    fn blocked_host_commit_does_not_consume_official_refresh_order() {
+        let workspace = TempGitWorkspace::new("parallel-host-commit-no-order-gap");
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let parallel_service = test_parallel_service(authority.clone());
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(workspace.path())
+            .expect("parallel pool should initialize");
+        let lease = parallel_service
+            .acquire_slot_lease(
+                workspace.path(),
+                ParallelModeSlotLeaseRequest::from_task_identity(
+                    "task-no-order-gap",
+                    "Do not consume refresh order",
+                ),
+            )
+            .expect("worker slot should lease");
+        parallel_service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("worker slot should become running");
+        let guard = ParallelModeAutomationGuard::default();
+        guard.activate(workspace.path().to_string(), 11);
+        let turn_service =
+            ParallelModeTurnService::new(parallel_service).with_automation_guard(guard);
+        let planning = test_planning_services(authority);
+        let mut request = worker_request_with_secret_bodies();
+        request.planning_workspace_directory = workspace.path().to_string();
+        request.worktree_directory = lease.worktree_path.clone();
+        request.automation_epoch_id = 11;
+        request.expected_lease = lease.clone();
+        request.handoff_task.task_id = lease.task_id.clone();
+        request.handoff_task.task_title = lease.task_title.clone();
+
+        let outcome = run_parallel_dispatch_official_completion(
+            &request,
+            &turn_service,
+            &planning,
+            &ParallelDispatchTurnCompleted {
+                turn_id: "turn-no-order-gap".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            },
+            Some("completed without file changes"),
+        );
+
+        assert!(!outcome.official_completion_refresh_succeeded);
+        assert!(
+            outcome
+                .notices
+                .iter()
+                .any(|notice| notice.contains("no tree changes")),
+            "notices: {:?}",
+            outcome.notices
+        );
+        assert_eq!(
+            turn_service
+                .reserve_official_completion_refresh_order(&lease.worktree_path)
+                .expect("first refresh order should reserve after blocked host commit"),
+            Some(1),
+            "blocked host commit must not leave a durable refresh-order gap"
+        );
+    }
+
+    #[test]
     fn scripted_worker_run_classifies_missing_completion_error_and_panic_paths() {
         let missing_completion = run_scripted_worker(Vec::new(), WorkerExit::Ok);
         assert_eq!(
@@ -1687,7 +2031,7 @@ mod tests {
             result
                 .notices
                 .iter()
-                .any(|notice| notice.contains("could not reserve official refresh order")),
+                .any(|notice| notice.contains("host-owned parallel worker commit failed")),
             "notices: {:?}",
             result.notices
         );
@@ -1722,7 +2066,7 @@ mod tests {
             result
                 .notices
                 .iter()
-                .any(|notice| notice.contains("no running slot lease was found")),
+                .any(|notice| notice.contains("host-owned parallel worker commit failed")),
             "notices: {:?}",
             result.notices
         );
@@ -1800,7 +2144,7 @@ mod tests {
             outcome
                 .blocked_reason
                 .as_deref()
-                .is_some_and(|reason| reason.contains("repository inspection failed"))
+                .is_some_and(|reason| reason.contains("git repository is unavailable"))
         );
     }
 
@@ -1844,7 +2188,7 @@ mod tests {
             result
                 .notices
                 .iter()
-                .any(|notice| notice.contains("could not reserve official refresh order")),
+                .any(|notice| notice.contains("host-owned parallel worker commit failed")),
             "notices: {:?}",
             result.notices
         );
@@ -2042,7 +2386,7 @@ mod tests {
             12
         );
         github
-            .push_integration_branch("/tmp/repo", "prerelease")
+            .push_integration_branch("/tmp/repo", "prerelease", "a".repeat(40).as_str())
             .expect("noop integration push should succeed");
         github
             .close_pull_request("/tmp/repo", 12)
@@ -2074,6 +2418,24 @@ mod tests {
                 updated_at: "2026-05-09T00:00:00Z".to_string(),
                 status_label: "ready".to_string(),
             },
+            expected_lease: ParallelModeSlotLeaseSnapshot::new(
+                "slot-1",
+                "task-a",
+                "Check trace retention",
+                "agent-task-a",
+                "akra-agent/slot-1/task-a",
+                "/tmp/workspace/.akra-pool/slot-1",
+                ParallelModeSlotLeaseState::Leased,
+                "2026-05-09T00:00:00Z",
+                None,
+            )
+            .with_delivery_target(ParallelModeDeliveryTargetSnapshot::new(
+                "origin",
+                "example/repository",
+                ParallelModeRepositoryVisibility::Private,
+                "prerelease",
+                "0".repeat(40),
+            )),
         }
     }
 }

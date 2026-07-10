@@ -62,6 +62,10 @@ pub struct PlanningDirectionAuthorityCommit<'a> {
     pub observed_planning_revision: Option<i64>,
     // 저장할 direction catalog 문서 참조이다.
     pub directions: &'a DirectionCatalogDocument,
+    // Workspace-wide direction maintenance may hold an exclusive authority
+    // mutation claim. Concrete stores validate this token in the same commit
+    // transaction instead of treating a preflight check as sufficient.
+    pub authority_mutation_owner_token: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -159,6 +163,7 @@ pub trait PlanningTaskRepositoryPort: Send + Sync {
             PlanningDirectionAuthorityCommit {
                 observed_planning_revision: commit.observed_planning_revision,
                 directions: commit.directions,
+                authority_mutation_owner_token: None,
             },
         )?;
         let (planning_revision, direction_changed) = match direction_result {

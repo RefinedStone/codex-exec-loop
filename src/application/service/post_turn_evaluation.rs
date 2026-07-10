@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+use crate::application::service::parallel_mode::{
+    ParallelModeOfficialCompletionReport, turn::ParallelModeTurnService,
+};
 use crate::application::service::planning::{
     PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON, PlanningPostTurnAutoFollowDecision,
     PlanningPostTurnAutoFollowRequest, PlanningPostTurnAutoFollowSkipReason,
@@ -16,6 +18,7 @@ use crate::application::service::post_turn_decision::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::operator_alert::OperatorAlert;
+use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 use crate::domain::planning::{
     PlanningWorkerPanelState as DomainPlanningWorkerPanelState,
     PlanningWorkerStatus as DomainPlanningWorkerStatus,
@@ -30,6 +33,7 @@ use crate::domain::planning::{
 use serde_json::json;
 
 pub(crate) const POST_TURN_EVALUATION_TIMEOUT: Duration = Duration::from_secs(600);
+const POST_TURN_CANCELLATION_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(2);
 #[path = "post_turn_evaluation/logging.rs"]
 mod logging;
 #[path = "post_turn_evaluation/official_completion.rs"]
@@ -96,13 +100,49 @@ impl PostTurnEvaluationService {
         let timeout_context = request.context.clone();
         let timeout_request = request.clone();
         let service = self.clone();
-        std::thread::spawn(move || {
-            let execution = service.evaluate(request);
+        let evaluator = std::thread::spawn(move || {
+            let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                service.evaluate(request)
+            }))
+            .map_err(|_| "post-turn evaluation worker panicked".to_string());
             let _ = execution_tx.send(execution);
         });
-        execution_rx.recv_timeout(timeout).unwrap_or_else(|_| {
-            post_turn_evaluation_timeout_execution(&timeout_context, &timeout_request, timeout)
-        })
+        match execution_rx.recv_timeout(timeout) {
+            Ok(Ok(execution)) => {
+                let _ = evaluator.join();
+                execution
+            }
+            Ok(Err(message)) => {
+                timeout_request.continuation_permit.invalidate_if_current();
+                let _ = evaluator.join();
+                post_turn_evaluation_failure_execution(&timeout_context, &timeout_request, message)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                timeout_request.continuation_permit.invalidate_if_current();
+                settle_post_turn_evaluator(evaluator, POST_TURN_CANCELLATION_SETTLEMENT_TIMEOUT);
+                post_turn_evaluation_timeout_execution(&timeout_context, &timeout_request, timeout)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                timeout_request.continuation_permit.invalidate_if_current();
+                let _ = evaluator.join();
+                post_turn_evaluation_failure_execution(
+                    &timeout_context,
+                    &timeout_request,
+                    "post-turn evaluation worker disconnected before returning a result"
+                        .to_string(),
+                )
+            }
+        }
+    }
+}
+
+fn settle_post_turn_evaluator(worker: std::thread::JoinHandle<()>, timeout: Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    while !worker.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if worker.is_finished() {
+        let _ = worker.join();
     }
 }
 
@@ -147,6 +187,12 @@ struct PlanningQueueRefreshOutcome {
 struct OfficialCompletionRefreshOutcome {
     runtime_projection: PlanningRuntimeProjection,
     runtime_notices: Vec<String>,
+}
+#[derive(Debug)]
+enum OfficialCompletionCapture {
+    NotApplicable,
+    Captured(Box<ParallelModeOfficialCompletionReport>),
+    Failed { detail: String },
 }
 #[derive(Debug, Clone)]
 struct PostTurnDecision {
@@ -214,7 +260,7 @@ impl PostTurnEvaluationExecutor {
     // only when continuation can act on the result, finish official parallel
     // completions before planning queue refreshes, then derive the action
     // from the final runtime projection.
-    #[tracing::instrument(level = "trace", skip(self, context))]
+    #[tracing::instrument(level = "trace", skip(self, context, request))]
     fn run(
         mut self,
         context: &PostTurnEvaluationContext,
@@ -256,9 +302,29 @@ impl PostTurnEvaluationExecutor {
         let reconciliation_result = reconciliation_outcome.reconciliation_result;
         let mut runtime_notices = reconciliation_result.notices.clone();
         let mut runtime_projection = reconciliation_outcome.runtime_projection;
-        let continuation_enabled = !context.continuation_paused;
-        let official_completion_report = self.begin_official_completion_if_needed(context, request);
-        if (continuation_enabled || official_completion_report.is_some())
+        let continuation_enabled =
+            !context.continuation_paused && request.continuation_permit.is_current();
+        let official_completion_capture = request
+            .continuation_permit
+            .with_current(|| self.begin_official_completion_if_needed(context, request))
+            .unwrap_or(OfficialCompletionCapture::NotApplicable);
+        let official_completion_capture_failed = matches!(
+            official_completion_capture,
+            OfficialCompletionCapture::Failed { .. }
+        );
+        let official_completion_report = match &official_completion_capture {
+            OfficialCompletionCapture::Captured(report) => Some(report.as_ref()),
+            OfficialCompletionCapture::NotApplicable | OfficialCompletionCapture::Failed { .. } => {
+                None
+            }
+        };
+        if let OfficialCompletionCapture::Failed { detail } = &official_completion_capture {
+            runtime_notices.push(detail.clone());
+            runtime_projection = PlanningRuntimeProjection::invalid(detail.clone());
+        }
+        if request.continuation_permit.is_current()
+            && !official_completion_capture_failed
+            && (continuation_enabled || official_completion_report.is_some())
             && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
         {
             let repair_outcome = self.run_hidden_planning_repairs(
@@ -267,6 +333,7 @@ impl PostTurnEvaluationExecutor {
                 &request.completed_turn_id,
                 repair_request,
                 previous_handoff_task(context),
+                &request.continuation_permit,
             );
             runtime_projection = repair_outcome.runtime_projection;
         }
@@ -277,7 +344,7 @@ impl PostTurnEvaluationExecutor {
                     request,
                     planning_workspace_directory,
                     &runtime_projection,
-                    &completion_report,
+                    completion_report,
                 );
                 runtime_notices.extend(official_completion_outcome.runtime_notices.clone());
                 runtime_projection = official_completion_outcome.runtime_projection;
@@ -285,12 +352,30 @@ impl PostTurnEvaluationExecutor {
             } else {
                 false
             };
-        if !handled_parallel_completion && continuation_enabled {
+        if !handled_parallel_completion
+            && !official_completion_capture_failed
+            && continuation_enabled
+            && request.continuation_permit.is_current()
+        {
             let refresh_outcome =
                 self.run_planning_queue_refresh(context, request, runtime_projection.clone());
             runtime_projection = refresh_outcome.runtime_projection;
         }
-        let post_turn_decision = if handled_parallel_completion {
+        let post_turn_decision = if !request.continuation_permit.is_current() {
+            PostTurnDecision::from_action(
+                request.completed_turn_id.clone(),
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PostTurnContinuationPaused,
+                },
+            )
+        } else if official_completion_capture_failed {
+            PostTurnDecision::from_action(
+                request.completed_turn_id.clone(),
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PlanningBlocked,
+                },
+            )
+        } else if handled_parallel_completion {
             PostTurnDecision::from_application_decision(
                 request.completed_turn_id.clone(),
                 decide_parallel_official_completion_post_turn(&runtime_projection),
@@ -353,7 +438,7 @@ impl PostTurnEvaluationExecutor {
     // reply. It skips non-ready workspaces, honors queue-idle policy, records
     // worker panel state, and promotes justified proposals into the executable
     // queue when no actionable head exists yet.
-    #[tracing::instrument(level = "trace", skip(self, context))]
+    #[tracing::instrument(level = "trace", skip(self, context, request, current_projection))]
     fn run_planning_queue_refresh(
         &mut self,
         context: &PostTurnEvaluationContext,
@@ -388,6 +473,11 @@ impl PostTurnEvaluationExecutor {
             }
             PlanningPostTurnQueueRefreshPreparation::Ready(prepared) => prepared,
         };
+        if !request.continuation_permit.is_current() {
+            return PlanningQueueRefreshOutcome {
+                runtime_projection: current_projection,
+            };
+        }
         event_log::emit_lazy("planning_worker_refresh_started", || {
             post_turn_event_detail(
                 post_turn_log_context(context, request),
@@ -424,7 +514,10 @@ impl PostTurnEvaluationExecutor {
         let worker_outcome = self
             .planning_feature
             .worker
-            .refresh_prepared_queue_from_reply(prepared.as_ref());
+            .refresh_prepared_queue_from_reply_with_permit(
+                prepared.as_ref(),
+                &request.continuation_permit,
+            );
         let outcome = match worker_outcome {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -499,6 +592,7 @@ impl PostTurnEvaluationExecutor {
                 &request.completed_turn_id,
                 repair_request,
                 previous_handoff_task(context),
+                &request.continuation_permit,
             );
             runtime_projection = if repair_outcome.resolved {
                 repair_outcome.runtime_projection
@@ -525,16 +619,24 @@ impl PostTurnEvaluationExecutor {
                 PlanningRuntimeProjection::invalid(PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON)
             };
         }
-        let finalization = self
+        let Some(finalization) = self
             .planning_feature
             .worker
-            .finalize_post_turn_queue_refresh(PlanningPostTurnQueueRefreshFinalizationRequest {
-                workspace_directory: &request.workspace_directory,
-                previous_handoff_task: previous_handoff_task(context),
-                previous_runtime_projection: &context.current_runtime_projection,
-                refreshed_runtime_projection: &runtime_projection,
-                queue_idle_derivation: prepared.is_queue_idle_derivation(),
-            });
+            .finalize_post_turn_queue_refresh_with_permit(
+                PlanningPostTurnQueueRefreshFinalizationRequest {
+                    workspace_directory: &request.workspace_directory,
+                    previous_handoff_task: previous_handoff_task(context),
+                    previous_runtime_projection: &context.current_runtime_projection,
+                    refreshed_runtime_projection: &runtime_projection,
+                    queue_idle_derivation: prepared.is_queue_idle_derivation(),
+                },
+                &request.continuation_permit,
+            )
+        else {
+            return PlanningQueueRefreshOutcome {
+                runtime_projection: current_projection,
+            };
+        };
         runtime_projection = finalization.runtime_projection;
         for event in finalization.events {
             match event {
@@ -630,7 +732,7 @@ impl PostTurnEvaluationExecutor {
     // The final action is always derived from the latest runtime projection. Explicit
     // pause states and queue-idle stop policy win before the conversation model
     // is allowed to enqueue another prompt.
-    #[tracing::instrument(level = "trace", skip(self, context))]
+    #[tracing::instrument(level = "trace", skip(self, context, request, runtime_projection))]
     fn auto_follow_decision_from_projection(
         &self,
         context: &PostTurnEvaluationContext,
@@ -682,7 +784,12 @@ impl PostTurnEvaluationExecutor {
                         transcript_text: queued_prompt.transcript_text,
                     })),
                     PostTurnEvaluationProvenance::new(request.completed_turn_id.clone())
-                        .with_handoff_task(queued_prompt.handoff_task),
+                        .with_handoff_task(queued_prompt.handoff_task)
+                        .with_parallel_queue_signal(
+                            context
+                                .parallel_mode_enabled
+                                .then_some(ParallelModePostTurnQueueSignal::AutoFollowQueued),
+                        ),
                 )
             }
             PlanningPostTurnAutoFollowDecision::Skip(reason) => {
@@ -767,8 +874,8 @@ fn operator_alerts_for_action(action: &PostTurnContinuationAction) -> Vec<Operat
 }
 
 // Timeout fallback reports a failed refresh while returning control to the main
-// session. The background worker may still finish later, but the UI receives a
-// deterministic blocked evaluation for the completed turn.
+// session. The shared generation is invalidated first, so a background worker
+// that finishes later cannot apply hidden planning results or enqueue a prompt.
 fn post_turn_evaluation_timeout_execution(
     context: &PostTurnEvaluationContext,
     request: &PostTurnEvaluationRequest,
@@ -807,6 +914,41 @@ fn post_turn_evaluation_timeout_execution(
         },
     }
 }
+
+fn post_turn_evaluation_failure_execution(
+    context: &PostTurnEvaluationContext,
+    request: &PostTurnEvaluationRequest,
+    message: String,
+) -> PostTurnEvaluationExecution {
+    PostTurnEvaluationExecution {
+        thread_id: context.thread_id.clone(),
+        completed_turn_id: request.completed_turn_id.clone(),
+        evaluation: PostTurnEvaluationOutcome {
+            provenance: PostTurnEvaluationProvenance::new(request.completed_turn_id.clone()),
+            runtime_projection: PlanningRuntimeProjection::invalid(message.clone()),
+            planning_repair_state: None,
+            runtime_notices: vec![message.clone()],
+            action: PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::PlanningBlocked,
+            },
+            operator_alerts: Vec::new(),
+        },
+        planning_worker_panel_state: PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshFailed,
+            last_operation_label: Some("post-turn".to_string()),
+            last_summary: Some(message),
+            last_rejected_summary: None,
+            last_queue_summary: Some("planning refresh failed".to_string()),
+            last_notice_detail: None,
+            last_prompt: None,
+            last_response: None,
+            last_host_detail: Some(
+                "host blocked continuation because the post-turn evaluator terminated unexpectedly"
+                    .to_string(),
+            ),
+        },
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,7 +970,6 @@ mod tests {
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
         PlanningRuntimeWorkspaceStatus, PlanningWorkerRunOutcome,
     };
-    use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
         PriorityQueueService, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
@@ -1080,7 +1221,7 @@ mod tests {
     }
 
     #[test]
-    fn service_evaluate_paused_request_skips_worker_refresh_and_preserves_panel_state() {
+    fn service_evaluate_paused_request_reconciles_projection_without_worker_refresh() {
         with_test_event_logging(|| {
             let service = test_service();
             let mut context = test_context(ready_projection(Some(queue_task())));
@@ -1107,8 +1248,15 @@ mod tests {
                 }
             );
             assert_eq!(
-                execution.evaluation.runtime_projection,
-                context.current_runtime_projection
+                execution.evaluation.runtime_projection.workspace_status(),
+                PlanningRuntimeWorkspaceStatus::ReadyNoTask
+            );
+            assert!(
+                execution
+                    .evaluation
+                    .runtime_projection
+                    .queue_head()
+                    .is_none()
             );
             assert!(execution.evaluation.runtime_notices.is_empty());
             assert_eq!(
@@ -1194,6 +1342,74 @@ mod tests {
     }
 
     #[test]
+    fn service_timeout_invalidates_inflight_hidden_worker_generation() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (returned_tx, returned_rx) = std::sync::mpsc::channel();
+        let worker = Arc::new(BlockingPlanningWorkerPort {
+            started_tx,
+            release_rx: Mutex::new(release_rx),
+            returned_tx,
+        });
+        let service = test_service_with_worker(worker);
+        let mut context = test_context(ready_projection(Some(queue_task())));
+        let workspace = TempPlanningWorkspace::new_git("post-turn-timeout-cancel");
+        context.planning_workspace_directory = workspace.path.clone();
+        let mut request = test_request(context);
+        request.workspace_directory = workspace.path.clone();
+        let permit = request.continuation_permit.clone();
+
+        let execution = service.evaluate_with_timeout(request, Duration::from_millis(500));
+
+        assert_eq!(
+            execution.evaluation.action,
+            PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::PostTurnEvaluationTimedOut
+            }
+        );
+        assert!(!permit.is_current());
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("hidden worker should have been in flight at timeout");
+        release_tx.send(()).expect("hidden worker should release");
+        returned_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("hidden worker should return after cancellation");
+    }
+
+    #[test]
+    fn service_worker_panic_is_reported_immediately_as_failure_not_timeout() {
+        let service = test_service_with_worker(Arc::new(PanickingPlanningWorkerPort));
+        let mut context = test_context(ready_projection(Some(queue_task())));
+        let workspace = TempPlanningWorkspace::new_git("post-turn-worker-panic");
+        context.planning_workspace_directory = workspace.path.clone();
+        let mut request = test_request(context);
+        request.workspace_directory = workspace.path.clone();
+        let permit = request.continuation_permit.clone();
+
+        let execution = service.evaluate_with_timeout(request, Duration::from_secs(5));
+
+        assert_eq!(
+            execution.evaluation.action,
+            PostTurnContinuationAction::SkipAutoFollow {
+                reason: PostTurnAutoFollowSkipReason::PlanningBlocked,
+            }
+        );
+        assert_eq!(
+            execution.evaluation.runtime_projection.failure_reason(),
+            Some("post-turn evaluation worker panicked")
+        );
+        assert!(!permit.is_current());
+        assert_eq!(
+            execution
+                .planning_worker_panel_state
+                .last_queue_summary
+                .as_deref(),
+            Some("planning refresh failed")
+        );
+    }
+
+    #[test]
     fn queue_refresh_worker_failure_records_refresh_failure_panel() {
         with_test_event_logging(|| {
             let workspace = TempPlanningWorkspace::new("queue-refresh-worker-failure");
@@ -1228,6 +1444,31 @@ mod tests {
                 Some("planning worker refresh failed: worker boom")
             );
         });
+    }
+
+    #[test]
+    fn superseded_queue_refresh_never_calls_planning_worker_port() {
+        let workspace = TempPlanningWorkspace::new("queue-refresh-superseded");
+        let worker = Arc::new(CountingPlanningWorkerPort::default());
+        let mut executor = test_executor_with_worker(worker.clone());
+        let context = test_context(ready_projection(Some(queue_task())));
+        let mut request = test_request(context.clone());
+        request.workspace_directory = workspace.path.clone();
+        let gate = crate::domain::planning::PostTurnContinuationGate::default();
+        request.continuation_permit = gate.capture();
+        gate.advance();
+
+        let outcome = executor.run_planning_queue_refresh(
+            &context,
+            &request,
+            context.current_runtime_projection.clone(),
+        );
+
+        assert_eq!(worker.call_count(), 0);
+        assert_eq!(
+            outcome.runtime_projection,
+            context.current_runtime_projection
+        );
     }
 
     #[test]
@@ -1540,7 +1781,8 @@ mod tests {
     fn auto_follow_decision_queues_prompt_with_handoff_provenance() {
         with_test_event_logging(|| {
             let executor = test_executor();
-            let context = test_context(ready_projection(Some(queue_task())));
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            context.parallel_mode_enabled = true;
             let request = test_request(context.clone());
 
             let decision = executor.auto_follow_decision_from_projection(
@@ -1561,6 +1803,10 @@ mod tests {
                     .as_ref()
                     .map(|task| task.task_id.as_str()),
                 Some("task-1")
+            );
+            assert_eq!(
+                decision.provenance.parallel_queue_signal,
+                Some(ParallelModePostTurnQueueSignal::AutoFollowQueued)
             );
             assert!(decision.operator_alerts.is_empty());
         });
@@ -1600,9 +1846,9 @@ mod tests {
             request.changed_planning_file_paths =
                 vec![".codex-exec-loop/planning/result.md".into()];
 
-            let report = executor.begin_official_completion_if_needed(&context, &request);
+            let capture = executor.begin_official_completion_if_needed(&context, &request);
 
-            assert!(report.is_none());
+            assert!(matches!(capture, OfficialCompletionCapture::Failed { .. }));
             assert_eq!(
                 executor.planning_worker_panel_state.status,
                 PlanningWorkerStatus::RefreshFailed
@@ -1617,6 +1863,44 @@ mod tests {
                     .last_queue_summary
                     .as_deref(),
                 Some("queue head: Queue head")
+            );
+        });
+    }
+
+    #[test]
+    fn official_completion_capture_failure_never_falls_back_to_normal_refresh() {
+        with_test_event_logging(|| {
+            let worker = Arc::new(CountingPlanningWorkerPort::default());
+            let service = test_service_with_worker(worker.clone());
+            let workspace = TempPlanningWorkspace::new("official-capture-failure");
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            context.planning_workspace_directory = workspace.path.clone();
+            context.parallel_mode_enabled = true;
+            let mut request = test_request(context);
+            request.workspace_directory = workspace.path.clone();
+
+            let execution = service.evaluate(request);
+
+            assert_eq!(worker.call_count(), 0);
+            assert_eq!(
+                execution.evaluation.action,
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PlanningBlocked,
+                }
+            );
+            assert!(
+                execution
+                    .evaluation
+                    .runtime_projection
+                    .failure_reason()
+                    .is_some_and(|detail| detail.contains("parallel completion capture failed"))
+            );
+            assert!(
+                execution
+                    .evaluation
+                    .runtime_notices
+                    .iter()
+                    .any(|detail| detail.contains("parallel completion capture failed"))
             );
         });
     }
@@ -1647,9 +1931,8 @@ mod tests {
                 .last_summary
                 .as_deref()
                 .expect("blocked refresh should record a panel failure detail");
-            assert!(
-                failure_detail.starts_with("failed to load planning workspace: failed to create ")
-            );
+            assert!(failure_detail.starts_with("failed to load planning workspace:"));
+            assert!(failure_detail.contains("workspace root"));
             assert!(failure_detail.contains(&blocked_workspace.path));
             assert_eq!(
                 outcome.runtime_projection.failure_reason(),
@@ -1900,12 +2183,18 @@ mod tests {
     }
 
     fn test_service() -> PostTurnEvaluationService {
+        test_service_with_worker(Arc::new(NoopPlanningWorkerPort))
+    }
+
+    fn test_service_with_worker(
+        planning_worker_port: Arc<dyn PlanningWorkerPort>,
+    ) -> PostTurnEvaluationService {
         PostTurnEvaluationService::new(
             PlanningServices::from_ports(
                 Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
                 Arc::new(NoopPlanningAuthorityPort::default()),
                 Arc::new(NoopPlanningTaskRepositoryPort),
-                Arc::new(NoopPlanningWorkerPort),
+                planning_worker_port,
             ),
             ParallelModeTurnService::new(ParallelModeService::new(
                 Arc::new(SqlitePlanningAuthorityAdapter::new()),
@@ -1944,6 +2233,8 @@ mod tests {
             latest_main_reply: Some("assistant reply".to_string()),
             previous_handoff_task: None,
             current_runtime_projection,
+            parallel_mode_enabled: false,
+            parallel_automation_epoch_id: Some(1),
             continuation_paused: false,
             can_queue_next: true,
             stop_keyword: "stop".to_string(),
@@ -1954,6 +2245,7 @@ mod tests {
     }
 
     fn test_request(context: PostTurnEvaluationContext) -> PostTurnEvaluationRequest {
+        let continuation_gate = crate::domain::planning::PostTurnContinuationGate::default();
         PostTurnEvaluationRequest {
             context,
             workspace_directory: "/tmp/workspace".to_string(),
@@ -1961,6 +2253,7 @@ mod tests {
             changed_planning_file_paths: Vec::new(),
             execution_snapshot_capture: None,
             planning_worker_panel_state: PlanningWorkerPanelState::default(),
+            continuation_permit: continuation_gate.capture(),
         }
     }
 
@@ -2055,6 +2348,7 @@ mod tests {
                 PlanningDirectionAuthorityCommit {
                     observed_planning_revision: None,
                     directions: &directions,
+                    authority_mutation_owner_token: None,
                 },
             )
             .expect("direction authority should be seeded");
@@ -2124,6 +2418,72 @@ mod tests {
     }
 
     struct FailingPlanningWorkerPort;
+    struct PanickingPlanningWorkerPort;
+
+    struct BlockingPlanningWorkerPort {
+        started_tx: std::sync::mpsc::Sender<()>,
+        release_rx: Mutex<std::sync::mpsc::Receiver<()>>,
+        returned_tx: std::sync::mpsc::Sender<()>,
+    }
+
+    impl PlanningWorkerPort for BlockingPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            self.started_tx
+                .send(())
+                .map_err(|error| anyhow::anyhow!("failed to report worker start: {error}"))?;
+            self.release_rx
+                .lock()
+                .map_err(|_| anyhow::anyhow!("blocking worker release mutex poisoned"))?
+                .recv()
+                .map_err(|error| anyhow::anyhow!("failed to await worker release: {error}"))?;
+            self.returned_tx
+                .send(())
+                .map_err(|error| anyhow::anyhow!("failed to report worker return: {error}"))?;
+            Ok(PlanningWorkerResponse {
+                operation: request.operation,
+                thread_id: None,
+                turn_id: None,
+                final_agent_message: Some("late worker result".to_string()),
+                changed_planning_file_paths: Vec::new(),
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingPlanningWorkerPort {
+        calls: Mutex<usize>,
+    }
+
+    impl CountingPlanningWorkerPort {
+        fn call_count(&self) -> usize {
+            *self
+                .calls
+                .lock()
+                .expect("worker call count should not be poisoned")
+        }
+    }
+
+    impl PlanningWorkerPort for CountingPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            *self
+                .calls
+                .lock()
+                .expect("worker call count should not be poisoned") += 1;
+            Ok(PlanningWorkerResponse {
+                operation: request.operation,
+                thread_id: None,
+                turn_id: None,
+                final_agent_message: Some("counted".to_string()),
+                changed_planning_file_paths: Vec::new(),
+            })
+        }
+    }
 
     impl PlanningWorkerPort for FailingPlanningWorkerPort {
         fn run_planning_session(
@@ -2131,6 +2491,15 @@ mod tests {
             _request: PlanningWorkerRequest,
         ) -> anyhow::Result<PlanningWorkerResponse> {
             Err(anyhow::anyhow!("worker boom"))
+        }
+    }
+
+    impl PlanningWorkerPort for PanickingPlanningWorkerPort {
+        fn run_planning_session(
+            &self,
+            _request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            panic!("planning worker panic fixture")
         }
     }
 

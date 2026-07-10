@@ -18,7 +18,9 @@
       <input type="search" data-list-filter="app-server-prompt-log" placeholder="session, thread, service, workspace">
     </label>
   </div>
-  {% if prompt_log.records.is_empty() %}
+  {% if !prompt_log.logging_enabled %}
+  <p class="empty-state">App-server prompt logging is disabled for this process.</p>
+  {% else if prompt_log.records.is_empty() %}
   <p class="empty-state">No app-server prompt interactions have been captured for this workspace yet.</p>
   {% else %}
   <p class="empty-state filter-empty" data-filter-empty="app-server-prompt-log">No prompt interactions match the current search.</p>

@@ -17,11 +17,19 @@ pub(super) struct ParallelPeekConversationPreview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingParallelPeekConversationLoad {
+    request_id: u64,
+    thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ParallelPeekOverlayUiState {
     step: ParallelPeekOverlayStep,
     selected_agent_index: usize,
     preview: Option<ParallelPeekConversationPreview>,
     conversation_scroll_from_bottom: usize,
+    next_load_request_id: u64,
+    pending_load: Option<PendingParallelPeekConversationLoad>,
 }
 
 impl Default for ParallelPeekOverlayUiState {
@@ -31,6 +39,8 @@ impl Default for ParallelPeekOverlayUiState {
             selected_agent_index: 0,
             preview: None,
             conversation_scroll_from_bottom: 0,
+            next_load_request_id: 1,
+            pending_load: None,
         }
     }
 }
@@ -53,7 +63,9 @@ impl ParallelPeekOverlayUiState {
     }
 
     pub fn reset(&mut self) {
+        let next_load_request_id = self.next_load_request_id;
         *self = Self::default();
+        self.next_load_request_id = next_load_request_id;
     }
 
     pub fn move_selection(&mut self, active_agent_count: usize, delta: isize) {
@@ -81,12 +93,65 @@ impl ParallelPeekOverlayUiState {
         self.step = ParallelPeekOverlayStep::ConversationPreview;
         self.preview = Some(preview);
         self.conversation_scroll_from_bottom = 0;
+        self.pending_load = None;
+    }
+
+    pub fn begin_conversation_load(
+        &mut self,
+        preview: ParallelPeekConversationPreview,
+        thread_id: String,
+    ) -> u64 {
+        let request_id = self.next_load_request_id;
+        self.next_load_request_id = self.next_load_request_id.wrapping_add(1).max(1);
+        self.open_preview(preview);
+        self.pending_load = Some(PendingParallelPeekConversationLoad {
+            request_id,
+            thread_id,
+        });
+        request_id
+    }
+
+    pub fn complete_conversation_load(
+        &mut self,
+        request_id: u64,
+        thread_id: &str,
+        result: Result<ConversationSnapshot, String>,
+    ) -> bool {
+        let matches_pending = self.pending_load.as_ref().is_some_and(|pending| {
+            pending.request_id == request_id && pending.thread_id == thread_id
+        });
+        if !matches_pending {
+            return false;
+        }
+
+        let Some(preview) = self.preview.as_mut() else {
+            self.pending_load = None;
+            return false;
+        };
+        if preview.thread_id.as_deref() != Some(thread_id) {
+            self.pending_load = None;
+            return false;
+        }
+
+        match result {
+            Ok(snapshot) => {
+                preview.snapshot = Some(snapshot);
+                preview.status_text = "conversation snapshot loaded".to_string();
+            }
+            Err(error) => {
+                preview.snapshot = None;
+                preview.status_text = format!("conversation snapshot failed: {error}");
+            }
+        }
+        self.pending_load = None;
+        true
     }
 
     pub fn back_to_agent_list(&mut self) {
         self.step = ParallelPeekOverlayStep::AgentList;
         self.preview = None;
         self.conversation_scroll_from_bottom = 0;
+        self.pending_load = None;
     }
 
     pub fn scroll_conversation_older(&mut self, row_count: usize) {
@@ -170,6 +235,55 @@ mod tests {
         assert_eq!(state.step(), ParallelPeekOverlayStep::AgentList);
         assert!(state.preview().is_none());
         assert_eq!(state.conversation_scroll_from_bottom(), 0);
+    }
+
+    #[test]
+    fn async_preview_load_ignores_results_from_closed_or_replaced_requests() {
+        let mut state = ParallelPeekOverlayUiState::default();
+        let first_request = state.begin_conversation_load(preview(), "thread-peek".to_string());
+        state.back_to_agent_list();
+        let second_request = state.begin_conversation_load(preview(), "thread-peek".to_string());
+        assert_ne!(first_request, second_request);
+
+        let stale_snapshot = ConversationSnapshot {
+            thread_id: "thread-peek".to_string(),
+            title: "Stale".to_string(),
+            cwd: "/tmp/stale".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        };
+        assert!(!state.complete_conversation_load(
+            first_request,
+            "thread-peek",
+            Ok(stale_snapshot),
+        ));
+        assert!(
+            state
+                .preview()
+                .is_some_and(|preview| preview.snapshot.is_none())
+        );
+
+        let current_snapshot = ConversationSnapshot {
+            thread_id: "thread-peek".to_string(),
+            title: "Current".to_string(),
+            cwd: "/tmp/current".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        };
+        assert!(state.complete_conversation_load(
+            second_request,
+            "thread-peek",
+            Ok(current_snapshot),
+        ));
+        assert_eq!(
+            state
+                .preview()
+                .and_then(|preview| preview.snapshot.as_ref())
+                .map(|snapshot| snapshot.title.as_str()),
+            Some("Current")
+        );
     }
 
     #[test]

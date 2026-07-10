@@ -1,22 +1,43 @@
 use super::distributor::load_distributor_queue_records;
 use super::{
-    DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME, MAX_AGENT_BRANCH_SLUG_LEN,
-    ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
-    ParallelModeReadinessSnapshot, ParallelModeReadinessState, ParallelModeService,
-    agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
-    command_succeeds, derive_default_pool_root, detect_canonical_repo_root, inspect_akra_branch,
+    DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME,
+    MAX_AGENT_BRANCH_SLUG_LEN, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
+    ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
+    ParallelModeService, PoolSlotCleanupIdentity, agent_session_detail_record_path,
+    allocate_agent_branch_name, build_pool_board, cleanup_slot_to_ref_with_hooks, command_succeeds,
+    delete_cleaned_slot_branch_if_unchanged, derive_default_pool_root,
+    derive_integration_worktree_path, detect_canonical_repo_root, inspect_akra_branch,
     inspect_authority_store, inspect_gh_auth, inspect_gh_binary, inspect_git_worktree,
-    inspect_planning_projection, inspect_push_remote, inspect_slot_git_status, lease_session_key,
-    local_branch_ref, normalize_parallel_mode_integration_branch, parse_https_remote,
-    read_agent_session_detail_record, reconcile_pool_board, record_assigned_session_detail,
-    remote_branch_name, remote_tracking_branch_ref, resolve_workspace_slot_lease, run_command,
-    sanitize_task_slug, short_branch_slug_hash, slot_id, slot_lease_file_path,
+    inspect_planning_projection, inspect_push_remote, inspect_slot_git_status,
+    install_before_distributor_cleanup_lock_hook, lease_session_key, local_branch_ref,
+    normalize_parallel_mode_integration_branch, parallel_mode_integration_branch_for_repo,
+    parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
+    record_assigned_session_detail, record_running_session_detail, remote_branch_name,
+    remote_tracking_branch_ref, reset_slot_worktree_to_ref,
+    resolve_parallel_mode_integration_branch, resolve_parallel_mode_integration_branch_strict,
+    resolve_parent_high_risk_opt_in, resolve_workspace_slot_lease, run_command, sanitize_task_slug,
+    short_branch_slug_hash, slot_id, slot_lease_file_path, transition_slot_lease, write_slot_lease,
 };
+
+#[test]
+fn high_risk_delivery_opt_ins_accept_only_exact_parent_environment_values() {
+    for variable in [
+        "AKRA_PARALLEL_AUTONOMOUS_DELIVERY",
+        "AKRA_PARALLEL_ALLOW_PUBLIC_REPOSITORY",
+    ] {
+        assert!(!resolve_parent_high_risk_opt_in(variable, None).unwrap());
+        assert!(resolve_parent_high_risk_opt_in(variable, Some("1")).unwrap());
+        assert!(!resolve_parent_high_risk_opt_in(variable, Some("0")).unwrap());
+        for invalid in ["", "true", " 1 ", "01"] {
+            assert!(resolve_parent_high_risk_opt_in(variable, Some(invalid)).is_err());
+        }
+    }
+}
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::application::port::outbound::github_automation_port::{
     AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, GithubAutomationCapabilities, GithubAutomationPort,
-    GithubAutomationPullRequest,
+    GithubAutomationPullRequest, GithubRepositoryVisibility,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
@@ -93,7 +114,13 @@ impl TempGitRepo {
             ],
         );
 
-        Self { root, repo_root }
+        let fixture = Self { root, repo_root };
+        fixture.create_bare_origin_remote();
+        run_git(
+            &fixture.repo_root,
+            &["push", "-q", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+        );
+        fixture
     }
     fn workspace_dir(&self) -> String {
         self.canonical_repo_root().display().to_string()
@@ -194,32 +221,54 @@ impl TempGitRepo {
             &self.repo_root,
             &["update-ref", "-d", &remote_standard_tracking_ref()],
         );
+        let remote_path = self.root.join("origin.git");
+        if remote_path.exists() {
+            run_git(&remote_path, &["update-ref", "-d", &local_standard_ref()]);
+        }
     }
     fn create_bare_origin_remote(&self) -> PathBuf {
         let remote_path = self.root.join("origin.git");
-        let output = Command::new("git")
-            .args(["init", "--bare", "-q"])
-            .arg(&remote_path)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .expect("git init --bare should spawn");
-        assert!(
-            output.status.success(),
-            "git init --bare should succeed\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-        run_git(
-            &self.repo_root,
-            &[
-                "remote",
-                "add",
-                DEFAULT_PUSH_REMOTE_NAME,
-                remote_path
+        if !remote_path.exists() {
+            let output = Command::new("git")
+                .args(["init", "--bare", "-q"])
+                .arg(&remote_path)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .expect("git init --bare should spawn");
+            assert!(
+                output.status.success(),
+                "git init --bare should succeed\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        if run_command(
+            "git",
+            [
+                "-C",
+                self.repo_root
                     .to_str()
-                    .expect("remote path should be valid utf-8"),
+                    .expect("repo root should be valid utf-8"),
+                "remote",
+                "get-url",
+                DEFAULT_PUSH_REMOTE_NAME,
             ],
-        );
+            None,
+        )
+        .is_none()
+        {
+            run_git(
+                &self.repo_root,
+                &[
+                    "remote",
+                    "add",
+                    DEFAULT_PUSH_REMOTE_NAME,
+                    remote_path
+                        .to_str()
+                        .expect("remote path should be valid utf-8"),
+                ],
+            );
+        }
         remote_path
     }
     fn commit_file_in_slot(
@@ -240,6 +289,10 @@ impl TempGitRepo {
         run_git(
             &self.repo_root,
             &["merge", "--ff-only", branch_name.as_str()],
+        );
+        run_git(
+            &self.repo_root,
+            &["push", "-q", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
         );
         self.set_remote_tracking_branch(&remote_standard_branch_name(), POOL_BASELINE_BRANCH);
         run_git(&self.repo_root, &["checkout", original_branch.as_str()]);
@@ -287,6 +340,10 @@ impl TempGitRepo {
         run_git(&self.repo_root, &["add", file_name]);
         run_git(&self.repo_root, &["commit", "-qm", message]);
         if current_branch(&self.repo_root) == POOL_BASELINE_BRANCH {
+            run_git(
+                &self.repo_root,
+                &["push", "-q", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+            );
             self.set_remote_tracking_branch(&remote_standard_branch_name(), POOL_BASELINE_BRANCH);
         }
     }
@@ -392,15 +449,12 @@ fn sample_lease_request(
     ParallelModeSlotLeaseRequest::new(task_id, task_title, agent_id, task_slug)
 }
 
-// readiness 검사는 실제 `gh` binary와 repo-local fallback script 중 어느 경로가
-// ready로 판정되는지에 민감하다. fake runtime은 그 두 신호만 통제해 startup
-// capability 계산을 좁게 검증한다.
+// readiness 검사는 trusted `gh` binary와 auth 상태만 통제한다. repository script는 실행
+// capability가 아니며 production embedded helper 검증은 GithubAutomationAdapter가 담당한다.
 #[derive(Debug, Default)]
 struct FakeReadinessRuntime {
     gh_path: Option<PathBuf>,
     gh_auth_ok: bool,
-    fallback_script_available: bool,
-    fallback_auth_ok: bool,
     git_worktree_list_available: bool,
     standard_ref_present: bool,
     push_remote_ok: bool,
@@ -418,7 +472,7 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
         if _program != "git" {
             return false;
         }
-        if _args.contains(&"show-ref") {
+        if _args.contains(&"show-ref") || _args.contains(&"ls-remote") {
             return self.standard_ref_present;
         }
         if _args.starts_with(&["-C"]) && _args.contains(&"remote") && _args.contains(&"get-url") {
@@ -449,13 +503,6 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
         if program == "git" && args.contains(&"branch") && args.contains(&"--show-current") {
             return self.current_branch.clone();
         }
-        if program == "bash"
-            && args.get(1) == Some(&"auth")
-            && args.get(2) == Some(&"status")
-            && self.fallback_auth_ok
-        {
-            return Some("Logged in to github.com as RefinedStone".to_string());
-        }
         None
     }
     fn run_command_with_stdin(
@@ -479,48 +526,51 @@ impl ParallelModeRuntimePort for FakeReadinessRuntime {
         path.to_path_buf()
     }
     fn path_exists(&self, path: &Path) -> bool {
-        self.fallback_script_available
-            && path
-                .to_str()
-                .map(|value| value.ends_with("scripts/gh-akra.sh"))
-                .unwrap_or(false)
+        let _ = path;
+        false
     }
     fn ensure_directory_exists(&self, _path: &Path) -> std::io::Result<()> {
         Ok(())
     }
-    fn read_dir_paths(&self, _path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    fn write_runtime_mirror_atomic(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+        _body: &str,
+    ) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn read_runtime_mirror_optional(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+    ) -> std::io::Result<Option<String>> {
+        Ok(None)
+    }
+    fn read_runtime_mirror_directory(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+    ) -> std::io::Result<Vec<(PathBuf, String)>> {
         Ok(Vec::new())
     }
-    fn read_to_string(&self, _path: &Path) -> std::io::Result<String> {
-        Ok(String::new())
-    }
-    fn write_string(&self, _path: &Path, _body: &str) -> std::io::Result<()> {
-        Ok(())
-    }
-    fn rename(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
-        Ok(())
-    }
-    fn remove_file(&self, _path: &Path) -> std::io::Result<()> {
+    fn remove_runtime_mirror_file(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+    ) -> std::io::Result<()> {
         Ok(())
     }
 }
 
-// gh binary가 없더라도 Akra GitHub fallback이 있고 auth가 통과하면
-// parallel mode는 GitHub 자동화 가능 상태로 떠야 한다. 이 테스트는 사용자가 gh를
-// 설치하지 않은 환경에서 startup gate가 과하게 막히지 않도록 한다.
 #[test]
-fn readiness_accepts_repo_github_fallback_when_gh_is_missing() {
-    let runtime = FakeReadinessRuntime {
-        fallback_script_available: true,
-        fallback_auth_ok: true,
-        ..Default::default()
-    };
+fn readiness_never_treats_a_repository_script_as_a_github_executable() {
+    let runtime = FakeReadinessRuntime::default();
     let gh_binary = inspect_gh_binary(&runtime);
-    assert_eq!(gh_binary.state, ParallelModeCapabilityState::Ready);
-    assert!(gh_binary.detail.contains("Akra GitHub API fallback"));
+    assert_eq!(gh_binary.state, ParallelModeCapabilityState::Degraded);
+    assert!(gh_binary.detail.contains("trusted gh"));
     let gh_auth = inspect_gh_auth(&runtime, &gh_binary, Some("/tmp/repo"));
-    assert_eq!(gh_auth.state, ParallelModeCapabilityState::Ready);
-    assert_eq!(gh_auth.detail, "GitHub automation authentication succeeded");
+    assert_eq!(gh_auth.state, ParallelModeCapabilityState::Degraded);
 }
 
 fn capability(
@@ -551,7 +601,7 @@ fn readiness_inspectors_cover_git_branch_and_push_remote_edges() {
             .next_action
             .as_deref()
             .unwrap_or_default()
-            .contains("non-agent workspace")
+            .contains("create `prerelease`")
     );
 
     let no_head_runtime = FakeReadinessRuntime {
@@ -563,7 +613,7 @@ fn readiness_inspectors_cover_git_branch_and_push_remote_edges() {
     assert!(
         no_head_branch
             .detail
-            .contains("origin/prerelease is missing")
+            .contains("origin/prerelease` is unavailable")
     );
 
     let missing_credentials = FakeReadinessRuntime {
@@ -729,9 +779,25 @@ fn readiness_inspectors_cover_gh_planning_authority_and_command_edges() {
 // distributor/supervisor 테스트는 GitHub side effect의 순서와 branch 인자를 봐야
 // 한다. fake port는 실제 네트워크 호출 대신 operations log와 PR metadata를 남겨
 // force-push 실패, PR ensure, inspect 흐름을 결정적으로 재현한다.
+#[derive(Debug, Clone, Default)]
+struct FakePullRequestReadinessOverrides {
+    state: Option<String>,
+    is_draft: Option<bool>,
+    base_branch: Option<String>,
+    head_branch: Option<String>,
+    head_commit_sha: Option<String>,
+    review_decision: Option<String>,
+    approved_review_commit_shas: Option<Vec<String>>,
+    merge_state_status: Option<String>,
+    required_checks_passed: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 struct FakeGithubAutomationPort {
     capabilities: GithubAutomationCapabilities,
+    repository_identity: Arc<Mutex<String>>,
+    repository_visibility: GithubRepositoryVisibility,
+    repository_visibility_after_inspection: Arc<Mutex<Option<(usize, GithubRepositoryVisibility)>>>,
     ensured_pull_request: GithubAutomationPullRequest,
     base_branch: Arc<Mutex<Option<String>>>,
     head_branch: Arc<Mutex<Option<String>>>,
@@ -745,7 +811,17 @@ struct FakeGithubAutomationPort {
     inspect_draft: Arc<Mutex<Option<bool>>>,
     inspect_base_branch: Arc<Mutex<Option<String>>>,
     inspect_head_branch: Arc<Mutex<Option<String>>>,
+    inspect_head_commit_sha: Arc<Mutex<Option<String>>>,
+    close_inspect_base_branch: Arc<Mutex<Option<String>>>,
+    close_inspect_head_branch: Arc<Mutex<Option<String>>>,
+    close_inspect_head_commit_sha: Arc<Mutex<Option<String>>>,
+    inspect_review_decision: Arc<Mutex<Option<String>>>,
+    inspect_approved_review_commit_shas: Arc<Mutex<Option<Vec<String>>>>,
+    inspect_merge_state_status: Arc<Mutex<Option<String>>>,
+    inspect_required_checks_passed: Arc<Mutex<Option<bool>>>,
+    pre_push_inspect_overrides: Arc<Mutex<Option<FakePullRequestReadinessOverrides>>>,
     close_error: Arc<Mutex<Option<String>>>,
+    source_branch_cleanup_calls: Arc<Mutex<usize>>,
 }
 impl FakeGithubAutomationPort {
     fn ready() -> Self {
@@ -770,6 +846,9 @@ impl FakeGithubAutomationPort {
                     None,
                 ),
             ),
+            repository_visibility: GithubRepositoryVisibility::Private,
+            repository_visibility_after_inspection: Arc::new(Mutex::new(None)),
+            repository_identity: Arc::new(Mutex::new("RefinedStone/codex-exec-loop".to_string())),
             ensured_pull_request: GithubAutomationPullRequest::new(
                 77,
                 "https://github.com/RefinedStone/codex-exec-loop/pull/77",
@@ -777,7 +856,8 @@ impl FakeGithubAutomationPort {
                 POOL_BASELINE_BRANCH,
                 "placeholder",
                 false,
-            ),
+            )
+            .with_merge_gate("APPROVED", "CLEAN", true),
             base_branch: Arc::new(Mutex::new(None)),
             head_branch: Arc::new(Mutex::new(None)),
             operations: Arc::new(Mutex::new(Vec::new())),
@@ -790,7 +870,17 @@ impl FakeGithubAutomationPort {
             inspect_draft: Arc::new(Mutex::new(None)),
             inspect_base_branch: Arc::new(Mutex::new(None)),
             inspect_head_branch: Arc::new(Mutex::new(None)),
+            inspect_head_commit_sha: Arc::new(Mutex::new(None)),
+            close_inspect_base_branch: Arc::new(Mutex::new(None)),
+            close_inspect_head_branch: Arc::new(Mutex::new(None)),
+            close_inspect_head_commit_sha: Arc::new(Mutex::new(None)),
+            inspect_review_decision: Arc::new(Mutex::new(None)),
+            inspect_approved_review_commit_shas: Arc::new(Mutex::new(None)),
+            inspect_merge_state_status: Arc::new(Mutex::new(None)),
+            inspect_required_checks_passed: Arc::new(Mutex::new(None)),
+            pre_push_inspect_overrides: Arc::new(Mutex::new(None)),
             close_error: Arc::new(Mutex::new(None)),
+            source_branch_cleanup_calls: Arc::new(Mutex::new(0)),
         }
     }
     fn with_capabilities(capabilities: GithubAutomationCapabilities) -> Self {
@@ -798,6 +888,26 @@ impl FakeGithubAutomationPort {
             capabilities,
             ..Self::ready()
         }
+    }
+
+    fn with_repository_visibility(repository_visibility: GithubRepositoryVisibility) -> Self {
+        Self {
+            repository_visibility,
+            ..Self::ready()
+        }
+    }
+
+    fn with_repository_visibility_after_inspections(
+        inspection_count: usize,
+        repository_visibility: GithubRepositoryVisibility,
+    ) -> Self {
+        let github = Self::ready();
+        *github
+            .repository_visibility_after_inspection
+            .lock()
+            .expect("fake github visibility drift mutex poisoned") =
+            Some((inspection_count, repository_visibility));
+        github
     }
 
     // force-with-lease 실패는 recovery path에서만 발생시킨다. 일반 push 흐름은
@@ -885,6 +995,117 @@ impl FakeGithubAutomationPort {
         github
     }
 
+    fn with_review_decision(review_decision: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_review_decision
+            .lock()
+            .expect("fake github review decision mutex poisoned") =
+            Some(review_decision.to_string());
+        github
+    }
+
+    fn with_inspect_head_commit_sha(head_commit_sha: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_head_commit_sha
+            .lock()
+            .expect("fake github head commit mutex poisoned") = Some(head_commit_sha.to_string());
+        github
+    }
+
+    fn with_approved_review_commit_sha(approved_review_commit_sha: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .inspect_approved_review_commit_shas
+            .lock()
+            .expect("fake github approved review commit mutex poisoned") =
+            Some(vec![approved_review_commit_sha.to_string()]);
+        github
+    }
+
+    fn with_pre_push_state(state: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .pre_push_inspect_overrides
+            .lock()
+            .expect("fake github pre-push overrides mutex poisoned") =
+            Some(FakePullRequestReadinessOverrides {
+                state: Some(state.to_string()),
+                ..Default::default()
+            });
+        github
+    }
+
+    fn with_pre_push_review_decision(review_decision: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .pre_push_inspect_overrides
+            .lock()
+            .expect("fake github pre-push overrides mutex poisoned") =
+            Some(FakePullRequestReadinessOverrides {
+                review_decision: Some(review_decision.to_string()),
+                ..Default::default()
+            });
+        github
+    }
+
+    fn with_pre_push_approved_review_commit_sha(approved_review_commit_sha: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .pre_push_inspect_overrides
+            .lock()
+            .expect("fake github pre-push overrides mutex poisoned") =
+            Some(FakePullRequestReadinessOverrides {
+                approved_review_commit_shas: Some(vec![approved_review_commit_sha.to_string()]),
+                ..Default::default()
+            });
+        github
+    }
+
+    fn with_pre_push_required_checks_passed(required_checks_passed: bool) -> Self {
+        let github = Self::ready();
+        *github
+            .pre_push_inspect_overrides
+            .lock()
+            .expect("fake github pre-push overrides mutex poisoned") =
+            Some(FakePullRequestReadinessOverrides {
+                required_checks_passed: Some(required_checks_passed),
+                ..Default::default()
+            });
+        github
+    }
+
+    fn with_close_inspect_base_branch(base_branch: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .close_inspect_base_branch
+            .lock()
+            .expect("fake github close-inspect base mutex poisoned") =
+            Some(base_branch.to_string());
+        github
+    }
+
+    fn with_close_inspect_head_branch(head_branch: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .close_inspect_head_branch
+            .lock()
+            .expect("fake github close-inspect head mutex poisoned") =
+            Some(head_branch.to_string());
+        github
+    }
+
+    fn with_close_inspect_head_commit_sha(head_commit_sha: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .close_inspect_head_commit_sha
+            .lock()
+            .expect("fake github close-inspect commit mutex poisoned") =
+            Some(head_commit_sha.to_string());
+        github
+    }
+
     fn with_close_error(error: &str) -> Self {
         let github = Self::ready();
         *github
@@ -898,9 +1119,82 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
     fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
         self.capabilities.clone()
     }
-    fn push_branch(
+    fn repository_identity(&self, _repo_root: &str) -> anyhow::Result<String> {
+        Ok(self
+            .repository_identity
+            .lock()
+            .expect("fake github repository identity mutex poisoned")
+            .clone())
+    }
+    fn repository_visibility(
         &self,
         _repo_root: &str,
+    ) -> anyhow::Result<GithubRepositoryVisibility> {
+        if let Some((required_inspections, visibility)) = *self
+            .repository_visibility_after_inspection
+            .lock()
+            .expect("fake github visibility drift mutex poisoned")
+        {
+            let inspection_count = self
+                .operations
+                .lock()
+                .expect("fake github operations mutex poisoned")
+                .iter()
+                .filter(|operation| operation.starts_with("inspect-pr:"))
+                .count();
+            if inspection_count >= required_inspections {
+                return Ok(visibility);
+            }
+        }
+        Ok(self.repository_visibility)
+    }
+    fn repository_identity_for_push_url(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+    ) -> anyhow::Result<String> {
+        self.repository_identity(repo_root)
+    }
+    fn repository_visibility_for_push_url(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+    ) -> anyhow::Result<GithubRepositoryVisibility> {
+        self.repository_visibility(repo_root)
+    }
+    fn credential_redacted_push_url_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+    ) -> anyhow::Result<String> {
+        run_command(
+            "git",
+            ["-C", repo_root, "remote", "get-url", "--push", push_remote],
+            None,
+        )
+        .ok_or_else(|| anyhow::anyhow!("test push remote URL is unavailable"))
+    }
+    fn fetch_branch_to_tracking_ref_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+        tracking_ref: &str,
+    ) -> anyhow::Result<String> {
+        let refspec = format!("+refs/heads/{branch_name}:{tracking_ref}");
+        run_git_result(
+            Path::new(repo_root),
+            &["fetch", "--quiet", credential_redacted_push_url, &refspec],
+        )?;
+        run_command("git", ["-C", repo_root, "rev-parse", tracking_ref], None)
+            .ok_or_else(|| anyhow::anyhow!("test tracking ref is unavailable"))
+    }
+    fn push_branch(
+        &self,
+        repo_root: &str,
         branch_name: &str,
         force_with_lease: bool,
     ) -> anyhow::Result<()> {
@@ -926,11 +1220,50 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         {
             anyhow::bail!(error);
         }
+        let mut args = vec!["push"];
+        if force_with_lease {
+            args.push("--force-with-lease");
+        }
+        args.extend([DEFAULT_PUSH_REMOTE_NAME, branch_name]);
+        run_git_result(Path::new(repo_root), &args)?;
         Ok(())
+    }
+    fn push_frozen_commit_to_branch(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        source_commit_sha: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<()> {
+        self.operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .push(format!("push:{branch_name}:false"));
+        if let Some(error) = self
+            .source_push_error
+            .lock()
+            .expect("fake github source-push error mutex poisoned")
+            .clone()
+        {
+            anyhow::bail!(error);
+        }
+        let refspec = format!("{source_commit_sha}:refs/heads/{branch_name}");
+        run_git_result(Path::new(repo_root), &["push", push_remote, &refspec])?;
+        Ok(())
+    }
+    fn push_frozen_commit_to_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        _credential_redacted_push_url: &str,
+        source_commit_sha: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<()> {
+        self.push_frozen_commit_to_branch(repo_root, push_remote, source_commit_sha, branch_name)
     }
     fn ensure_pull_request(
         &self,
-        _repo_root: &str,
+        repo_root: &str,
         base_branch: &str,
         head_branch: &str,
         _title: &str,
@@ -944,6 +1277,15 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             .head_branch
             .lock()
             .expect("fake github head branch mutex poisoned") = Some(head_branch.to_string());
+        let mut head_commit_sha = self
+            .inspect_head_commit_sha
+            .lock()
+            .expect("fake github head commit mutex poisoned");
+        if head_commit_sha.is_none() {
+            *head_commit_sha =
+                run_command("git", ["-C", repo_root, "rev-parse", head_branch], None);
+        }
+        drop(head_commit_sha);
         self.operations
             .lock()
             .expect("fake github operations mutex poisoned")
@@ -956,14 +1298,60 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         {
             anyhow::bail!(error);
         }
-        Ok(GithubAutomationPullRequest::new(
+        let mut pull_request = GithubAutomationPullRequest::new(
             self.ensured_pull_request.number,
             self.ensured_pull_request.url.clone(),
             "OPEN",
             base_branch,
             head_branch,
             false,
-        ))
+        )
+        .with_merge_gate(
+            self.inspect_review_decision
+                .lock()
+                .expect("fake github review decision mutex poisoned")
+                .clone()
+                .unwrap_or_else(|| "APPROVED".to_string()),
+            self.inspect_merge_state_status
+                .lock()
+                .expect("fake github merge state mutex poisoned")
+                .clone()
+                .unwrap_or_else(|| "CLEAN".to_string()),
+            self.inspect_required_checks_passed
+                .lock()
+                .expect("fake github checks mutex poisoned")
+                .unwrap_or(true),
+        );
+        pull_request.head_commit_sha = self
+            .inspect_head_commit_sha
+            .lock()
+            .expect("fake github head commit mutex poisoned")
+            .clone();
+        pull_request.approved_review_commit_shas = self
+            .inspect_approved_review_commit_shas
+            .lock()
+            .expect("fake github approved review commit mutex poisoned")
+            .clone()
+            .unwrap_or_else(|| {
+                pull_request
+                    .head_commit_sha
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+        Ok(pull_request)
+    }
+    fn ensure_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        base_branch: &str,
+        head_branch: &str,
+        title: &str,
+        body: &str,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.ensure_pull_request(repo_root, base_branch, head_branch, title, body)
     }
     fn inspect_pull_request(
         &self,
@@ -982,29 +1370,92 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             .expect("fake github head branch mutex poisoned")
             .clone()
             .unwrap_or_else(|| self.ensured_pull_request.head_branch.clone());
-        let base_branch = self
-            .inspect_base_branch
-            .lock()
-            .expect("fake github inspect base branch mutex poisoned")
-            .clone()
+        let (closing_inspection, pre_push_inspection) = {
+            let operations = self
+                .operations
+                .lock()
+                .expect("fake github operations mutex poisoned");
+            let closing_inspection = operations
+                .last()
+                .is_some_and(|operation| operation.starts_with("push-integration:"));
+            let inspection_count = operations
+                .iter()
+                .filter(|operation| operation.starts_with("inspect-pr:"))
+                .count();
+            (
+                closing_inspection,
+                !closing_inspection && inspection_count == 1,
+            )
+        };
+        let pre_push_overrides = pre_push_inspection
+            .then(|| {
+                self.pre_push_inspect_overrides
+                    .lock()
+                    .expect("fake github pre-push overrides mutex poisoned")
+                    .clone()
+            })
+            .flatten();
+        let close_base_branch = closing_inspection
+            .then(|| {
+                self.close_inspect_base_branch
+                    .lock()
+                    .expect("fake github close-inspect base mutex poisoned")
+                    .clone()
+            })
+            .flatten();
+        let base_branch = close_base_branch
+            .or_else(|| {
+                pre_push_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.base_branch.clone())
+            })
+            .or_else(|| {
+                self.inspect_base_branch
+                    .lock()
+                    .expect("fake github inspect base branch mutex poisoned")
+                    .clone()
+            })
             .unwrap_or(ensured_base_branch);
-        let head_branch = self
-            .inspect_head_branch
-            .lock()
-            .expect("fake github inspect head branch mutex poisoned")
-            .clone()
+        let close_head_branch = closing_inspection
+            .then(|| {
+                self.close_inspect_head_branch
+                    .lock()
+                    .expect("fake github close-inspect head mutex poisoned")
+                    .clone()
+            })
+            .flatten();
+        let head_branch = close_head_branch
+            .or_else(|| {
+                pre_push_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.head_branch.clone())
+            })
+            .or_else(|| {
+                self.inspect_head_branch
+                    .lock()
+                    .expect("fake github inspect head branch mutex poisoned")
+                    .clone()
+            })
             .unwrap_or(ensured_head_branch);
-        let state = self
-            .inspect_state
-            .lock()
-            .expect("fake github inspect state mutex poisoned")
-            .clone()
+        let state = pre_push_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.state.clone())
+            .or_else(|| {
+                self.inspect_state
+                    .lock()
+                    .expect("fake github inspect state mutex poisoned")
+                    .clone()
+            })
             .unwrap_or_else(|| "OPEN".to_string());
-        let is_draft = self
-            .inspect_draft
-            .lock()
-            .expect("fake github inspect draft mutex poisoned")
-            .unwrap_or(false);
+        let is_draft = pre_push_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.is_draft)
+            .unwrap_or_else(|| {
+                self.inspect_draft
+                    .lock()
+                    .expect("fake github inspect draft mutex poisoned")
+                    .unwrap_or(false)
+            });
         self.operations
             .lock()
             .expect("fake github operations mutex poisoned")
@@ -1017,16 +1468,98 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         {
             anyhow::bail!(error);
         }
-        Ok(GithubAutomationPullRequest::new(
+        let mut pull_request = GithubAutomationPullRequest::new(
             pr_number,
             format!("https://github.com/RefinedStone/codex-exec-loop/pull/{pr_number}"),
             state,
             base_branch,
             head_branch,
             is_draft,
-        ))
+        )
+        .with_merge_gate(
+            pre_push_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.review_decision.clone())
+                .or_else(|| {
+                    self.inspect_review_decision
+                        .lock()
+                        .expect("fake github review decision mutex poisoned")
+                        .clone()
+                })
+                .unwrap_or_else(|| "APPROVED".to_string()),
+            pre_push_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.merge_state_status.clone())
+                .or_else(|| {
+                    self.inspect_merge_state_status
+                        .lock()
+                        .expect("fake github merge state mutex poisoned")
+                        .clone()
+                })
+                .unwrap_or_else(|| "CLEAN".to_string()),
+            pre_push_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.required_checks_passed)
+                .unwrap_or_else(|| {
+                    self.inspect_required_checks_passed
+                        .lock()
+                        .expect("fake github checks mutex poisoned")
+                        .unwrap_or(true)
+                }),
+        );
+        let close_head_commit_sha = closing_inspection
+            .then(|| {
+                self.close_inspect_head_commit_sha
+                    .lock()
+                    .expect("fake github close-inspect commit mutex poisoned")
+                    .clone()
+            })
+            .flatten();
+        pull_request.head_commit_sha = close_head_commit_sha
+            .or_else(|| {
+                pre_push_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.head_commit_sha.clone())
+            })
+            .or_else(|| {
+                self.inspect_head_commit_sha
+                    .lock()
+                    .expect("fake github head commit mutex poisoned")
+                    .clone()
+            });
+        pull_request.approved_review_commit_shas = pre_push_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.approved_review_commit_shas.clone())
+            .or_else(|| {
+                self.inspect_approved_review_commit_shas
+                    .lock()
+                    .expect("fake github approved review commit mutex poisoned")
+                    .clone()
+            })
+            .unwrap_or_else(|| {
+                pull_request
+                    .head_commit_sha
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+        Ok(pull_request)
     }
-    fn push_integration_branch(&self, _repo_root: &str, branch_name: &str) -> anyhow::Result<()> {
+    fn inspect_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.inspect_pull_request(repo_root, pr_number)
+    }
+    fn push_integration_branch(
+        &self,
+        repo_root: &str,
+        branch_name: &str,
+        _expected_old_commit_sha: &str,
+    ) -> anyhow::Result<()> {
         self.operations
             .lock()
             .expect("fake github operations mutex poisoned")
@@ -1039,7 +1572,22 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
         {
             anyhow::bail!(error);
         }
+        let target_refspec = format!("HEAD:refs/heads/{branch_name}");
+        run_git_result(
+            Path::new(repo_root),
+            &["push", DEFAULT_PUSH_REMOTE_NAME, target_refspec.as_str()],
+        )?;
         Ok(())
+    }
+    fn push_integration_branch_to_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+    ) -> anyhow::Result<()> {
+        self.push_integration_branch(repo_root, branch_name, expected_old_commit_sha)
     }
     fn close_pull_request(&self, _repo_root: &str, pr_number: u64) -> anyhow::Result<()> {
         self.operations
@@ -1055,6 +1603,68 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             anyhow::bail!(error);
         }
         Ok(())
+    }
+    fn close_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<()> {
+        self.close_pull_request(repo_root, pr_number)
+    }
+    fn remote_branch_head(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(run_command(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "ls-remote",
+                "--heads",
+                push_remote,
+                &format!("refs/heads/{branch_name}"),
+            ],
+            None,
+        )
+        .and_then(|line| line.split_whitespace().next().map(str::to_string)))
+    }
+    fn remote_branch_head_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<Option<String>> {
+        self.remote_branch_head(repo_root, push_remote, branch_name)
+    }
+    fn delete_branch_if_unchanged(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        branch_name: &str,
+        _expected_sha: &str,
+    ) -> anyhow::Result<bool> {
+        let _ = branch_name;
+        *self
+            .source_branch_cleanup_calls
+            .lock()
+            .expect("fake github source cleanup counter mutex poisoned") += 1;
+        Ok(true)
+    }
+    fn delete_branch_if_unchanged_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_sha: &str,
+    ) -> anyhow::Result<bool> {
+        self.delete_branch_if_unchanged(repo_root, push_remote, branch_name, expected_sha)
     }
 }
 
@@ -1098,6 +1708,59 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
     fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
         self.capabilities.clone()
     }
+    fn repository_identity(&self, _repo_root: &str) -> anyhow::Result<String> {
+        Ok("RefinedStone/codex-exec-loop".to_string())
+    }
+    fn repository_visibility(
+        &self,
+        _repo_root: &str,
+    ) -> anyhow::Result<GithubRepositoryVisibility> {
+        Ok(GithubRepositoryVisibility::Private)
+    }
+    fn repository_identity_for_push_url(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+    ) -> anyhow::Result<String> {
+        self.repository_identity(repo_root)
+    }
+    fn repository_visibility_for_push_url(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+    ) -> anyhow::Result<GithubRepositoryVisibility> {
+        self.repository_visibility(repo_root)
+    }
+    fn credential_redacted_push_url_for_remote(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+    ) -> anyhow::Result<String> {
+        run_command(
+            "git",
+            ["-C", repo_root, "remote", "get-url", "--push", push_remote],
+            None,
+        )
+        .ok_or_else(|| anyhow::anyhow!("test push remote URL is unavailable"))
+    }
+    fn fetch_branch_to_tracking_ref_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_name: &str,
+        tracking_ref: &str,
+    ) -> anyhow::Result<String> {
+        let refspec = format!("+refs/heads/{branch_name}:{tracking_ref}");
+        run_git_result(
+            Path::new(repo_root),
+            &["fetch", "--quiet", credential_redacted_push_url, &refspec],
+        )?;
+        run_command("git", ["-C", repo_root, "rev-parse", tracking_ref], None)
+            .ok_or_else(|| anyhow::anyhow!("test tracking ref is unavailable"))
+    }
     fn push_branch(
         &self,
         repo_root: &str,
@@ -1116,9 +1779,34 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
         run_git_result(Path::new(repo_root), &args)?;
         Ok(())
     }
+    fn push_frozen_commit_to_branch(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        source_commit_sha: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<()> {
+        self.operations
+            .lock()
+            .expect("git-backed github operations mutex poisoned")
+            .push(format!("push:{branch_name}:false"));
+        let refspec = format!("{source_commit_sha}:refs/heads/{branch_name}");
+        run_git_result(Path::new(repo_root), &["push", push_remote, &refspec])?;
+        Ok(())
+    }
+    fn push_frozen_commit_to_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        _credential_redacted_push_url: &str,
+        source_commit_sha: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<()> {
+        self.push_frozen_commit_to_branch(repo_root, push_remote, source_commit_sha, branch_name)
+    }
     fn ensure_pull_request(
         &self,
-        _repo_root: &str,
+        repo_root: &str,
         base_branch: &str,
         head_branch: &str,
         _title: &str,
@@ -1134,19 +1822,36 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
             .expect("git-backed github PR counter mutex poisoned");
         let pr_number = *next_pr_number;
         *next_pr_number = next_pr_number.saturating_add(1);
-        let pull_request = GithubAutomationPullRequest::new(
+        let head_commit_sha = run_command("git", ["-C", repo_root, "rev-parse", head_branch], None);
+        let mut pull_request = GithubAutomationPullRequest::new(
             pr_number,
             format!("https://example.invalid/pr/{pr_number}"),
             "OPEN",
             base_branch,
             head_branch,
             false,
-        );
+        )
+        .with_merge_gate("APPROVED", "CLEAN", true);
+        pull_request.head_commit_sha = head_commit_sha;
+        pull_request.approved_review_commit_shas =
+            pull_request.head_commit_sha.iter().cloned().collect();
         self.pull_requests
             .lock()
             .expect("git-backed github PR map mutex poisoned")
             .insert(pr_number, pull_request.clone());
         Ok(pull_request)
+    }
+    fn ensure_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        base_branch: &str,
+        head_branch: &str,
+        title: &str,
+        body: &str,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.ensure_pull_request(repo_root, base_branch, head_branch, title, body)
     }
     fn inspect_pull_request(
         &self,
@@ -1164,16 +1869,41 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("test pull request #{pr_number} was not ensured"))
     }
-    fn push_integration_branch(&self, repo_root: &str, branch_name: &str) -> anyhow::Result<()> {
+    fn inspect_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        self.inspect_pull_request(repo_root, pr_number)
+    }
+    fn push_integration_branch(
+        &self,
+        repo_root: &str,
+        branch_name: &str,
+        _expected_old_commit_sha: &str,
+    ) -> anyhow::Result<()> {
         self.operations
             .lock()
             .expect("git-backed github operations mutex poisoned")
             .push(format!("push-integration:{branch_name}"));
+        let target_refspec = format!("HEAD:refs/heads/{branch_name}");
         run_git_result(
             Path::new(repo_root),
-            &["push", DEFAULT_PUSH_REMOTE_NAME, branch_name],
+            &["push", DEFAULT_PUSH_REMOTE_NAME, target_refspec.as_str()],
         )?;
         Ok(())
+    }
+    fn push_integration_branch_to_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+    ) -> anyhow::Result<()> {
+        self.push_integration_branch(repo_root, branch_name, expected_old_commit_sha)
     }
     fn close_pull_request(&self, _repo_root: &str, pr_number: u64) -> anyhow::Result<()> {
         self.operations
@@ -1181,6 +1911,76 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
             .expect("git-backed github operations mutex poisoned")
             .push(format!("close-pr:{pr_number}"));
         Ok(())
+    }
+    fn close_pull_request_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<()> {
+        self.close_pull_request(repo_root, pr_number)
+    }
+    fn remote_branch_head(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let output = run_command(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "ls-remote",
+                "--heads",
+                push_remote,
+                &format!("refs/heads/{branch_name}"),
+            ],
+            None,
+        );
+        Ok(output.and_then(|line| line.split_whitespace().next().map(str::to_string)))
+    }
+    fn remote_branch_head_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+    ) -> anyhow::Result<Option<String>> {
+        self.remote_branch_head(repo_root, push_remote, branch_name)
+    }
+    fn delete_branch_if_unchanged(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        branch_name: &str,
+        expected_sha: &str,
+    ) -> anyhow::Result<bool> {
+        let Some(remote_head) = self.remote_branch_head(repo_root, push_remote, branch_name)?
+        else {
+            return Ok(true);
+        };
+        if remote_head != expected_sha {
+            return Ok(false);
+        }
+        let lease = format!("--force-with-lease=refs/heads/{branch_name}:{expected_sha}");
+        let delete_refspec = format!(":refs/heads/{branch_name}");
+        run_git_result(
+            Path::new(repo_root),
+            &["push", lease.as_str(), push_remote, delete_refspec.as_str()],
+        )?;
+        Ok(true)
+    }
+    fn delete_branch_if_unchanged_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        _credential_redacted_push_url: &str,
+        branch_name: &str,
+        expected_sha: &str,
+    ) -> anyhow::Result<bool> {
+        self.delete_branch_if_unchanged(repo_root, push_remote, branch_name, expected_sha)
     }
 }
 
@@ -1193,6 +1993,7 @@ fn test_parallel_mode_service() -> ParallelModeService {
         Arc::new(FakeGithubAutomationPort::ready()),
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
+    .with_test_delivery_safety_policy(false, false)
 }
 fn test_parallel_mode_service_with_github(
     github: Arc<dyn GithubAutomationPort>,
@@ -1202,6 +2003,17 @@ fn test_parallel_mode_service_with_github(
         github,
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
+    .with_test_delivery_safety_policy(false, false)
+}
+fn test_parallel_mode_service_with_autonomous_github(
+    github: Arc<dyn GithubAutomationPort>,
+) -> ParallelModeService {
+    ParallelModeService::new(
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        github,
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    )
+    .with_test_delivery_safety_policy(false, true)
 }
 
 fn test_parallel_runtime() -> GitParallelModeRuntimeAdapter {
@@ -1236,19 +2048,15 @@ fn parse_https_remote_extracts_host_and_path() {
 
 #[test]
 fn inspect_akra_branch_uses_repo_configured_push_remote() {
+    let _guard = crate::test_utils::process_environment_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _env_guard = EnvVarGuard::set(AKRA_GITHUB_PUSH_REMOTE_ENV_VAR, "");
     let repo = TempGitRepo::new("configured-push-remote");
+    run_git(&repo.repo_root, &["remote", "rename", "origin", "upstream"]);
     run_git(
         &repo.repo_root,
         &["config", "akra.githubPushRemote", "upstream"],
-    );
-    run_git(
-        &repo.repo_root,
-        &[
-            "update-ref",
-            &remote_tracking_branch_ref("upstream", POOL_BASELINE_BRANCH),
-            POOL_BASELINE_BRANCH,
-        ],
     );
 
     let capability = inspect_akra_branch(&test_parallel_runtime(), &repo.workspace_dir());
@@ -1274,14 +2082,67 @@ fn parallel_mode_integration_branch_parser_accepts_git_branch_names() {
 }
 
 #[test]
+fn parallel_mode_integration_branch_uses_repo_local_configuration() {
+    let repo = TempGitRepo::new("configured-integration-branch");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.parallelIntegrationBranch", "pre-release"],
+    );
+
+    assert_eq!(
+        parallel_mode_integration_branch_for_repo(&repo.workspace_dir())
+            .expect("configured integration branch should be valid"),
+        "pre-release"
+    );
+}
+
+#[test]
+fn parallel_mode_integration_branch_resolution_prefers_env_then_repo_config_then_default() {
+    assert_eq!(
+        resolve_parallel_mode_integration_branch(Some("release/env"), Some("pre-release")),
+        "release/env"
+    );
+    assert_eq!(
+        resolve_parallel_mode_integration_branch(None, Some("pre-release")),
+        "pre-release"
+    );
+    assert_eq!(
+        resolve_parallel_mode_integration_branch(None, None),
+        DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH
+    );
+}
+
+#[test]
+fn explicit_invalid_integration_branch_never_falls_back_to_another_target() {
+    assert!(
+        resolve_parallel_mode_integration_branch_strict(Some("bad branch"), Some("pre-release"))
+            .is_err()
+    );
+    assert!(resolve_parallel_mode_integration_branch_strict(None, Some("../oops")).is_err());
+    assert_eq!(
+        resolve_parallel_mode_integration_branch_strict(Some(""), Some("pre-release")),
+        Ok("pre-release".to_string())
+    );
+}
+
+#[test]
 fn parallel_mode_integration_branch_parser_rejects_invalid_values() {
     for value in [
         "",
         "HEAD",
+        "@",
         "../oops",
         "bad branch",
         "topic.lock",
         "topic@{1}",
+        " topic",
+        "topic ",
+        "topic//child",
+        ".hidden",
+        "topic/.hidden",
+        "topic/part.lock/child",
+        "topic/control\u{1f}",
+        "topic/delete\u{7f}",
     ] {
         assert_eq!(
             normalize_parallel_mode_integration_branch(Some(value)),

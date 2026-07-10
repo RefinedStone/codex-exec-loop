@@ -4,8 +4,16 @@ use std::process::{Command, Stdio};
 
 use chrono::Utc;
 
+#[cfg(unix)]
+use crate::adapter::outbound::filesystem::secure_fs;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+use crate::application::port::outbound::parallel_mode_runtime_port::{
+    ParallelWorkerCommitOutcome, ParallelWorkerCommitRequest,
+};
+use crate::git_subprocess;
 use crate::subprocess;
+
+use super::parallel_worker_commit;
 
 /*
  * GitParallelModeRuntimeAdapter는 parallel mode application service가 요청하는 낮은 수준의
@@ -23,6 +31,23 @@ impl GitParallelModeRuntimeAdapter {
          * 관찰하므로, service가 Arc<dyn ParallelModeRuntimePort>로 공유해도 내부 상태 동기화가 필요 없다.
          */
         Self
+    }
+
+    fn find_executable_in_path(
+        &self,
+        program: &str,
+        path: &std::ffi::OsStr,
+        cwd: &Path,
+    ) -> Option<PathBuf> {
+        if program == "codex" {
+            return crate::trusted_executable::resolve_codex_command_from_path(path, cwd)
+                .ok()
+                .map(|command| command.source_executable);
+        }
+        if matches!(program, "git" | "gh") {
+            return crate::trusted_executable::resolve_native_from_path(program, path, cwd).ok();
+        }
+        which::which_in(program, Some(path), cwd).ok()
     }
 }
 
@@ -46,12 +71,15 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
          * readiness probe는 stdout이 필요 없고 성공/실패만 중요하다.
          * stdout/stderr를 버려 TUI가 background capability check 중 터미널에 noise를 흘리지 않게 한다.
          */
-        let mut command = Command::new(program);
-        command.args(args);
+        if crate::git_execution_guard::ensure_git_command_execution_config_safe(program, args, None)
+            .is_err()
+        {
+            return false;
+        }
+        let mut command = git_subprocess::command_for_program(program, args.iter().copied());
         command.stdin(Stdio::null());
         command.stdout(Stdio::null());
         command.stderr(Stdio::null());
-        command.env("GIT_TERMINAL_PROMPT", "0");
         subprocess::command_output(&mut command, &format!("{program} {}", args.join(" ")))
             .is_ok_and(|output| output.status.success())
     }
@@ -67,14 +95,18 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
          * spawn 실패, non-zero exit, invalid utf8, empty stdout을 모두 None으로 축약해 caller가
          * capability degraded/blocker 같은 domain 상태로 바꾸기 쉽게 한다.
          */
-        let mut command = Command::new(program);
-        command.args(args);
+        crate::git_execution_guard::ensure_git_command_execution_config_safe(
+            program,
+            args,
+            current_dir,
+        )
+        .ok()?;
+        let mut command = git_subprocess::command_for_program(program, args.iter().copied());
         if let Some(current_dir) = current_dir {
             command.current_dir(current_dir);
         }
         command.stdin(Stdio::null());
         command.stderr(Stdio::null());
-        command.env("GIT_TERMINAL_PROMPT", "0");
 
         let output =
             subprocess::command_output(&mut command, &format!("{program} {}", args.join(" ")))
@@ -98,16 +130,14 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
          * GitHub fallback script처럼 민감한 입력을 argv에 남기면 안 되는 경로가 이 primitive를 쓴다.
          * stdin을 명시적으로 닫은 뒤 wait해야 child process가 EOF를 보고 종료한다.
          */
-        let mut child = Command::new(program)
-            .args(args)
+        let mut command = git_subprocess::command_for_program(program, args.iter().copied());
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .spawn()
-            .ok()?;
+            .stderr(Stdio::null());
+        let mut child = subprocess::spawn(&mut command).ok()?;
 
-        let mut stdin = child.stdin.take()?;
+        let mut stdin = child.take_stdin()?;
         stdin.write_all(stdin_body.as_bytes()).ok()?;
         drop(stdin);
 
@@ -127,7 +157,9 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
          * readiness는 binary가 있는지와 어디에서 발견됐는지를 operator-facing detail로 보여 줄 수 있다.
          * which crate에 PATH 탐색 규칙을 맡겨 platform별 executable lookup 차이를 adapter 안에 가둔다.
          */
-        which::which(program).ok()
+        let cwd = std::env::current_dir().ok()?;
+        let path = std::env::var_os("PATH")?;
+        self.find_executable_in_path(program, &path, &cwd)
     }
 
     fn gh_auth_status(&self, repo_root: Option<&str>) -> bool {
@@ -135,7 +167,32 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
          * GitHub delivery/readiness는 `gh auth status`가 현재 repo context에서 성공하는지만 필요하다.
          * repo_root가 있으면 그 디렉터리에서 실행해 gh가 올바른 host/account configuration을 고르게 한다.
          */
-        let mut command = Command::new("gh");
+        let Some(cwd) = repo_root
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+        else {
+            return false;
+        };
+        let Ok(executable) =
+            crate::trusted_executable::resolve_native_from_current_path("gh", &cwd)
+        else {
+            return false;
+        };
+        let mut command = Command::new(executable);
+        if crate::trusted_executable::configure_credential_command_environment(
+            &mut command,
+            &cwd,
+            true,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        for name in ["GH_TOKEN", "GITHUB_TOKEN"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
         command.args(["auth", "status"]);
         if let Some(repo_root) = repo_root {
             command.current_dir(repo_root);
@@ -146,6 +203,13 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         command.env("GIT_TERMINAL_PROMPT", "0");
         subprocess::command_output(&mut command, "gh auth status")
             .is_ok_and(|output| output.status.success())
+    }
+
+    fn prepare_parallel_worker_commit(
+        &self,
+        request: ParallelWorkerCommitRequest<'_>,
+    ) -> Result<ParallelWorkerCommitOutcome, String> {
+        parallel_worker_commit::prepare_parallel_worker_commit(request)
     }
 
     fn current_timestamp(&self) -> String {
@@ -193,45 +257,637 @@ impl ParallelModeRuntimePort for GitParallelModeRuntimeAdapter {
         std::fs::create_dir_all(path)
     }
 
-    fn read_dir_paths(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
-        /*
-         * pool reconciliation은 directory entry를 domain slot 후보로 다시 해석한다.
-         * adapter는 path 목록만 반환하고, 어떤 entry가 slot인지/stale인지 판단하는 정책은 service에 남긴다.
-         */
-        std::fs::read_dir(path)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect()
+    fn write_runtime_mirror_atomic(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+        body: &str,
+    ) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            secure_fs::write_file_atomic(pool_root, relative, body.as_bytes())
+                .map_err(secure_mirror_io_error)
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pool_root, relative, body);
+            Ok(())
+        }
     }
 
-    fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
-        /*
-         * lease와 session detail record는 service가 JSON/text schema를 해석한다.
-         * adapter는 UTF-8 file read를 수행하고 io error를 숨기지 않는다.
-         */
-        std::fs::read_to_string(path)
+    fn read_runtime_mirror_optional(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+    ) -> std::io::Result<Option<String>> {
+        #[cfg(unix)]
+        {
+            secure_fs::read_optional_file(pool_root, relative).map_err(secure_mirror_io_error)
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pool_root, relative);
+            Ok(None)
+        }
     }
 
-    fn write_string(&self, path: &Path, body: &str) -> std::io::Result<()> {
-        /*
-         * service가 만든 serialized lease/session detail body를 그대로 쓴다.
-         * atomic 교체가 필요한 흐름은 write_string으로 temp file을 만들고 rename primitive를 이어서 사용한다.
-         */
-        std::fs::write(path, body)
+    fn read_runtime_mirror_directory(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+    ) -> std::io::Result<Vec<(PathBuf, String)>> {
+        #[cfg(unix)]
+        {
+            secure_fs::read_tree(pool_root, relative)
+                .map(|records| {
+                    records
+                        .into_iter()
+                        .map(|(path, body)| (PathBuf::from(path), body))
+                        .collect()
+                })
+                .map_err(secure_mirror_io_error)
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pool_root, relative);
+            Ok(Vec::new())
+        }
     }
 
-    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-        /*
-         * lease write의 final commit이나 temp marker 이동에 쓰이는 filesystem primitive다.
-         * cross-device rename 실패 같은 세부는 caller의 recovery policy가 판단해야 하므로 그대로 반환한다.
-         */
-        std::fs::rename(from, to)
+    fn remove_runtime_mirror_file(&self, pool_root: &Path, relative: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            secure_fs::remove_optional_file(pool_root, relative).map_err(secure_mirror_io_error)
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pool_root, relative);
+            Ok(())
+        }
     }
 
-    fn remove_file(&self, path: &Path) -> std::io::Result<()> {
-        /*
-         * stale lease/temp file cleanup은 성공/실패가 pool 상태에 영향을 준다.
-         * 여기서 best-effort로 삼키지 않고 service가 blocker나 notice로 바꿀 수 있게 io::Result를 보존한다.
-         */
-        std::fs::remove_file(path)
+    fn remove_runtime_mirror_file_if_matches(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+        expected_body: &str,
+    ) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            let observed = secure_fs::read_optional_file(pool_root, relative)
+                .map_err(secure_mirror_io_error)?;
+            match observed.as_deref() {
+                None => secure_fs::compare_and_swap_optional_file(pool_root, relative, None, None)
+                    .map_err(secure_mirror_io_error),
+                Some(body) if body == expected_body => secure_fs::compare_and_swap_optional_file(
+                    pool_root,
+                    relative,
+                    Some(expected_body),
+                    None,
+                )
+                .map_err(secure_mirror_io_error),
+                Some(_) => Ok(false),
+            }
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pool_root, relative, expected_body);
+            Ok(true)
+        }
+    }
+
+    fn replace_runtime_mirror_file_if_matches(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+        expected_body: &str,
+        replacement_body: &str,
+    ) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            secure_fs::compare_and_swap_optional_file(
+                pool_root,
+                relative,
+                Some(expected_body),
+                Some(replacement_body),
+            )
+            .map_err(secure_mirror_io_error)
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pool_root, relative, expected_body, replacement_body);
+            Ok(true)
+        }
+    }
+
+    fn compare_and_swap_runtime_mirror_file(
+        &self,
+        pool_root: &Path,
+        relative: &Path,
+        expected_body: Option<&str>,
+        replacement_body: Option<&str>,
+    ) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            secure_fs::compare_and_swap_optional_file(
+                pool_root,
+                relative,
+                expected_body,
+                replacement_body,
+            )
+            .map_err(secure_mirror_io_error)
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pool_root, relative, expected_body, replacement_body);
+            Ok(true)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn secure_mirror_io_error(error: anyhow::Error) -> std::io::Error {
+    std::io::Error::other(error.to_string())
+}
+
+#[cfg(all(test, unix))]
+mod trusted_executable_tests {
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::GitParallelModeRuntimeAdapter;
+
+    #[test]
+    fn codex_readiness_accepts_trusted_npm_launcher_and_rejects_repository_path_entries() {
+        let cwd = std::env::current_dir().expect("test cwd should resolve");
+        let original_path = std::env::var_os("PATH").expect("PATH should be available");
+        let node =
+            crate::trusted_executable::resolve_native_from_path("node", &original_path, &cwd)
+                .expect("test host should provide trusted native Node.js");
+        let install = safe_fixture_root("parallel-codex-npm");
+        let launcher = install.join("codex.js");
+        write_executable(&launcher, "#!/usr/bin/env node\nprocess.exit(0);\n");
+        symlink(&launcher, install.join("codex")).expect("npm launcher symlink should create");
+        let trusted_path = std::env::join_paths([
+            install.clone(),
+            node.parent()
+                .expect("Node.js should have a parent directory")
+                .to_path_buf(),
+        ])
+        .expect("trusted fixture PATH should join");
+        let runtime = GitParallelModeRuntimeAdapter::new();
+
+        assert_eq!(
+            runtime.find_executable_in_path("codex", &trusted_path, &cwd),
+            Some(fs::canonicalize(&launcher).expect("launcher should canonicalize"))
+        );
+
+        let hostile_bin = cwd
+            .join("target")
+            .join(format!("akra-hostile-parallel-codex-{}", unique_suffix()));
+        fs::create_dir_all(&hostile_bin).expect("hostile repository bin should create");
+        let marker = hostile_bin.join("executed");
+        let hostile_script = format!("#!/bin/sh\nset -eu\n: > '{}'\nexit 0\n", marker.display());
+        write_executable(&hostile_bin.join("codex"), &hostile_script);
+        write_executable(&hostile_bin.join("node"), &hostile_script);
+        let hostile_path = std::env::join_paths(
+            std::iter::once(hostile_bin.clone())
+                .chain(std::iter::once(install.clone()))
+                .chain(std::iter::once(
+                    node.parent()
+                        .expect("Node.js should have a parent directory")
+                        .to_path_buf(),
+                )),
+        )
+        .expect("hostile fixture PATH should join");
+        assert_eq!(
+            runtime.find_executable_in_path("codex", &hostile_path, &cwd),
+            None
+        );
+        assert!(!marker.exists(), "repository Codex or Node.js was executed");
+
+        let _ = fs::remove_dir_all(&hostile_bin);
+        let _ = fs::remove_dir_all(&install);
+    }
+
+    fn safe_fixture_root(label: &str) -> PathBuf {
+        let root = PathBuf::from(std::env::var_os("HOME").expect("HOME should be available"))
+            .join(".cache")
+            .join(format!("akra-{label}-{}", unique_suffix()));
+        fs::create_dir_all(&root).expect("safe fixture root should create");
+        let mut permissions = fs::metadata(&root)
+            .expect("fixture metadata should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&root, permissions).expect("fixture directory should be safe");
+        root
+    }
+
+    fn write_executable(path: &Path, contents: &str) {
+        fs::write(path, contents).expect("executable fixture should write");
+        let mut permissions = fs::metadata(path)
+            .expect("fixture metadata should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("fixture should be executable");
+    }
+
+    fn unique_suffix() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should follow Unix epoch")
+            .as_nanos()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_runtime_mirror_tests {
+    use std::path::Path;
+
+    use super::{GitParallelModeRuntimeAdapter, ParallelModeRuntimePort};
+
+    #[test]
+    fn windows_parallel_runtime_uses_sqlite_authority_without_filesystem_mirrors() {
+        let runtime = GitParallelModeRuntimeAdapter::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock should follow the Unix epoch")
+            .as_nanos();
+        let unavailable_root = std::env::temp_dir().join(format!(
+            "akra-disabled-windows-mirror-{}-{nonce}",
+            std::process::id()
+        ));
+        let relative = Path::new(".leases/slot-1.json");
+
+        runtime
+            .write_runtime_mirror_atomic(&unavailable_root, relative, "authority projection")
+            .expect("disabled Windows mirror writes should be non-fatal");
+        assert_eq!(
+            runtime
+                .read_runtime_mirror_optional(&unavailable_root, relative)
+                .expect("disabled Windows mirror reads should be cache misses"),
+            None
+        );
+        assert!(
+            runtime
+                .read_runtime_mirror_directory(&unavailable_root, Path::new(".leases"))
+                .expect("disabled Windows mirror lists should be empty")
+                .is_empty()
+        );
+        runtime
+            .remove_runtime_mirror_file(&unavailable_root, relative)
+            .expect("disabled Windows mirror removal should be idempotent");
+        assert!(
+            runtime
+                .remove_runtime_mirror_file_if_matches(
+                    &unavailable_root,
+                    relative,
+                    "authority projection",
+                )
+                .expect("disabled Windows mirror CAS removal should be satisfied")
+        );
+        assert!(!unavailable_root.exists());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod secure_runtime_mirror_tests {
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{GitParallelModeRuntimeAdapter, ParallelModeRuntimePort, secure_fs};
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    const MIRROR_CASES: [(&str, &str); 3] = [
+        (".leases/slot-1.json", ".leases/slot-1.tmp"),
+        (
+            ".distributor-queue/queue-1.json",
+            ".distributor-queue/queue-1.json.tmp",
+        ),
+        (
+            ".agent-sessions/session-1.json",
+            ".agent-sessions/session-1.json.tmp",
+        ),
+    ];
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new(label: &str) -> Self {
+            let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "akra-secure-runtime-mirror-{label}-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("secure mirror test root should create");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .expect("secure mirror test root should be private");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_private_file(path: &Path, body: &str) {
+        fs::write(path, body).expect("sentinel should write");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("sentinel should be private");
+    }
+
+    fn create_private_parent(root: &Path, relative: &Path) {
+        let parent = root.join(relative.parent().expect("mirror path should have parent"));
+        fs::create_dir_all(&parent).expect("mirror parent should create");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("mirror parent should be private");
+    }
+
+    #[test]
+    fn runtime_mirror_write_ignores_predictable_symlink_and_hardlink_temps() {
+        let root = TestDirectory::new("legacy-temp-links");
+        let sentinel_root = TestDirectory::new("legacy-temp-sentinel");
+        let sentinel = sentinel_root.path().join("sentinel");
+        write_private_file(&sentinel, "sentinel");
+        let runtime = GitParallelModeRuntimeAdapter::new();
+
+        for (relative, legacy_temp) in MIRROR_CASES {
+            let relative = Path::new(relative);
+            let legacy_temp = root.path().join(legacy_temp);
+            create_private_parent(root.path(), relative);
+
+            symlink(&sentinel, &legacy_temp).expect("legacy temporary symlink should create");
+            runtime
+                .write_runtime_mirror_atomic(root.path(), relative, "first")
+                .expect("an unrelated predictable temporary symlink must not affect the write");
+            assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+            assert!(
+                fs::symlink_metadata(&legacy_temp)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            fs::remove_file(&legacy_temp).unwrap();
+
+            fs::hard_link(&sentinel, &legacy_temp)
+                .expect("legacy temporary hardlink should create");
+            runtime
+                .write_runtime_mirror_atomic(root.path(), relative, "second")
+                .expect("an unrelated predictable temporary hardlink must not affect the write");
+            assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+            assert_eq!(fs::metadata(&sentinel).unwrap().nlink(), 2);
+            fs::remove_file(&legacy_temp).unwrap();
+            assert_eq!(
+                runtime
+                    .read_runtime_mirror_optional(root.path(), relative)
+                    .unwrap()
+                    .as_deref(),
+                Some("second")
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_mirror_operations_reject_leaf_symlinks_and_hardlinks() {
+        let root = TestDirectory::new("leaf-links");
+        let sentinel_root = TestDirectory::new("leaf-link-sentinel");
+        let sentinel = sentinel_root.path().join("sentinel");
+        write_private_file(&sentinel, "sentinel");
+        let runtime = GitParallelModeRuntimeAdapter::new();
+
+        for (relative, _) in MIRROR_CASES {
+            let relative = Path::new(relative);
+            let leaf = root.path().join(relative);
+            create_private_parent(root.path(), relative);
+
+            symlink(&sentinel, &leaf).expect("mirror leaf symlink should create");
+            assert!(
+                runtime
+                    .write_runtime_mirror_atomic(root.path(), relative, "overwrite")
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .read_runtime_mirror_optional(root.path(), relative)
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .remove_runtime_mirror_file(root.path(), relative)
+                    .is_err()
+            );
+            assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+            fs::remove_file(&leaf).unwrap();
+
+            fs::hard_link(&sentinel, &leaf).expect("mirror leaf hardlink should create");
+            assert!(
+                runtime
+                    .write_runtime_mirror_atomic(root.path(), relative, "overwrite")
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .read_runtime_mirror_optional(root.path(), relative)
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .remove_runtime_mirror_file(root.path(), relative)
+                    .is_err()
+            );
+            assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+            fs::remove_file(&leaf).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_mirror_operations_reject_metadata_directory_symlinks() {
+        let root = TestDirectory::new("metadata-links");
+        let outside = TestDirectory::new("metadata-link-target");
+        let sentinel = outside.path().join("sentinel");
+        write_private_file(&sentinel, "sentinel");
+        let runtime = GitParallelModeRuntimeAdapter::new();
+
+        for (relative, _) in MIRROR_CASES {
+            let relative = Path::new(relative);
+            let metadata_name = relative.components().next().unwrap().as_os_str();
+            let metadata_path = root.path().join(metadata_name);
+            symlink(outside.path(), &metadata_path)
+                .expect("metadata directory symlink should create");
+
+            assert!(
+                runtime
+                    .write_runtime_mirror_atomic(root.path(), relative, "overwrite")
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .read_runtime_mirror_optional(root.path(), relative)
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .read_runtime_mirror_directory(root.path(), Path::new(metadata_name))
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .remove_runtime_mirror_file(root.path(), relative)
+                    .is_err()
+            );
+            assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+            assert!(!outside.path().join(relative.file_name().unwrap()).exists());
+            fs::remove_file(&metadata_path).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_mirror_operations_reject_a_symlinked_pool_root() {
+        let root_parent = TestDirectory::new("pool-root-link-parent");
+        let outside = TestDirectory::new("pool-root-link-target");
+        let sentinel = outside.path().join("sentinel");
+        write_private_file(&sentinel, "sentinel");
+        let pool_root = root_parent.path().join("akra-pool");
+        symlink(outside.path(), &pool_root).expect("pool root symlink should create");
+        let relative = Path::new(".leases/slot-1.json");
+        let runtime = GitParallelModeRuntimeAdapter::new();
+
+        assert!(
+            runtime
+                .write_runtime_mirror_atomic(&pool_root, relative, "overwrite")
+                .is_err()
+        );
+        assert!(
+            runtime
+                .read_runtime_mirror_optional(&pool_root, relative)
+                .is_err()
+        );
+        assert!(
+            runtime
+                .read_runtime_mirror_directory(&pool_root, Path::new(".leases"))
+                .is_err()
+        );
+        assert!(
+            runtime
+                .remove_runtime_mirror_file(&pool_root, relative)
+                .is_err()
+        );
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+        assert!(!outside.path().join(".leases/slot-1.json").exists());
+    }
+
+    #[test]
+    fn runtime_mirror_write_rejects_ancestor_replacement_race() {
+        let root = TestDirectory::new("ancestor-race");
+        let outside = TestDirectory::new("ancestor-race-target");
+        let sentinel = outside.path().join("sentinel");
+        write_private_file(&sentinel, "sentinel");
+        let relative = Path::new(".agent-sessions/session-race.json");
+        create_private_parent(root.path(), relative);
+        let metadata = root.path().join(".agent-sessions");
+        let displaced = root.path().join(".agent-sessions-displaced");
+        let replacement_target = outside.0.clone();
+        let metadata_for_hook = metadata.clone();
+        let displaced_for_hook = displaced.clone();
+        secure_fs::install_before_atomic_replace_hook(move || {
+            fs::rename(&metadata_for_hook, &displaced_for_hook)
+                .expect("pinned metadata directory should move");
+            symlink(&replacement_target, &metadata_for_hook)
+                .expect("attacker replacement symlink should create");
+        });
+
+        let runtime = GitParallelModeRuntimeAdapter::new();
+        let error = runtime
+            .write_runtime_mirror_atomic(root.path(), relative, "candidate")
+            .expect_err("an ancestor replacement must fail the final reachability check");
+        assert!(error.to_string().contains("ancestor"));
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+        assert!(!outside.path().join("session-race.json").exists());
+    }
+
+    #[test]
+    fn runtime_mirror_lifecycle_is_private_atomic_and_bounded_to_the_pool() {
+        let root = TestDirectory::new("lifecycle");
+        let runtime = GitParallelModeRuntimeAdapter::new();
+        let relative = Path::new(".distributor-queue/queue.json");
+
+        runtime
+            .write_runtime_mirror_atomic(root.path(), relative, "record")
+            .expect("private mirror should write");
+        let installed = root.path().join(relative);
+        let metadata = fs::metadata(&installed).unwrap();
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+        assert_eq!(metadata.nlink(), 1);
+        let directory = fs::metadata(root.path().join(".distributor-queue")).unwrap();
+        assert_eq!(directory.mode() & 0o077, 0);
+
+        assert_eq!(
+            runtime
+                .read_runtime_mirror_directory(root.path(), Path::new(".distributor-queue"))
+                .unwrap(),
+            vec![(PathBuf::from("queue.json"), "record".to_string())]
+        );
+        runtime
+            .remove_runtime_mirror_file(root.path(), relative)
+            .expect("private mirror should remove");
+        assert_eq!(
+            runtime
+                .read_runtime_mirror_optional(root.path(), relative)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn runtime_mirror_compare_and_delete_preserves_replacement_body() {
+        let root = TestDirectory::new("compare-delete");
+        let runtime = GitParallelModeRuntimeAdapter::new();
+        let relative = Path::new(".leases/slot-1.json");
+
+        runtime
+            .write_runtime_mirror_atomic(root.path(), relative, "generation-one")
+            .expect("first mirror generation should write");
+        runtime
+            .write_runtime_mirror_atomic(root.path(), relative, "generation-two")
+            .expect("replacement mirror generation should write");
+        assert!(
+            !runtime
+                .remove_runtime_mirror_file_if_matches(root.path(), relative, "generation-one",)
+                .expect("stale mirror compare-and-delete should be rejected")
+        );
+        assert_eq!(
+            runtime
+                .read_runtime_mirror_optional(root.path(), relative)
+                .expect("replacement mirror should remain")
+                .as_deref(),
+            Some("generation-two")
+        );
+        assert!(
+            runtime
+                .remove_runtime_mirror_file_if_matches(root.path(), relative, "generation-two",)
+                .expect("exact mirror compare-and-delete should succeed")
+        );
+        assert_eq!(
+            runtime
+                .read_runtime_mirror_optional(root.path(), relative)
+                .expect("removed mirror should read as missing"),
+            None
+        );
+        assert!(
+            runtime
+                .remove_runtime_mirror_file_if_matches(root.path(), relative, "generation-two")
+                .expect("missing mirror compare-and-delete should be idempotent")
+        );
     }
 }

@@ -88,7 +88,137 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::PlanningInit => {
             draw_inline_planning_init_inspection(frame, inspection_area, app)
         }
+        ShellOverlay::Approval => draw_inline_approval_inspection(frame, inspection_area, app),
     }
+}
+
+fn draw_inline_approval_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
+    let Some((request, requested_scroll_offset, submitted_decision)) =
+        (match &app.conversation_state {
+            super::ConversationState::Ready(conversation) => conversation
+                .pending_approval_request
+                .as_ref()
+                .map(|request| {
+                    (
+                        request.clone(),
+                        conversation.approval_detail_scroll_offset,
+                        conversation.pending_approval_decision(),
+                    )
+                }),
+            super::ConversationState::Loading | super::ConversationState::Failed(_) => None,
+        })
+    else {
+        render_inline_titled_panel(
+            frame,
+            area,
+            inline_overlay_title("Approval"),
+            vec![Line::from("The approval request is no longer available.")],
+            true,
+        );
+        return;
+    };
+
+    let kind = match request.kind {
+        crate::domain::conversation::ConversationApprovalRequestKind::CommandExecution => {
+            "Command execution"
+        }
+        crate::domain::conversation::ConversationApprovalRequestKind::FileChange => "File change",
+        crate::domain::conversation::ConversationApprovalRequestKind::Permissions => "Permissions",
+    };
+    let mut header_lines = vec![
+        Line::from(format!("Type: {kind}")),
+        Line::from(format!("Request: {}", request.server_request_id)),
+        Line::from(format!("Method: {}", request.method)),
+        Line::from(""),
+        Line::from(request.summary.clone()),
+    ];
+    if let Some(decision) = submitted_decision {
+        header_lines.push(Line::from(format!(
+            "Decision submitted: {} / waiting for runtime resolution",
+            approval_decision_label(decision)
+        )));
+    }
+    let detail_lines = request
+        .details
+        .iter()
+        .cloned()
+        .map(Line::from)
+        .collect::<Vec<_>>();
+    let key_lines = match submitted_decision {
+        Some(decision) => vec![
+            AkraTheme::key_line(format!(
+                "Decision locked: {}",
+                approval_decision_label(decision)
+            )),
+            AkraTheme::key_line("Waiting for runtime resolution"),
+            AkraTheme::key_line("Up/Down/Page: scroll    Ctrl-C: stop turn"),
+        ],
+        None => vec![
+            AkraTheme::key_line("Y: approve once"),
+            AkraTheme::key_line("N / Esc: decline"),
+            AkraTheme::key_line("Up/Down/Page: scroll    Ctrl-C: decline + stop"),
+        ],
+    };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(wrapped_approval_panel_height(&header_lines, area.width, 6)),
+            Constraint::Min(3),
+            Constraint::Length(wrapped_approval_panel_height(&key_lines, area.width, 4)),
+        ])
+        .split(area);
+    let visible_detail_rows = layout[1].height.saturating_sub(1) as usize;
+    let rendered_detail_rows = count_rendered_inline_rows(&detail_lines, layout[1].width);
+    let max_scroll = rendered_detail_rows.saturating_sub(visible_detail_rows.max(1));
+    let scroll_offset = requested_scroll_offset
+        .min(max_scroll)
+        .min(u16::MAX as usize) as u16;
+    if let super::ConversationState::Ready(conversation) = &mut app.conversation_state {
+        conversation.approval_detail_scroll_offset = usize::from(scroll_offset);
+    }
+    let visible_start = if rendered_detail_rows == 0 {
+        0
+    } else {
+        usize::from(scroll_offset) + 1
+    };
+    let visible_end = (usize::from(scroll_offset) + visible_detail_rows).min(rendered_detail_rows);
+    render_inline_titled_panel(
+        frame,
+        layout[0],
+        inline_overlay_title("Approval Required"),
+        header_lines,
+        true,
+    );
+    render_inline_scrolled_panel(
+        frame,
+        layout[1],
+        Line::from(format!(
+            "Requested Details / {visible_start}-{visible_end} of {rendered_detail_rows}",
+        )),
+        detail_lines,
+        scroll_offset,
+    );
+    render_inline_titled_panel(frame, layout[2], Line::from("Decision"), key_lines, true);
+}
+
+fn approval_decision_label(
+    decision: crate::domain::conversation::ConversationApprovalDecision,
+) -> &'static str {
+    match decision {
+        crate::domain::conversation::ConversationApprovalDecision::Accept => "accept",
+        crate::domain::conversation::ConversationApprovalDecision::Decline => "decline",
+    }
+}
+
+fn wrapped_approval_panel_height(lines: &[Line<'_>], width: u16, minimum: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    let wrapped_rows = lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(width))
+        .sum::<usize>();
+    u16::try_from(wrapped_rows.saturating_add(1))
+        .unwrap_or(u16::MAX)
+        .max(minimum)
 }
 
 pub(super) fn draw_inline_parallel_mode_inspection(

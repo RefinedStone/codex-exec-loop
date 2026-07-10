@@ -27,7 +27,6 @@ pub(super) struct AkraDashboardTemplate {
     pub(super) csrf_token: String,
     pub(super) notice: Option<String>,
     pub(super) dashboard: AkraAdminDashboardView,
-    pub(super) api_base_url: String,
     pub(super) polling_interval_ms: u64,
 }
 
@@ -125,6 +124,7 @@ pub(super) struct ReviewsTemplate {
 
 #[derive(Debug, Clone)]
 pub(super) struct AppServerPromptLogView {
+    pub(super) logging_enabled: bool,
     pub(super) records: Vec<AppServerPromptInteractionView>,
     pub(super) total_count: usize,
     pub(super) main_count: usize,
@@ -133,7 +133,10 @@ pub(super) struct AppServerPromptLogView {
 }
 
 impl AppServerPromptLogView {
-    pub(super) fn from_records(records: Vec<AppServerPromptInteractionRecord>) -> Self {
+    pub(super) fn from_records(
+        records: Vec<AppServerPromptInteractionRecord>,
+        logging_enabled: bool,
+    ) -> Self {
         let total_count = records.len();
         let main_count = records
             .iter()
@@ -148,6 +151,7 @@ impl AppServerPromptLogView {
             .filter(|record| record.status == "failed")
             .count();
         Self {
+            logging_enabled,
             records: records
                 .into_iter()
                 .map(AppServerPromptInteractionView::from_record)
@@ -335,25 +339,28 @@ mod tests {
 
     #[test]
     fn prompt_log_view_counts_session_kinds_failures_and_character_totals() {
-        let view = AppServerPromptLogView::from_records(vec![
-            prompt_record(
-                10,
-                "main",
-                "turn",
-                "completed",
-                Some("thread-main"),
-                Some("turn-1"),
-                Some("conversation"),
-            )
-            .with_input("prompt", "operator", "안녕")
-            .with_output("assistant", Some("final"), "hello")
-            .build(),
-            prompt_record(11, "worker", "repair", "failed", None, None, None)
-                .with_input("developer", "instructions", "fix")
-                .with_output("notice", None, "실패")
-                .with_error("worker timeout")
+        let view = AppServerPromptLogView::from_records(
+            vec![
+                prompt_record(
+                    10,
+                    "main",
+                    "turn",
+                    "completed",
+                    Some("thread-main"),
+                    Some("turn-1"),
+                    Some("conversation"),
+                )
+                .with_input("prompt", "operator", "안녕")
+                .with_output("assistant", Some("final"), "hello")
                 .build(),
-        ]);
+                prompt_record(11, "worker", "repair", "failed", None, None, None)
+                    .with_input("developer", "instructions", "fix")
+                    .with_output("notice", None, "실패")
+                    .with_error("worker timeout")
+                    .build(),
+            ],
+            true,
+        );
 
         assert_eq!(view.total_count, 2);
         assert_eq!(view.main_count, 1);
@@ -388,7 +395,8 @@ mod tests {
 
     #[test]
     fn prompt_log_view_handles_empty_records() {
-        let view = AppServerPromptLogView::from_records(Vec::new());
+        let view = AppServerPromptLogView::from_records(Vec::new(), false);
+        assert!(!view.logging_enabled);
 
         assert!(view.records.is_empty());
         assert_eq!(view.total_count, 0);

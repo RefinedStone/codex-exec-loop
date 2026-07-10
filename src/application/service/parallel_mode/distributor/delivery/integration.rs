@@ -2,7 +2,21 @@
 // queue record 차단, slot lease context, Git 상태 조회와 같은 주변 흐름을 같은 어휘로 다루게 한다.
 use super::*;
 
-use crate::application::service::parallel_mode::distributor_integration_branch;
+use std::fs;
+
+use crate::application::service::parallel_mode::PoolMutationLock;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreparedIntegrationState {
+    Fresh,
+    ResumePendingPush,
+    AlreadyPushed,
+}
+
+pub(super) struct PreparedIntegrationWorktree {
+    pub(super) repo_root: String,
+    pub(super) state: PreparedIntegrationState,
+}
 /*
 integration worktree readiness는 cherry-pick 직전의 마지막 안전 게이트이다.
 distributor는 source branch commit을 integration branch에 로컬 cherry-pick하므로, 현재 worktree가
@@ -13,25 +27,178 @@ distributor는 source branch commit을 integration branch에 로컬 cherry-pick�
 같은 head를 계속 밀어붙이지 않고, supervisor가 operator에게 어떤 worktree 정리가 필요한지
 표시할 수 있다.
 */
-pub(super) fn ensure_distributor_integration_worktree_ready(
+pub(super) fn prepare_distributor_integration_worktree(
     // 준비 실패를 발견했을 때 queue record를 blocked로 저장하는 영속 포트이다.
     planning_authority: &dyn PlanningAuthorityPort,
     // queue/session mirror 파일 I/O를 수행하는 outbound runtime boundary이다.
     runtime: &dyn ParallelModeRuntimePort,
+    github_automation: &dyn GithubAutomationPort,
     // block 기록에 repo root, pool root, lease id를 같이 남기기 위한 slot 해석 결과이다.
     resolution: &WorkspaceSlotLeaseResolution,
     // 이 함수가 직접 상태를 바꾸는 delivery 대상 queue record이다.
     record: &mut ParallelModeDistributorQueueRecord,
-    // cherry-pick을 실행할 별도 integration worktree의 루트 경로이다.
-    integration_repo_root: &str,
-) -> Result<(), String> {
-    let integration_branch = distributor_integration_branch();
-    if current_branch_name(Path::new(integration_repo_root)).as_deref() != Some(integration_branch)
+    automation_permit: Option<&ParallelModeAutomationPermit>,
+    mutation_lock: &PoolMutationLock,
+) -> Result<PreparedIntegrationWorktree, String> {
+    let Some(target) = record.delivery_target.clone() else {
+        let message = "legacy distributor queue record has no immutable delivery target; inspect the queued commit and re-enqueue it explicitly".to_string();
+        let _ = block_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            message.clone(),
+        )?;
+        return Err(message);
+    };
+    let canonical_repo_root = resolution.context.canonical_repo_root.display().to_string();
+    let integration_path = derive_integration_worktree_path(
+        &resolution.context.pool_root,
+        &target.push_remote,
+        &target.github_repository,
+        &target.integration_branch,
+    );
+    let integration_repo_root = integration_path.display().to_string();
+
+    if let Some(notice) = block_if_automation_epoch_closed(
+        planning_authority,
+        runtime,
+        resolution,
+        record,
+        automation_permit,
+        "integration target fetch",
+    )? {
+        return Err(notice);
+    }
+    if !fetch_integration_remote_branch(&canonical_repo_root, &target, github_automation) {
+        let message = format!(
+            "integration branch `{}` could not be fetched from frozen remote `{}`",
+            target.integration_branch, target.push_remote
+        );
+        let _ = block_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            message.clone(),
+        )?;
+        return Err(message);
+    }
+
+    let remote_ref = remote_tracking_branch_ref(&target.push_remote, &target.integration_branch);
+    if !integration_path.exists() {
+        if let Some(notice) = block_if_automation_epoch_closed(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            automation_permit,
+            "dedicated integration worktree creation",
+        )? {
+            return Err(notice);
+        }
+        let Some(parent) = integration_path.parent() else {
+            return Err("dedicated integration worktree parent is unavailable".to_string());
+        };
+        runtime.ensure_directory_exists(parent).map_err(|error| {
+            format!("dedicated integration worktree parent could not be created: {error}")
+        })?;
+        if let Err(error) = mutation_lock.verify_pool_root(&resolution.context.pool_root) {
+            let message = format!(
+                "dedicated integration worktree creation lost its pool mutation permit: {error}"
+            );
+            let _ = block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                message.clone(),
+            )?;
+            return Err(message);
+        }
+        if let Err(error) = crate::git_execution_guard::ensure_host_git_execution_config_safe(
+            Path::new(&canonical_repo_root),
+        ) {
+            let message = format!(
+                "dedicated integration worktree creation was blocked by Git execution configuration: {error}"
+            );
+            let _ = block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                message.clone(),
+            )?;
+            return Err(message);
+        }
+        if !command_succeeds(
+            "git",
+            [
+                "-C",
+                canonical_repo_root.as_str(),
+                "worktree",
+                "add",
+                "--detach",
+                integration_repo_root.as_str(),
+                remote_ref.as_str(),
+            ],
+        ) {
+            let message = format!(
+                "dedicated integration worktree could not be created from `{}/{}`",
+                target.push_remote, target.integration_branch
+            );
+            let _ = block_distributor_queue_record(
+                planning_authority,
+                runtime,
+                &resolution.context.repo_root,
+                &resolution.context.pool_root,
+                Some(&resolution.lease),
+                record,
+                message.clone(),
+            )?;
+            return Err(message);
+        }
+    }
+
+    if fs::symlink_metadata(&integration_path)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        || !worktrees_share_common_git_dir(&canonical_repo_root, &integration_repo_root)
     {
         let message = format!(
-            "integration worktree must be checked out to `{}` before cherry-pick delivery",
-            integration_branch
+            "dedicated integration path `{}` is not the generated worktree registered for this repository",
+            integration_path.display()
         );
+        let _ = block_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            message.clone(),
+        )?;
+        return Err(message);
+    }
+
+    if command_succeeds(
+        "git",
+        [
+            "-C",
+            integration_repo_root.as_str(),
+            "symbolic-ref",
+            "--quiet",
+            "HEAD",
+        ],
+    ) {
+        let message = "dedicated integration worktree must remain detached".to_string();
         let _ = block_distributor_queue_record(
             planning_authority,
             runtime,
@@ -46,7 +213,7 @@ pub(super) fn ensure_distributor_integration_worktree_ready(
 
     // Git 상태 조회 자체가 실패한 경우에는 clean 여부를 판단할 수 없으므로, 안전한
     // 기본값으로 delivery를 막고 사람이 worktree를 점검하게 한다.
-    let Some(status) = inspect_slot_git_status(Path::new(integration_repo_root)) else {
+    let Ok(status) = inspect_slot_git_status(&integration_path) else {
         // status detail이 없는 실패라서 고정 문구만 남긴다. 이 문구는 block reason과
         // 함수 오류 문자열로 그대로 공유된다.
         let message = "integration worktree git status could not be inspected".to_string();
@@ -67,7 +234,7 @@ pub(super) fn ensure_distributor_integration_worktree_ready(
     };
     // readiness는 unstaged/staged 변경뿐 아니라 rebase, merge, cherry-pick 같은 Git
     // operation metadata까지 포함한다. 남은 작업이 있으면 새 cherry-pick은 기존 복구 상태를 덮을 수 있다.
-    if !status.is_ready_for_integration() {
+    if !status.is_clean_baseline() {
         // detail label을 message에 넣어 단순히 "not clean"이 아니라 어떤 Git 상태가
         // 막고 있는지 TUI에서 바로 보이게 한다.
         let message = format!(
@@ -90,85 +257,286 @@ pub(super) fn ensure_distributor_integration_worktree_ready(
         return Err(message);
     }
 
-    // 여기까지 도달했다는 것은 branch와 cleanliness gate가 모두 통과했다는 뜻이다.
-    // 실제 cherry-pick 실행은 caller가 맡고, 이 함수는 readiness만 보증한다.
-    Ok(())
-}
-
-/*
-`git cherry`는 patch-id 기준으로 commit이 base branch에 이미 반영되었는지 확인할
-수 있다. source commit SHA가 직접 조상으로 들어간 것은 아니어도 같은 patch가 이미 적용된
-경우가 있으므로, distributor는 중복 cherry-pick 대신 "patch-equivalent already integrated"로
-기록할 수 있다.
-
-이 함수가 false를 반환한다고 해서 오류는 아니다. 단지 아직 patch-equivalent 증거가 없으니
-일반 cherry-pick 경로로 진행해야 한다는 뜻이다.
-*/
-pub(super) fn commit_patch_equivalent_in_branch(
-    // patch 동등성을 확인할 Git repository 루트이다.
-    repo_root: &str,
-    // source commit이 이미 반영되었는지 비교할 integration/base branch이다.
-    base_branch: &str,
-    // delivery queue가 가져온 source branch head commit이다.
-    commit_sha: &str,
-) -> bool {
-    // `git cherry <base> <commit>`은 각 candidate commit 앞에 `+` 또는 `-`를 붙인다.
-    // 명령 실행이 실패하면 evidence가 없는 것으로 보고 일반 cherry-pick 경로에 맡긴다.
-    let Some(cherry_output) = run_command(
-        "git",
-        ["-C", repo_root, "cherry", base_branch, commit_sha],
-        None,
-    ) else {
-        // false는 "동등하지 않다"가 아니라 "동등하다는 증거를 얻지 못했다"에 가깝다.
-        // 그래서 caller는 실패로 기록하지 않고 cherry-pick을 계속 시도할 수 있다.
-        return false;
+    let Some(local_head) = resolve_workspace_head_sha(&integration_path) else {
+        return block_integration_preparation(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            "dedicated integration worktree HEAD could not be resolved".to_string(),
+        );
+    };
+    let Some(remote_head) = resolve_workspace_head_sha_for_ref(&canonical_repo_root, &remote_ref)
+    else {
+        return block_integration_preparation(
+            planning_authority,
+            runtime,
+            resolution,
+            record,
+            "fetched integration branch HEAD could not be resolved".to_string(),
+        );
     };
 
-    cherry_output
-        // Git 출력은 한 줄당 한 commit 판정이므로 줄 단위로 검사한다.
-        .lines()
-        // 앞쪽 공백을 걷어낸 뒤 `-`로 시작하면 patch-id가 base에 이미 존재한다는
-        // 뜻이라 중복 cherry-pick을 건너뛸 수 있다.
-        .any(|line| line.trim_start().starts_with('-'))
+    let state = classify_prepared_integration_state(
+        &integration_repo_root,
+        &remote_head,
+        &local_head,
+        record,
+    )
+    .map_err(|detail| {
+        block_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            Some(&resolution.lease),
+            record,
+            detail.clone(),
+        )
+        .unwrap_or(detail)
+    })?;
+
+    if record.integration_base_commit_sha.is_none() {
+        record.integration_base_commit_sha = Some(remote_head.clone());
+        record.integration_note = format!(
+            "frozen integration target `{}/{}` at `{}` before cherry-pick",
+            target.push_remote,
+            target.integration_branch,
+            short_sha(&remote_head)
+        );
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            record,
+        )?;
+    }
+    if state == PreparedIntegrationState::ResumePendingPush
+        && record.integration_commit_sha.is_none()
+    {
+        record.integration_commit_sha = Some(local_head.clone());
+        record.integration_note = format!(
+            "recovered reviewed integration result `{}` from the dedicated worktree after restart",
+            short_sha(&local_head)
+        );
+        record.updated_at = current_timestamp();
+        write_distributor_queue_record(
+            planning_authority,
+            runtime,
+            &resolution.context.repo_root,
+            &resolution.context.pool_root,
+            record,
+        )?;
+    }
+
+    Ok(PreparedIntegrationWorktree {
+        repo_root: integration_repo_root,
+        state,
+    })
 }
 
-pub(super) fn fetch_integration_remote_branch(repo_root: &str) -> bool {
-    let integration_branch = distributor_integration_branch();
-    let push_remote = push_remote_name(repo_root);
-    command_succeeds(
+fn block_integration_preparation<T>(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    resolution: &WorkspaceSlotLeaseResolution,
+    record: &mut ParallelModeDistributorQueueRecord,
+    message: String,
+) -> Result<T, String> {
+    let _ = block_distributor_queue_record(
+        planning_authority,
+        runtime,
+        &resolution.context.repo_root,
+        &resolution.context.pool_root,
+        Some(&resolution.lease),
+        record,
+        message.clone(),
+    )?;
+    Err(message)
+}
+
+fn classify_prepared_integration_state(
+    integration_repo_root: &str,
+    remote_head: &str,
+    local_head: &str,
+    record: &ParallelModeDistributorQueueRecord,
+) -> Result<PreparedIntegrationState, String> {
+    let Some(frozen_base) = record.integration_base_commit_sha.as_deref() else {
+        if local_head == remote_head {
+            return Ok(PreparedIntegrationState::Fresh);
+        }
+        return Err(format!(
+            "dedicated integration worktree HEAD `{}` differs from fetched target `{}` without a persisted integration base",
+            short_sha(local_head),
+            short_sha(remote_head)
+        ));
+    };
+
+    if let Some(integrated_head) = record.integration_commit_sha.as_deref() {
+        if remote_head == integrated_head && local_head == integrated_head {
+            return Ok(PreparedIntegrationState::AlreadyPushed);
+        }
+        if remote_head == frozen_base && local_head == integrated_head {
+            return Ok(PreparedIntegrationState::ResumePendingPush);
+        }
+        return Err(format!(
+            "dedicated integration recovery drifted from frozen base `{}` and reviewed result `{}` (remote `{}`, local `{}`)",
+            short_sha(frozen_base),
+            short_sha(integrated_head),
+            short_sha(remote_head),
+            short_sha(local_head)
+        ));
+    }
+
+    if remote_head != frozen_base {
+        return Err(format!(
+            "integration target moved from frozen base `{}` to `{}` before the reviewed result was persisted",
+            short_sha(frozen_base),
+            short_sha(remote_head)
+        ));
+    }
+    if local_head == frozen_base {
+        return Ok(PreparedIntegrationState::Fresh);
+    }
+
+    validate_recovered_integration_range(integration_repo_root, frozen_base, local_head, record)?;
+    Ok(PreparedIntegrationState::ResumePendingPush)
+}
+
+fn validate_recovered_integration_range(
+    repo_root: &str,
+    frozen_base: &str,
+    local_head: &str,
+    record: &ParallelModeDistributorQueueRecord,
+) -> Result<(), String> {
+    let source_states_at_base = distributor_source_cherry_states(repo_root, frozen_base, record)?;
+    let pending_source_count = source_states_at_base
+        .iter()
+        .filter(|(_, equivalent)| !*equivalent)
+        .count();
+    if pending_source_count == 0 {
+        return Err(
+            "dedicated integration worktree moved even though no source patch remained".to_string(),
+        );
+    }
+
+    let recovered_commits =
+        resolve_linear_distributor_source_range(repo_root, frozen_base, local_head)?;
+    if recovered_commits.len() != pending_source_count {
+        return Err(format!(
+            "recovered integration range contains {} commit(s), expected {pending_source_count}",
+            recovered_commits.len()
+        ));
+    }
+    if !distributor_source_cherry_states(repo_root, local_head, record)?
+        .iter()
+        .all(|(_, equivalent)| *equivalent)
+    {
+        return Err(
+            "recovered integration worktree does not contain every frozen source patch".to_string(),
+        );
+    }
+
+    // A cherry-pick can reproduce the source commit object exactly when its
+    // parent and committer metadata also match. `git cherry` then omits that
+    // commit because it is already a literal ancestor of `source_tip`. Treat
+    // exact object identity as the strongest equivalence proof before asking
+    // `git cherry` to classify only the remaining recovered commits.
+    let source_commits = source_states_at_base
+        .iter()
+        .map(|(commit, _)| commit.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut classified = recovered_commits
+        .iter()
+        .filter(|commit| source_commits.contains(commit.as_str()))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if classified.len() == recovered_commits.len() {
+        return Ok(());
+    }
+
+    let source_tip = record.effective_source_commit_sha();
+    let output = run_command(
         "git",
         [
             "-C",
             repo_root,
-            "fetch",
-            "--quiet",
-            push_remote.as_str(),
-            &format!(
-                "{}:{}",
-                integration_branch,
-                remote_tracking_branch_ref(push_remote.as_str(), integration_branch)
-            ),
+            "cherry",
+            source_tip.as_str(),
+            local_head,
+            frozen_base,
         ],
+        None,
     )
+    .ok_or_else(|| {
+        "recovered integration commits could not be compared to the source".to_string()
+    })?;
+    for line in output.lines() {
+        let mut fields = line.split_whitespace();
+        let marker = fields.next().unwrap_or_default();
+        let sha = fields.next().unwrap_or_default();
+        if fields.next().is_some()
+            || marker != "-"
+            || !recovered_commits.iter().any(|commit| commit == sha)
+            || !classified.insert(sha.to_string())
+        {
+            return Err(
+                "recovered integration worktree contains a commit not patch-equivalent to the frozen source range"
+                    .to_string(),
+            );
+        }
+    }
+    if classified.len() != recovered_commits.len() {
+        return Err(
+            "recovered integration patch comparison omitted one or more commits".to_string(),
+        );
+    }
+    Ok(())
 }
 
-pub(super) fn commit_patch_equivalent_in_remote_integration_branch(
+fn worktrees_share_common_git_dir(canonical_repo_root: &str, integration_repo_root: &str) -> bool {
+    let resolve = |repo_root: &str| {
+        run_command(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            None,
+        )
+        .and_then(|path| fs::canonicalize(path).ok())
+    };
+    resolve(canonical_repo_root).is_some_and(|canonical_common_dir| {
+        resolve(integration_repo_root).as_ref() == Some(&canonical_common_dir)
+    })
+}
+
+pub(super) fn fetch_integration_remote_branch(
     repo_root: &str,
-    commit_sha: &str,
+    target: &PlanningAuthorityDistributorDeliveryTarget,
+    github_automation: &dyn GithubAutomationPort,
 ) -> bool {
-    let push_remote = push_remote_name(repo_root);
-    let remote_branch = remote_branch_name(push_remote.as_str(), distributor_integration_branch());
-    branch_is_integrated_into(repo_root, commit_sha, &remote_branch)
-        || commit_patch_equivalent_in_branch(repo_root, &remote_branch, commit_sha)
+    let Some(fetch_source) = target.credential_redacted_push_url.as_deref() else {
+        return false;
+    };
+    let tracking_ref = remote_tracking_branch_ref(&target.push_remote, &target.integration_branch);
+    github_automation
+        .fetch_branch_to_tracking_ref_for_delivery_target(
+            repo_root,
+            &target.push_remote,
+            fetch_source,
+            &target.integration_branch,
+            &tracking_ref,
+        )
+        .is_ok()
 }
 
-pub(super) fn reset_integration_branch_to_remote(repo_root: &str) -> bool {
-    let push_remote = push_remote_name(repo_root);
-    let remote_branch = remote_branch_name(push_remote.as_str(), distributor_integration_branch());
-    command_succeeds(
-        "git",
-        ["-C", repo_root, "reset", "--hard", remote_branch.as_str()],
-    )
+fn resolve_workspace_head_sha_for_ref(repo_root: &str, reference: &str) -> Option<String> {
+    run_command("git", ["-C", repo_root, "rev-parse", reference], None)
 }
 
 /*

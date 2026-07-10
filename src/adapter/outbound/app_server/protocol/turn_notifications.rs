@@ -1,8 +1,7 @@
-use std::sync::mpsc::Sender;
-
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+use crate::adapter::outbound::app_server::AppServerEventSender;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::planning::canonical_active_planning_file_path;
 use crate::domain::conversation::{
@@ -37,6 +36,15 @@ impl AppServerNotification {
 
     pub(in crate::adapter::outbound::app_server) fn params(&self) -> &Value {
         &self.params
+    }
+
+    pub(in crate::adapter::outbound::app_server) fn encoded_size_bytes(&self) -> usize {
+        // Pending notifications outlive the transport line that carried them. Re-encode
+        // the retained method/params value so that queue admission is bounded by bytes,
+        // not only by an entry count that small deltas or one huge item can game.
+        self.method
+            .len()
+            .saturating_add(serde_json::to_vec(&self.params).map_or(usize::MAX, |body| body.len()))
     }
 
     pub(in crate::adapter::outbound::app_server) fn should_defer_to_turn_stream(&self) -> bool {
@@ -92,7 +100,7 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
     thread_id: &str,
     turn_id: &str,
     changed_planning_file_paths: &mut Vec<String>,
-    event_sender: &Sender<ConversationStreamEvent>,
+    event_sender: &dyn AppServerEventSender,
 ) -> Result<TurnNotificationHandling> {
     /*
      * This function is the live stream reducer. Every branch first verifies thread/turn identity before emitting
@@ -474,7 +482,7 @@ fn parse_approval_review_status(value: &str) -> ConversationApprovalReviewStatus
     }
 }
 
-fn handle_completed_item(item: Option<&Value>, event_sender: &Sender<ConversationStreamEvent>) {
+fn handle_completed_item(item: Option<&Value>, event_sender: &dyn AppServerEventSender) {
     // Live item/completed notifications fan out to either final message events or tool activity events.
     let Some(item) = item else {
         return;

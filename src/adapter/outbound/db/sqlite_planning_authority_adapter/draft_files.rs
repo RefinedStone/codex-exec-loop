@@ -22,13 +22,22 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
-    PlanningDraftStageRecord, PlanningStagedFileRecord,
+    PlanningDraftStageRecord, PlanningFileSyncBaselineRecord, PlanningStagedFileRecord,
 };
 use crate::application::service::planning::validate_planning_draft_name;
 
 use super::store::upsert_authority_metadata;
 use super::workspace_paths::{draft_directory_display_path, draft_display_path};
 use super::{SqlitePlanningAuthorityAdapter, open_authority_connection};
+
+pub(super) fn clear_staged_drafts(transaction: &rusqlite::Transaction<'_>) -> Result<bool> {
+    // Foreign keys are enabled for every authority connection, so deleting the
+    // parent rows removes staged_draft_files in the same transaction.
+    let deleted = transaction
+        .execute("DELETE FROM staged_drafts", [])
+        .context("failed to clear staged planning drafts")?;
+    Ok(deleted > 0)
+}
 
 impl SqlitePlanningAuthorityAdapter {
     /*
@@ -238,6 +247,58 @@ impl SqlitePlanningAuthorityAdapter {
             .commit()
             .context("failed to commit authority-store draft replace transaction")?;
         Ok(draft_display_path(&location, draft_name, active_path))
+    }
+
+    pub(crate) fn store_repo_scoped_file_sync_baseline(
+        workspace_dir: &str,
+        baseline: &PlanningFileSyncBaselineRecord,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open planning file-sync baseline transaction")?;
+        transaction
+            .execute(
+                "INSERT INTO planning_file_sync_baselines
+                 (relative_path, observed_planning_revision, exported_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(relative_path) DO UPDATE
+                 SET observed_planning_revision = excluded.observed_planning_revision,
+                     exported_at = excluded.exported_at",
+                params![
+                    baseline.relative_path,
+                    baseline.observed_planning_revision,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .context("failed to store planning file-sync baseline")?;
+        transaction
+            .commit()
+            .context("failed to commit planning file-sync baseline")
+    }
+
+    pub(crate) fn load_repo_scoped_file_sync_baseline(
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<PlanningFileSyncBaselineRecord>> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        connection
+            .query_row(
+                "SELECT observed_planning_revision
+                 FROM planning_file_sync_baselines
+                 WHERE relative_path = ?1",
+                params![relative_path],
+                |row| {
+                    Ok(PlanningFileSyncBaselineRecord {
+                        relative_path: relative_path.to_string(),
+                        observed_planning_revision: row.get(0)?,
+                    })
+                },
+            )
+            .optional()
+            .context("failed to load planning file-sync baseline")
     }
 }
 

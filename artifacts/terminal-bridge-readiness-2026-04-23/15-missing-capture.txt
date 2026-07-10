@@ -1,2 +1,2 @@
-+ tmux -L akra-readiness-20260423 -f /dev/null capture-pane -p -t akra-evidence:missing
++ tmux -L <socket> -f /dev/null capture-pane -p -t <session>:missing
 can't find window: missing

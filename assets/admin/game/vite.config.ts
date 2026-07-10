@@ -9,7 +9,7 @@ export default defineConfig({
       fileName: () => "akra-diorama.js",
       name: "AkraAdminDioramaBundle",
     },
-    minify: false,
+    minify: true,
     outDir: "dist",
     sourcemap: false,
     target: "es2020",

@@ -1,9 +1,9 @@
 use std::any::Any;
-use std::sync::mpsc;
-use std::sync::mpsc::Sender;
 use std::thread;
 
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::{
+    ConversationStreamEvent, ConversationStreamSender, conversation_stream_channel,
+};
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::turn::{
     ParallelModeTurnService, ParallelTurnStreamLaunchRequest,
@@ -13,6 +13,8 @@ use crate::application::service::planning::{
     PlanningTurnExecutionSnapshotCaptureRequest,
 };
 use crate::core::app::{CoreInput, TurnStreamEvent, TurnSubmissionRequest};
+use crate::core::runtime::CoreInputSender;
+use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StreamExecutionObservation {
@@ -25,10 +27,10 @@ pub(crate) fn spawn_turn_submission_worker(
     conversation_service: ConversationService,
     planning_runtime: PlanningRuntimeUseCases,
     parallel_mode_turn_service: ParallelModeTurnService,
-    input_sender: Sender<CoreInput>,
+    input_sender: CoreInputSender,
 ) {
     thread::spawn(move || {
-        let (resolved_request, launch_notice, invalidate_supervisor_snapshot) =
+        let (resolved_request, expected_lease, launch_notice, invalidate_supervisor_snapshot) =
             match resolve_stream_launch_request(&parallel_mode_turn_service, request) {
                 Ok(result) => result,
                 Err(error) => {
@@ -58,6 +60,7 @@ pub(crate) fn spawn_turn_submission_worker(
 
         run_conversation_stream_worker(
             resolved_request,
+            expected_lease,
             execution_snapshot_capture,
             conversation_service,
             parallel_mode_turn_service,
@@ -68,19 +71,22 @@ pub(crate) fn spawn_turn_submission_worker(
 
 fn run_conversation_stream_worker(
     request: TurnSubmissionRequest,
+    expected_lease: Option<ParallelModeSlotLeaseSnapshot>,
     execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
     conversation_service: ConversationService,
     parallel_mode_turn_service: ParallelModeTurnService,
-    input_sender: Sender<CoreInput>,
+    input_sender: CoreInputSender,
 ) {
-    let (event_tx, event_rx) = mpsc::channel();
+    let (event_tx, event_rx) = conversation_stream_channel();
 
     let request_for_service = request.clone();
     let service_thread = thread::spawn(move || {
         run_stream_request(conversation_service, request_for_service, event_tx)
     });
-    let mut stream_lifecycle =
-        parallel_mode_turn_service.stream_lifecycle(request.workspace_directory.clone());
+    let mut stream_lifecycle = expected_lease.map_or_else(
+        || parallel_mode_turn_service.stream_lifecycle(request.workspace_directory.clone()),
+        |lease| parallel_mode_turn_service.stream_lifecycle_for_lease(lease),
+    );
 
     let mut saw_terminal_event = false;
 
@@ -104,6 +110,11 @@ fn run_conversation_stream_worker(
             break;
         }
     }
+
+    // A bounded producer may still attempt to send after a terminal event.
+    // Disconnect before joining so that send fails instead of blocking forever
+    // against a receiver that intentionally stopped draining.
+    drop(event_rx);
 
     let observation = match service_thread.join() {
         Ok(result) => observe_stream_completion(&request, saw_terminal_event, result),
@@ -135,7 +146,15 @@ fn run_conversation_stream_worker(
 fn resolve_stream_launch_request(
     parallel_mode_turn_service: &ParallelModeTurnService,
     request: TurnSubmissionRequest,
-) -> Result<(TurnSubmissionRequest, Option<String>, bool), String> {
+) -> Result<
+    (
+        TurnSubmissionRequest,
+        Option<ParallelModeSlotLeaseSnapshot>,
+        Option<String>,
+        bool,
+    ),
+    String,
+> {
     let TurnSubmissionRequest {
         workspace_directory,
         thread_id,
@@ -160,6 +179,7 @@ fn resolve_stream_launch_request(
             turn_options,
             slot_lease_handoff: outcome.request.slot_lease_handoff,
         },
+        outcome.expected_lease,
         outcome.launch_notice,
         outcome.invalidate_supervisor_snapshot,
     ))
@@ -233,6 +253,19 @@ fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStr
         ConversationStreamEvent::ApprovalReviewUpdated { review } => {
             TurnStreamEvent::ApprovalReviewUpdated { review }
         }
+        ConversationStreamEvent::ApprovalRequested { request } => {
+            TurnStreamEvent::ApprovalRequested { request }
+        }
+        ConversationStreamEvent::ApprovalResolved {
+            approval_id,
+            resolution,
+        } => TurnStreamEvent::ApprovalResolved {
+            approval_id,
+            resolution,
+        },
+        ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
+            TurnStreamEvent::TurnInterruptRequestFailed { message }
+        }
         ConversationStreamEvent::TurnCompleted { .. } => {
             unreachable!("terminal turn completion is handled before stream event conversion")
         }
@@ -243,7 +276,7 @@ fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStr
 fn run_stream_request(
     conversation_service: ConversationService,
     request: TurnSubmissionRequest,
-    event_sender: Sender<ConversationStreamEvent>,
+    event_sender: ConversationStreamSender,
 ) -> Result<(), String> {
     match request.thread_id.as_deref() {
         Some(thread_id) => conversation_service
@@ -347,6 +380,8 @@ fn panic_payload_summary(payload: Box<dyn Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
     use crate::application::service::planning::{
         PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
@@ -472,5 +507,39 @@ mod tests {
             vec!["new/docs/plan.md".to_string()]
         );
         assert_eq!(execution_snapshot_capture, snapshot_capture);
+    }
+
+    #[test]
+    fn terminal_receiver_disconnects_post_terminal_producer_without_deadlock() {
+        let (sender, receiver) = conversation_stream_channel();
+        let producer = thread::spawn(move || {
+            sender
+                .send(ConversationStreamEvent::TurnCompleted {
+                    turn_id: "turn-1".to_string(),
+                    changed_planning_file_paths: Vec::new(),
+                })
+                .expect("terminal event should be admitted");
+            loop {
+                if let Err(error) = sender.send(ConversationStreamEvent::StatusUpdated {
+                    text: "invalid post-terminal event".to_string(),
+                }) {
+                    return error.0;
+                }
+            }
+        });
+
+        assert!(matches!(
+            receiver.recv().expect("terminal event should arrive"),
+            ConversationStreamEvent::TurnCompleted { .. }
+        ));
+        drop(receiver);
+        assert_eq!(
+            producer
+                .join()
+                .expect("post-terminal producer should observe disconnect"),
+            ConversationStreamEvent::StatusUpdated {
+                text: "invalid post-terminal event".to_string(),
+            }
+        );
     }
 }

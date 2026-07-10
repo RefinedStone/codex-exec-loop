@@ -30,6 +30,8 @@ pub struct PlanningWorkerRequest {
     // planning runtime이 조립한 최종 worker prompt이다. port는 이 문자열을 재해석하지 않고
     // Codex turn으로 전달해 prompt 정책을 application service 안에 남긴다.
     pub prompt: String,
+    // Post-turn launches carry a generation permit. Direct/manual worker calls use None.
+    pub continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +77,13 @@ impl PlanningWorkerPort for NoopPlanningWorkerPort {
         // operation만 response에 반영하고 workspace/prompt는 실행하지 않는다.
         request: PlanningWorkerRequest,
     ) -> Result<PlanningWorkerResponse> {
+        if request
+            .continuation_permit
+            .as_ref()
+            .is_some_and(|permit| !permit.is_current())
+        {
+            anyhow::bail!("post-turn continuation was superseded before planning worker launch");
+        }
         Ok(PlanningWorkerResponse {
             operation: request.operation,
             thread_id: None,

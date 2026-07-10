@@ -10,9 +10,11 @@ use crate::core::app::CoreEffectCompletion;
 use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
+use super::app_runtime::TUI_BACKGROUND_CHANNEL_CAPACITY;
 use super::{BackgroundMessage, InputCursorMovement, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
+const _: () = assert!(TUI_BACKGROUND_CHANNEL_CAPACITY > BACKGROUND_MESSAGE_DRAIN_BUDGET);
 
 /* ShellRuntime is the thin event-loop owner around NativeTuiApp. It drains
  * background work, applies terminal input in priority order, and only exposes
@@ -113,12 +115,23 @@ impl ShellRuntime {
                 }
                 #[cfg(test)]
                 BackgroundMessage::ConversationLoaded(result) => {
+                    let requested_thread_id = result
+                        .as_ref()
+                        .map(|snapshot| snapshot.thread_id.clone())
+                        .unwrap_or_else(|_| "test-conversation-load".to_string());
+                    let correlation =
+                        crate::core::app::ConversationLoadCorrelation::new(1, requested_thread_id);
+                    self.app.pending_conversation_load = Some(correlation.clone());
                     let core_result = result.map(|snapshot| {
                         Box::new(crate::core::app::ConversationReadySnapshot::from(snapshot))
                     });
-                    self.app.dispatch_core_input(CoreInput::EffectCompleted(
-                        CoreEffectCompletion::ConversationLoaded(core_result),
-                    ));
+                    let snapshot = core_result
+                        .map(crate::core::app::ConversationSnapshot::Ready)
+                        .unwrap_or_else(|message| crate::core::app::ConversationSnapshot::Failed {
+                            message,
+                        });
+                    self.app
+                        .apply_correlated_conversation_snapshot(Some(correlation), snapshot);
                 }
                 BackgroundMessage::ConversationStream(event) => {
                     self.app
@@ -218,6 +231,10 @@ impl ShellRuntime {
     }
 
     fn handle_paste_text(&mut self, text: String, now: Instant) {
+        if self.app.approval_overlay_active() {
+            self.request_redraw_at(now);
+            return;
+        }
         if self.app.insert_input_text(text) {
             self.request_redraw_at(now);
         }

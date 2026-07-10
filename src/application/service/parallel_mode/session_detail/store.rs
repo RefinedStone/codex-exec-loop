@@ -97,8 +97,10 @@ pub(crate) fn read_agent_session_detail_record(
     pool_root: &Path,
     session_key: &str,
 ) -> Option<ParallelModeAgentSessionDetailSnapshot> {
-    let path = agent_session_detail_record_path(pool_root, session_key);
-    let content = runtime.read_to_string(&path).ok()?;
+    let relative = agent_session_detail_record_relative_path(session_key);
+    let content = runtime
+        .read_runtime_mirror_optional(pool_root, &relative)
+        .ok()??;
     // mirror parse 실패는 authority-backed state를 계속 쓰게 하기 위해 absence로 접는다.
     serde_json::from_str(&content).ok()
 }
@@ -141,33 +143,25 @@ pub(super) fn write_agent_session_detail_record(
     history가 보존되고, supervisor snapshot이 idle로 돌아간 slot의 직전 작업 이력을 계속 보여
     줄 수 있다.
     */
-    let history_dir = agent_session_history_dir(pool_root);
-    runtime
-        .ensure_directory_exists(&history_dir)
-        .map_err(|error| format!("failed to create agent session history directory: {error}"))?;
-
-    let path = agent_session_detail_record_path(pool_root, &detail.session_key);
-    let temp_path = path.with_extension("json.tmp");
     let body = serde_json::to_string_pretty(detail)
         .map_err(|error| format!("failed to serialize agent session detail: {error}"))?;
     /*
-    파일 mirror는 temp 파일에 먼저 쓰고 rename으로 교체한다. 중간에 프로세스가
-    종료되어도 기존 JSON을 절반만 덮어쓴 상태로 남기지 않기 위한 최소한의 원자성 장치이다.
-    session detail은 recovery와 UI가 바로 읽는 파일이므로, partially-written JSON을 피하는 것이
-    중요하다.
+    파일 mirror는 adapter의 pinned-root private atomic install로 교체한다. application이
+    예측 가능한 temp path를 만들지 않으며, 중간에 프로세스가 종료되어도 기존 JSON을 절반만
+    덮어쓴 상태로 남기지 않는다.
     */
-    runtime.write_string(&temp_path, &body).map_err(|error| {
-        format!(
-            "failed to write temporary agent session detail `{}`: {error}",
-            detail.session_key
+    runtime
+        .write_runtime_mirror_atomic(
+            pool_root,
+            &agent_session_detail_record_relative_path(&detail.session_key),
+            &body,
         )
-    })?;
-    runtime.rename(&temp_path, &path).map_err(|error| {
-        format!(
-            "failed to persist agent session detail `{}`: {error}",
-            detail.session_key
-        )
-    })
+        .map_err(|error| {
+            format!(
+                "failed to persist agent session detail `{}`: {error}",
+                detail.session_key
+            )
+        })
 }
 
 /*
@@ -177,6 +171,10 @@ root와 별개로 parallel mode의 실행 상태를 한 위치에서 검사할 �
 */
 fn agent_session_history_dir(pool_root: &Path) -> PathBuf {
     pool_root.join(".agent-sessions")
+}
+
+fn agent_session_detail_record_relative_path(session_key: &str) -> PathBuf {
+    agent_session_detail_record_path(Path::new(""), session_key)
 }
 
 /*

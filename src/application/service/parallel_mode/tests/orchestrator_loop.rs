@@ -1,5 +1,7 @@
 use super::*;
-use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::adapter::outbound::filesystem::{
+    FilesystemParallelAgentProfileRepositoryAdapter, FilesystemPlanningWorkspaceAdapter,
+};
 use crate::application::port::outbound::parallel_agent_worker_port::{
     ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
 };
@@ -16,7 +18,7 @@ use crate::application::port::outbound::planning_worker_port::{
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_agent_profile::{
-    ParallelAgentProfile, ParallelAgentProfileConfig, save_parallel_agent_profile_config,
+    ParallelAgentProfile, ParallelAgentProfileConfig, ParallelAgentProfileService,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
@@ -62,7 +64,7 @@ impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         _request: ParallelAgentWorkerStreamRequest<'_>,
-        event_sender: mpsc::Sender<ConversationStreamEvent>,
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> anyhow::Result<()> {
         self.launch_count.fetch_add(1, Ordering::SeqCst);
         let _ = event_sender.send(ConversationStreamEvent::Failed {
@@ -110,7 +112,7 @@ impl ParallelAgentWorkerPort for HoldingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
-        _event_sender: mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> anyhow::Result<()> {
         self.launches
             .lock()
@@ -144,9 +146,19 @@ impl ParallelAgentWorkerPort for CompletingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
-        event_sender: mpsc::Sender<ConversationStreamEvent>,
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> anyhow::Result<()> {
-        self.launch_count.fetch_add(1, Ordering::SeqCst);
+        let launch_index = self.launch_count.fetch_add(1, Ordering::SeqCst);
+        let result_file = format!("worker-result-{launch_index}.txt");
+        std::fs::write(
+            std::path::Path::new(request.cwd).join(&result_file),
+            "completed worker result\n",
+        )?;
+        run_git(std::path::Path::new(request.cwd), &["add", &result_file]);
+        run_git(
+            std::path::Path::new(request.cwd),
+            &["commit", "-qm", "complete parallel worker result"],
+        );
         event_sender.send(ConversationStreamEvent::ThreadPrepared {
             thread_id: "worker-thread-1".to_string(),
             title: "Completed parallel worker".to_string(),
@@ -271,6 +283,16 @@ impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
             .release_official_refresh_claim(workspace_dir, refresh_order, owner_token)
     }
 
+    fn cancel_official_refresh_claim(
+        &self,
+        workspace_dir: &str,
+        refresh_order: u64,
+        owner_token: &str,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .cancel_official_refresh_claim(workspace_dir, refresh_order, owner_token)
+    }
+
     fn abandon_next_official_refresh_order(
         &self,
         workspace_dir: &str,
@@ -288,6 +310,16 @@ impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
     ) -> anyhow::Result<bool> {
         self.inner
             .try_acquire_distributor_queue_claim(workspace_dir, queue_item_id, owner_token)
+    }
+
+    fn renew_distributor_queue_claim(
+        &self,
+        workspace_dir: &str,
+        queue_item_id: &str,
+        owner_token: &str,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .renew_distributor_queue_claim(workspace_dir, queue_item_id, owner_token)
     }
 
     fn release_distributor_queue_claim(
@@ -397,6 +429,28 @@ impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
 
     fn remove_runtime_slot_lease(&self, workspace_dir: &str, slot_id: &str) -> anyhow::Result<()> {
         self.inner.remove_runtime_slot_lease(workspace_dir, slot_id)
+    }
+
+    fn remove_runtime_slot_lease_if_matches(
+        &self,
+        workspace_dir: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .remove_runtime_slot_lease_if_matches(workspace_dir, expected)
+    }
+
+    fn replace_runtime_slot_lease_if_matches(
+        &self,
+        workspace_dir: &str,
+        expected_current: &ParallelModeSlotLeaseSnapshot,
+        replacement: &ParallelModeSlotLeaseSnapshot,
+    ) -> anyhow::Result<bool> {
+        self.inner.replace_runtime_slot_lease_if_matches(
+            workspace_dir,
+            expected_current,
+            replacement,
+        )
     }
 
     fn upsert_runtime_session_detail(
@@ -1564,21 +1618,25 @@ fn dispatch_orchestrator_logs_update_failures_after_successful_launch() {
 fn dispatch_uses_task_identity_lease_when_agent_profiles_are_disabled() {
     let repo = TempGitRepo::new("orchestrator-disabled-agent-profiles");
     let workspace_dir = repo.workspace_dir();
-    save_parallel_agent_profile_config(
-        &workspace_dir,
-        &ParallelAgentProfileConfig {
-            profiles: vec![ParallelAgentProfile {
-                agent_id: "disabled-agent".to_string(),
-                display_name: "Disabled".to_string(),
-                role: "Disabled".to_string(),
-                persona_prompt: "This profile must not be selected.".to_string(),
-                avatar_class: "Runner".to_string(),
-                capabilities: Vec::new(),
-                enabled: false,
-            }],
-        },
-    )
-    .expect("disabled agent profile config should be written");
+    let profile_service = ParallelAgentProfileService::new(Arc::new(
+        FilesystemParallelAgentProfileRepositoryAdapter::new(),
+    ));
+    profile_service
+        .save_config(
+            &workspace_dir,
+            &ParallelAgentProfileConfig {
+                profiles: vec![ParallelAgentProfile {
+                    agent_id: "disabled-agent".to_string(),
+                    display_name: "Disabled".to_string(),
+                    role: "Disabled".to_string(),
+                    persona_prompt: "This profile must not be selected.".to_string(),
+                    avatar_class: "Runner".to_string(),
+                    capabilities: Vec::new(),
+                    enabled: false,
+                }],
+            },
+        )
+        .expect("disabled agent profile config should be written");
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let planning = build_test_planning_services(authority.clone());
     bootstrap_planning_workspace(&planning, &workspace_dir);
@@ -1598,7 +1656,8 @@ fn dispatch_uses_task_identity_lease_when_agent_profiles_are_disabled() {
         authority.clone(),
         Arc::new(FakeGithubAutomationPort::ready()),
         Arc::new(GitParallelModeRuntimeAdapter::new()),
-    );
+    )
+    .with_parallel_agent_profile_service(profile_service);
     service
         .enqueue_dispatch_commands_for_event(
             &workspace_dir,

@@ -18,7 +18,13 @@ pub enum AppCommand {
         thread_id: String,
         fallback_workspace_directory: String,
     },
+    InvalidateConversationLoad,
+    LoadParallelPeekConversation {
+        request_id: u64,
+        thread_id: String,
+    },
     PrepareManualPrompt(Box<ManualPromptRequest>),
+    CancelManualPromptPreparation,
     SubmitTurn(TurnSubmissionRequest),
     EvaluatePostTurn(Box<PostTurnRequest>),
 }

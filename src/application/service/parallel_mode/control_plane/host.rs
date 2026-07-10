@@ -120,6 +120,12 @@ where
     }
 
     #[cfg(test)]
+    pub fn automation_epoch_is_active(&self, workspace_directory: &str, epoch_id: u64) -> bool {
+        self.service()
+            .automation_epoch_is_active(workspace_directory, epoch_id)
+    }
+
+    #[cfg(test)]
     pub fn supervisor_refresh_in_flight(&self) -> bool {
         self.service().supervisor_refresh_in_flight()
     }
@@ -169,6 +175,32 @@ where
     ) -> ParallelModeControlPlaneEffectId {
         self.service()
             .force_supervisor_refresh_in_flight_for_test(workspace_directory, epoch_id)
+    }
+
+    #[cfg(test)]
+    pub fn force_parallel_entry_in_flight_for_test(
+        &self,
+        workspace_directory: impl Into<String>,
+        epoch_id: u64,
+    ) -> ParallelModeControlPlaneEffectId {
+        self.service()
+            .force_parallel_entry_in_flight_for_test(workspace_directory, epoch_id)
+    }
+
+    #[cfg(test)]
+    pub fn force_readiness_snapshot_for_test(
+        &self,
+        readiness_snapshot: crate::domain::parallel_mode::ParallelModeReadinessSnapshot,
+    ) {
+        self.service()
+            .force_readiness_snapshot_for_test(readiness_snapshot);
+    }
+
+    #[cfg(test)]
+    pub fn readiness_snapshot_for_test(
+        &self,
+    ) -> Option<crate::domain::parallel_mode::ParallelModeReadinessSnapshot> {
+        self.service().readiness_snapshot_for_test()
     }
 
     #[cfg(test)]

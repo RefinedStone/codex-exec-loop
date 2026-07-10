@@ -1,15 +1,18 @@
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::sync::mpsc::Sender;
+use std::thread;
 
 use anyhow::{Result, anyhow};
 
 use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::{
+    ConversationStreamEvent, ConversationStreamSender, conversation_stream_channel,
+};
 use crate::diagnostics::event_log;
 use serde_json::json;
+
+use super::persisted_error_summary;
 
 /*
  * PlanningThreadLauncher는 planning worker port와 실제 app-server thread 실행 사이의 좁은 seam이다.
@@ -27,7 +30,8 @@ pub(crate) trait PlanningThreadLauncher: Send + Sync {
         &self,
         workspace_directory: &str,
         prompt: &str,
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
+        continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
     ) -> Result<()>;
 }
 
@@ -52,12 +56,19 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
      * response로 축약한다. 이렇게 해야 queue refresh/repair service가 app-server protocol의 세부 event
      * vocabulary에 직접 의존하지 않는다.
      */
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     fn run_planning_session(
         &self,
         request: PlanningWorkerRequest,
     ) -> Result<PlanningWorkerResponse> {
-        let (tx, rx) = mpsc::channel();
+        if request
+            .continuation_permit
+            .as_ref()
+            .is_some_and(|permit| !permit.is_current())
+        {
+            anyhow::bail!("post-turn continuation was superseded before planning worker launch");
+        }
+        let (tx, rx) = conversation_stream_channel();
         event_log::emit_lazy("planning_worker_session_starting", || {
             json!({
                 "thread_id": serde_json::Value::Null,
@@ -67,11 +78,18 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 "prompt_chars": request.prompt.chars().count(),
             })
         });
-        let stream_result = self.planning_thread_launcher.run_hidden_planning_thread(
-            &request.workspace_directory,
-            &request.prompt,
-            tx,
-        );
+        let planning_thread_launcher = self.planning_thread_launcher.clone();
+        let workspace_directory = request.workspace_directory.clone();
+        let prompt = request.prompt.clone();
+        let continuation_permit = request.continuation_permit.clone();
+        let service_thread = thread::spawn(move || {
+            planning_thread_launcher.run_hidden_planning_thread(
+                &workspace_directory,
+                &prompt,
+                tx,
+                continuation_permit,
+            )
+        });
 
         let mut final_agent_message = None;
         let mut changed_planning_file_paths = Vec::new();
@@ -79,26 +97,16 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let mut captured_thread_id = None;
         let mut captured_turn_id = None;
 
-        /*
-         * A launch error means no reliable stream exists to drain. Once launch
-         * succeeds, later failures should arrive as ConversationStreamEvent::Failed
-         * so the reducer can still consume any earlier context before returning.
-         */
-        if let Err(error) = stream_result {
-            event_log::emit_lazy("planning_worker_session_launch_failed", || {
-                json!({
-                    "thread_id": serde_json::Value::Null,
-                    "operation": operation_label(request.operation),
-                    "phase": "launch_failed",
-                    "workspace_directory": &request.workspace_directory,
-                    "error": error.to_string(),
-                })
-            });
-            return Err(error);
-        }
-
-        // sender가 drop될 때까지 hidden thread event를 drain해 마지막 completed message와 turn summary를 채택한다.
+        // The producer runs concurrently because the stream queue is bounded.
+        // Stop receiving at the first terminal event, then disconnect the queue
+        // before joining so a buggy producer cannot deadlock the join by sending
+        // post-terminal events.
         for event in rx.iter() {
+            let terminal = matches!(
+                event,
+                ConversationStreamEvent::TurnCompleted { .. }
+                    | ConversationStreamEvent::Failed { .. }
+            );
             match event {
                 ConversationStreamEvent::AgentMessageCompleted { text, .. } => {
                     /*
@@ -131,7 +139,10 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 | ConversationStreamEvent::StatusUpdated { .. }
                 | ConversationStreamEvent::AgentMessageDelta { .. }
                 | ConversationStreamEvent::ToolActivity { .. }
-                | ConversationStreamEvent::ApprovalReviewUpdated { .. } => {}
+                | ConversationStreamEvent::ApprovalReviewUpdated { .. }
+                | ConversationStreamEvent::ApprovalRequested { .. }
+                | ConversationStreamEvent::ApprovalResolved { .. }
+                | ConversationStreamEvent::TurnInterruptRequestFailed { .. } => {}
                 ConversationStreamEvent::Failed { message } => {
                     /*
                      * Keep draining after seeing a failure so channel closure
@@ -141,6 +152,26 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                     failure_message = Some(message);
                 }
             }
+            if terminal {
+                break;
+            }
+        }
+        drop(rx);
+
+        let stream_result = service_thread
+            .join()
+            .map_err(|_| anyhow!("planning worker stream producer panicked"))?;
+        if let Err(error) = stream_result {
+            event_log::emit_lazy("planning_worker_session_launch_failed", || {
+                json!({
+                    "thread_id": captured_thread_id.as_deref(),
+                    "operation": operation_label(request.operation),
+                    "phase": "launch_failed",
+                    "workspace_directory": &request.workspace_directory,
+                    "error_summary": persisted_error_summary(&error),
+                })
+            });
+            return Err(error);
         }
 
         if let Some(message) = failure_message {
@@ -151,7 +182,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                     "operation": operation_label(request.operation),
                     "phase": "stream_failed",
                     "workspace_directory": &request.workspace_directory,
-                    "message": &message,
+                    "message_chars": message.chars().count(),
                     "changed_planning_file_count": changed_planning_file_paths.len(),
                     "has_final_agent_message": final_agent_message.is_some(),
                 })
@@ -219,7 +250,8 @@ mod tests {
             &self,
             workspace_directory: &str,
             prompt: &str,
-            event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+            _continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
         ) -> Result<()> {
             /*
              * The fake records launch input before sending events. That gives
@@ -277,6 +309,7 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
+                continuation_permit: None,
             })
             .expect("planning worker should succeed");
 
@@ -304,6 +337,36 @@ mod tests {
     }
 
     #[test]
+    fn canceled_continuation_never_invokes_hidden_thread_launcher() {
+        let fake_launcher = Arc::new(FakePlanningThreadLauncher {
+            events: Vec::new(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let adapter = AppServerPlanningWorkerAdapter::new(fake_launcher.clone());
+        let gate = crate::domain::planning::PostTurnContinuationGate::default();
+        let permit = gate.capture();
+        gate.advance();
+
+        let error = adapter
+            .run_planning_session(PlanningWorkerRequest {
+                operation: PlanningWorkerOperation::RefreshQueue,
+                workspace_directory: "/tmp/workspace".to_string(),
+                prompt: "must not launch".to_string(),
+                continuation_permit: Some(permit),
+            })
+            .expect_err("superseded continuation must fail closed before launch");
+
+        assert!(error.to_string().contains("superseded"));
+        assert!(
+            fake_launcher
+                .calls
+                .lock()
+                .expect("calls lock should succeed")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn run_planning_session_returns_error_when_stream_reports_failure() {
         /*
          * Failed events are promoted to anyhow errors instead of being mixed into
@@ -322,6 +385,7 @@ mod tests {
                 operation: PlanningWorkerOperation::RepairTaskAuthority,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "repair".to_string(),
+                continuation_permit: None,
             })
             .expect_err("failed stream should surface as error");
 

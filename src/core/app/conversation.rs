@@ -41,30 +41,6 @@ impl ConversationReadySnapshot {
             thread_review,
         }
     }
-
-    pub fn thread_review_snapshot(
-        thread_id: String,
-        review_id: String,
-        review_label: String,
-        review_state: String,
-        review_summary: String,
-        requested_at: String,
-        updated_at: String,
-        handoff_target: Option<String>,
-        handoff_note: Option<String>,
-    ) -> ConversationThreadReviewSnapshot {
-        ConversationThreadReviewSnapshot {
-            thread_id,
-            review_id,
-            review_label,
-            review_state,
-            review_summary,
-            requested_at,
-            updated_at,
-            handoff_target,
-            handoff_note,
-        }
-    }
 }
 
 impl From<DomainConversationSnapshot> for ConversationReadySnapshot {
@@ -170,7 +146,10 @@ mod tests {
         assert_eq!(ready.conversation, Box::new(conversation));
         assert_eq!(ready.thread_review.len(), 1);
         assert_eq!(ready.thread_review[0].review_id, "review-1");
-        assert_eq!(ready.thread_review[0].handoff_target.as_deref(), Some("operator"));
+        assert_eq!(
+            ready.thread_review[0].handoff_target.as_deref(),
+            Some("operator")
+        );
     }
 
     #[test]

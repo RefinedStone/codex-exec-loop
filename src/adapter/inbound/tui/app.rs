@@ -7,11 +7,13 @@ use crate::application::service::github_review_poller_service::GithubReviewPolle
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::composition::core_effect_runner::CoreEffectRunner;
+use crate::core::app::{ConversationLoadCorrelation, StartupCheckCorrelation};
 use crate::core::runtime::CoreRuntime;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
     ConversationRuntimeControlTruth, ConversationTurnOptions,
 };
+use crate::domain::planning::{ManualPromptCorrelation, PostTurnContinuationGate};
 use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
@@ -19,7 +21,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Clear;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SyncSender};
 
 /*
  * This module is the native TUI state and module root. Production service
@@ -29,12 +31,13 @@ use std::sync::mpsc::{Receiver, Sender};
  */
 
 // These defaults define the shell's bounded presentation surface: session lists
-// are paged, transcript history is capped, auto-follow is finite unless the
-// operator opts into the explicit "infinite" token, and inline panels stay short
+// are paged, transcript history is capped, auto-follow is disabled until the
+// operator explicitly supplies a positive budget, and inline panels stay short
 // enough to keep the prompt visible.
 const SESSION_PAGE_SIZE: usize = 10;
 const MAX_CONVERSATION_HISTORY_LINES: usize = 160;
-const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 20;
+const DEFAULT_AUTO_FOLLOW_MAX_TURNS: usize = 0;
+const DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "off";
 const INFINITE_AUTO_FOLLOW_MAX_TURNS: usize = usize::MAX;
 const INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN: &str = "infinite";
 const DEFAULT_AUTO_FOLLOW_STOP_KEYWORD: &str = "AUTO_STOP";
@@ -241,6 +244,7 @@ struct ManualIntakeSubmitContext {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingManualPromptPreparation {
+    correlation: ManualPromptCorrelation,
     transcript_text: String,
     parallel_mode_enabled_at_submission: bool,
 }
@@ -304,14 +308,18 @@ struct NativeTuiApp {
     shell_overlay: ShellOverlay,
     exit_confirmation_state: ExitConfirmationState,
     startup_state: StartupState,
+    pending_startup_check: Option<StartupCheckCorrelation>,
     session_state: SessionState,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
+    next_manual_prompt_preparation_request_id: u64,
+    manual_prompt_preparation_generation: u64,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     conversation_state: ConversationState,
+    pending_conversation_load: Option<ConversationLoadCorrelation>,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
     tui_language: TuiLanguage,
@@ -329,13 +337,14 @@ struct NativeTuiApp {
     turn_options: ConversationTurnOptions,
     conversation_view_mode: ConversationViewMode,
     planning_worker_panel_state: PlanningWorkerPanelState,
+    post_turn_continuation_gate: PostTurnContinuationGate,
     planning_worker_visibility: PlanningWorkerVisibility,
     github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     inline_history_render_mode: InlineHistoryRenderMode,
     history_insert_mode: HistoryInsertionMode,
     show_startup_ascii_art: bool,
-    tx: Sender<BackgroundMessage>,
+    tx: SyncSender<BackgroundMessage>,
     rx: Receiver<BackgroundMessage>,
 }
 

@@ -1,5 +1,387 @@
 use super::*;
 
+#[test]
+fn enqueue_blocks_public_repository_without_exact_operator_opt_in() {
+    let repo = TempGitRepo::new("distributor-public-repository-blocked");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.parallelAllowPublicRepository", "true"],
+    );
+    let service = test_parallel_mode_service_with_github(Arc::new(
+        FakeGithubAutomationPort::with_repository_visibility(GithubRepositoryVisibility::Public),
+    ));
+    let error = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect_err("public repository worker must not start without parent opt-in");
+
+    assert!(error.contains("public GitHub repository delivery is blocked before worker start"));
+    assert!(
+        !repo
+            .pool_root()
+            .join("slot-1")
+            .join(".akra-slot-lease.json")
+            .exists(),
+        "repo-local config must not create a public-repository lease"
+    );
+}
+
+#[test]
+fn enqueue_rejects_legacy_lease_without_delivery_target() {
+    let repo = TempGitRepo::new("distributor-legacy-lease-target");
+    let service = test_parallel_mode_service();
+    let mut lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-legacy", "Legacy", "agent-legacy", "legacy"),
+        )
+        .expect("slot lease should be acquired");
+    lease.delivery_target = None;
+    write_slot_lease(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+        &repo.pool_root(),
+        &lease,
+    )
+    .expect("legacy lease fixture should persist in authority and mirror");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("legacy slot should transition to running");
+    repo.commit_file_in_slot(
+        Path::new(&lease.worktree_path),
+        "legacy.txt",
+        "done\n",
+        "legacy worker result",
+    );
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-legacy-lease",
+            None,
+            Some("Legacy result."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(&lease.worktree_path, "legacy lease ready")
+        .expect("commit-ready should be recorded");
+
+    let error = service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect_err("legacy lease must fail closed before enqueue");
+    assert!(error.contains("legacy slot lease has no immutable delivery target"));
+}
+
+#[test]
+fn worker_remote_redirect_cannot_freeze_another_private_repository() {
+    let repo = TempGitRepo::new("distributor-worker-remote-redirect");
+    let github = FakeGithubAutomationPort::ready();
+    let repository_identity = github.repository_identity.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-redirect", "Redirect", "agent-redirect", "redirect"),
+        )
+        .expect("slot lease should freeze the original target");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(
+        Path::new(&lease.worktree_path),
+        "redirect.txt",
+        "done\n",
+        "worker result",
+    );
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-redirect",
+            None,
+            Some("Redirect attempt."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(&lease.worktree_path, "redirect result ready")
+        .expect("commit-ready should be recorded");
+
+    let redirected_remote = repo.root.join("redirect.git");
+    fs::create_dir_all(&redirected_remote).expect("redirected bare remote root should exist");
+    run_git(&redirected_remote, &["init", "--bare", "-q"]);
+    run_git(
+        &repo.repo_root,
+        &[
+            "remote",
+            "set-url",
+            DEFAULT_PUSH_REMOTE_NAME,
+            redirected_remote
+                .to_str()
+                .expect("redirected remote path should be valid utf-8"),
+        ],
+    );
+    *repository_identity
+        .lock()
+        .expect("fake github repository identity mutex poisoned") =
+        "attacker/other-private-repo".to_string();
+
+    let error = service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect_err("worker target redirect must fail closed");
+    assert!(
+        error.contains("slot lease delivery target drifted after worker start"),
+        "unexpected redirect rejection: {error}"
+    );
+    assert!(
+        error.contains("credential-redacted push URL changed"),
+        "redirected URL must be part of the immutable-target rejection: {error}"
+    );
+    assert!(
+        error.contains("GitHub repository"),
+        "redirected repository identity must be part of the immutable-target rejection: {error}"
+    );
+    assert!(load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty());
+}
+
+#[test]
+fn distributor_blocks_legacy_queue_record_before_remote_delivery() {
+    let repo = TempGitRepo::new("distributor-legacy-target-blocked");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let _lease = blocked::enqueue_single_commit_ready_result(&service, &repo, "turn-legacy-target");
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    record.delivery_target = None;
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("legacy queue record should persist");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("legacy record should be durably blocked");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("immutable delivery target"))
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty()
+    );
+}
+
+#[test]
+fn distributor_blocks_queue_without_frozen_source_base_before_remote_delivery() {
+    let repo = TempGitRepo::new("distributor-legacy-source-base-blocked");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    blocked::enqueue_single_commit_ready_result(&service, &repo, "turn-legacy-source-base");
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    record.source_base_commit_sha.clear();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("legacy queue record should persist");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("legacy source range should be durably blocked");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("lease identity no longer matches distributor session"))
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty()
+    );
+}
+
+#[test]
+fn passive_supervisor_keeps_durable_queue_visible_without_claiming_tui_mode() {
+    let repo = TempGitRepo::new("passive-supervisor-durable-queue");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    blocked::enqueue_single_commit_ready_result(&service, &repo, "turn-passive-projection");
+    let readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Ready,
+        vec![],
+        None,
+    );
+
+    let snapshot =
+        service.build_passive_supervisor_snapshot(&repo.workspace_dir(), Some(&readiness));
+
+    assert_eq!(snapshot.state, ParallelModeSupervisorState::Prepare);
+    assert_eq!(snapshot.roster.active_count(), 1);
+    assert_eq!(snapshot.distributor.queue_depth(), 1);
+    assert_ne!(snapshot.distributor.head_summary, "inactive");
+    assert!(
+        snapshot
+            .top_notice
+            .as_deref()
+            .is_some_and(|notice| { notice.contains("native TUI mode is not shared") })
+    );
+
+    let blocked_readiness = ParallelModeReadinessSnapshot::new(
+        repo.workspace_dir(),
+        ParallelModeReadinessState::Blocked,
+        vec![],
+        Some("git readiness is blocked".to_string()),
+    );
+    let blocked_snapshot =
+        service.build_passive_supervisor_snapshot(&repo.workspace_dir(), Some(&blocked_readiness));
+    assert_eq!(blocked_snapshot.state, ParallelModeSupervisorState::Prepare);
+    assert_eq!(blocked_snapshot.roster.active_count(), 1);
+    assert_eq!(blocked_snapshot.distributor.queue_depth(), 1);
+    assert!(
+        blocked_snapshot
+            .top_notice
+            .as_deref()
+            .is_some_and(|notice| {
+                notice.contains("native TUI mode is not shared")
+                    && notice.contains("git readiness is blocked")
+            })
+    );
+}
+
+#[test]
+fn distributor_blocks_push_remote_drift_before_remote_delivery() {
+    let repo = TempGitRepo::new("distributor-target-drift-blocked");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let _lease = blocked::enqueue_single_commit_ready_result(&service, &repo, "turn-target-drift");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPushRemote", "upstream"],
+    );
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("target drift should be durably blocked");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("delivery target drifted"))
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty()
+    );
+}
+
+#[test]
+fn distributor_blocks_same_identity_push_url_swap_before_remote_delivery() {
+    let repo = TempGitRepo::new("distributor-push-url-swap-blocked");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    blocked::enqueue_single_commit_ready_result(&service, &repo, "turn-push-url-swap");
+
+    let redirected_remote = repo.root.join("attacker-controlled.git");
+    fs::create_dir_all(&redirected_remote).expect("redirected remote root should be created");
+    run_git(&redirected_remote, &["init", "--bare", "-q"]);
+    run_git(
+        &repo.repo_root,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            DEFAULT_PUSH_REMOTE_NAME,
+            redirected_remote
+                .to_str()
+                .expect("redirected remote path should be utf-8"),
+        ],
+    );
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("push URL drift should be durably blocked");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("delivery target drifted")
+            && notice.contains("credential-redacted push URL changed")
+    }));
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty(),
+        "no remote operation may start after a same-identity URL swap"
+    );
+}
+
+#[test]
+fn distributor_blocks_legacy_queue_without_frozen_push_url() {
+    let repo = TempGitRepo::new("distributor-legacy-push-url-blocked");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    blocked::enqueue_single_commit_ready_result(&service, &repo, "turn-legacy-push-url");
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    record
+        .delivery_target
+        .as_mut()
+        .expect("delivery target should exist")
+        .credential_redacted_push_url = None;
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("legacy target fixture should persist");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("legacy push URL proof should be durably blocked");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("no credential-redacted immutable push URL"))
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty()
+    );
+}
+
 // 성공한 distributor run은 worker의 commit-ready 결과를 `prerelease`에 통합하고,
 // GitHub PR lifecycle을 정리한 뒤 slot을 idle pool로 되돌리는 전체 happy path다.
 // 이 테스트는 queue record, session history, fake GitHub 호출 순서, branch cleanup,
@@ -124,6 +506,7 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
             format!("push:{}:false", lease.branch_name),
             format!("ensure-pr:prerelease:{}", lease.branch_name),
             "inspect-pr:77".to_string(),
+            "inspect-pr:77".to_string(),
             "push-integration:prerelease".to_string(),
             "inspect-pr:77".to_string(),
             "close-pr:77".to_string(),
@@ -143,7 +526,293 @@ fn process_distributor_queue_delivers_commit_ready_result_into_akra_and_cleans_s
             None,
         )
         .as_deref(),
+        None,
+        "canonical integration checkout must remain untouched"
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "show",
+                "refs/remotes/origin/prerelease:feature.txt",
+            ],
+            None,
+        )
+        .as_deref(),
         Some("done")
+    );
+    assert_eq!(
+        fs::read_to_string(repo.repo_root.join("operator-note.tmp"))
+            .expect("canonical untracked note should be preserved"),
+        "local note\n"
+    );
+}
+
+#[test]
+fn cleanup_generation_mismatch_never_fails_the_replacement_session() {
+    let repo = TempGitRepo::new("distributor-cleanup-replacement-lease");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let original = blocked::enqueue_single_commit_ready_result(
+        &service,
+        &repo,
+        "turn-cleanup-replacement-lease",
+    );
+    let mut replacement = original.clone();
+    replacement.leased_at = "2099-01-01T00:00:00Z".to_string();
+    replacement.lease_generation =
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    replacement.state = ParallelModeSlotLeaseState::Running;
+    replacement.running_started_at = Some("2099-01-01T00:00:01Z".to_string());
+    assert_ne!(original.session_key(), replacement.session_key());
+    let expected_replacement = replacement.clone();
+    let workspace_dir = repo.workspace_dir();
+    let pool_root = repo.pool_root();
+    install_before_distributor_cleanup_lock_hook(move || {
+        let authority = SqlitePlanningAuthorityAdapter::new();
+        let runtime = test_parallel_runtime();
+        write_slot_lease(
+            &authority,
+            &runtime,
+            &workspace_dir,
+            &pool_root,
+            &replacement,
+        )
+        .expect("replacement live lease should persist before cleanup revalidation");
+        record_running_session_detail(
+            &authority,
+            &runtime,
+            &workspace_dir,
+            &pool_root,
+            &replacement,
+        )
+        .expect("replacement live session detail should persist");
+    });
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("cleanup generation mismatch should become a durable queue block");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice
+                .contains("lease generation changed before locked distributor cleanup")),
+        "generation mismatch should be explicit: {notices:?}"
+    );
+    let projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("runtime projection should remain readable");
+    assert_eq!(
+        projection.slot_leases.get(&expected_replacement.slot_id),
+        Some(&expected_replacement)
+    );
+    let replacement_detail = projection
+        .session_details
+        .iter()
+        .find(|detail| detail.session_key == expected_replacement.session_key())
+        .expect("replacement session detail should remain present");
+    assert_eq!(replacement_detail.state_label, "running");
+    assert_eq!(replacement_detail.completion_state_label, "in_progress");
+    assert!(replacement_detail.distributor_outcome.is_none());
+}
+
+#[test]
+fn process_distributor_queue_integrates_the_complete_reviewed_multi_commit_range() {
+    let repo = TempGitRepo::new("distributor-multi-commit-range");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-range", "Task Range", "agent-range", "task-range"),
+        )
+        .expect("slot lease should be acquired");
+    let slot_path = PathBuf::from(&lease.worktree_path);
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    repo.commit_file_in_slot(&slot_path, "first.txt", "first\n", "first reviewed commit");
+    repo.commit_file_in_slot(
+        &slot_path,
+        "second.txt",
+        "second\n",
+        "second reviewed commit",
+    );
+    service
+        .begin_workspace_official_completion(
+            &lease.worktree_path,
+            "turn-range",
+            None,
+            Some("Multi-commit result completed."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("official completion should be captured");
+    service
+        .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+        .expect("ledger refreshing should be recorded");
+    service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official ledger refresh succeeded: multi-commit delivery approved",
+        )
+        .expect("commit-ready should be recorded");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("multi-commit result should enqueue")
+        .expect("queue item should be created");
+
+    let queued = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    let range = format!(
+        "{}..{}",
+        queued.source_base_commit_sha, queued.source_commit_sha
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "rev-list",
+                "--count",
+                range.as_str(),
+            ],
+            None,
+        )
+        .as_deref(),
+        Some("2")
+    );
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("multi-commit queue should process");
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor returned slot to idle"))
+    );
+    for (path, expected) in [("first.txt", "first"), ("second.txt", "second")] {
+        assert_eq!(
+            run_command(
+                "git",
+                [
+                    "-C",
+                    repo.workspace_dir().as_str(),
+                    "show",
+                    &format!("refs/remotes/origin/prerelease:{path}"),
+                ],
+                None,
+            )
+            .as_deref(),
+            Some(expected),
+            "the remote integration branch must contain every reviewed source commit"
+        );
+    }
+}
+
+fn assert_close_inspection_drift_preserves_remote_review_surface(
+    prefix: &str,
+    github: FakeGithubAutomationPort,
+    expected_drift: &str,
+) {
+    let repo = TempGitRepo::new(prefix);
+    let operations = github.operations.clone();
+    let source_branch_cleanup_calls = github.source_branch_cleanup_calls.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease =
+        blocked::enqueue_single_commit_ready_result(&service, &repo, &format!("turn-{prefix}"));
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("drifted close inspection should finish conservatively");
+
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains(expected_drift) && notice.contains("preserved for operator review")
+        }),
+        "operator notice should explain preserved review surface: {notices:?}"
+    );
+    let operations = operations
+        .lock()
+        .expect("fake github operations mutex poisoned")
+        .clone();
+    assert!(operations.contains(&"push-integration:prerelease".to_string()));
+    assert!(
+        operations
+            .iter()
+            .all(|operation| !operation.starts_with("close-pr:")),
+        "a drifted pull request must remain open: {operations:?}"
+    );
+    assert_eq!(
+        *source_branch_cleanup_calls
+            .lock()
+            .expect("fake github source cleanup counter mutex poisoned"),
+        0,
+        "remote source cleanup must be skipped with a drifted PR"
+    );
+    assert!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.repo_root
+                    .to_str()
+                    .expect("repo root should be valid utf-8"),
+                "ls-remote",
+                "--heads",
+                DEFAULT_PUSH_REMOTE_NAME,
+                &format!("refs/heads/{}", lease.branch_name),
+            ],
+            None,
+        )
+        .is_some(),
+        "the remote source branch should remain available for operator review"
+    );
+    let record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(record.queue_state, ParallelModeQueueItemState::Done);
+    assert_eq!(record.integration_state, "done");
+    assert!(
+        record
+            .recovery_note
+            .as_deref()
+            .is_some_and(|note| note.contains(expected_drift) && note.contains("preserved"))
+    );
+    assert!(record.integration_note.contains("review surface"));
+}
+
+#[test]
+fn distributor_preserves_pr_and_source_branch_when_close_base_drifted() {
+    assert_close_inspection_drift_preserves_remote_review_surface(
+        "close-base-drift",
+        FakeGithubAutomationPort::with_close_inspect_base_branch("main"),
+        "base `main` != `prerelease`",
+    );
+}
+
+#[test]
+fn distributor_preserves_pr_and_source_branch_when_close_head_drifted() {
+    assert_close_inspection_drift_preserves_remote_review_surface(
+        "close-head-drift",
+        FakeGithubAutomationPort::with_close_inspect_head_branch("feature/reassigned"),
+        "head `feature/reassigned` !=",
+    );
+}
+
+#[test]
+fn distributor_preserves_pr_and_source_branch_when_close_sha_drifted() {
+    assert_close_inspection_drift_preserves_remote_review_surface(
+        "close-sha-drift",
+        FakeGithubAutomationPort::with_close_inspect_head_commit_sha("deadbeef"),
+        "head commit `deadbee` !=",
     );
 }
 
@@ -298,7 +967,8 @@ fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerele
                 None,
             )
             .as_deref(),
-            Some(expected_contents.as_str())
+            None,
+            "source branch should be conditionally deleted after verified integration"
         );
         assert_eq!(
             run_command(
@@ -327,17 +997,20 @@ fn process_distributor_queue_drains_three_commit_ready_results_to_origin_prerele
             format!("push:{}:false", leases[0].branch_name),
             format!("ensure-pr:prerelease:{}", leases[0].branch_name),
             "inspect-pr:900".to_string(),
+            "inspect-pr:900".to_string(),
             "push-integration:prerelease".to_string(),
             "inspect-pr:900".to_string(),
             "close-pr:900".to_string(),
             format!("push:{}:false", leases[1].branch_name),
             format!("ensure-pr:prerelease:{}", leases[1].branch_name),
             "inspect-pr:901".to_string(),
+            "inspect-pr:901".to_string(),
             "push-integration:prerelease".to_string(),
             "inspect-pr:901".to_string(),
             "close-pr:901".to_string(),
             format!("push:{}:false", leases[2].branch_name),
             format!("ensure-pr:prerelease:{}", leases[2].branch_name),
+            "inspect-pr:902".to_string(),
             "inspect-pr:902".to_string(),
             "push-integration:prerelease".to_string(),
             "inspect-pr:902".to_string(),
@@ -692,7 +1365,7 @@ fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
                 "-C",
                 repo.workspace_dir().as_str(),
                 "show",
-                "prerelease:feature.txt",
+                "refs/remotes/origin/prerelease:feature.txt",
             ],
             None,
         )
@@ -707,7 +1380,7 @@ fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
             "merge-base",
             "--is-ancestor",
             source_commit.as_str(),
-            "prerelease",
+            "refs/remotes/origin/prerelease",
         ],
     );
     let patch_equivalent = run_command(
@@ -716,7 +1389,7 @@ fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
             "-C",
             repo.workspace_dir().as_str(),
             "cherry",
-            "prerelease",
+            "refs/remotes/origin/prerelease",
             source_commit.as_str(),
         ],
         None,
@@ -735,6 +1408,7 @@ fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
             format!("push:{}:false", lease.branch_name),
             format!("ensure-pr:prerelease:{}", lease.branch_name),
             "inspect-pr:77".to_string(),
+            "inspect-pr:77".to_string(),
             "push-integration:prerelease".to_string(),
             "inspect-pr:77".to_string(),
             "close-pr:77".to_string(),
@@ -743,7 +1417,7 @@ fn process_distributor_queue_integrates_prerelease_based_lease_branch() {
 }
 
 #[test]
-fn process_distributor_queue_treats_remote_patch_equivalent_push_rejection_as_integrated() {
+fn process_distributor_queue_uses_dedicated_worktree_without_resetting_diverged_local_history() {
     let repo = TempGitRepo::new("distributor-remote-already-integrated");
     repo.create_bare_origin_remote();
     run_git(&repo.repo_root, &["push", "-u", "origin", "prerelease"]);
@@ -813,6 +1487,7 @@ fn process_distributor_queue_treats_remote_patch_equivalent_push_rejection_as_in
     )
     .expect("remote-equivalent prerelease head should resolve");
     run_git(&repo.repo_root, &["reset", "--hard", "HEAD~1"]);
+    let local_prerelease_before_delivery = repo.head_sha();
     assert_ne!(
         run_command(
             "git",
@@ -836,21 +1511,14 @@ fn process_distributor_queue_treats_remote_patch_equivalent_push_rejection_as_in
     assert!(
         notices
             .iter()
-            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
-        "remote patch-equivalent push rejection should still converge through cleanup: {notices:?}"
+            .any(|notice| notice.contains("distributor returned slot to idle")),
+        "remote patch-equivalence recovery should ignore canonical branch divergence: {notices:?}"
     );
     let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
         .next()
         .expect("queue record should persist");
     assert_eq!(queue_record.queue_state, ParallelModeQueueItemState::Done);
-    assert!(
-        queue_record
-            .integration_note
-            .contains("slot returned to idle"),
-        "final queue note should reflect cleanup completion: {}",
-        queue_record.integration_note
-    );
     assert_eq!(
         run_command(
             "git",
@@ -863,36 +1531,22 @@ fn process_distributor_queue_treats_remote_patch_equivalent_push_rejection_as_in
             None,
         )
         .as_deref(),
-        Some(remote_prerelease.as_str()),
-        "local integration branch should be aligned to the remote-equivalent head"
-    );
-    assert_eq!(
-        run_command(
-            "git",
-            [
-                "-C",
-                repo.workspace_dir().as_str(),
-                "show",
-                "prerelease:feature.txt",
-            ],
-            None,
-        )
-        .as_deref(),
-        Some("done")
+        Some(local_prerelease_before_delivery.as_str()),
+        "preflight must preserve the local integration branch instead of hard-resetting it"
     );
     assert!(
-        operations
+        !operations
             .lock()
             .expect("fake github operations mutex poisoned")
             .contains(&"push-integration:prerelease".to_string()),
-        "integration push should still be attempted before remote-equivalence recovery"
+        "remote patch-equivalence recovery should not push integration again"
     );
 }
 
 // hidden worker의 official completion 성공 경로는 slot worktree에서 호출된다. 이때 뒤따르는
-// orchestrator tick은 slot checkout이 아니라 canonical integration worktree에서 queue를 처리해야 한다.
+// orchestrator tick은 slot checkout이나 canonical checkout이 아닌 전용 integration worktree에서 처리한다.
 #[test]
-fn official_completion_success_orchestrator_tick_uses_canonical_integration_worktree() {
+fn official_completion_success_orchestrator_tick_uses_dedicated_integration_worktree() {
     let repo = TempGitRepo::new("official-success-canonical-orchestrator");
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
     let github = FakeGithubAutomationPort::ready();
@@ -952,15 +1606,28 @@ fn official_completion_success_orchestrator_tick_uses_canonical_integration_work
             None,
         )
         .as_deref(),
+        None
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                repo.workspace_dir().as_str(),
+                "show",
+                "refs/remotes/origin/prerelease:feature.txt",
+            ],
+            None,
+        )
+        .as_deref(),
         Some("done")
     );
 }
 
-// official completion이 끝났지만 integration worktree가 다른 브랜치에 있으면 queue record는
-// queued 상태로 남아야 한다. 이후 planning queue가 모두 idle/done이어도 supervisor retry가 같은
-// distributor head를 다시 tick할 수 있어야 현재 운영 중인 "all tasks done, distributor queued" 정체가 풀린다.
+// canonical checkout branch와 무관하게 official completion은 전용 integration worktree에서
+// delivery를 끝내야 한다.
 #[test]
-fn blocked_official_completion_queue_retries_after_integration_worktree_recovers() {
+fn official_completion_ignores_canonical_checkout_branch() {
     let repo = TempGitRepo::new("official-success-blocked-retry");
     let github = FakeGithubAutomationPort::ready();
     let operations = github.operations.clone();
@@ -1003,63 +1670,34 @@ fn blocked_official_completion_queue_retries_after_integration_worktree_recovers
         crate::application::service::parallel_mode::turn::ParallelModeTurnService::new(
             service.clone(),
         );
-    let blocked_notices = turn_service.finalize_official_completion_success(
+    let notices = turn_service.finalize_official_completion_success(
         &lease.worktree_path,
         "official ledger refresh succeeded: distributor delivery approved",
     );
 
     assert!(
-        blocked_notices
+        notices
             .iter()
             .any(|notice| notice.contains("commit-ready result entered the distributor queue")),
-        "official completion should enqueue the result before the integration blocker: {blocked_notices:?}"
+        "official completion should enqueue the result: {notices:?}"
     );
     assert!(
-        blocked_notices.iter().any(|notice| notice
-            .contains("orchestrator blocked / integration worktree must be checked out")),
-        "wrong integration branch should block the first tick without consuming the queue: {blocked_notices:?}"
+        notices
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "dedicated worktree should complete delivery without canonical checkout preparation: {notices:?}"
     );
     assert!(
-        operations
+        !operations
             .lock()
             .expect("fake github operations mutex poisoned")
             .is_empty(),
-        "blocked integration worktree should prevent any GitHub delivery operation"
+        "dedicated integration delivery should execute GitHub operations"
     );
-    let blocked_projection =
+    let projection =
         service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
-    assert_eq!(blocked_projection.distributor.head_summary, "queued");
-    assert_eq!(blocked_projection.distributor.queue_depth(), 1);
-    assert!(
-        blocked_projection
-            .distributor
-            .orchestrator_status
-            .integration_worktree_readiness
-            .contains("blocked:"),
-        "snapshot should keep the queued head and surface the worktree blocker: {}",
-        blocked_projection
-            .distributor
-            .orchestrator_status
-            .integration_worktree_readiness
-    );
-
-    run_git(&repo.repo_root, &["checkout", "prerelease"]);
-    let retry = service
-        .run_orchestrator_tick(
-            &repo.workspace_dir(),
-            crate::application::service::parallel_mode::ParallelModeOrchestratorTrigger::ManualDispatch,
-        )
-        .expect("manual distributor retry should run after worktree recovery");
-
-    assert!(!retry.blocked);
-    assert!(
-        retry
-            .notices
-            .iter()
-            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
-        "retry should consume the queued head after the integration worktree is ready: {:?}",
-        retry.notices
-    );
+    assert_eq!(projection.distributor.head_summary, "idle");
+    assert_eq!(projection.distributor.queue_depth(), 0);
     assert_eq!(
         run_command(
             "git",
@@ -1067,16 +1705,13 @@ fn blocked_official_completion_queue_retries_after_integration_worktree_recovers
                 "-C",
                 repo.workspace_dir().as_str(),
                 "show",
-                "prerelease:retry.txt",
+                "refs/remotes/origin/prerelease:retry.txt",
             ],
             None,
         )
         .as_deref(),
         Some("done")
     );
-    let recovered_snapshot =
-        service.build_supervisor_snapshot(&repo.workspace_dir(), true, Some(&readiness));
-    assert_eq!(recovered_snapshot.distributor.head_summary, "idle");
 }
 
 // supervisor detail pane은 단순히 가장 최근 running session을 고르면 안 된다.
@@ -1188,7 +1823,7 @@ fn build_supervisor_snapshot_populates_idle_orchestrator_without_session_detail(
             .distributor
             .orchestrator_status
             .integration_worktree_readiness
-            .contains("prerelease"),
+            .contains("no active delivery"),
         "idle snapshot should still inspect integration readiness: {}",
         snapshot
             .distributor

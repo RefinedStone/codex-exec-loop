@@ -13,10 +13,7 @@ use super::views::{
 };
 use super::{AdminAppState, parse_reset_target};
 use crate::adapter::inbound::admin_api::akra_dashboard::build_akra_dashboard_view;
-use crate::application::service::parallel_agent_profile::{
-    load_parallel_agent_profile_config, parse_parallel_agent_profile_config_json,
-    save_parallel_agent_profile_config,
-};
+use crate::application::service::parallel_agent_profile::parse_parallel_agent_profile_config_json;
 use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftFileUpdate, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
@@ -177,6 +174,7 @@ pub(super) async fn akra_dashboard_page(
     let dashboard = build_akra_dashboard_view(
         state.facade.as_ref(),
         state.parallel_mode_control_plane.as_ref(),
+        &state.parallel_agent_profile_service,
     )
     .map_err(internal_server_error)?;
     render_html(
@@ -188,7 +186,6 @@ pub(super) async fn akra_dashboard_page(
             csrf_token,
             notice: query.get("notice").cloned(),
             dashboard,
-            api_base_url: state.graphic.api_base_url.clone(),
             polling_interval_ms: state.graphic.polling_interval_ms,
         },
     )
@@ -203,6 +200,7 @@ pub(super) async fn akra_metrics_page(
     let dashboard = build_akra_dashboard_view(
         state.facade.as_ref(),
         state.parallel_mode_control_plane.as_ref(),
+        &state.parallel_agent_profile_service,
     )
     .map_err(internal_server_error)?;
     render_html(
@@ -581,7 +579,9 @@ pub(super) async fn controls_page(
         .facade
         .load_overview()
         .map_err(internal_server_error)?;
-    let agent_profile_config = load_parallel_agent_profile_config(state.facade.workspace_dir())
+    let agent_profile_config = state
+        .parallel_agent_profile_service
+        .load_config(state.facade.workspace_dir())
         .map_err(|error| internal_server_error(anyhow!(error)))?;
     let agent_profile_config_json = agent_profile_config.to_pretty_json();
     render_html(
@@ -617,7 +617,10 @@ pub(super) async fn app_server_prompts_page(
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
             notice: query.get("notice").cloned(),
-            prompt_log: AppServerPromptLogView::from_records(snapshot.records),
+            prompt_log: AppServerPromptLogView::from_records(
+                snapshot.records,
+                state.app_server_prompt_log_port.is_enabled(),
+            ),
         },
     )
 }
@@ -630,7 +633,9 @@ pub(super) async fn update_agent_profiles_page(
     verify_form_csrf(&jar, &form.csrf_token)?;
     let config = parse_parallel_agent_profile_config_json(&form.profiles_json)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    save_parallel_agent_profile_config(state.facade.workspace_dir(), &config)
+    state
+        .parallel_agent_profile_service
+        .save_config(state.facade.workspace_dir(), &config)
         .map_err(|error| internal_server_error(anyhow!(error)))?;
     Ok(Redirect::to(&notice_location(
         "/admin/controls",

@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use super::{
     DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-    INFINITE_AUTO_FOLLOW_MAX_TURNS, INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
+    DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN, INFINITE_AUTO_FOLLOW_MAX_TURNS,
+    INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
 };
 
 const AUTO_FOLLOW_MODE_LABEL: &str = "planning queue";
@@ -22,14 +23,18 @@ pub(crate) use decision::AutoFollowSkipReason;
 #[derive(Debug, Clone)]
 pub(crate) struct AutoFollowState {
     /*
-     * Operator pause is separate from runtime_phase. A pause should stop the next
-     * continuation decision but must not erase an already-submitted turn or the
-     * completed-turn budget counter.
+     * Operator stop is separate from runtime_phase. It remains sticky until a
+     * positive budget explicitly re-arms automation, without erasing an already
+     * submitted turn or corrupting its budget accounting.
      */
     post_turn_continuation_paused: bool,
+    // `:parallel` is an independent automation opt-in. After a global stop it
+    // may re-arm only the parallel path without clearing the single-session
+    // auto-follow pause or restoring its turn budget.
+    parallel_post_turn_rearmed_after_stop: bool,
     // Number of auto-follow turns that reached stream completion in this chain.
     pub(crate) completed_auto_turns: usize,
-    // Budget for this automatic chain; usize::MAX is displayed as the infinite token.
+    // Zero is the secure default (off); usize::MAX is displayed as the infinite token.
     pub(crate) max_auto_turns: usize,
     // Live lifecycle phase used by runtime status/tail copy.
     pub(crate) runtime_phase: AutoFollowRuntimePhase,
@@ -82,6 +87,7 @@ impl AutoFollowState {
     pub(crate) fn new() -> Self {
         Self {
             post_turn_continuation_paused: false,
+            parallel_post_turn_rearmed_after_stop: false,
             completed_auto_turns: 0,
             max_auto_turns: DEFAULT_AUTO_FOLLOW_MAX_TURNS,
             runtime_phase: AutoFollowRuntimePhase::Idle,
@@ -95,6 +101,9 @@ impl AutoFollowState {
 
     // Compact progress used by prompt/tail copy while the chain is active.
     pub(crate) fn progress_label(&self) -> String {
+        if !self.is_enabled() {
+            return DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string();
+        }
         format!(
             "{}/{}",
             self.completed_auto_turns,
@@ -109,6 +118,10 @@ impl AutoFollowState {
 
     pub(crate) fn max_auto_turns_label(&self) -> String {
         format_max_auto_turns(self.max_auto_turns)
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.max_auto_turns > 0
     }
 
     pub(crate) fn stop_keyword_value(&self) -> &str {
@@ -156,14 +169,13 @@ impl AutoFollowState {
     }
 
     /*
-     * Manual turns start a new operator-directed chain. They clear pause and
-     * progress so auto-follow state from the previous chain cannot suppress or
-     * relabel the user's explicit request.
+     * Manual turns start a new operator-directed chain and clear its progress,
+     * but preserve both the configured budget and an operator stop. Only a later
+     * positive `:turns` setting may re-arm automation after `:stop`.
      */
     pub(crate) fn reset_for_manual_turn(&mut self) {
         self.completed_auto_turns = 0;
         self.runtime_phase = AutoFollowRuntimePhase::Idle;
-        self.post_turn_continuation_paused = false;
     }
 
     // Post-turn execution is now inspecting planning/runtime state for a follow-up prompt.
@@ -241,18 +253,39 @@ impl AutoFollowState {
 
     pub(crate) fn pause_post_turn_continuation(&mut self) {
         self.post_turn_continuation_paused = true;
-    }
-
-    pub(crate) fn clear_post_turn_continuation_pause(&mut self) {
-        self.post_turn_continuation_paused = false;
+        self.parallel_post_turn_rearmed_after_stop = false;
     }
 
     pub(crate) fn post_turn_continuation_paused(&self) -> bool {
         self.post_turn_continuation_paused
     }
 
+    pub(crate) fn rearm_parallel_post_turn_continuation(&mut self) {
+        self.parallel_post_turn_rearmed_after_stop = true;
+    }
+
+    pub(crate) fn disarm_parallel_post_turn_continuation(&mut self) {
+        self.parallel_post_turn_rearmed_after_stop = false;
+    }
+
+    pub(crate) fn parallel_post_turn_continuation_allowed(&self) -> bool {
+        !self.post_turn_continuation_paused || self.parallel_post_turn_rearmed_after_stop
+    }
+
     pub(crate) fn set_max_auto_turns(&mut self, value: usize) {
         self.max_auto_turns = value;
+        self.completed_auto_turns = 0;
+        if value > 0 {
+            self.post_turn_continuation_paused = false;
+        }
+        if value == 0
+            && !matches!(
+                self.runtime_phase,
+                AutoFollowRuntimePhase::Submitting { .. } | AutoFollowRuntimePhase::Running { .. }
+            )
+        {
+            self.runtime_phase = AutoFollowRuntimePhase::Idle;
+        }
     }
 
     #[cfg(test)]
@@ -266,16 +299,20 @@ impl AutoFollowState {
      */
     pub(crate) fn normalize_max_auto_turns_candidate(candidate: &str) -> Option<usize> {
         let normalized = candidate.trim();
+        if normalized.eq_ignore_ascii_case(DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN) {
+            return Some(0);
+        }
         if normalized.eq_ignore_ascii_case(INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN) {
             return Some(INFINITE_AUTO_FOLLOW_MAX_TURNS);
         }
-        let value = normalized.parse::<usize>().ok()?;
-        if value == 0 { None } else { Some(value) }
+        normalized.parse::<usize>().ok()
     }
 }
 
 fn format_max_auto_turns(value: usize) -> String {
-    if value == INFINITE_AUTO_FOLLOW_MAX_TURNS {
+    if value == 0 {
+        DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string()
+    } else if value == INFINITE_AUTO_FOLLOW_MAX_TURNS {
         INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN.to_string()
     } else {
         value.to_string()

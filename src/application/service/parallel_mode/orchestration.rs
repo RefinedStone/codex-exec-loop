@@ -6,8 +6,8 @@ use chrono::DateTime;
 
 // orchestration service는 slot pool의 runtime 관찰값과 distributor queue를 함께 본다.
 // 하위 pool helper가 repo root 탐색과 git 상태 판정을 맡고, 이 파일은 tick을 막을지 결정한다.
-use super::pool::{PoolRuntimeContext, detect_canonical_repo_root, inspect_slot_git_status};
-use super::{current_branch_name, distributor_integration_branch};
+use super::pool::{PoolRuntimeContext, inspect_slot_git_status};
+use super::{current_branch_name, derive_integration_worktree_path, load_pool_runtime_context};
 
 /*
 병렬 디스패처가 새 작업을 고를 때 이미 "누군가 처리 중인" 작업을 다시 뽑으면
@@ -123,24 +123,44 @@ pub(super) fn inspect_akra_integration_worktree_blocker(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
 ) -> Option<String> {
-    // repo root를 찾지 못하면 이 검사만으로 blocker를 만들 수 없다.
-    // 상위 startup/workspace 검증이 더 구체적인 오류를 담당한다.
-    let canonical_repo_root = detect_canonical_repo_root(planning_authority, workspace_dir)?;
-    // integration queue 처리는 항상 지정 브랜치에서만 수행되어야 하므로 현재 브랜치를 먼저 본다.
-    let branch_name = current_branch_name(&canonical_repo_root)?;
-    if branch_name != distributor_integration_branch() {
+    let context = load_pool_runtime_context(planning_authority, workspace_dir).ok()?;
+    let record = context
+        .distributor_queue_records
+        .iter()
+        .find(|record| record.queue_state.is_active())?;
+    let Some(target) = record.delivery_target.as_ref() else {
         return Some(format!(
-            "orchestrator blocked / integration worktree must be checked out to `{}` but is `{branch_name}`",
-            distributor_integration_branch()
+            "orchestrator blocked / legacy queue item `{}` has no immutable delivery target",
+            record.queue_item_id
         ));
+    };
+    let integration_path = derive_integration_worktree_path(
+        &context.pool_root,
+        &target.push_remote,
+        &target.github_repository,
+        &target.integration_branch,
+    );
+    if !integration_path.exists() {
+        return None;
     }
 
-    // 브랜치가 맞아도 staged/unstaged/rebase 상태가 있으면 queue 통합 결과가 사용자 변경과 섞인다.
-    let status = inspect_slot_git_status(&canonical_repo_root)?;
-    if !status.is_ready_for_integration() {
+    let status = match inspect_slot_git_status(&integration_path) {
+        Ok(status) => status,
+        Err(error) => {
+            return Some(format!(
+                "orchestrator blocked / dedicated integration worktree Git status inspection failed: {error}"
+            ));
+        }
+    };
+    if !status.is_clean_baseline() {
         return Some(format!(
-            "orchestrator blocked / integration worktree must be clean before queue processing: {}",
+            "orchestrator blocked / dedicated integration worktree must be clean before queue processing: {}",
             status.detail_label()
+        ));
+    }
+    if let Some(branch_name) = current_branch_name(&integration_path) {
+        return Some(format!(
+            "orchestrator blocked / dedicated integration worktree must remain detached but is on `{branch_name}`"
         ));
     }
 

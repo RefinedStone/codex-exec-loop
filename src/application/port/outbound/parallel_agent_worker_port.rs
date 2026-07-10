@@ -1,8 +1,3 @@
-// parallel worker는 slot별 worktree에서 별도 Codex session을 실행하지만, 결과 수집은 TUI
-// dispatch worker가 맡는다. `Sender`는 app-server adapter가 그 dispatch worker의 event
-// loop로 stream event를 밀어 넣는 단방향 통로이다.
-use std::sync::mpsc::Sender;
-
 // isolated worker thread 시작은 app-server I/O, 현재 repo의 worktree 상태, Codex session
 // bootstrap에 닿는 outbound 작업이다. 실패는 정책 오류가 아니라 실행 환경의 정상적인 결과일 수
 // 있으므로 port는 `anyhow::Result`로 adapter 실패를 그대로 올린다.
@@ -11,7 +6,7 @@ use anyhow::Result;
 // parallel worker도 일반 conversation stream과 같은 `ConversationStreamEvent` 계약을 쓴다.
 // 이 공유 vocabulary 덕분에 dispatch worker는 worker 전용 protocol을 새로 만들지 않고도
 // final assistant text, completion, failure, tool activity를 기존 reducer 관점으로 관찰할 수 있다.
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::ConversationStreamSender;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // `ParallelAgentWorkerStreamRequest`는 application layer가 확정한 sub-session prompt 경계이다.
@@ -43,7 +38,7 @@ pub trait ParallelAgentWorkerPort: Send + Sync {
         // dispatch worker가 소유한 stream receiver와 짝을 이루는 sender이다. outbound adapter는
         // thread prepared, message completed, tool activity, terminal completion 같은 app-server
         // event를 이 통로로 전달하고, dispatch worker는 그 흐름을 slot 상태로 축약한다.
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()>;
 }
 
@@ -61,7 +56,7 @@ impl ParallelAgentWorkerPort for NoopParallelAgentWorkerPort {
         // noop에서는 실행 요청을 사용하지 않는다.
         _request: ParallelAgentWorkerStreamRequest<'_>,
         // noop은 stream events를 보내지 않으므로 sender도 사용하지 않는다.
-        _event_sender: Sender<ConversationStreamEvent>,
+        _event_sender: ConversationStreamSender,
     ) -> Result<()> {
         // 성공을 반환해 shell/runtime 구성 테스트가 parallel worker adapter 없이도 진행되게 한다.
         Ok(())

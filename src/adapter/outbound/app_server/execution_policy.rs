@@ -14,6 +14,10 @@ use super::protocol::{ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeVa
 const APPROVAL_POLICY_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVAL_POLICY";
 const APPROVALS_REVIEWER_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_APPROVALS_REVIEWER";
 const SANDBOX_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_SANDBOX_MODE";
+const AUTO_REVIEW_WARNING: &str = "automatic approval review is explicitly enabled; it may approve app-server tool requests without operator confirmation";
+const APPROVAL_POLICY_ALLOWED_VALUES: &str = "untrusted, on-request, or never";
+const APPROVALS_REVIEWER_ALLOWED_VALUES: &str = "user, auto-review, or guardian-subagent (legacy)";
+const SANDBOX_MODE_ALLOWED_VALUES: &str = "read-only, workspace-write, or danger-full-access";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /*
@@ -46,17 +50,66 @@ impl Default for AppServerExecutionPolicy {
 }
 
 impl AppServerExecutionPolicy {
+    pub(super) fn summary(&self) -> String {
+        format!(
+            "approval={}, reviewer={}, sandbox={}",
+            approval_policy_label(self.approval_policy),
+            self.approvals_reviewer
+                .map(approvals_reviewer_label)
+                .unwrap_or("default"),
+            sandbox_mode_label(self.sandbox_mode)
+        )
+    }
+
+    pub(super) fn elevated_risk_labels(&self) -> Vec<&'static str> {
+        let mut labels = Vec::new();
+        if self.approval_policy == ApprovalPolicyValue::Never {
+            labels.push("approval=never");
+        }
+        if self.sandbox_mode == SandboxModeValue::DangerFullAccess {
+            labels.push("sandbox=danger-full-access");
+        }
+        if matches!(
+            self.approvals_reviewer,
+            Some(ApprovalsReviewerValue::AutoReview | ApprovalsReviewerValue::GuardianSubagent)
+        ) {
+            labels.push("automatic reviewer may auto-approve");
+        }
+        labels
+    }
+
     /*
      * adapter 생성 시점에 process environment를 읽어 실행 정책 snapshot을 만든다.
      * 이후 같은 adapter instance가 main-session, hidden planning worker, parallel worker에 같은 정책을
      * 적용하므로 한 실행 중에 env var가 바뀌어도 active adapter policy가 흔들리지 않는다.
      */
     pub(super) fn from_environment() -> Self {
-        Self::from_env_values(
-            std::env::var(APPROVAL_POLICY_ENV_VAR).ok().as_deref(),
-            std::env::var(APPROVALS_REVIEWER_ENV_VAR).ok().as_deref(),
-            std::env::var(SANDBOX_MODE_ENV_VAR).ok().as_deref(),
-        )
+        let approval_policy_value = std::env::var(APPROVAL_POLICY_ENV_VAR).ok();
+        let approvals_reviewer_value = std::env::var(APPROVALS_REVIEWER_ENV_VAR).ok();
+        let sandbox_mode_value = std::env::var(SANDBOX_MODE_ENV_VAR).ok();
+        let policy = Self::from_env_values(
+            approval_policy_value.as_deref(),
+            approvals_reviewer_value.as_deref(),
+            sandbox_mode_value.as_deref(),
+        );
+        for warning in invalid_execution_policy_warnings(
+            approval_policy_value.as_deref(),
+            approvals_reviewer_value.as_deref(),
+            sandbox_mode_value.as_deref(),
+        ) {
+            eprintln!("warning: {warning}");
+            tracing::warn!(warning = %warning, "invalid app-server execution policy override");
+        }
+        if matches!(
+            policy.approvals_reviewer,
+            Some(ApprovalsReviewerValue::AutoReview | ApprovalsReviewerValue::GuardianSubagent)
+        ) {
+            tracing::warn!(
+                environment_variable = APPROVALS_REVIEWER_ENV_VAR,
+                "{AUTO_REVIEW_WARNING}"
+            );
+        }
+        policy
     }
 
     /*
@@ -85,6 +138,30 @@ impl AppServerExecutionPolicy {
     }
 }
 
+fn approval_policy_label(value: ApprovalPolicyValue) -> &'static str {
+    match value {
+        ApprovalPolicyValue::Untrusted => "untrusted",
+        ApprovalPolicyValue::OnRequest => "on-request",
+        ApprovalPolicyValue::Never => "never",
+    }
+}
+
+fn approvals_reviewer_label(value: ApprovalsReviewerValue) -> &'static str {
+    match value {
+        ApprovalsReviewerValue::User => "user",
+        ApprovalsReviewerValue::AutoReview => "auto-review",
+        ApprovalsReviewerValue::GuardianSubagent => "guardian-subagent",
+    }
+}
+
+fn sandbox_mode_label(value: SandboxModeValue) -> &'static str {
+    match value {
+        SandboxModeValue::ReadOnly => "read-only",
+        SandboxModeValue::WorkspaceWrite => "workspace-write",
+        SandboxModeValue::DangerFullAccess => "danger-full-access",
+    }
+}
+
 /*
  * operator-facing env value는 dash, underscore, space가 섞일 수 있다. normalization 단계에서
  * 모두 app-server enum의 kebab-case vocabulary로 맞추면 deployment script가 `on_request`,
@@ -99,6 +176,45 @@ fn normalize_execution_policy_value(value: Option<&str>) -> Option<String> {
     Some(raw_value.to_ascii_lowercase().replace(['_', ' '], "-"))
 }
 
+fn invalid_execution_policy_warnings(
+    approval_policy_value: Option<&str>,
+    approvals_reviewer_value: Option<&str>,
+    sandbox_mode_value: Option<&str>,
+) -> Vec<String> {
+    let candidates = [
+        (
+            APPROVAL_POLICY_ENV_VAR,
+            approval_policy_value,
+            APPROVAL_POLICY_ALLOWED_VALUES,
+            parse_approval_policy_value(approval_policy_value).is_some(),
+        ),
+        (
+            APPROVALS_REVIEWER_ENV_VAR,
+            approvals_reviewer_value,
+            APPROVALS_REVIEWER_ALLOWED_VALUES,
+            parse_approvals_reviewer_value(approvals_reviewer_value).is_some(),
+        ),
+        (
+            SANDBOX_MODE_ENV_VAR,
+            sandbox_mode_value,
+            SANDBOX_MODE_ALLOWED_VALUES,
+            parse_sandbox_mode_value(sandbox_mode_value).is_some(),
+        ),
+    ];
+
+    candidates
+        .into_iter()
+        .filter_map(|(environment_variable, value, allowed_values, is_valid)| {
+            let is_nonempty = value.is_some_and(|value| !value.trim().is_empty());
+            (is_nonempty && !is_valid).then(|| {
+                format!(
+                    "invalid {environment_variable}; expected {allowed_values}; using secure default"
+                )
+            })
+        })
+        .collect()
+}
+
 /*
  * approval policy parser는 app-server protocol enum의 허용 값만 통과시킨다.
  * 알 수 없는 문자열은 None이 되어 default policy를 유지하므로, 잘못된 env var 하나가 TUI startup을
@@ -107,7 +223,6 @@ fn normalize_execution_policy_value(value: Option<&str>) -> Option<String> {
 fn parse_approval_policy_value(value: Option<&str>) -> Option<ApprovalPolicyValue> {
     match normalize_execution_policy_value(value).as_deref() {
         Some("untrusted") => Some(ApprovalPolicyValue::Untrusted),
-        Some("on-failure") => Some(ApprovalPolicyValue::OnFailure),
         Some("on-request") => Some(ApprovalPolicyValue::OnRequest),
         Some("never") => Some(ApprovalPolicyValue::Never),
         _ => None,
@@ -115,13 +230,15 @@ fn parse_approval_policy_value(value: Option<&str>) -> Option<ApprovalPolicyValu
 }
 
 /*
- * approvals reviewer는 approval이 켜졌을 때만 실질적인 의미가 있지만, thread/turn payload는
- * 항상 같은 field set을 받을 수 있다. parser를 따로 두어 reviewer vocabulary가 approval policy와
- * 독립적으로 확장될 수 있게 한다.
+ * 기본 reviewer는 user이고, automatic reviewer는 운영자가 env로 정확히 opt-in할 때만 허용한다.
+ * auto-review는 canonical wire value이고 guardian-subagent는 upstream compatibility alias다.
+ * automatic reviewer는 operator confirmation 없이 승인할 수 있다. reviewer가 처리하지 않고 client로 보낸
+ * server approval request는 connection layer가 계속 명시적으로 거절한다.
  */
 fn parse_approvals_reviewer_value(value: Option<&str>) -> Option<ApprovalsReviewerValue> {
     match normalize_execution_policy_value(value).as_deref() {
         Some("user") => Some(ApprovalsReviewerValue::User),
+        Some("auto-review") => Some(ApprovalsReviewerValue::AutoReview),
         Some("guardian-subagent") => Some(ApprovalsReviewerValue::GuardianSubagent),
         _ => None,
     }
@@ -144,8 +261,8 @@ fn parse_sandbox_mode_value(value: Option<&str>) -> Option<SandboxModeValue> {
 #[cfg(test)]
 mod tests {
     use super::{
-        APPROVAL_POLICY_ENV_VAR, APPROVALS_REVIEWER_ENV_VAR, AppServerExecutionPolicy,
-        SANDBOX_MODE_ENV_VAR,
+        APPROVAL_POLICY_ENV_VAR, APPROVALS_REVIEWER_ENV_VAR, AUTO_REVIEW_WARNING,
+        AppServerExecutionPolicy, SANDBOX_MODE_ENV_VAR, invalid_execution_policy_warnings,
     };
     use crate::adapter::outbound::app_server::protocol::{
         ApprovalPolicyValue, ApprovalsReviewerValue, SandboxModeValue,
@@ -176,15 +293,52 @@ mod tests {
         assert_eq!(
             AppServerExecutionPolicy::from_env_values(
                 Some("never"),
-                Some("guardian-subagent"),
+                Some("user"),
                 Some("danger full access")
             ),
             AppServerExecutionPolicy {
                 approval_policy: ApprovalPolicyValue::Never,
-                approvals_reviewer: Some(ApprovalsReviewerValue::GuardianSubagent),
+                approvals_reviewer: Some(ApprovalsReviewerValue::User),
                 sandbox_mode: SandboxModeValue::DangerFullAccess,
             }
         );
+    }
+
+    #[test]
+    fn automatic_reviewers_require_explicit_opt_in() {
+        assert_eq!(
+            AppServerExecutionPolicy::from_env_values(
+                Some("on-request"),
+                Some("auto_review"),
+                Some("workspace-write"),
+            )
+            .approvals_reviewer,
+            Some(ApprovalsReviewerValue::AutoReview)
+        );
+        assert_eq!(
+            AppServerExecutionPolicy::from_env_values(
+                Some("on-request"),
+                Some("guardian-subagent"),
+                Some("workspace-write"),
+            )
+            .approvals_reviewer,
+            Some(ApprovalsReviewerValue::GuardianSubagent)
+        );
+
+        for reviewer in [None, Some("automatic"), Some("guardian")] {
+            let policy = AppServerExecutionPolicy::from_env_values(
+                Some("on-request"),
+                reviewer,
+                Some("workspace-write"),
+            );
+
+            assert_eq!(
+                policy.approvals_reviewer,
+                Some(ApprovalsReviewerValue::User)
+            );
+        }
+
+        assert!(AUTO_REVIEW_WARNING.contains("without operator confirmation"));
     }
 
     #[test]
@@ -197,6 +351,34 @@ mod tests {
             AppServerExecutionPolicy::from_env_values(Some("bogus"), Some("nope"), Some("unknown")),
             AppServerExecutionPolicy::default()
         );
+        assert_eq!(
+            AppServerExecutionPolicy::from_env_values(
+                Some("on-failure"),
+                Some("user"),
+                Some("workspace-write"),
+            ),
+            AppServerExecutionPolicy::default()
+        );
+    }
+
+    #[test]
+    fn invalid_execution_policy_overrides_warn_without_echoing_raw_values() {
+        let raw_value = "super-secret-raw-value";
+        let warnings =
+            invalid_execution_policy_warnings(Some(raw_value), Some(raw_value), Some(raw_value));
+
+        assert_eq!(warnings.len(), 3);
+        assert!(warnings.iter().any(|warning| {
+            warning.contains(APPROVAL_POLICY_ENV_VAR) && warning.contains("on-request")
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.contains(APPROVALS_REVIEWER_ENV_VAR) && warning.contains("guardian-subagent")
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.contains(SANDBOX_MODE_ENV_VAR) && warning.contains("workspace-write")
+        }));
+        assert!(warnings.iter().all(|warning| !warning.contains(raw_value)));
+        assert!(invalid_execution_policy_warnings(Some(" "), None, Some("\t")).is_empty());
     }
 
     #[test]

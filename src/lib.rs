@@ -26,10 +26,20 @@ pub mod core;
 pub mod diagnostics;
 // domain은 planning/parallel-mode의 상태 전이와 값 객체를 framework 없이 표현하는 가장 안쪽 계층이다.
 pub(crate) mod domain;
+// Windows file identity와 owner-only DACL 처리는 trace/planning 같은 private stores가 공유한다.
+#[cfg(windows)]
+pub(crate) mod private_fs;
+// process liveness is shared by durable local leases that must not reclaim a live owner.
+pub(crate) mod process_liveness;
+// git_subprocess는 host-owned Git 명령의 repository/config/environment 격리를 강제한다.
+pub(crate) mod git_execution_guard;
+pub(crate) mod git_subprocess;
 // subprocess는 외부 CLI 경계의 non-interactive timeout 실행을 모은 crate-private helper다.
 pub(crate) mod subprocess;
+// trusted executable resolution pins host-owned tools before any repository-controlled PATH entry can run.
 #[cfg(test)]
 pub(crate) mod test_utils;
+pub(crate) mod trusted_executable;
 
 /*
  * 공용 실행 함수는 native-first UX의 분기점이다. argv가 doctor/init/admin 같은 CLI command로

@@ -91,6 +91,7 @@ pub(super) async fn akra_dashboard_api(
     let dashboard = build_akra_dashboard_view(
         state.facade.as_ref(),
         state.parallel_mode_control_plane.as_ref(),
+        &state.parallel_agent_profile_service,
     )
     .map_err(internal_server_error)?;
     Ok(Json(dashboard).into_response())
@@ -102,6 +103,7 @@ pub(super) async fn akra_pool_api(
     let dashboard = build_akra_dashboard_view(
         state.facade.as_ref(),
         state.parallel_mode_control_plane.as_ref(),
+        &state.parallel_agent_profile_service,
     )
     .map_err(internal_server_error)?;
     Ok(Json(dashboard.pool).into_response())
@@ -113,6 +115,7 @@ pub(super) async fn akra_agents_api(
     let dashboard = build_akra_dashboard_view(
         state.facade.as_ref(),
         state.parallel_mode_control_plane.as_ref(),
+        &state.parallel_agent_profile_service,
     )
     .map_err(internal_server_error)?;
     Ok(Json(dashboard.agents).into_response())
@@ -124,6 +127,7 @@ pub(super) async fn akra_distributor_api(
     let dashboard = build_akra_dashboard_view(
         state.facade.as_ref(),
         state.parallel_mode_control_plane.as_ref(),
+        &state.parallel_agent_profile_service,
     )
     .map_err(internal_server_error)?;
     Ok(Json(dashboard.distributor).into_response())

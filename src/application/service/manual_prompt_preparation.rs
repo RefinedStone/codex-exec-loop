@@ -30,7 +30,7 @@ impl ManualPromptPreparationService {
         let runtime_projection = self
             .planning
             .runtime
-            .load_runtime_projection_or_invalid(&request.workspace_directory);
+            .load_runtime_projection_or_invalid(&request.correlation.workspace_directory);
         self.prepare_with_runtime_projection(request, runtime_projection)
     }
 
@@ -42,6 +42,7 @@ impl ManualPromptPreparationService {
         let transcript_text = request.raw_prompt.trim().to_string();
         if transcript_text.is_empty() {
             return ManualPromptPreparationResult::Rejected {
+                correlation: request.correlation,
                 transcript_text,
                 runtime_projection: Box::new(runtime_projection),
                 reason: "manual prompt is empty".to_string(),
@@ -50,7 +51,7 @@ impl ManualPromptPreparationService {
 
         if !runtime_projection.workspace_present() {
             let workspace_preparation = self.ensure_manual_planning_workspace(
-                &request.workspace_directory,
+                &request.correlation,
                 &transcript_text,
                 runtime_projection,
             );
@@ -68,13 +69,14 @@ impl ManualPromptPreparationService {
             self.planning
                 .runtime
                 .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
-                    workspace_directory: request.workspace_directory,
+                    workspace_directory: request.correlation.workspace_directory.clone(),
                     raw_prompt: transcript_text.clone(),
                     legacy_source_turn_id: None,
                     parent_thread_id: request.parent_thread_id,
                     parent_turn_id: request.parent_turn_id,
                 });
         ManualPromptPreparationResult::PromptReady {
+            correlation: request.correlation,
             transcript_text,
             runtime_projection: Box::new(runtime_projection),
             intake: Box::new(intake),
@@ -83,10 +85,11 @@ impl ManualPromptPreparationService {
 
     fn ensure_manual_planning_workspace(
         &self,
-        workspace_directory: &str,
+        correlation: &crate::domain::planning::ManualPromptCorrelation,
         transcript_text: &str,
         initial_projection: PlanningRuntimeProjection,
     ) -> ManualWorkspacePreparation {
+        let workspace_directory = correlation.workspace_directory.as_str();
         let stage_result = match self
             .planning
             .workspace
@@ -96,6 +99,7 @@ impl ManualPromptPreparationService {
             Err(error) => {
                 return ManualWorkspacePreparation::Blocked(
                     ManualPromptPreparationResult::BootstrapFailed {
+                        correlation: correlation.clone(),
                         transcript_text: transcript_text.to_string(),
                         runtime_projection: Box::new(initial_projection),
                         kind: ManualPlanningBootstrapFailureKind::Stage,
@@ -113,6 +117,7 @@ impl ManualPromptPreparationService {
             Err(error) => {
                 return ManualWorkspacePreparation::Blocked(
                     ManualPromptPreparationResult::BootstrapFailed {
+                        correlation: correlation.clone(),
                         transcript_text: transcript_text.to_string(),
                         runtime_projection: Box::new(initial_projection),
                         kind: ManualPlanningBootstrapFailureKind::Promote,
@@ -131,6 +136,7 @@ impl ManualPromptPreparationService {
 
         ManualWorkspacePreparation::Blocked(
             ManualPromptPreparationResult::BootstrapReviewRequired {
+                correlation: correlation.clone(),
                 transcript_text: transcript_text.to_string(),
                 runtime_projection: Box::new(runtime_projection),
                 review: ManualPlanningBootstrapReview {
@@ -160,6 +166,7 @@ mod tests {
         PlanningWorkspacePort,
     };
     use crate::application::service::planning::PlanningRuntimeWorkspaceStatus;
+    use crate::domain::planning::ManualPromptCorrelation;
     use anyhow::{Result, anyhow};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -385,10 +392,18 @@ mod tests {
 
     fn request(raw_prompt: &str) -> ManualPromptPreparationRequest {
         ManualPromptPreparationRequest {
-            workspace_directory: unique_workspace("prepare"),
+            correlation: correlation(unique_workspace("prepare")),
             raw_prompt: raw_prompt.to_string(),
             parent_thread_id: Some("thread-parent".to_string()),
             parent_turn_id: Some("turn-parent".to_string()),
+        }
+    }
+
+    fn correlation(workspace_directory: String) -> ManualPromptCorrelation {
+        ManualPromptCorrelation {
+            request_id: 1,
+            generation: 1,
+            workspace_directory,
         }
     }
 
@@ -454,6 +469,7 @@ mod tests {
                 transcript_text,
                 reason,
                 runtime_projection,
+                ..
             } if transcript_text.is_empty()
                 && reason == "manual prompt is empty"
                 && runtime_projection.workspace_present()
@@ -470,6 +486,7 @@ mod tests {
                 transcript_text,
                 runtime_projection,
                 intake,
+                ..
             } if transcript_text == "ship it"
                 && runtime_projection.workspace_present()
                 && std::mem::discriminant(intake.as_ref())
@@ -523,7 +540,7 @@ mod tests {
         let service = service_for(WorkspaceBehavior::StageFailure);
 
         let result = service.ensure_manual_planning_workspace(
-            &unique_workspace("stage-failure"),
+            &correlation(unique_workspace("stage-failure")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
         );
@@ -548,7 +565,7 @@ mod tests {
         let service = service_for(WorkspaceBehavior::PromoteLoadFailure);
 
         let result = service.ensure_manual_planning_workspace(
-            &unique_workspace("promote-failure"),
+            &correlation(unique_workspace("promote-failure")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
         );
@@ -570,7 +587,7 @@ mod tests {
         let service = service_for(WorkspaceBehavior::InvalidPromoteDraft);
 
         let result = service.ensure_manual_planning_workspace(
-            &unique_workspace("review"),
+            &correlation(unique_workspace("review")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
         );
@@ -582,6 +599,7 @@ mod tests {
                     transcript_text,
                     runtime_projection,
                     review,
+                    ..
                 }
             ) if transcript_text == "start planning"
                 && runtime_projection.workspace_present()
@@ -596,7 +614,7 @@ mod tests {
         let service = service_for(WorkspaceBehavior::Normal);
 
         let result = service.ensure_manual_planning_workspace(
-            &unique_workspace("ready"),
+            &correlation(unique_workspace("ready")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
         );

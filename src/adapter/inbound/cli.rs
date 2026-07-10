@@ -211,15 +211,16 @@ fn run_planning_tool(
     stdout: &mut impl Write,
 ) -> Result<i32> {
     // planning tool은 의도적으로 script/worker 지향이다. contract는 schema를 출력하고 run은 stdin payload를 소비한다.
-    let planning = production::build_planning_services();
     match subcommand.to_str() {
         Some("contract") => {
+            let planning = production::build_planning_services();
             writeln!(stdout, "{}", planning.task_tool.contract_json())?;
             Ok(0)
         }
         Some("run") => {
             let workspace_path = resolve_workspace_path(workspace_arg)?;
             let workspace_label = workspace_path.display().to_string();
+            let planning = production::build_planning_services_for_workspace(&workspace_label);
             let result = run_planning_tool_request(&planning, &workspace_path);
             // tool caller는 anyhow backtrace보다 structured failure output을 기대한다.
             match result {
@@ -253,8 +254,8 @@ fn run_planning_tool(
 fn run_parallel_tick(workspace_arg: Option<&OsStr>, stdout: &mut impl Write) -> Result<i32> {
     let workspace_path = resolve_workspace_path(workspace_arg)?;
     validate_workspace_path(&workspace_path).map_err(anyhow::Error::msg)?;
-    let control_plane = production::build_parallel_mode_control_plane_composition();
     let workspace_label = workspace_path.display().to_string();
+    let control_plane = production::build_parallel_mode_control_plane_composition(&workspace_label);
 
     writeln!(stdout, "workspace: {workspace_label}")?;
     // 이 command는 TUI가 supervise하는 같은 distributor queue를 수동/cron 환경에서 tick하는 driver다.
@@ -341,7 +342,7 @@ fn inspect_workspace(workspace_path: &Path) -> DoctorReport {
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return DoctorReport::path_issue(workspace_label, issue);
     }
-    let planning = production::build_planning_services();
+    let planning = production::build_planning_services_for_workspace(&workspace_label);
     let report = planning
         .workspace
         .inspect_workspace(workspace_path.to_string_lossy().as_ref());
@@ -354,7 +355,7 @@ fn reset_workspace(workspace_path: &Path, target: PlanningResetTarget) -> ResetR
     if let Err(issue) = validate_workspace_path(workspace_path) {
         return ResetReport::path_issue(workspace_label, issue);
     }
-    let planning = production::build_planning_services();
+    let planning = production::build_planning_services_for_workspace(&workspace_label);
     match planning
         .workspace
         .reset_workspace(workspace_path.to_string_lossy().as_ref(), target)

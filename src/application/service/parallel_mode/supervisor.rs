@@ -3,9 +3,8 @@ use super::{
     PoolBoardWithContextResult, PoolRuntimeContext, build_pool_board,
     default_authority_refresh_outcome, default_supervisor_notice, default_validation_summary,
     format_elapsed_label_from_timestamp, inspect_pool_board_and_context, lease_session_key,
-    pool_operator_recovery_notice, reconcile_pool_board_and_context,
+    pool_operator_recovery_notice,
 };
-use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeAgentSessionDetailSnapshot,
@@ -78,55 +77,42 @@ impl ParallelModeSupervisorService {
         )
     }
 
-    /*
-    `reconcile_snapshot`은 사용자가 병렬 모드를 켜거나 감독자 화면에서 복구성 refresh를
-    요청했을 때 쓰는 쓰기 가능한 읽기 경로다. mode가 켜져 있고 readiness가 통과된 경우에만
-    pool baseline, slot worktree, reusable slot 정리를 맞춘 뒤 같은 supervisor view를 만든다.
-
-    `build_snapshot`과 반환 타입은 같지만 의미는 다르다. 하나는 관찰용이고, 이 함수는 관찰 전에
-    pool runtime을 기대 형태로 수렴시키는 orchestration 진입점이다.
-    */
-    pub(super) fn reconcile_snapshot(
+    pub(super) fn build_passive_snapshot(
         &self,
         planning_authority: &dyn PlanningAuthorityPort,
-        runtime: &dyn ParallelModeRuntimePort,
         workspace_dir: &str,
-        mode_enabled: bool,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
         distributor_service: &ParallelModeDistributorService,
     ) -> ParallelModeSupervisorSnapshot {
-        let state = ParallelModeSupervisorState::derive(mode_enabled, readiness_snapshot);
+        /*
+         * Admin and Telegram run outside the native TUI process, so they cannot
+         * truthfully observe its in-memory mode toggle. They can still inspect
+         * durable leases, session history, and distributor queue records. Keep
+         * the control state in Prepare while projecting those records directly.
+         */
         let workspace_path = readiness_snapshot
             .map(|snapshot| snapshot.workspace_path.clone())
             .unwrap_or_else(|| workspace_dir.to_string());
-        let (pool, roster, detail) = match readiness_snapshot {
-            Some(snapshot) if snapshot.allows_parallel_mode() => {
-                let pool_runtime = if mode_enabled {
-                    /*
-                    Only the enabled path may reconcile. A user can inspect the
-                    board before turning parallel mode on, but slot provisioning
-                    and cleanup should wait until the mode flag is actually live.
-                    */
-                    reconcile_pool_board_and_context(planning_authority, runtime, workspace_dir)
-                } else {
-                    inspect_pool_board_and_context(planning_authority, workspace_dir)
-                };
-                build_supervisor_views(pool_runtime, mode_enabled)
-            }
-            _ => (
-                build_pool_board(planning_authority, workspace_dir, readiness_snapshot),
-                build_placeholder_roster(mode_enabled, readiness_snapshot),
-                build_supervisor_detail(readiness_snapshot),
-            ),
-        };
-        let top_notice = supervisor_top_notice(&pool, mode_enabled, readiness_snapshot);
+        let (pool, roster, detail) = build_supervisor_views(
+            inspect_pool_board_and_context(planning_authority, workspace_dir),
+            false,
+        );
+        let passive_notice =
+            "read-only durable projection; native TUI mode is not shared with this process";
+        let operational_notice = readiness_snapshot
+            .and_then(|snapshot| snapshot.top_alert.clone())
+            .or_else(|| pool_operator_recovery_notice(&pool));
+        let top_notice = Some(match operational_notice {
+            Some(notice) => format!("{passive_notice} / {notice}"),
+            None => passive_notice.to_string(),
+        });
         ParallelModeSupervisorSnapshot::new(
-            state,
+            ParallelModeSupervisorState::Prepare,
             workspace_path,
             pool,
             roster,
             detail,
-            distributor_service.build_snapshot(workspace_dir, mode_enabled, readiness_snapshot),
+            distributor_service.inspect_snapshot(workspace_dir),
             top_notice,
         )
     }

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[path = "orchestration/logging.rs"]
 mod logging;
@@ -35,7 +36,8 @@ use crate::application::service::planning::task_mutation::{
 };
 use crate::diagnostics::event_log;
 use crate::domain::planning::{
-    OriginSessionKind, PlanningOfficialCompletionRefreshContract, TaskMutationProvenance,
+    OriginSessionKind, PlanningOfficialCompletionRefreshContract, PostTurnContinuationPermit,
+    TaskMutationProvenance,
 };
 use anyhow::Result;
 use serde_json::json;
@@ -112,16 +114,27 @@ pub struct PlanningWorkerOrchestrationService {
     planning_authority: Arc<dyn PlanningAuthorityPort>,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     task_mutation_service: PlanningTaskMutationService,
+    #[cfg(test)]
+    before_result_application: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
-#[derive(Clone)]
 struct OfficialCompletionRefreshPermit {
-    // official completion refresh claim을 위한 RAII permit이다. worker execution이나 reconciliation이 실패해도
-    // permit drop이 claim release를 시도한다.
+    // official completion refresh claim을 위한 RAII permit이다. Only an explicit successful
+    // host apply may consume the order; every unfinished permit cancels without advancing it.
     planning_authority: Arc<dyn PlanningAuthorityPort>,
     workspace_directory: String,
     refresh_order: u64,
     owner_token: String,
+    heartbeat_stop: Option<mpsc::Sender<()>>,
+    heartbeat_thread: Option<JoinHandle<()>>,
+    claim_active: bool,
+    drop_disposition: OfficialRefreshClaimDisposition,
+}
+
+#[derive(Clone, Copy)]
+enum OfficialRefreshClaimDisposition {
+    Cancel,
+    Complete,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,11 +143,13 @@ struct WorkerParentProvenance<'a> {
     turn_id: Option<&'a str>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct WorkerRunContext<'a> {
     previous_handoff: Option<&'a PlanningTaskHandoff>,
     parent_provenance: WorkerParentProvenance<'a>,
     command_policy: WorkerTaskCommandPolicy,
+    continuation_permit: Option<&'a PostTurnContinuationPermit>,
+    official_refresh_permit: Option<&'a OfficialCompletionRefreshPermit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,25 +164,136 @@ impl OfficialCompletionRefreshPermit {
         workspace_directory: &str,
         refresh_order: u64,
         owner_token: String,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let workspace_directory = workspace_directory.to_string();
+        let heartbeat_authority = planning_authority.clone();
+        let heartbeat_workspace = workspace_directory.clone();
+        let heartbeat_owner = owner_token.clone();
+        let (heartbeat_stop, heartbeat_receiver) = mpsc::channel();
+        let heartbeat_thread = std::thread::Builder::new()
+            .name(format!("akra-official-refresh-{refresh_order}"))
+            .spawn(move || {
+                loop {
+                    match heartbeat_receiver.recv_timeout(Duration::from_secs(30)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            let _ = heartbeat_authority.renew_official_refresh_claim(
+                                &heartbeat_workspace,
+                                refresh_order,
+                                &heartbeat_owner,
+                            );
+                        }
+                    }
+                }
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to start official refresh heartbeat: {error}")
+            })?;
+        Ok(Self {
             planning_authority,
             // permit을 만든 request 값이 scope 밖으로 나간 뒤에도 release call이 유효하도록 owned data를 보관한다.
-            workspace_directory: workspace_directory.to_string(),
+            workspace_directory,
             refresh_order,
             owner_token,
+            heartbeat_stop: Some(heartbeat_stop),
+            heartbeat_thread: Some(heartbeat_thread),
+            claim_active: true,
+            drop_disposition: OfficialRefreshClaimDisposition::Cancel,
+        })
+    }
+
+    fn renew_and_verify(&self) -> Result<()> {
+        if !self.planning_authority.renew_official_refresh_claim(
+            &self.workspace_directory,
+            self.refresh_order,
+            &self.owner_token,
+        )? {
+            anyhow::bail!(
+                "official completion refresh order {} lost its authority claim before result application",
+                self.refresh_order
+            );
         }
+        Ok(())
+    }
+
+    fn complete(mut self) -> Result<()> {
+        self.drop_disposition = OfficialRefreshClaimDisposition::Complete;
+        self.settle_claim(OfficialRefreshClaimDisposition::Complete)
+    }
+
+    fn cancel(mut self) -> Result<()> {
+        self.settle_claim(OfficialRefreshClaimDisposition::Cancel)
+    }
+
+    fn settle_claim(&mut self, disposition: OfficialRefreshClaimDisposition) -> Result<()> {
+        let heartbeat_result = self.stop_heartbeat();
+        let claim_result = if !self.claim_active {
+            Ok(())
+        } else {
+            match disposition {
+                OfficialRefreshClaimDisposition::Cancel => {
+                    self.planning_authority.cancel_official_refresh_claim(
+                        &self.workspace_directory,
+                        self.refresh_order,
+                        &self.owner_token,
+                    )
+                }
+                OfficialRefreshClaimDisposition::Complete => {
+                    self.planning_authority.release_official_refresh_claim(
+                        &self.workspace_directory,
+                        self.refresh_order,
+                        &self.owner_token,
+                    )
+                }
+            }
+        };
+        if claim_result.is_ok() {
+            self.claim_active = false;
+        }
+        combine_official_refresh_cleanup_results(heartbeat_result, claim_result, disposition)
+    }
+
+    fn stop_heartbeat(&mut self) -> Result<()> {
+        if let Some(stop) = self.heartbeat_stop.take() {
+            // A disconnected receiver implies the heartbeat already exited; join below reports a
+            // panic if that exit was abnormal.
+            let _ = stop.send(());
+        }
+        let Some(thread) = self.heartbeat_thread.take() else {
+            return Ok(());
+        };
+        thread.join().map_err(|_| {
+            anyhow::anyhow!(
+                "official completion refresh order {} heartbeat thread panicked",
+                self.refresh_order
+            )
+        })
     }
 }
 impl Drop for OfficialCompletionRefreshPermit {
     fn drop(&mut self) {
-        // Drop은 error를 반환할 수 없으므로 release는 best-effort다. stale claim은 worker orchestration panic이 아니라
-        // authority-store cleanup 작업으로 다룬다.
-        let _ = self.planning_authority.release_official_refresh_claim(
-            &self.workspace_directory,
-            self.refresh_order,
-            &self.owner_token,
-        );
+        // Explicit settlement returns cleanup errors to the caller. Unwinding and early returns use
+        // this best-effort fallback, preserving the same complete/cancel disposition on retry.
+        let _ = self.settle_claim(self.drop_disposition);
+    }
+}
+
+fn combine_official_refresh_cleanup_results(
+    heartbeat_result: Result<()>,
+    claim_result: Result<()>,
+    disposition: OfficialRefreshClaimDisposition,
+) -> Result<()> {
+    let action = match disposition {
+        OfficialRefreshClaimDisposition::Cancel => "cancel",
+        OfficialRefreshClaimDisposition::Complete => "complete",
+    };
+    match (heartbeat_result, claim_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(heartbeat_error), Ok(())) => Err(heartbeat_error),
+        (Ok(()), Err(claim_error)) => Err(claim_error),
+        (Err(heartbeat_error), Err(claim_error)) => Err(anyhow::anyhow!(
+            "{heartbeat_error:#}; official refresh claim {action} also failed: {claim_error:#}"
+        )),
     }
 }
 impl PlanningWorkerOrchestrationService {
@@ -189,12 +315,30 @@ impl PlanningWorkerOrchestrationService {
             planning_authority,
             planning_task_repository_port,
             task_mutation_service,
+            #[cfg(test)]
+            before_result_application: None,
         }
     }
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn refresh_queue_from_reply(
         &self,
         request: PlanningQueueRefreshRequest<'_>,
+    ) -> Result<PlanningWorkerRunOutcome> {
+        self.refresh_queue_from_reply_with_optional_permit(request, None)
+    }
+
+    pub fn refresh_queue_from_reply_with_permit(
+        &self,
+        request: PlanningQueueRefreshRequest<'_>,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> Result<PlanningWorkerRunOutcome> {
+        self.refresh_queue_from_reply_with_optional_permit(request, Some(continuation_permit))
+    }
+
+    fn refresh_queue_from_reply_with_optional_permit(
+        &self,
+        request: PlanningQueueRefreshRequest<'_>,
+        continuation_permit: Option<&PostTurnContinuationPermit>,
     ) -> Result<PlanningWorkerRunOutcome> {
         // normal queue refresh는 latest main reply를 evidence로 쓰고, previous handoff를 함께 넘겨 worker가 닫거나 갱신할 수 있게 한다.
         let prompt = self.render_refresh_queue_prompt(&request);
@@ -211,6 +355,8 @@ impl PlanningWorkerOrchestrationService {
                     turn_id: Some(request.completed_turn_id),
                 },
                 command_policy: WorkerTaskCommandPolicy::ApplyAll,
+                continuation_permit,
+                official_refresh_permit: None,
             },
         )
     }
@@ -223,19 +369,39 @@ impl PlanningWorkerOrchestrationService {
             .load_runtime_projection_or_invalid(workspace_directory)
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn refresh_queue_from_official_completion(
         &self,
         request: PlanningOfficialCompletionRefreshRequest<'_>,
     ) -> Result<PlanningWorkerRunOutcome> {
+        self.refresh_queue_from_official_completion_with_optional_permit(request, None)
+    }
+
+    pub fn refresh_queue_from_official_completion_with_permit(
+        &self,
+        request: PlanningOfficialCompletionRefreshRequest<'_>,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> Result<PlanningWorkerRunOutcome> {
+        self.refresh_queue_from_official_completion_with_optional_permit(
+            request,
+            Some(continuation_permit),
+        )
+    }
+
+    fn refresh_queue_from_official_completion_with_optional_permit(
+        &self,
+        request: PlanningOfficialCompletionRefreshRequest<'_>,
+        continuation_permit: Option<&PostTurnContinuationPermit>,
+    ) -> Result<PlanningWorkerRunOutcome> {
         let prompt = self.render_official_completion_refresh_prompt(&request);
         // permit은 worker/reconcile sequence 전체 동안 유지된다. 이 refresh가 진행 중일 때 다른 client가 같은 official
         // completion order로 task를 다시 derive하지 못하게 한다.
-        let _permit = self.acquire_official_refresh_permit(
+        let permit = self.acquire_official_refresh_permit(
             request.workspace_directory,
             request.contract.refresh_order,
+            continuation_permit,
         )?;
-        self.run_worker_and_reconcile(
+        let worker_result = self.run_worker_and_reconcile(
             request.workspace_directory,
             &format!(
                 "planning-worker-refresh-{}",
@@ -250,13 +416,48 @@ impl PlanningWorkerOrchestrationService {
                     turn_id: Some(request.contract.completed_turn_id.as_str()),
                 },
                 command_policy: WorkerTaskCommandPolicy::IgnoreDeliveryOnlyFollowUps,
+                continuation_permit,
+                official_refresh_permit: Some(&permit),
             },
-        )
+        );
+        match worker_result {
+            Ok(outcome) => {
+                permit.complete().map_err(|error| {
+                    anyhow::anyhow!(
+                        "official completion host result was applied but refresh order {} could not be completed: {error:#}",
+                        request.contract.refresh_order
+                    )
+                })?;
+                Ok(outcome)
+            }
+            Err(worker_error) => match permit.cancel() {
+                Ok(()) => Err(worker_error),
+                Err(cancel_error) => Err(anyhow::anyhow!(
+                    "{worker_error:#}; official refresh claim cancellation also failed: {cancel_error:#}"
+                )),
+            },
+        }
     }
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn repair_task_authority(
         &self,
         request: PlanningLedgerRepairRequest<'_>,
+    ) -> Result<PlanningWorkerRunOutcome> {
+        self.repair_task_authority_with_optional_permit(request, None)
+    }
+
+    pub fn repair_task_authority_with_permit(
+        &self,
+        request: PlanningLedgerRepairRequest<'_>,
+        continuation_permit: &PostTurnContinuationPermit,
+    ) -> Result<PlanningWorkerRunOutcome> {
+        self.repair_task_authority_with_optional_permit(request, Some(continuation_permit))
+    }
+
+    fn repair_task_authority_with_optional_permit(
+        &self,
+        request: PlanningLedgerRepairRequest<'_>,
+        continuation_permit: Option<&PostTurnContinuationPermit>,
     ) -> Result<PlanningWorkerRunOutcome> {
         // repair mode는 accepted authority와 rejected payload context를 worker에게 주고, valid planning_task_commands만 내라고 요구한다.
         let prompt = self.render_repair_task_authority_prompt(&request);
@@ -275,10 +476,12 @@ impl PlanningWorkerOrchestrationService {
                     turn_id: Some(request.completed_turn_id),
                 },
                 command_policy: WorkerTaskCommandPolicy::ApplyAll,
+                continuation_permit,
+                official_refresh_permit: None,
             },
         )
     }
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn render_refresh_queue_prompt(&self, request: &PlanningQueueRefreshRequest<'_>) -> String {
         // prompt rendering은 항상 가능한 최신 accepted authority snapshot을 포함하지만, rendering 자체는 state를 mutate하지 않는다.
         let authority_context = self.load_worker_authority_context(request.workspace_directory);
@@ -300,7 +503,7 @@ impl PlanningWorkerOrchestrationService {
             ),
         }
     }
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn render_official_completion_refresh_prompt(
         &self,
         request: &PlanningOfficialCompletionRefreshRequest<'_>,
@@ -316,7 +519,7 @@ impl PlanningWorkerOrchestrationService {
             &authority_context,
         )
     }
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, request))]
     pub fn render_repair_task_authority_prompt(
         &self,
         request: &PlanningLedgerRepairRequest<'_>,
@@ -342,22 +545,45 @@ impl PlanningWorkerOrchestrationService {
         &self,
         workspace_directory: &str,
         refresh_order: u64,
+        continuation_permit: Option<&PostTurnContinuationPermit>,
     ) -> Result<OfficialCompletionRefreshPermit> {
         // owner token에는 process/time entropy를 넣는다. 같은 order에 대한 반복 refresh loop도 authority store에서 구분된다.
-        let owner_token = authority_claim_owner_token("official-refresh", refresh_order);
+        let owner_token = authority_claim_owner_token("official-refresh", refresh_order)?;
         loop {
+            if continuation_permit.is_some_and(|permit| !permit.is_current()) {
+                anyhow::bail!(
+                    "post-turn continuation was superseded while waiting for official refresh order {refresh_order}"
+                );
+            }
             match self.planning_authority.acquire_official_refresh_claim(
                 workspace_directory,
                 refresh_order,
                 &owner_token,
             )? {
                 PlanningAuthorityOfficialRefreshClaimStatus::Acquired => {
-                    return Ok(OfficialCompletionRefreshPermit::new(
+                    let permit = OfficialCompletionRefreshPermit::new(
                         self.planning_authority.clone(),
                         workspace_directory,
                         refresh_order,
-                        owner_token,
-                    ));
+                        owner_token.clone(),
+                    );
+                    return match permit {
+                        Ok(permit) => Ok(permit),
+                        Err(error) => {
+                            let cancellation =
+                                self.planning_authority.cancel_official_refresh_claim(
+                                    workspace_directory,
+                                    refresh_order,
+                                    &owner_token,
+                                );
+                            match cancellation {
+                                Ok(()) => Err(error),
+                                Err(cancel_error) => Err(anyhow::anyhow!(
+                                    "{error}; official refresh claim cancellation also failed: {cancel_error}"
+                                )),
+                            }
+                        }
+                    };
                 }
                 PlanningAuthorityOfficialRefreshClaimStatus::Waiting => {
                     // authority store가 refresh order별로 직렬화한다. caller는 이미 background planning refresh path에 있으므로
@@ -372,7 +598,7 @@ impl PlanningWorkerOrchestrationService {
             }
         }
     }
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, prompt, run_context))]
     fn run_worker_and_reconcile(
         &self,
         workspace_directory: &str,
@@ -420,6 +646,12 @@ impl PlanningWorkerOrchestrationService {
                 return Err(error);
             }
         };
+        if run_context
+            .continuation_permit
+            .is_some_and(|permit| !permit.is_current())
+        {
+            anyhow::bail!("post-turn continuation was superseded before planning worker launch");
+        }
         // worker는 changed planning file과 final message를 모두 돌려줄 수 있다. accepted task authority를 mutate할 수 있는 것은
         // final message 안의 structured planning_task_commands뿐이다.
         let worker_response =
@@ -429,6 +661,7 @@ impl PlanningWorkerOrchestrationService {
                     operation,
                     workspace_directory: workspace_directory.to_string(),
                     prompt,
+                    continuation_permit: run_context.continuation_permit.cloned(),
                 }) {
                 Ok(response) => response,
                 Err(error) => {
@@ -446,187 +679,225 @@ impl PlanningWorkerOrchestrationService {
                     return Err(error);
                 }
             };
-        let task_provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
-            .with_thread_turn(
-                worker_response.thread_id.clone(),
-                worker_response.turn_id.clone(),
-            )
-            .with_parent(
-                run_context.parent_provenance.thread_id.map(str::to_string),
-                run_context.parent_provenance.turn_id.map(str::to_string),
-            );
-        let mut authority_result = PlanningReconciliationResult::default();
-        let mut task_authority_changed = false;
-        if let Some(final_message) = worker_response.final_agent_message.as_deref() {
-            // accepted path는 command 기반이라 validation, conflict handling, queue projection rebuild가
-            // PlanningTaskMutationService에 중앙화된다.
-            match extract_planning_task_commands(final_message) {
-                PlanningTaskCommandExtraction::Commands(commands) => {
-                    let (commands, ignored_delivery_only_follow_up_count) =
-                        filter_worker_task_commands(commands, run_context.command_policy);
-                    if ignored_delivery_only_follow_up_count > 0 {
-                        authority_result.notices.push(format!(
+        if run_context
+            .continuation_permit
+            .is_some_and(|permit| !permit.is_current())
+        {
+            self.runtime_facade.reconcile_after_turn(
+                workspace_directory,
+                orchestration_id,
+                &worker_response.changed_planning_file_paths,
+                &execution_snapshot,
+            )?;
+            anyhow::bail!("post-turn continuation was superseded during planning worker execution");
+        }
+        if let Some(permit) = run_context.official_refresh_permit
+            && let Err(error) = permit.renew_and_verify()
+        {
+            self.runtime_facade.reconcile_after_turn(
+                workspace_directory,
+                orchestration_id,
+                &worker_response.changed_planning_file_paths,
+                &execution_snapshot,
+            )?;
+            return Err(error);
+        }
+        #[cfg(test)]
+        if let Some(hook) = self.before_result_application.as_ref() {
+            hook();
+        }
+        let apply_worker_result = || -> Result<PlanningWorkerRunOutcome> {
+            let task_provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+                .with_thread_turn(
+                    worker_response.thread_id.clone(),
+                    worker_response.turn_id.clone(),
+                )
+                .with_parent(
+                    run_context.parent_provenance.thread_id.map(str::to_string),
+                    run_context.parent_provenance.turn_id.map(str::to_string),
+                );
+            let mut authority_result = PlanningReconciliationResult::default();
+            let mut task_authority_changed = false;
+            if let Some(final_message) = worker_response.final_agent_message.as_deref() {
+                // accepted path는 command 기반이라 validation, conflict handling, queue projection rebuild가
+                // PlanningTaskMutationService에 중앙화된다.
+                match extract_planning_task_commands(final_message) {
+                    PlanningTaskCommandExtraction::Commands(commands) => {
+                        let (commands, ignored_delivery_only_follow_up_count) =
+                            filter_worker_task_commands(commands, run_context.command_policy);
+                        if ignored_delivery_only_follow_up_count > 0 {
+                            authority_result.notices.push(format!(
                             "planning worker ignored {ignored_delivery_only_follow_up_count} delivery-only follow-up task command(s) during official completion"
                         ));
-                    }
-                    if commands.is_empty() && ignored_delivery_only_follow_up_count > 0 {
-                        event_log::emit_lazy("planning_worker_task_commands_ignored", || {
-                            orchestration_event_detail(
-                                workspace_directory,
-                                orchestration_id,
-                                operation,
-                                "task_commands_ignored",
-                                Some("delivery_only_follow_up"),
-                                None,
-                                [(
-                                    "ignored_delivery_only_follow_up_count",
-                                    json!(ignored_delivery_only_follow_up_count),
-                                )],
-                            )
-                        });
-                    } else if !commands.is_empty() {
-                        match self.task_mutation_service.apply_commands(
-                            PlanningTaskMutationRequest {
-                                workspace_directory: workspace_directory.to_string(),
-                                source: PlanningTaskMutationSource::Worker,
-                                legacy_source_turn_id: worker_response.turn_id.clone(),
-                                provenance: task_provenance.clone(),
-                                commands,
-                            },
-                        ) {
-                            Ok(mutation_result) => {
-                                task_authority_changed = mutation_result.task_authority_changed;
-                                if mutation_result.task_authority_changed {
-                                    // mutation service가 projection을 이미 다시 만들었다. reconciliation result는 downstream notice를 위해 그 사실만 기록한다.
-                                    authority_result.queue_projection_action = Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
-                                    authority_result.notices.push(format!(
-                                        "planning worker committed {} task command(s)",
-                                        mutation_result.applied_command_count
-                                    ));
+                        }
+                        if commands.is_empty() && ignored_delivery_only_follow_up_count > 0 {
+                            event_log::emit_lazy("planning_worker_task_commands_ignored", || {
+                                orchestration_event_detail(
+                                    workspace_directory,
+                                    orchestration_id,
+                                    operation,
+                                    "task_commands_ignored",
+                                    Some("delivery_only_follow_up"),
+                                    None,
+                                    [(
+                                        "ignored_delivery_only_follow_up_count",
+                                        json!(ignored_delivery_only_follow_up_count),
+                                    )],
+                                )
+                            });
+                        } else if !commands.is_empty() {
+                            match self.task_mutation_service.apply_commands(
+                                PlanningTaskMutationRequest {
+                                    workspace_directory: workspace_directory.to_string(),
+                                    source: PlanningTaskMutationSource::Worker,
+                                    legacy_source_turn_id: worker_response.turn_id.clone(),
+                                    provenance: task_provenance.clone(),
+                                    commands,
+                                },
+                            ) {
+                                Ok(mutation_result) => {
+                                    task_authority_changed = mutation_result.task_authority_changed;
+                                    if mutation_result.task_authority_changed {
+                                        // mutation service가 projection을 이미 다시 만들었다. reconciliation result는 downstream notice를 위해 그 사실만 기록한다.
+                                        authority_result.queue_projection_action = Some(crate::application::service::planning::repair::reconciliation::PlanningQueueProjectionAction::RebuiltFromAcceptedPlanning);
+                                        authority_result.notices.push(format!(
+                                            "planning worker committed {} task command(s)",
+                                            mutation_result.applied_command_count
+                                        ));
+                                    }
                                 }
-                            }
-                            Err(error) => {
-                                authority_result = self.build_rejected_command_result(
+                                Err(error) => {
+                                    authority_result = self.build_rejected_command_result(
                                     workspace_directory,
                                     &format!(
                                         "planning worker task commands failed validation: {error}"
                                     ),
                                     None,
                                 )?;
+                                }
                             }
                         }
                     }
-                }
-                PlanningTaskCommandExtraction::InvalidCommands {
-                    error,
-                    rejected_json,
-                } => {
-                    // invalid command JSON은 조용히 사라지지 않고 repair request가 된다. planning ledger drift가 operator와 retry loop에 보이게 한다.
-                    authority_result = self.build_rejected_command_result(
-                        workspace_directory,
-                        &format!(
-                            "planning worker returned invalid planning_task_commands: {error}"
-                        ),
+                    PlanningTaskCommandExtraction::InvalidCommands {
+                        error,
                         rejected_json,
-                    )?;
-                }
-                PlanningTaskCommandExtraction::None => {}
-            }
-        }
-        // command handling 뒤에도 file-level reconciliation은 실행된다. worker가 task command를 내지 않았어도 planning workspace file을
-        // 건드렸을 수 있기 때문이다.
-        let reconciliation_result = match self.runtime_facade.reconcile_after_turn(
-            workspace_directory,
-            orchestration_id,
-            &worker_response.changed_planning_file_paths,
-            &execution_snapshot,
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                event_log::emit_lazy("planning_worker_orchestration_failed", || {
-                    orchestration_event_detail(
-                        workspace_directory,
-                        orchestration_id,
-                        operation,
-                        "reconcile_after_turn",
-                        Some("abort"),
-                        None,
-                        [
-                            (
-                                "changed_planning_file_count",
-                                json!(worker_response.changed_planning_file_paths.len()),
+                    } => {
+                        // invalid command JSON은 조용히 사라지지 않고 repair request가 된다. planning ledger drift가 operator와 retry loop에 보이게 한다.
+                        authority_result = self.build_rejected_command_result(
+                            workspace_directory,
+                            &format!(
+                                "planning worker returned invalid planning_task_commands: {error}"
                             ),
-                            ("error", json!(error.to_string())),
-                        ],
-                    )
-                });
-                return Err(error);
+                            rejected_json,
+                        )?;
+                    }
+                    PlanningTaskCommandExtraction::None => {}
+                }
             }
-        };
-        let reconciliation_result =
-            merge_reconciliation_results(authority_result, reconciliation_result);
-        let runtime_projection =
-            if let Some(block_reason) = reconciliation_result.auto_follow_block_reason.clone() {
+            // command handling 뒤에도 file-level reconciliation은 실행된다. worker가 task command를 내지 않았어도 planning workspace file을
+            // 건드렸을 수 있기 때문이다.
+            let reconciliation_result = match self.runtime_facade.reconcile_after_turn(
+                workspace_directory,
+                orchestration_id,
+                &worker_response.changed_planning_file_paths,
+                &execution_snapshot,
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    event_log::emit_lazy("planning_worker_orchestration_failed", || {
+                        orchestration_event_detail(
+                            workspace_directory,
+                            orchestration_id,
+                            operation,
+                            "reconcile_after_turn",
+                            Some("abort"),
+                            None,
+                            [
+                                (
+                                    "changed_planning_file_count",
+                                    json!(worker_response.changed_planning_file_paths.len()),
+                                ),
+                                ("error", json!(error.to_string())),
+                            ],
+                        )
+                    });
+                    return Err(error);
+                }
+            };
+            let reconciliation_result =
+                merge_reconciliation_results(authority_result, reconciliation_result);
+            let runtime_projection = if let Some(block_reason) =
+                reconciliation_result.auto_follow_block_reason.clone()
+            {
                 // reconciliation block은 reload로 가리지 않고 즉시 invalid runtime projection으로 표면화한다.
                 PlanningRuntimeProjection::invalid(block_reason)
             } else {
                 self.runtime_facade
                     .load_runtime_projection_or_invalid(workspace_directory)
             };
-        let worker_summary = worker_response
-            .final_agent_message
-            .as_deref()
-            .and_then(first_non_empty_line)
-            .map(str::to_string);
-        // UI caller는 full repair request를 풀지 않고도 짧은 줄이 필요하므로 rejected summary를 outcome에도 복제한다.
-        let rejected_summary = reconciliation_result
-            .repair_request
-            .as_ref()
-            .map(|request| request.failure_summary.clone());
-        let mut notices = reconciliation_result.notices;
-        if let Some(worker_summary) = worker_summary.as_deref() {
-            notices.push(format!(
-                "planning worker {} summary: {}",
-                operation_label(operation),
-                worker_summary
-            ));
+            let worker_summary = worker_response
+                .final_agent_message
+                .as_deref()
+                .and_then(first_non_empty_line)
+                .map(str::to_string);
+            // UI caller는 full repair request를 풀지 않고도 짧은 줄이 필요하므로 rejected summary를 outcome에도 복제한다.
+            let rejected_summary = reconciliation_result
+                .repair_request
+                .as_ref()
+                .map(|request| request.failure_summary.clone());
+            let mut notices = reconciliation_result.notices;
+            if let Some(worker_summary) = worker_summary.as_deref() {
+                notices.push(format!(
+                    "planning worker {} summary: {}",
+                    operation_label(operation),
+                    worker_summary
+                ));
+            }
+            event_log::emit_lazy("planning_worker_orchestration_completed", || {
+                orchestration_event_detail(
+                    workspace_directory,
+                    orchestration_id,
+                    operation,
+                    "completed",
+                    Some("return_outcome"),
+                    Some(&runtime_projection),
+                    [
+                        (
+                            "changed_planning_file_count",
+                            json!(worker_response.changed_planning_file_paths.len()),
+                        ),
+                        ("task_authority_changed", json!(task_authority_changed)),
+                        (
+                            "repair_requested",
+                            json!(reconciliation_result.repair_request.is_some()),
+                        ),
+                        (
+                            "auto_followup_blocked",
+                            json!(reconciliation_result.auto_follow_block_reason.is_some()),
+                        ),
+                        ("notices_count", json!(notices.len())),
+                        ("has_worker_summary", json!(worker_summary.is_some())),
+                    ],
+                )
+            });
+            Ok(PlanningWorkerRunOutcome {
+                runtime_projection,
+                notices,
+                repair_request: reconciliation_result.repair_request,
+                worker_summary,
+                worker_response: worker_response.final_agent_message,
+                rejected_summary,
+                task_authority_changed,
+            })
+        };
+        match run_context.continuation_permit {
+            Some(permit) => permit.with_current(apply_worker_result).unwrap_or_else(|| {
+                Err(anyhow::anyhow!(
+                    "post-turn continuation was superseded before worker result application"
+                ))
+            }),
+            None => apply_worker_result(),
         }
-        event_log::emit_lazy("planning_worker_orchestration_completed", || {
-            orchestration_event_detail(
-                workspace_directory,
-                orchestration_id,
-                operation,
-                "completed",
-                Some("return_outcome"),
-                Some(&runtime_projection),
-                [
-                    (
-                        "changed_planning_file_count",
-                        json!(worker_response.changed_planning_file_paths.len()),
-                    ),
-                    ("task_authority_changed", json!(task_authority_changed)),
-                    (
-                        "repair_requested",
-                        json!(reconciliation_result.repair_request.is_some()),
-                    ),
-                    (
-                        "auto_followup_blocked",
-                        json!(reconciliation_result.auto_follow_block_reason.is_some()),
-                    ),
-                    ("notices_count", json!(notices.len())),
-                    ("has_worker_summary", json!(worker_summary.is_some())),
-                ],
-            )
-        });
-        Ok(PlanningWorkerRunOutcome {
-            runtime_projection,
-            notices,
-            repair_request: reconciliation_result.repair_request,
-            worker_summary,
-            worker_response: worker_response.final_agent_message,
-            rejected_summary,
-            task_authority_changed,
-        })
     }
     fn load_worker_authority_context(
         &self,
@@ -734,14 +1005,21 @@ fn authority_load_status<T>(result: Result<Option<T>>) -> String {
     }
 }
 
-fn authority_claim_owner_token(prefix: &str, nonce: u64) -> String {
+fn authority_claim_owner_token(prefix: &str, nonce: u64) -> Result<String> {
     // token은 security-sensitive하지 않다. local concurrent refresh attempt 사이에서 claim/release bookkeeping을 위한
     // collision-resistant owner id다.
+    let pid = std::process::id();
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("{prefix}-{}-{nonce}-{unique_suffix}", std::process::id())
+    let identity =
+        crate::process_liveness::required_process_start_identity(pid).map_err(|error| {
+            anyhow::anyhow!("official refresh owner identity is unavailable: {error}")
+        })?;
+    Ok(format!(
+        "{prefix}-{pid}-{nonce}-{unique_suffix}-process-start:{identity}"
+    ))
 }
 
 fn first_non_empty_line(text: &str) -> Option<&str> {
@@ -901,7 +1179,7 @@ fn contains_word(words: &HashSet<&str>, word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -930,8 +1208,9 @@ mod tests {
     use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
-        PLANNING_FORMAT_VERSION, PlanningOfficialCompletionRefreshPayload, PriorityQueueProjection,
-        QueueIdleConfig, TaskActor, TaskAuthorityDocument,
+        PLANNING_FORMAT_VERSION, PlanningOfficialCompletionRefreshPayload,
+        PostTurnContinuationGate, PriorityQueueProjection, QueueIdleConfig, TaskActor,
+        TaskAuthorityDocument,
     };
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
@@ -949,6 +1228,7 @@ mod tests {
     struct RecordingPlanningWorkerPort {
         response: Mutex<Option<PlanningWorkerResponse>>,
         requests: Mutex<Vec<PlanningWorkerRequest>>,
+        after_run: Option<Arc<dyn Fn() + Send + Sync>>,
     }
 
     impl RecordingPlanningWorkerPort {
@@ -956,6 +1236,18 @@ mod tests {
             Self {
                 response: Mutex::new(Some(response)),
                 requests: Mutex::new(Vec::new()),
+                after_run: None,
+            }
+        }
+
+        fn new_with_after_run(
+            response: PlanningWorkerResponse,
+            after_run: Arc<dyn Fn() + Send + Sync>,
+        ) -> Self {
+            Self {
+                response: Mutex::new(Some(response)),
+                requests: Mutex::new(Vec::new()),
+                after_run: Some(after_run),
             }
         }
 
@@ -976,11 +1268,16 @@ mod tests {
                 .lock()
                 .expect("recorded worker requests should not be poisoned")
                 .push(request);
-            self.response
+            let response = self
+                .response
                 .lock()
                 .expect("worker response should not be poisoned")
                 .clone()
-                .ok_or_else(|| anyhow!("test worker response was not configured"))
+                .ok_or_else(|| anyhow!("test worker response was not configured"))?;
+            if let Some(after_run) = self.after_run.as_ref() {
+                after_run();
+            }
+            Ok(response)
         }
     }
 
@@ -989,6 +1286,9 @@ mod tests {
         record: Mutex<PlanningWorkspaceLoadRecord>,
         commits: Mutex<Vec<PlanningWorkspaceLoadRecord>>,
         optional_files: Mutex<BTreeMap<String, String>>,
+        post_snapshot_candidate: Mutex<Option<PlanningWorkspaceLoadRecord>>,
+        before_cas_record: Mutex<Option<PlanningWorkspaceLoadRecord>>,
+        load_count: AtomicU64,
     }
 
     impl RecordingPlanningWorkspacePort {
@@ -999,7 +1299,22 @@ mod tests {
                 }),
                 commits: Mutex::new(Vec::new()),
                 optional_files: Mutex::new(BTreeMap::new()),
+                post_snapshot_candidate: Mutex::new(None),
+                before_cas_record: Mutex::new(None),
+                load_count: AtomicU64::new(0),
             }
+        }
+
+        fn new_with_worker_candidate(result_output_markdown: &str, worker_candidate: &str) -> Self {
+            let port = Self::new(result_output_markdown);
+            *port
+                .post_snapshot_candidate
+                .lock()
+                .expect("worker candidate should not be poisoned") =
+                Some(PlanningWorkspaceLoadRecord {
+                    result_output_markdown: Some(worker_candidate.to_string()),
+                });
+            port
         }
 
         fn commits(&self) -> Vec<PlanningWorkspaceLoadRecord> {
@@ -1007,6 +1322,20 @@ mod tests {
                 .lock()
                 .expect("recorded workspace commits should not be poisoned")
                 .clone()
+        }
+
+        fn current_record(&self) -> PlanningWorkspaceLoadRecord {
+            self.record
+                .lock()
+                .expect("workspace record should not be poisoned")
+                .clone()
+        }
+
+        fn mutate_before_next_cas(&self, record: PlanningWorkspaceLoadRecord) {
+            *self
+                .before_cas_record
+                .lock()
+                .expect("workspace CAS mutation should not be poisoned") = Some(record);
         }
     }
 
@@ -1048,6 +1377,18 @@ mod tests {
             &self,
             _workspace_dir: &str,
         ) -> Result<PlanningWorkspaceLoadRecord> {
+            if self.load_count.fetch_add(1, Ordering::SeqCst) > 0
+                && let Some(candidate) = self
+                    .post_snapshot_candidate
+                    .lock()
+                    .expect("worker candidate should not be poisoned")
+                    .take()
+            {
+                *self
+                    .record
+                    .lock()
+                    .expect("workspace record should not be poisoned") = candidate;
+            }
             Ok(self
                 .record
                 .lock()
@@ -1078,6 +1419,35 @@ mod tests {
                 .expect("recorded workspace commits should not be poisoned")
                 .push(record.clone());
             Ok(())
+        }
+
+        fn compare_and_swap_planning_workspace_files(
+            &self,
+            _workspace_dir: &str,
+            observed: &PlanningWorkspaceLoadRecord,
+            replacement: &PlanningWorkspaceLoadRecord,
+        ) -> Result<bool> {
+            let mut current = self
+                .record
+                .lock()
+                .expect("workspace record should not be poisoned");
+            if let Some(concurrent) = self
+                .before_cas_record
+                .lock()
+                .expect("workspace CAS mutation should not be poisoned")
+                .take()
+            {
+                *current = concurrent;
+            }
+            if *current != *observed {
+                return Ok(false);
+            }
+            *current = replacement.clone();
+            self.commits
+                .lock()
+                .expect("recorded workspace commits should not be poisoned")
+                .push(replacement.clone());
+            Ok(true)
         }
 
         fn load_optional_planning_file(
@@ -1142,8 +1512,9 @@ mod tests {
         let workspace = workspace("command-commit");
         let repo = Arc::new(NoopPlanningTaskRepositoryPort);
         seed_authority(repo.as_ref(), &workspace);
-        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new_with_worker_candidate(
             "# Result Output\n- Summarize completed work.",
+            "# Result Output\n- Worker attempted overwrite.",
         ));
         let worker_message = r#"Worker planned follow-up.
 
@@ -1239,6 +1610,133 @@ mod tests {
         assert_eq!(requests[0].workspace_directory, workspace);
         assert!(requests[0].prompt.contains("please continue"));
         assert!(requests[0].prompt.contains("source_of_truth=accepted DB"));
+    }
+
+    #[test]
+    fn superseded_permit_between_worker_return_and_host_apply_preserves_authority() {
+        let workspace = workspace("superseded-before-host-apply");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Preserve this state.",
+        ));
+        let worker_message = r#"Worker planned stale follow-up.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Must not commit","description":"A superseded worker result cannot mutate accepted authority.","direction_relation_note":"stale continuation"}]}}
+```"#;
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("stale-worker-thread".to_string()),
+            turn_id: Some("stale-worker-turn".to_string()),
+            final_agent_message: Some(worker_message.to_string()),
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let mut service = orchestration_service(worker, workspace_port.clone(), repo.clone());
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let hook_entered = entered.clone();
+        let hook_release = release.clone();
+        service.before_result_application = Some(Arc::new(move || {
+            hook_entered.wait();
+            hook_release.wait();
+        }));
+        let gate = PostTurnContinuationGate::default();
+        let permit = gate.capture();
+        let request_workspace = workspace.clone();
+        let handle = std::thread::spawn(move || {
+            service.refresh_queue_from_reply_with_permit(
+                PlanningQueueRefreshRequest {
+                    workspace_directory: &request_workspace,
+                    parent_thread_id: Some("parent-thread"),
+                    completed_turn_id: "parent-turn",
+                    latest_user_message: Some("continue"),
+                    latest_main_reply: "done",
+                    previous_handoff_task: None,
+                    mode: PlanningQueueRefreshMode::FromLatestMainReply,
+                },
+                &permit,
+            )
+        });
+
+        entered.wait();
+        gate.advance();
+        release.wait();
+        let error = handle
+            .join()
+            .expect("worker refresh thread should finish")
+            .expect_err("superseded result must not be applied");
+
+        assert!(
+            error
+                .to_string()
+                .contains("before worker result application")
+        );
+        let task_snapshot = repo
+            .load_task_authority_snapshot(&workspace)
+            .expect("task authority should load")
+            .expect("seeded task authority should remain");
+        assert!(task_snapshot.task_authority.tasks.is_empty());
+        assert!(workspace_port.commits().is_empty());
+    }
+
+    #[test]
+    fn superseded_worker_reconciliation_preserves_concurrent_operator_file_edit() {
+        let workspace = workspace("superseded-file-reconciliation");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new_with_worker_candidate(
+            "# Result Output\n- Pre-turn snapshot.",
+            "# Result Output\n- Late worker candidate.",
+        ));
+        workspace_port.mutate_before_next_cas(PlanningWorkspaceLoadRecord {
+            result_output_markdown: Some("# Result Output\n- Operator edit.".to_string()),
+        });
+        let gate = PostTurnContinuationGate::default();
+        let callback_gate = gate.clone();
+        let worker = Arc::new(RecordingPlanningWorkerPort::new_with_after_run(
+            PlanningWorkerResponse {
+                operation: PlanningWorkerOperation::RefreshQueue,
+                thread_id: Some("late-worker-thread".to_string()),
+                turn_id: Some("late-worker-turn".to_string()),
+                final_agent_message: Some("late worker result".to_string()),
+                changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
+            },
+            Arc::new(move || {
+                callback_gate.advance();
+            }),
+        ));
+        let service = orchestration_service(worker, workspace_port.clone(), repo);
+        let permit = gate.capture();
+
+        let error = service
+            .refresh_queue_from_reply_with_permit(
+                PlanningQueueRefreshRequest {
+                    workspace_directory: &workspace,
+                    parent_thread_id: Some("parent-thread"),
+                    completed_turn_id: "parent-turn",
+                    latest_user_message: Some("continue"),
+                    latest_main_reply: "done",
+                    previous_handoff_task: None,
+                    mode: PlanningQueueRefreshMode::FromLatestMainReply,
+                },
+                &permit,
+            )
+            .expect_err("superseded worker must not apply its late result");
+
+        assert!(
+            error
+                .to_string()
+                .contains("superseded during planning worker execution")
+        );
+        assert!(workspace_port.commits().is_empty());
+        assert_eq!(
+            workspace_port
+                .current_record()
+                .result_output_markdown
+                .as_deref(),
+            Some("# Result Output\n- Operator edit.")
+        );
     }
 
     #[test]
@@ -1492,7 +1990,7 @@ mod tests {
     }
 
     #[test]
-    fn official_refresh_permit_waits_for_earlier_claim_then_releases_on_drop() {
+    fn official_refresh_permit_waits_for_earlier_claim_then_cancels_on_drop() {
         let workspace = workspace("official-completion-waiting");
         let repo = Arc::new(NoopPlanningTaskRepositoryPort);
         let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
@@ -1530,7 +2028,7 @@ mod tests {
             orchestration_service_with_authority(worker, workspace_port, repo, authority.clone());
 
         let permit = service
-            .acquire_official_refresh_permit(&workspace, second_order)
+            .acquire_official_refresh_permit(&workspace, second_order, None)
             .expect("second order should acquire after first order releases");
         release_handle
             .join()
@@ -1540,9 +2038,180 @@ mod tests {
         assert_eq!(
             authority
                 .acquire_official_refresh_claim(&workspace, second_order, "second-owner")
-                .expect("second order should be completed after permit drop"),
+                .expect("second order should be reusable after unfinished permit drop"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+        authority
+            .cancel_official_refresh_claim(&workspace, second_order, "second-owner")
+            .expect("replacement claim should cancel");
+    }
+
+    #[test]
+    fn official_refresh_permit_wait_stops_when_post_turn_continuation_is_superseded() {
+        let workspace = workspace("official-completion-cancelled-wait");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: None,
+            turn_id: None,
+            final_agent_message: None,
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let first_order = authority
+            .reserve_next_official_refresh_order(&workspace)
+            .expect("first order should reserve");
+        let second_order = authority
+            .reserve_next_official_refresh_order(&workspace)
+            .expect("second order should reserve");
+        assert_eq!(
+            authority
+                .acquire_official_refresh_claim(&workspace, first_order, "first-owner")
+                .expect("first claim should acquire"),
+            PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+        );
+        let service =
+            orchestration_service_with_authority(worker, workspace_port, repo, authority.clone());
+        let gate = PostTurnContinuationGate::default();
+        let continuation_permit = gate.capture();
+        let cancel_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            gate.advance();
+        });
+
+        let started_at = std::time::Instant::now();
+        let error = match service.acquire_official_refresh_permit(
+            &workspace,
+            second_order,
+            Some(&continuation_permit),
+        ) {
+            Ok(_) => panic!("superseded waiter must stop without acquiring a later order"),
+            Err(error) => error,
+        };
+        cancel_handle
+            .join()
+            .expect("cancellation helper should complete");
+        authority
+            .release_official_refresh_claim(&workspace, first_order, "first-owner")
+            .expect("first claim should release");
+
+        assert!(error.to_string().contains("superseded while waiting"));
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn superseded_official_refresh_reacquires_same_order_then_completes() {
+        let workspace = workspace("official-completion-superseded-retry");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new(
+            "# Result Output\n- Summarize completed work.",
+        ));
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-retry".to_string()),
+            turn_id: Some("worker-turn-retry".to_string()),
+            final_agent_message: Some("official refresh applied".to_string()),
+            changed_planning_file_paths: Vec::new(),
+        }));
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let refresh_order = authority
+            .reserve_next_official_refresh_order(&workspace)
+            .expect("refresh order should reserve");
+        let mut service = orchestration_service_with_authority(
+            worker.clone(),
+            workspace_port,
+            repo,
+            authority.clone(),
+        );
+        let gate = PostTurnContinuationGate::default();
+        let superseded_once = Arc::new(AtomicBool::new(false));
+        let hook_gate = gate.clone();
+        let hook_superseded_once = superseded_once.clone();
+        service.before_result_application = Some(Arc::new(move || {
+            if !hook_superseded_once.swap(true, Ordering::SeqCst) {
+                hook_gate.advance();
+            }
+        }));
+        let contract = official_completion_contract_with_order(refresh_order);
+
+        let first_error = service
+            .refresh_queue_from_official_completion_with_permit(
+                PlanningOfficialCompletionRefreshRequest {
+                    workspace_directory: &workspace,
+                    parent_thread_id: Some("parent-thread-retry"),
+                    latest_user_message: None,
+                    latest_main_reply: "done",
+                    previous_handoff_task: None,
+                    contract: &contract,
+                },
+                &gate.capture(),
+            )
+            .expect_err("superseded result must cancel without consuming its order");
+        assert!(
+            first_error
+                .to_string()
+                .contains("before worker result application")
+        );
+
+        let outcome = service
+            .refresh_queue_from_official_completion_with_permit(
+                PlanningOfficialCompletionRefreshRequest {
+                    workspace_directory: &workspace,
+                    parent_thread_id: Some("parent-thread-retry"),
+                    latest_user_message: None,
+                    latest_main_reply: "done",
+                    previous_handoff_task: None,
+                    contract: &contract,
+                },
+                &gate.capture(),
+            )
+            .expect("same order should be reacquired and completed by the current generation");
+
+        assert_eq!(
+            outcome.worker_summary.as_deref(),
+            Some("official refresh applied")
+        );
+        assert_eq!(worker.requests().len(), 2);
+        assert_eq!(
+            authority
+                .acquire_official_refresh_claim(&workspace, refresh_order, "after-success-owner")
+                .expect("completed order should inspect"),
             PlanningAuthorityOfficialRefreshClaimStatus::AlreadyCompleted
         );
+    }
+
+    #[test]
+    fn official_refresh_cleanup_error_preserves_heartbeat_and_claim_failures() {
+        let error = combine_official_refresh_cleanup_results(
+            Err(anyhow!("heartbeat join failed")),
+            Err(anyhow!("claim transaction failed")),
+            OfficialRefreshClaimDisposition::Cancel,
+        )
+        .expect_err("both cleanup failures should surface");
+
+        let detail = error.to_string();
+        assert!(detail.contains("heartbeat join failed"));
+        assert!(detail.contains("official refresh claim cancel also failed"));
+        assert!(detail.contains("claim transaction failed"));
+    }
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
+    #[test]
+    fn official_refresh_owner_token_captures_process_start_identity() {
+        let pid = std::process::id();
+        let identity = crate::process_liveness::process_start_identity(pid)
+            .expect("current process identity probe should succeed")
+            .expect("supported OS should expose process start identity");
+
+        let token = authority_claim_owner_token("official-refresh", 17)
+            .expect("official refresh owner token should include a birth identity");
+
+        assert!(token.starts_with(&format!("official-refresh-{pid}-17-")));
+        assert!(token.ends_with(&format!("-process-start:{identity}")));
     }
 
     #[test]
@@ -1780,6 +2449,7 @@ mod tests {
             PlanningDirectionAuthorityCommit {
                 observed_planning_revision: None,
                 directions: &directions(),
+                authority_mutation_owner_token: None,
             },
         )
         .expect("direction snapshot should commit");

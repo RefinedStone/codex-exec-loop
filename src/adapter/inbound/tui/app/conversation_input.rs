@@ -1,5 +1,9 @@
 use super::{ConversationViewModel, InlineShellCommand};
 
+pub(super) const MAX_PROMPT_INPUT_BYTES: usize = 1024 * 1024;
+const PROMPT_INPUT_LIMIT_STATUS: &str =
+    "prompt input limit reached (1048576 bytes); shorten the prompt before submitting";
+
 /*
  * conversation_input is a pure reducer for composer-facing events. Shell
  * controllers translate keys and overlay actions into ConversationInputEvent;
@@ -50,6 +54,22 @@ pub(super) enum ConversationInputEvent {
         transcript_text: String,
         status_text: String,
     },
+}
+
+impl ConversationInputEvent {
+    pub(super) fn mutates_input_buffer(&self) -> bool {
+        matches!(
+            self,
+            Self::CharacterTyped { .. }
+                | Self::TextInserted { .. }
+                | Self::NewlineInserted
+                | Self::BackspacePressed
+                | Self::DeletePressed
+                | Self::PreviousWordDeleted
+                | Self::InputCleared
+                | Self::InlineCommandPaletteCommandInserted { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +188,11 @@ fn modify_input_buffer_and_sync(
 }
 
 fn insert_text_into_input_buffer_and_sync(state: &mut ConversationViewModel, text: &str) {
+    if state.input_buffer.len().saturating_add(text.len()) > MAX_PROMPT_INPUT_BYTES {
+        clear_startup_submit_after_input_change(state);
+        state.status_text = PROMPT_INPUT_LIMIT_STATUS.to_string();
+        return;
+    }
     modify_input_buffer_and_sync(state, |buffer, cursor_byte_index| {
         buffer.insert_str(cursor_byte_index, text);
         cursor_byte_index + text.len()
@@ -445,6 +470,27 @@ mod tests {
         );
 
         assert_eq!(reduced.state.input_buffer, "before first\nsecond");
+    }
+
+    #[test]
+    fn text_inserted_rejects_an_atomic_paste_above_the_prompt_limit() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "a".repeat(MAX_PROMPT_INPUT_BYTES - 1);
+        let original = state.input_buffer.clone();
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationInputEvent::TextInserted {
+                text: "한".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.state.input_buffer, original);
+        assert_eq!(reduced.state.status_text, PROMPT_INPUT_LIMIT_STATUS);
+        assert_eq!(
+            reduced.state.input_cursor_byte_index(),
+            MAX_PROMPT_INPUT_BYTES - 1
+        );
     }
 
     #[test]

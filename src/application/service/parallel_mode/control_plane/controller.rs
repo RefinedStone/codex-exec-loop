@@ -25,6 +25,8 @@ const CONTROL_PLANE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 pub enum ParallelModeControlPlanePresentationEvent {
     EnterProgress {
         workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
         readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
         loading_stage: ParallelModeControlPlaneLoadingStage,
         status_text: String,
@@ -38,9 +40,11 @@ pub enum ParallelModeControlPlanePresentationEvent {
         snapshot: Box<ParallelModeSupervisorSnapshot>,
     },
     StatusShown {
+        workspace_directory: String,
         status_text: String,
     },
     ConversationRuntimeNotice {
+        workspace_directory: String,
         notice: String,
     },
     PostTurnAutoFollowPromptConsumed,
@@ -137,6 +141,12 @@ where
         self.runtime.store().current_epoch_id
     }
 
+    #[cfg(test)]
+    pub fn automation_epoch_is_active(&self, workspace_directory: &str, epoch_id: u64) -> bool {
+        self.effect_runner
+            .automation_epoch_is_active(workspace_directory, epoch_id)
+    }
+
     pub fn supervisor_refresh_in_flight(&self) -> bool {
         self.runtime.store().supervisor_refresh_in_flight.is_some()
     }
@@ -221,11 +231,15 @@ where
         match event {
             ParallelModeControlPlaneBackgroundEvent::EnterProgress {
                 workspace_directory,
+                epoch_id,
+                effect_id,
                 readiness_snapshot,
                 loading_stage,
                 status_text,
             } => self.enter_progress(
                 workspace_directory,
+                epoch_id,
+                effect_id,
                 readiness_snapshot,
                 loading_stage,
                 status_text,
@@ -285,11 +299,12 @@ where
                 event,
                 has_actionable_queue_head,
             } => self.worker_event_received(event, has_actionable_queue_head),
-            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice(notice) => {
-                vec![
-                    ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice },
-                ]
-            }
+            ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+                workspace_directory,
+                epoch_id,
+                effect_id,
+                notice,
+            } => self.intermediate_runtime_notice(workspace_directory, epoch_id, effect_id, notice),
             ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
                 workspace_directory,
                 epoch_id,
@@ -372,8 +387,17 @@ where
 
     #[cfg(test)]
     pub fn force_mode_for_test(&mut self, workspace_directory: impl Into<String>, enabled: bool) {
+        let workspace_directory = workspace_directory.into();
         self.runtime
-            .force_mode_for_test(workspace_directory, enabled);
+            .force_mode_for_test(workspace_directory.clone(), enabled);
+        if enabled {
+            if let Some(epoch_id) = self.runtime.store().current_epoch_id {
+                self.effect_runner
+                    .activate_epoch(&workspace_directory, epoch_id);
+            }
+        } else {
+            self.effect_runner.cancel_epoch(&workspace_directory);
+        }
     }
 
     #[cfg(test)]
@@ -384,8 +408,11 @@ where
 
     #[cfg(test)]
     pub fn force_epoch_for_test(&mut self, workspace_directory: impl Into<String>, epoch_id: u64) {
+        let workspace_directory = workspace_directory.into();
         self.runtime
-            .force_epoch_for_test(workspace_directory, epoch_id);
+            .force_epoch_for_test(workspace_directory.clone(), epoch_id);
+        self.effect_runner
+            .activate_epoch(&workspace_directory, epoch_id);
     }
 
     #[cfg(test)]
@@ -394,18 +421,53 @@ where
         workspace_directory: impl Into<String>,
         epoch_id: u64,
     ) -> ParallelModeControlPlaneEffectId {
-        self.runtime
-            .force_supervisor_refresh_in_flight_for_test(workspace_directory, epoch_id)
+        let workspace_directory = workspace_directory.into();
+        let effect_id = self
+            .runtime
+            .force_supervisor_refresh_in_flight_for_test(workspace_directory.clone(), epoch_id);
+        self.effect_runner
+            .activate_epoch(&workspace_directory, epoch_id);
+        effect_id
+    }
+
+    #[cfg(test)]
+    pub fn force_parallel_entry_in_flight_for_test(
+        &mut self,
+        workspace_directory: impl Into<String>,
+        epoch_id: u64,
+    ) -> ParallelModeControlPlaneEffectId {
+        let workspace_directory = workspace_directory.into();
+        let effect_id = self
+            .runtime
+            .force_parallel_entry_in_flight_for_test(workspace_directory.clone(), epoch_id);
+        self.effect_runner
+            .activate_epoch(&workspace_directory, epoch_id);
+        effect_id
+    }
+
+    #[cfg(test)]
+    pub fn force_readiness_snapshot_for_test(
+        &mut self,
+        readiness_snapshot: ParallelModeReadinessSnapshot,
+    ) {
+        self.readiness_snapshot = Some(readiness_snapshot);
+    }
+
+    #[cfg(test)]
+    pub fn readiness_snapshot_for_test(&self) -> Option<ParallelModeReadinessSnapshot> {
+        self.readiness_snapshot.clone()
     }
 
     fn enter_progress(
         &mut self,
         workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
         readiness_snapshot: Option<ParallelModeReadinessSnapshot>,
         loading_stage: ParallelModeControlPlaneLoadingStage,
         status_text: String,
     ) -> Vec<ParallelModeControlPlanePresentationEvent> {
-        if !self.event_targets_active_workspace(&workspace_directory) {
+        if !self.event_targets_current_effect(&workspace_directory, epoch_id, effect_id) {
             return Vec::new();
         }
         if let Some(readiness_snapshot) = readiness_snapshot.as_ref() {
@@ -413,10 +475,30 @@ where
         }
         vec![ParallelModeControlPlanePresentationEvent::EnterProgress {
             workspace_directory,
+            epoch_id,
+            effect_id,
             readiness_snapshot,
             loading_stage,
             status_text,
         }]
+    }
+
+    fn intermediate_runtime_notice(
+        &self,
+        workspace_directory: String,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+        notice: String,
+    ) -> Vec<ParallelModeControlPlanePresentationEvent> {
+        if !self.event_targets_current_effect(&workspace_directory, epoch_id, effect_id) {
+            return Vec::new();
+        }
+        vec![
+            ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+                workspace_directory,
+                notice,
+            },
+        ]
     }
 
     fn entry_completed(
@@ -480,9 +562,12 @@ where
                 snapshot: Box::new(supervisor_snapshot),
             },
             ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
-                workspace_directory,
+                workspace_directory: workspace_directory.clone(),
             },
-            ParallelModeControlPlanePresentationEvent::StatusShown { status_text },
+            ParallelModeControlPlanePresentationEvent::StatusShown {
+                workspace_directory,
+                status_text,
+            },
         ];
         events.extend(self.drain_outcome(outcome));
         events
@@ -576,9 +661,12 @@ where
                 snapshot: Box::new(supervisor_snapshot),
             },
             ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
-                workspace_directory,
+                workspace_directory: workspace_directory.clone(),
             },
-            ParallelModeControlPlanePresentationEvent::StatusShown { status_text },
+            ParallelModeControlPlanePresentationEvent::StatusShown {
+                workspace_directory,
+                status_text,
+            },
         ];
         events.extend(self.drain_outcome(runtime_outcome));
         events
@@ -633,19 +721,24 @@ where
         } else {
             format!("parallel mode: distributor retry completed / notices: {notice_count}")
         };
-        let mut events: Vec<_> =
-            notices
-                .into_iter()
-                .map(|notice| {
-                    ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice { notice }
-                })
-                .collect();
+        let mut events: Vec<_> = notices
+            .into_iter()
+            .map(
+                |notice| ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+                    workspace_directory: workspace_directory.clone(),
+                    notice,
+                },
+            )
+            .collect();
         events.push(
             ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
-                workspace_directory,
+                workspace_directory: workspace_directory.clone(),
             },
         );
-        events.push(ParallelModeControlPlanePresentationEvent::StatusShown { status_text });
+        events.push(ParallelModeControlPlanePresentationEvent::StatusShown {
+            workspace_directory,
+            status_text,
+        });
         events.extend(self.drain_outcome(outcome));
         events
     }
@@ -699,11 +792,16 @@ where
                 }
                 ParallelModeControlPlaneEvent::DispatchWithheld { trigger, reason } => {
                     self.record_dispatch_withheld(trigger, &reason);
-                    presentation_events.push(
-                        ParallelModeControlPlanePresentationEvent::StatusShown {
-                            status_text: format!("parallel mode: dispatch withheld / {reason}"),
-                        },
-                    );
+                    if let Some(workspace_directory) =
+                        self.runtime.store().workspace_directory.clone()
+                    {
+                        presentation_events.push(
+                            ParallelModeControlPlanePresentationEvent::StatusShown {
+                                workspace_directory,
+                                status_text: format!("parallel mode: dispatch withheld / {reason}"),
+                            },
+                        );
+                    }
                 }
                 ParallelModeControlPlaneEvent::DispatchCommandQueued {
                     trigger,
@@ -727,21 +825,26 @@ where
                     );
                 }
                 ParallelModeControlPlaneEvent::PostTurnDispatchRequested {
-                    workspace_directory: _,
+                    workspace_directory,
                     epoch_id,
                 } => {
                     self.clear_dispatch_withheld_reason();
                     presentation_events.push(
                         ParallelModeControlPlanePresentationEvent::StatusShown {
+                            workspace_directory,
                             status_text: format!(
                                 "parallel mode: automation epoch {epoch_id} opened / dispatching accepted queue"
                             ),
                         },
                     );
                 }
-                ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice } => {
+                ParallelModeControlPlaneEvent::ConversationRuntimeNotice {
+                    workspace_directory,
+                    notice,
+                } => {
                     presentation_events.push(
                         ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+                            workspace_directory,
                             notice,
                         },
                     );
@@ -749,12 +852,27 @@ where
                 ParallelModeControlPlaneEvent::ModeDisabled {
                     workspace_directory,
                 } => {
+                    self.effect_runner.cancel_epoch(&workspace_directory);
                     self.readiness_snapshot = None;
                     presentation_events.push(
                         ParallelModeControlPlanePresentationEvent::ModeDisabled {
                             workspace_directory,
                         },
                     );
+                }
+                ParallelModeControlPlaneEvent::EpochOpened {
+                    workspace_directory,
+                    epoch_id,
+                } => {
+                    self.effect_runner
+                        .activate_epoch(&workspace_directory, epoch_id);
+                }
+                ParallelModeControlPlaneEvent::EpochClosed {
+                    workspace_directory,
+                    ..
+                } => {
+                    self.effect_runner.cancel_epoch(&workspace_directory);
+                    self.readiness_snapshot = None;
                 }
                 _ => {}
             }
@@ -824,12 +942,13 @@ where
                         snapshot: readiness_snapshot.clone(),
                     },
                     ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
-                        workspace_directory,
+                        workspace_directory: workspace_directory.clone(),
                         snapshot: Box::new(supervisor_snapshot),
                     },
                 ];
                 if show_status {
                     events.push(ParallelModeControlPlanePresentationEvent::StatusShown {
+                        workspace_directory,
                         status_text: format!(
                             "parallel readiness refreshed / state: {}",
                             readiness_snapshot.readiness_label()
@@ -939,6 +1058,7 @@ where
                         effects: Vec::new(),
                     });
                     events.push(ParallelModeControlPlanePresentationEvent::StatusShown {
+                        workspace_directory,
                         status_text: format!("parallel mode: dispatch deferred / {reason}"),
                     });
                     events
@@ -965,6 +1085,17 @@ where
     fn event_targets_active_workspace(&self, workspace_directory: &str) -> bool {
         self.mode_enabled()
             && self.runtime.store().workspace_directory.as_deref() == Some(workspace_directory)
+    }
+
+    fn event_targets_current_effect(
+        &self,
+        workspace_directory: &str,
+        epoch_id: u64,
+        effect_id: ParallelModeControlPlaneEffectId,
+    ) -> bool {
+        self.event_targets_active_workspace(workspace_directory)
+            && self.current_epoch_id() == Some(epoch_id)
+            && self.runtime.store().effect_is_in_flight(effect_id)
     }
 
     fn record_dispatch_withheld(

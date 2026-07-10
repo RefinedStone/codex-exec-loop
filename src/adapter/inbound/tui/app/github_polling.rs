@@ -1,6 +1,6 @@
 use super::{BackgroundMessage, NativeTuiApp};
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::application::service::parallel_mode::parallel_mode_integration_branch;
+use crate::application::service::parallel_mode::parallel_mode_integration_branch_for_repo;
 use crate::composition::production;
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
@@ -50,9 +50,12 @@ impl GithubReviewPollingBootstrap {
         Self::from_discovery_result(
             interval_seconds_value,
             || {
+                let integration_branch =
+                    parallel_mode_integration_branch_for_repo(&repo_root.display().to_string())
+                        .map_err(anyhow::Error::msg)?;
                 production::discover_github_review_poller_service_for_current_branch(
                     repo_root,
-                    parallel_mode_integration_branch(),
+                    &integration_branch,
                 )
             },
             now,

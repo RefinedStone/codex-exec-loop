@@ -1,16 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+    <link rel="icon" href="data:,">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ page_title }} | Planning Admin</title>
     <meta name="csrf-token" content="{{ csrf_token }}">
     <style>
       @font-face {
-        font-family: 'DungGeunMo';
-        src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_six@1.2/DungGeunMo.woff') format('woff');
-        font-weight: normal;
+        font-family: 'Galmuri11';
+        src: url('/admin/assets/fonts/Galmuri11.woff2') format('woff2');
         font-style: normal;
+        font-weight: 400;
+        font-display: block;
+      }
+      @font-face {
+        font-family: 'Galmuri11';
+        src: url('/admin/assets/fonts/Galmuri11-Bold.woff2') format('woff2');
+        font-style: normal;
+        font-weight: 700;
+        font-display: block;
       }
       :root {
         --bg: #eef2f6;
@@ -46,7 +55,7 @@
         --accent: #35d07f;
         --accent-soft: rgba(53, 208, 127, 0.13);
         --sidebar: #07101d;
-        font-family: 'DungGeunMo', monospace;
+        font-family: 'Galmuri11', ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
         -webkit-font-smoothing: none;
         font-smooth: never;
       }
@@ -764,9 +773,16 @@
         .admin-layout {
           grid-template-columns: 1fr;
         }
+        body.akra-graphic .admin-layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
         .sidebar {
           position: static;
           height: auto;
+        }
+        body.akra-graphic .sidebar {
+          width: 100%;
+          min-width: 0;
         }
         .nav {
           flex-direction: row;
@@ -826,110 +842,7 @@
         }
       }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.3.3/pixi.min.js"></script>
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script>
-      (function () {
-        const akraHashTabRoutes = {
-          directions: "/admin/akra/directions",
-          tasks: "/admin/akra/tasks"
-        };
-
-        const redirectAkraHashTab = function () {
-          if (window.location.pathname !== "/admin/akra") return;
-
-          const tabName = window.location.hash.replace(/^#/, "");
-          const targetPath = akraHashTabRoutes[tabName];
-          if (!targetPath) return;
-
-          window.location.replace(targetPath);
-        };
-
-        redirectAkraHashTab();
-        window.addEventListener("hashchange", redirectAkraHashTab);
-      })();
-
-      document.addEventListener("htmx:configRequest", function (event) {
-        const token = document.querySelector('meta[name="csrf-token"]')?.content;
-        if (token) {
-          event.detail.headers["X-CSRF-Token"] = token;
-        }
-      });
-
-      document.addEventListener("input", function (event) {
-        const filter = event.target.closest("[data-list-filter]");
-        if (!filter) return;
-
-        const targetId = filter.dataset.listFilter;
-        const list = document.getElementById(targetId);
-        if (!list) return;
-
-        const query = filter.value.trim().toLowerCase();
-        const rows = [...list.querySelectorAll("[data-filter-text]")];
-        let visibleCount = 0;
-
-        for (const row of rows) {
-          const isVisible = row.dataset.filterText.toLowerCase().includes(query);
-          row.hidden = !isVisible;
-          if (isVisible) visibleCount += 1;
-        }
-
-        const emptyState = document.querySelector(`[data-filter-empty="${targetId}"]`);
-        if (emptyState) {
-          emptyState.classList.toggle("is-visible", visibleCount === 0);
-        }
-      });
-
-      document.addEventListener("submit", function (event) {
-        const form = event.target;
-        const submitter = event.submitter;
-        const message = submitter?.dataset.confirm || form?.dataset.confirm;
-        if (!message) return;
-
-        if (!window.confirm(message)) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      }, true);
-    </script>
-    <script type="module">
-      const editors = [...document.querySelectorAll("textarea[data-editor-textarea]")];
-      if (editors.length > 0) {
-        try {
-          const [{ EditorView, keymap, lineNumbers }, { EditorState }, { defaultKeymap }, { json }, { markdown }] =
-            await Promise.all([
-              import("https://esm.sh/codemirror@6.0.1"),
-              import("https://esm.sh/@codemirror/state@6.4.1"),
-              import("https://esm.sh/@codemirror/commands@6.8.1"),
-              import("https://esm.sh/@codemirror/lang-json@6.0.1"),
-              import("https://esm.sh/@codemirror/lang-markdown@6.3.4")
-            ]);
-          for (const textarea of editors) {
-            const language = textarea.dataset.editorLanguage;
-            const extensions = [lineNumbers(), keymap.of(defaultKeymap)];
-            if (language === "json") extensions.push(json());
-            if (language === "markdown") extensions.push(markdown());
-            const state = EditorState.create({ doc: textarea.value, extensions });
-            const mount = document.createElement("div");
-            textarea.after(mount);
-            textarea.style.display = "none";
-            const view = new EditorView({
-              state,
-              parent: mount,
-              dispatch(transaction) {
-                view.update([transaction]);
-                textarea.value = view.state.doc.toString();
-              }
-            });
-            textarea.form?.addEventListener("submit", () => {
-              textarea.value = view.state.doc.toString();
-            });
-          }
-        } catch (_error) {
-          // Keep the plain textarea fallback when CDN modules are unavailable.
-        }
-      }
-    </script>
+    <script src="/admin/assets/scripts/admin-shell.js" defer></script>
   </head>
   {% set is_akra = current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}
   <body class="{% if is_akra %}akra-graphic{% endif %}{% if current_nav == "akra_dashboard" %} akra-dashboard-page{% endif %}">
@@ -990,6 +903,7 @@
         <nav class="nav" aria-label="Admin navigation">
           <div class="nav-label">Workspace</div>
           <a href="/admin" class="{% if current_nav == "dashboard" %}active{% endif %}">대시보드</a>
+          <a href="/admin/akra">Graphic dashboard</a>
           <a href="/admin/directions" class="{% if current_nav == "directions" %}active{% endif %}">Directions</a>
           <a href="/admin/tasks" class="{% if current_nav == "tasks" %}active{% endif %}">Tasks</a>
           <a href="/admin/reviews" class="{% if current_nav == "reviews" %}active{% endif %}">Reviews</a>
@@ -1001,6 +915,9 @@
           <span class="mono">{{ workspace_dir }}</span>
         </div>
         {% endif %}
+        <form method="post" action="/admin/logout">
+          <button type="submit" class="secondary">Sign out</button>
+        </form>
       </aside>
       <main class="shell">
         <header class="page-header">

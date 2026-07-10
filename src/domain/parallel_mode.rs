@@ -225,6 +225,52 @@ fn sanitize_parallel_mode_identifier(input: &str) -> Option<String> {
 
 // lease snapshot은 slot 소유권의 기준 데이터다. branch, worktree, agent, task,
 // 시간 정보를 함께 보존해 재시작 뒤에도 같은 병렬 작업을 다시 식별할 수 있다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelModeRepositoryVisibility {
+    Private,
+    Internal,
+    Public,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeDeliveryTargetSnapshot {
+    pub push_remote: String,
+    #[serde(default)]
+    pub credential_redacted_push_url: Option<String>,
+    pub github_repository: String,
+    pub repository_visibility: ParallelModeRepositoryVisibility,
+    pub integration_branch: String,
+    pub integration_base_commit_sha: String,
+}
+
+impl ParallelModeDeliveryTargetSnapshot {
+    pub fn new(
+        push_remote: impl Into<String>,
+        github_repository: impl Into<String>,
+        repository_visibility: ParallelModeRepositoryVisibility,
+        integration_branch: impl Into<String>,
+        integration_base_commit_sha: impl Into<String>,
+    ) -> Self {
+        Self {
+            push_remote: push_remote.into(),
+            credential_redacted_push_url: None,
+            github_repository: github_repository.into(),
+            repository_visibility,
+            integration_branch: integration_branch.into(),
+            integration_base_commit_sha: integration_base_commit_sha.into(),
+        }
+    }
+
+    pub fn with_credential_redacted_push_url(
+        mut self,
+        credential_redacted_push_url: impl Into<String>,
+    ) -> Self {
+        self.credential_redacted_push_url = Some(credential_redacted_push_url.into());
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParallelModeSlotLeaseSnapshot {
     pub slot_id: String,
@@ -236,6 +282,14 @@ pub struct ParallelModeSlotLeaseSnapshot {
     pub state: ParallelModeSlotLeaseState,
     pub leased_at: String,
     pub running_started_at: Option<String>,
+    #[serde(default)]
+    pub delivery_target: Option<ParallelModeDeliveryTargetSnapshot>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_lease_generation"
+    )]
+    pub lease_generation: Option<String>,
 }
 
 impl ParallelModeSlotLeaseSnapshot {
@@ -261,7 +315,25 @@ impl ParallelModeSlotLeaseSnapshot {
             state,
             leased_at: leased_at.into(),
             running_started_at,
+            delivery_target: None,
+            lease_generation: None,
         }
+    }
+
+    pub fn with_delivery_target(mut self, target: ParallelModeDeliveryTargetSnapshot) -> Self {
+        self.delivery_target = Some(target);
+        self
+    }
+
+    pub fn with_lease_generation(mut self, lease_generation: impl Into<String>) -> Self {
+        self.lease_generation = Some(lease_generation.into());
+        self
+    }
+
+    pub fn has_valid_lease_generation(&self) -> bool {
+        self.lease_generation
+            .as_deref()
+            .is_none_or(valid_lease_generation)
     }
 
     pub fn owner_label(&self) -> String {
@@ -269,7 +341,22 @@ impl ParallelModeSlotLeaseSnapshot {
     }
 
     pub fn session_key(&self) -> String {
-        format!("{}@{}", self.slot_id, self.leased_at)
+        self.lease_generation.as_ref().map_or_else(
+            || format!("{}@{}", self.slot_id, self.leased_at),
+            |generation| format!("{}@{}", self.slot_id, generation),
+        )
+    }
+
+    pub fn same_generation_as(&self, other: &Self) -> bool {
+        self.slot_id == other.slot_id
+            && self.task_id == other.task_id
+            && self.task_title == other.task_title
+            && self.agent_id == other.agent_id
+            && self.branch_name == other.branch_name
+            && self.worktree_path == other.worktree_path
+            && self.leased_at == other.leased_at
+            && self.delivery_target == other.delivery_target
+            && self.lease_generation == other.lease_generation
     }
 
     // lease가 Running 이후라면 agent session의 더 세밀한 후속 파이프라인 상태를
@@ -304,6 +391,27 @@ impl ParallelModeSlotLeaseSnapshot {
     // agent_session 쪽 정렬 규칙과 이 core snapshot의 선택 규칙이 함께 움직여야 한다.
     pub fn selection_priority(&self) -> (u8, &str) {
         (roster_state_priority(self.state), roster_recency_key(self))
+    }
+}
+
+fn valid_lease_generation(generation: &str) -> bool {
+    generation.len() == 64
+        && generation
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn deserialize_lease_generation<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let generation = Option::<String>::deserialize(deserializer)?;
+    if generation.as_deref().is_none_or(valid_lease_generation) {
+        Ok(generation)
+    } else {
+        Err(serde::de::Error::custom(
+            "lease_generation must be 64 lowercase hexadecimal characters",
+        ))
     }
 }
 

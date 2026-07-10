@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source": "https://github.com/quiple/galmuri",
+  "source_version": "v2.40.3",
+  "license_file": "LICENSE-Galmuri.txt",
+  "files": [
+    {
+      "name": "Galmuri11-Bold.woff2",
+      "sha256": "03edc70cfacc32ec4d5d356ca2dbd9ff3fea92d08d6924eb8ace3b8b42336cb6",
+      "size": 167372
+    },
+    {
+      "name": "Galmuri11.woff2",
+      "sha256": "bb5655930587f2e3a2eb943afff42e39d9dc489a58df45a5fd524a9fd2178e90",
+      "size": 505116
+    }
+  ]
+}

@@ -1,8 +1,19 @@
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use crate::core::app::{
     AppCommand, AppSnapshot, CoreController, CoreDispatchOutcome, CoreEffect, CoreInput,
 };
+
+// Effect workers share one bounded ingress so a fast provider cannot retain an
+// unbounded number of transcript snapshots while the terminal is painting.
+// This is deliberately larger than the provider stream queue because unrelated
+// startup/session completions use the same FIFO.
+pub const CORE_INPUT_CHANNEL_CAPACITY: usize = 16;
+pub type CoreInputSender = SyncSender<CoreInput>;
+
+pub fn core_input_channel() -> (CoreInputSender, Receiver<CoreInput>) {
+    sync_channel(CORE_INPUT_CHANNEL_CAPACITY)
+}
 
 /*
  * CoreRuntime is the headless command loop around CoreController. Inbound
@@ -16,7 +27,10 @@ pub struct CoreRuntime<E> {
 }
 
 pub trait CoreEffectExecutor {
-    fn run_effect(&self, effect: CoreEffect);
+    // Bounded local effects may return an immediate completion when their mutation must remain
+    // serialized with the command dispatch. Long-running provider work returns None and reports
+    // completion through CoreInputSender instead.
+    fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput>;
 }
 
 impl<E> CoreRuntime<E>
@@ -61,15 +75,18 @@ where
     }
 
     pub fn dispatch_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
-        let outcome = self.controller.handle_input(input);
-        self.run_effects(&outcome);
-        outcome
-    }
-
-    fn run_effects(&self, outcome: &CoreDispatchOutcome) {
-        for effect in outcome.effects.iter().cloned() {
-            self.effect_executor.run_effect(effect);
+        let mut outcome = self.controller.handle_input(input);
+        let effects = outcome.effects.clone();
+        for effect in effects {
+            let Some(immediate_input) = self.effect_executor.run_effect(effect) else {
+                continue;
+            };
+            let immediate_outcome = self.dispatch_input(immediate_input);
+            outcome.events.extend(immediate_outcome.events);
+            outcome.effects.extend(immediate_outcome.effects);
+            outcome.snapshot = immediate_outcome.snapshot;
         }
+        outcome
     }
 }
 
@@ -78,15 +95,32 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::mpsc;
+    use std::sync::mpsc::TrySendError;
 
     use super::*;
     use crate::application::service::manual_prompt_preparation::ManualPromptPreparationRequest;
     use crate::core::app::{
         AppEvent, CoreEffectCompletion, CorePromptOrigin, SessionCatalogReadySnapshot,
-        SessionCatalogSnapshot, StartupAttachmentSnapshot, StartupDiagnosticSnapshot,
-        StartupReadySnapshot, StartupSnapshot, TurnSubmissionRequest,
+        SessionCatalogSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
+        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSubmissionRequest,
     };
     use crate::domain::recent_sessions::RecentSessions;
+
+    #[test]
+    fn core_input_channel_applies_backpressure_and_reports_disconnect() {
+        let (sender, receiver) = core_input_channel();
+        for _ in 0..CORE_INPUT_CHANNEL_CAPACITY {
+            sender
+                .try_send(CoreInput::Command(AppCommand::Noop))
+                .expect("inputs within the fixed capacity should be admitted");
+        }
+        assert!(matches!(
+            sender.try_send(CoreInput::Command(AppCommand::Noop)),
+            Err(TrySendError::Full(_))
+        ));
+        drop(receiver);
+        assert!(sender.send(CoreInput::Command(AppCommand::Noop)).is_err());
+    }
 
     #[derive(Clone, Default)]
     struct RecordingEffectExecutor {
@@ -100,8 +134,32 @@ mod tests {
     }
 
     impl CoreEffectExecutor for RecordingEffectExecutor {
-        fn run_effect(&self, effect: CoreEffect) {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
             self.effects.borrow_mut().push(effect);
+            None
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediateManualPromptExecutor;
+
+    impl CoreEffectExecutor for ImmediateManualPromptExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::PrepareManualPrompt(request) = effect else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::ManualPromptPrepared(Box::new(
+                    crate::domain::planning::ManualPromptOutcome::Rejected {
+                        correlation: request.correlation,
+                        transcript_text: request.raw_prompt,
+                        runtime_projection: Box::new(
+                            crate::domain::planning::RuntimeProjection::invalid("blocked"),
+                        ),
+                        reason: "blocked".to_string(),
+                    },
+                )),
+            ))
         }
     }
 
@@ -116,11 +174,16 @@ mod tests {
         assert_eq!(outcome.snapshot.startup, StartupSnapshot::Loading);
         assert_eq!(
             outcome.events,
-            vec![AppEvent::StartupChanged(StartupSnapshot::Loading)]
+            vec![AppEvent::StartupChanged {
+                correlation: StartupCheckCorrelation::new(1),
+                snapshot: StartupSnapshot::Loading,
+            }]
         );
         assert_eq!(
             effects.recorded_effects(),
-            vec![CoreEffect::RunStartupChecks]
+            vec![CoreEffect::RunStartupChecks {
+                correlation: StartupCheckCorrelation::new(1),
+            }]
         );
         assert_eq!(runtime.snapshot().startup, StartupSnapshot::Loading);
     }
@@ -155,7 +218,11 @@ mod tests {
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
         let request = ManualPromptPreparationRequest {
-            workspace_directory: "/tmp/workspace".to_string(),
+            correlation: crate::domain::planning::ManualPromptCorrelation {
+                request_id: 1,
+                generation: 1,
+                workspace_directory: "/tmp/workspace".to_string(),
+            },
             raw_prompt: "ship it".to_string(),
             parent_thread_id: Some("thread-1".to_string()),
             parent_turn_id: None,
@@ -173,10 +240,42 @@ mod tests {
     }
 
     #[test]
+    fn immediate_manual_prompt_effect_is_accepted_before_dispatch_returns() {
+        let (_tx, rx) = mpsc::channel();
+        let mut runtime = CoreRuntime::new(ImmediateManualPromptExecutor, rx);
+        let request = ManualPromptPreparationRequest {
+            correlation: crate::domain::planning::ManualPromptCorrelation {
+                request_id: 1,
+                generation: 1,
+                workspace_directory: "/tmp/workspace".to_string(),
+            },
+            raw_prompt: "ship it".to_string(),
+            parent_thread_id: None,
+            parent_turn_id: None,
+        };
+
+        let outcome =
+            runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(request.clone())));
+
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::PrepareManualPrompt(Box::new(request.clone()))]
+        );
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [AppEvent::ManualPromptPrepared(result)]
+                if result.correlation() == &request.correlation
+        ));
+        let second = runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(request)));
+        assert_eq!(second.events.len(), 1);
+    }
+
+    #[test]
     fn drain_pending_inputs_reenters_completions_through_controller() {
         let (tx, rx) = mpsc::channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
+        runtime.dispatch_command(AppCommand::RunStartupChecks);
         let ready = StartupReadySnapshot {
             cwd: "/tmp/workspace".to_string(),
             workspace_path: "/tmp/workspace".to_string(),
@@ -206,7 +305,10 @@ mod tests {
         };
 
         tx.send(CoreInput::EffectCompleted(
-            CoreEffectCompletion::StartupChecksLoaded(Ok(Box::new(ready.clone()))),
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: StartupCheckCorrelation::new(1),
+                result: Ok(Box::new(ready.clone())),
+            },
         ))
         .unwrap();
 
@@ -215,15 +317,21 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert_eq!(
             outcomes[0].events,
-            vec![AppEvent::StartupChanged(StartupSnapshot::Ready(Box::new(
-                ready.clone()
-            )))]
+            vec![AppEvent::StartupChanged {
+                correlation: StartupCheckCorrelation::new(1),
+                snapshot: StartupSnapshot::Ready(Box::new(ready.clone())),
+            }]
         );
         assert_eq!(
             runtime.snapshot().startup,
             StartupSnapshot::Ready(Box::new(ready))
         );
-        assert!(effects.recorded_effects().is_empty());
+        assert_eq!(
+            effects.recorded_effects(),
+            vec![CoreEffect::RunStartupChecks {
+                correlation: StartupCheckCorrelation::new(1),
+            }]
+        );
     }
 
     #[test]

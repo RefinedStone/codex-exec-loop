@@ -108,6 +108,8 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/conversation_intents.rs`
 - `src/adapter/inbound/tui/app/conversation_lifecycle.rs`
 - `src/adapter/inbound/tui/app/conversation_model/auto_follow_decision.rs`
+- `src/adapter/inbound/tui/app/conversation_model/view_model.rs`
+- `src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs`
 - `src/adapter/inbound/tui/app/conversation_model_tests.rs`
 - `src/adapter/inbound/tui/app/conversation_runtime.rs`
 - `src/adapter/inbound/tui/app/github_polling/tests.rs`
@@ -167,6 +169,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/test_helpers.rs`
 - `src/adapter/inbound/tui/app/tui_testkit.rs`
 - `src/adapter/inbound/tui/app/turn_submission_runtime.rs`
+- `src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs`
 - `src/adapter/inbound/tui/app/view_selection_overlay_ui.rs`
 - `src/adapter/inbound/tui/conversation_text.rs`
 - `src/adapter/inbound/tui/shell_chrome.rs`

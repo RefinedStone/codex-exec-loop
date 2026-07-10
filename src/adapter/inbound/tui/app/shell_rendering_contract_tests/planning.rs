@@ -181,7 +181,7 @@ fn inline_planning_simple_review_renders_promote_and_edit_actions() {
     assert!(header.contains("Simple mode review"));
     assert!(options.contains("bootstrap-1"));
     assert!(options.contains("advanced path"));
-    assert!(status.contains("turn budget: 20"));
+    assert!(status.contains("turn budget: off"));
     assert!(status.contains("advanced action: D opens detail-mode authoring"));
     assert!(keys.contains("Enter or Ctrl+P promotes the staged scaffold."));
     assert!(keys.contains("Ctrl+L edits turn budget."));
@@ -218,7 +218,9 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
 
     assert!(keys.contains("next action: type the new turn budget directly."));
     assert!(keys.contains("controls: Enter saves"));
-    assert!(keys.contains("validation: use a whole number greater than 0, or type infinite."));
+    assert!(keys.contains(
+        "validation: use a positive whole number or infinite to enable; off or 0 disables."
+    ));
     assert!(!keys.contains("promote staged scaffold"));
 }
 

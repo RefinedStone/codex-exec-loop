@@ -90,11 +90,11 @@
       <input type="search" data-list-filter="task-list" placeholder="title, id, direction, status">
     </label>
   </div>
-  {% if management.tasks.is_empty() %}
-  <p class="empty-state">No tasks are stored in the ledger.</p>
-  {% else %}
-  <p class="empty-state filter-empty" data-filter-empty="task-list">No tasks match the current search.</p>
   <div class="entity-list" id="task-list">
+    {% if management.tasks.is_empty() %}
+    <p class="empty-state">No tasks are stored in the ledger.</p>
+    {% else %}
+    <p class="empty-state filter-empty" data-filter-empty="task-list">No tasks match the current search.</p>
     {% for task in management.tasks %}
     <details class="entity-row" data-filter-text="{{ task.title }} {{ task.id }} {{ task.direction_id }} {{ task.status }}">
       <summary>
@@ -179,8 +179,8 @@
       </div>
     </details>
     {% endfor %}
+    {% endif %}
   </div>
-  {% endif %}
 </section>
 
 <section class="grid">

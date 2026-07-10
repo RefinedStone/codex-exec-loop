@@ -43,6 +43,8 @@ fn parse_recognizes_supported_aliases() {
             ":turns infinite",
             Some((InlineShellCommand::Turns, Some("infinite"))),
         ),
+        (":turns off", Some((InlineShellCommand::Turns, Some("off")))),
+        (":turns 0", Some((InlineShellCommand::Turns, Some("0")))),
         (
             ":auto-turns 12",
             Some((InlineShellCommand::Turns, Some("12"))),
@@ -98,6 +100,7 @@ fn parse_recognizes_supported_aliases() {
             ":reset queue",
             Some((InlineShellCommand::Reset, Some("queue"))),
         ),
+        (":r", Some((InlineShellCommand::Reset, None))),
         (
             ":reset directions confirm",
             Some((InlineShellCommand::Reset, Some("directions confirm"))),
@@ -131,6 +134,7 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Parallel,
             InlineShellCommand::Peek,
             InlineShellCommand::Sessions,
+            InlineShellCommand::Reviews,
             InlineShellCommand::Queue,
             InlineShellCommand::Directions,
             InlineShellCommand::Turns,
@@ -178,7 +182,11 @@ fn suggestions_filter_by_prefix() {
     assert_eq!(InlineShellCommand::suggestions(":i"), Vec::new());
     assert_eq!(
         InlineShellCommand::suggestions(":re"),
-        vec![InlineShellCommand::Reset]
+        vec![InlineShellCommand::Reviews, InlineShellCommand::Reset]
+    );
+    assert_eq!(
+        InlineShellCommand::suggestions(":r"),
+        vec![InlineShellCommand::Reset, InlineShellCommand::Reviews]
     );
     assert_eq!(
         InlineShellCommand::suggestions(":st"),
@@ -237,7 +245,12 @@ fn palette_state_keeps_selected_command_when_input_refines() {
     */
     let mut state = InlineShellCommandPaletteState::default();
     state.sync_to_input(":", None);
-    assert!(state.move_selection(13));
+    let planning_index = state
+        .suggestions()
+        .iter()
+        .position(|command| *command == InlineShellCommand::PlanningInit)
+        .expect("planning command should be present");
+    assert!(state.move_selection(planning_index as isize));
     assert_eq!(
         state.selected_command(),
         Some(InlineShellCommand::PlanningInit)
@@ -302,7 +315,9 @@ fn help_entries_use_renderable_command_forms() {
     assert!(rendered.contains(":parallel [off] - parallel mode"));
     assert!(rendered.contains(":peek - parallel agent peek"));
     assert!(!rendered.lines().any(|line| line.starts_with(":pa ")));
-    assert!(rendered.contains(":turns <number|infinite> - auto turn budget"));
+    assert!(
+        rendered.contains(":turns <positive|infinite|off> - auto-follow opt-in; off or 0 disables")
+    );
     assert!(rendered.contains(":stop - stop active sessions"));
     assert!(rendered.contains(":model - model and think"));
     assert!(rendered.contains(":view [simple|medium|detail] - conversation view"));

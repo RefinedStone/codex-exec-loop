@@ -1,4 +1,7 @@
-use crate::domain::conversation::{ConversationApprovalReview, ConversationToolActivity};
+use crate::domain::conversation::{
+    ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
+    ConversationToolActivity,
+};
 use crate::domain::planning::{PostTurnExecution, TurnSnapshotCapture};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
@@ -26,6 +29,21 @@ impl TurnStreamState {
             terminal: None,
             last_applied_post_turn_evaluation_id: None,
         }
+    }
+
+    pub fn seed_loaded_thread_identity(
+        &mut self,
+        thread_id: impl Into<String>,
+        title: impl Into<String>,
+        cwd: impl Into<String>,
+    ) {
+        self.thread_id = Some(thread_id.into());
+        self.title = Some(title.into());
+        self.cwd = Some(cwd.into());
+        self.active_turn_id = None;
+        self.status_text = None;
+        self.terminal = None;
+        self.last_applied_post_turn_evaluation_id = None;
     }
 
     pub fn apply_stream_event(&mut self, event: TurnStreamEvent) -> TurnStreamSnapshot {
@@ -89,6 +107,21 @@ impl TurnStreamState {
             }
             TurnStreamEvent::ApprovalReviewUpdated { review } => {
                 TurnStreamUpdate::ApprovalReviewUpdated { review }
+            }
+            TurnStreamEvent::ApprovalRequested { request } => {
+                self.status_text = Some("approval required".to_string());
+                TurnStreamUpdate::ApprovalRequested { request }
+            }
+            TurnStreamEvent::ApprovalResolved {
+                approval_id,
+                resolution,
+            } => TurnStreamUpdate::ApprovalResolved {
+                approval_id,
+                resolution,
+            },
+            TurnStreamEvent::TurnInterruptRequestFailed { message } => {
+                self.status_text = Some(message.clone());
+                TurnStreamUpdate::TurnInterruptRequestFailed { message }
             }
             TurnStreamEvent::TurnCompleted {
                 turn_id,
@@ -239,6 +272,16 @@ pub enum TurnStreamEvent {
     ApprovalReviewUpdated {
         review: ConversationApprovalReview,
     },
+    ApprovalRequested {
+        request: ConversationApprovalRequest,
+    },
+    ApprovalResolved {
+        approval_id: String,
+        resolution: ConversationApprovalResolution,
+    },
+    TurnInterruptRequestFailed {
+        message: String,
+    },
     TurnCompleted {
         turn_id: String,
         changed_planning_file_paths: Vec<String>,
@@ -293,6 +336,16 @@ pub enum TurnStreamUpdate {
     ApprovalReviewUpdated {
         review: ConversationApprovalReview,
     },
+    ApprovalRequested {
+        request: ConversationApprovalRequest,
+    },
+    ApprovalResolved {
+        approval_id: String,
+        resolution: ConversationApprovalResolution,
+    },
+    TurnInterruptRequestFailed {
+        message: String,
+    },
     TurnCompleted {
         turn_id: String,
         changed_planning_file_paths: Vec<String>,
@@ -312,8 +365,9 @@ pub enum TurnStreamUpdate {
 mod tests {
     use super::*;
     use crate::domain::conversation::{
-        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
-        ConversationToolActivityKind,
+        ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationApprovalResolution, ConversationApprovalReview,
+        ConversationApprovalReviewStatus, ConversationToolActivity, ConversationToolActivityKind,
     };
     use crate::domain::planning::{ExecutionSnapshot, TurnSnapshotCapture};
 
@@ -341,6 +395,20 @@ mod tests {
                 status_text: "thread started".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn loaded_thread_identity_is_seeded_without_emitting_a_stream_revision() {
+        let mut state = TurnStreamState::new();
+
+        state.seed_loaded_thread_identity("thread-loaded", "Loaded thread", "/tmp/loaded");
+        let snapshot = state.apply_runtime_notice("reattached".to_string());
+
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(snapshot.thread_id.as_deref(), Some("thread-loaded"));
+        assert_eq!(snapshot.title.as_deref(), Some("Loaded thread"));
+        assert_eq!(snapshot.cwd.as_deref(), Some("/tmp/loaded"));
+        assert_eq!(snapshot.status_text, None);
     }
 
     #[test]
@@ -469,6 +537,40 @@ mod tests {
             snapshot.update,
             TurnStreamUpdate::ApprovalReviewUpdated { review }
         );
+    }
+
+    #[test]
+    fn approval_request_and_resolution_cross_the_core_stream_unchanged() {
+        let mut state = TurnStreamState::new();
+        let request = ConversationApprovalRequest {
+            approval_id: "approval-core".to_string(),
+            server_request_id: "server-core".to_string(),
+            method: "item/fileChange/requestApproval".to_string(),
+            kind: ConversationApprovalRequestKind::FileChange,
+            summary: "File changes requested.".to_string(),
+            details: vec!["Reason: update tests".to_string()],
+        };
+
+        let requested = state.apply_stream_event(TurnStreamEvent::ApprovalRequested {
+            request: request.clone(),
+        });
+        assert_eq!(
+            requested.update,
+            TurnStreamUpdate::ApprovalRequested { request }
+        );
+        assert_eq!(requested.status_text.as_deref(), Some("approval required"));
+
+        let resolved = state.apply_stream_event(TurnStreamEvent::ApprovalResolved {
+            approval_id: "approval-core".to_string(),
+            resolution: ConversationApprovalResolution::Declined,
+        });
+        assert!(matches!(
+            resolved.update,
+            TurnStreamUpdate::ApprovalResolved {
+                resolution: ConversationApprovalResolution::Declined,
+                ..
+            }
+        ));
     }
 
     #[test]

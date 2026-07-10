@@ -213,6 +213,7 @@ pub enum ParallelModeControlPlaneEvent {
         epoch_id: u64,
     },
     ConversationRuntimeNotice {
+        workspace_directory: String,
         notice: String,
     },
     WorkerCompleted {
@@ -381,6 +382,25 @@ impl Default for ParallelModeControlPlaneRuntimeStore {
     }
 }
 
+impl ParallelModeControlPlaneRuntimeStore {
+    fn effect_is_in_flight(&self, effect_id: ParallelModeControlPlaneEffectId) -> bool {
+        match effect_id.kind {
+            ParallelModeControlPlaneEffectKind::EnterParallelMode => {
+                self.parallel_entry_in_flight == Some(effect_id)
+            }
+            ParallelModeControlPlaneEffectKind::RefreshSupervisor => {
+                self.supervisor_refresh_in_flight == Some(effect_id)
+            }
+            ParallelModeControlPlaneEffectKind::RunOrchestrator => {
+                self.orchestrator_wake_in_flight == Some(effect_id)
+            }
+            ParallelModeControlPlaneEffectKind::RunOrchestratorTick => {
+                self.orchestrator_tick_in_flight == Some(effect_id)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParallelModeControlPlaneRuntime {
     store: ParallelModeControlPlaneRuntimeStore,
@@ -443,6 +463,19 @@ impl ParallelModeControlPlaneRuntime {
         self.force_epoch_for_test(workspace_directory, epoch_id);
         let effect_id = self.next_effect_id(ParallelModeControlPlaneEffectKind::RefreshSupervisor);
         self.store.supervisor_refresh_in_flight = Some(effect_id);
+        effect_id
+    }
+
+    #[cfg(test)]
+    pub fn force_parallel_entry_in_flight_for_test(
+        &mut self,
+        workspace_directory: impl Into<String>,
+        epoch_id: u64,
+    ) -> ParallelModeControlPlaneEffectId {
+        self.force_epoch_for_test(workspace_directory, epoch_id);
+        self.store.projection_ready = false;
+        let effect_id = self.next_effect_id(ParallelModeControlPlaneEffectKind::EnterParallelMode);
+        self.store.parallel_entry_in_flight = Some(effect_id);
         effect_id
     }
 
@@ -992,10 +1025,14 @@ impl ParallelModeControlPlaneRuntime {
         outcome
             .events
             .push(worker_event_to_control_plane_event(&event));
+        let workspace_directory = event.workspace_directory.clone();
         for notice in event.notices {
             outcome
                 .events
-                .push(ParallelModeControlPlaneEvent::ConversationRuntimeNotice { notice });
+                .push(ParallelModeControlPlaneEvent::ConversationRuntimeNotice {
+                    workspace_directory: workspace_directory.clone(),
+                    notice,
+                });
         }
         if decision.refresh_supervisor {
             self.start_or_queue_supervisor_refresh(
@@ -1459,6 +1496,23 @@ impl ParallelModeControlPlaneRuntime {
                 epoch_id
             }
             _ => {
+                if let (Some(previous_workspace), Some(previous_epoch_id)) = (
+                    self.store.workspace_directory.clone(),
+                    self.store.current_epoch_id,
+                ) {
+                    outcome
+                        .events
+                        .push(ParallelModeControlPlaneEvent::EpochClosed {
+                            workspace_directory: previous_workspace.clone(),
+                            epoch_id: previous_epoch_id,
+                        });
+                    outcome
+                        .effects
+                        .push(ParallelModeControlPlaneEffect::CancelDispatchCommands {
+                            workspace_directory: previous_workspace,
+                            reason: "parallel workspace superseded".to_string(),
+                        });
+                }
                 let epoch_id = self.store.next_epoch_id;
                 self.store.next_epoch_id = self.store.next_epoch_id.saturating_add(1);
                 self.store.mode_enabled = false;
@@ -1703,10 +1757,23 @@ mod tests {
 
         assert!(matches!(
             opened.events.as_slice(),
-            [ParallelModeControlPlaneEvent::EpochOpened {
+            [
+                ParallelModeControlPlaneEvent::EpochClosed {
+                    workspace_directory: previous_workspace,
+                    epoch_id: 1,
+                },
+                ParallelModeControlPlaneEvent::EpochOpened {
+                    workspace_directory,
+                    epoch_id: 2,
+                }
+            ] if previous_workspace == "/repo" && workspace_directory == "/other"
+        ));
+        assert!(matches!(
+            opened.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::CancelDispatchCommands {
                 workspace_directory,
-                epoch_id: 2,
-            }] if workspace_directory == "/other"
+                reason,
+            }] if workspace_directory == "/repo" && reason == "parallel workspace superseded"
         ));
         assert!(runtime.store().supervisor_refresh_in_flight.is_none());
         assert_eq!(runtime.store().current_epoch_id, Some(2));
@@ -1729,10 +1796,23 @@ mod tests {
         });
         assert!(matches!(
             opened.events.as_slice(),
-            [ParallelModeControlPlaneEvent::EpochOpened {
+            [
+                ParallelModeControlPlaneEvent::EpochClosed {
+                    workspace_directory: previous_workspace,
+                    epoch_id: 1,
+                },
+                ParallelModeControlPlaneEvent::EpochOpened {
+                    workspace_directory,
+                    epoch_id: 2,
+                }
+            ] if previous_workspace == "/repo" && workspace_directory == "/other"
+        ));
+        assert!(matches!(
+            opened.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::CancelDispatchCommands {
                 workspace_directory,
-                epoch_id: 2,
-            }] if workspace_directory == "/other"
+                ..
+            }] if workspace_directory == "/repo"
         ));
         assert!(!runtime.store().mode_enabled);
         assert!(!runtime.store().initial_pool_reset_completed);

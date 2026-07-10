@@ -89,7 +89,26 @@ impl PlanningAdminFacadeService {
     }
     pub(super) fn commit_operator_planning_documents(
         &self,
+        documents: PlanningOperatorPlanningDocuments,
+    ) -> Result<()> {
+        self.commit_operator_planning_documents_inner(documents, None)
+    }
+
+    pub(super) fn commit_operator_planning_documents_with_guard(
+        &self,
+        documents: PlanningOperatorPlanningDocuments,
+        authority_mutation_owner_token: &str,
+    ) -> Result<()> {
+        self.commit_operator_planning_documents_inner(
+            documents,
+            Some(authority_mutation_owner_token),
+        )
+    }
+
+    fn commit_operator_planning_documents_inner(
+        &self,
         mut documents: PlanningOperatorPlanningDocuments,
+        authority_mutation_owner_token: Option<&str>,
     ) -> Result<()> {
         // admin edit는 direction을 먼저 지우고 child task 정리를 나중에 할 수 있다. commit boundary에서는 default
         // direction 복구와 unresolved direction task 제거를 먼저 수행한 뒤, 실제 persist할 세 문서 조합을 그대로
@@ -131,6 +150,20 @@ impl PlanningAdminFacadeService {
                 &rollback_documents.task_authority,
             )
             .context("failed to rebuild rollback planning queue")?;
+        let retained_task_ids = documents
+            .task_authority
+            .tasks
+            .iter()
+            .map(|task| task.id.trim())
+            .collect::<BTreeSet<_>>();
+        let retired_task_ids = rollback_documents
+            .task_authority
+            .tasks
+            .iter()
+            .map(|task| task.id.trim())
+            .filter(|task_id| !retained_task_ids.contains(task_id))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         let authority_commit = self
             .planning_authority_port
             .commit_planning_authority_documents(
@@ -141,6 +174,9 @@ impl PlanningAdminFacadeService {
                     task_authority: &documents.task_authority,
                     queue_projection: &queue_projection,
                     result_output_markdown: &documents.result_output_markdown,
+                    active_document_mutations: &[],
+                    retired_task_ids: &retired_task_ids,
+                    authority_mutation_owner_token,
                 },
             )?;
         let (authority_commit_revision, authority_commit_changed) = match authority_commit {
@@ -178,6 +214,7 @@ impl PlanningAdminFacadeService {
                 &rollback_documents,
                 &rollback_queue_projection,
                 Some(authority_commit_revision),
+                authority_mutation_owner_token,
             )
             .map_err(|rollback_error| {
                 anyhow!(
@@ -194,6 +231,7 @@ impl PlanningAdminFacadeService {
         rollback_documents: &PlanningOperatorPlanningDocuments,
         rollback_queue_projection: &PriorityQueueProjection,
         observed_planning_revision: Option<i64>,
+        authority_mutation_owner_token: Option<&str>,
     ) -> Result<()> {
         match self
             .planning_authority_port
@@ -205,6 +243,9 @@ impl PlanningAdminFacadeService {
                     task_authority: &rollback_documents.task_authority,
                     queue_projection: rollback_queue_projection,
                     result_output_markdown: &rollback_documents.result_output_markdown,
+                    active_document_mutations: &[],
+                    retired_task_ids: &[],
+                    authority_mutation_owner_token,
                 },
             )? {
             PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(()),
@@ -228,7 +269,7 @@ pub(super) struct PlanningOperatorPlanningDocuments {
     pub(super) directions: DirectionCatalogDocument,
     pub(super) task_authority: TaskAuthorityDocument,
     pub(super) result_output_markdown: String,
-    observed_planning_revision: Option<i64>,
+    pub(super) observed_planning_revision: Option<i64>,
 }
 
 pub(super) fn direction_from_request(
@@ -840,6 +881,7 @@ mod tests {
                 PlanningDirectionAuthorityCommit {
                     observed_planning_revision: None,
                     directions: &concurrent_directions,
+                    authority_mutation_owner_token: None,
                 },
             )
             .expect("concurrent direction edit should commit first");

@@ -1,0 +1,20 @@
+# akra-example: reviewable-task
+# language: en
+# safety: repository-instructions-required; remote-write-requires-verified-identity
+
+Read the repository's agent instructions, including AGENTS.md and only the linked guidance relevant
+to this task, before changing files. Choose exactly one high-priority, reviewable task supported by
+the current repository state.
+
+Follow the repository's worktree, base branch, commit, push, PR, merge, and cleanup rules. If the
+repository does not define a delivery workflow, isolate changes on a new worktree and branch based
+on the current upstream default branch, but stop before any commit, push, PR, merge, or remote
+branch creation. Never invent an integration branch or remote.
+
+Before any remote write, verify the active Git identity, destination repository, remote, and target
+branch. Keep the change narrowly scoped, run the relevant checks, and do not weaken security or
+validation to make a check pass.
+
+Finish with a concise summary of the change, verification results, and any remaining blocker. If a
+required instruction or remote identity cannot be verified, leave the repository unchanged and
+report the blocker instead.

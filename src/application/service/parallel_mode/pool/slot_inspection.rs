@@ -2,6 +2,9 @@ use super::paths::display_pool_path;
 use super::*;
 use crate::domain::parallel_mode::{ParallelModePoolSlotSnapshot, ParallelModePoolSlotState};
 
+const INTEGRATION_PROOF_UNAVAILABLE_DETAIL: &str =
+    "integration proof unavailable until a successful remote reconcile fetch";
+
 /*
 pool slot inspection은 git worktree 상태와 lease metadata를 합쳐 하나의 화면용 slot snapshot으로
 바꾸는 판정기다. 같은 slot path라도 "worktree 없음", "baseline에 있지만 lease가 남음", "agent
@@ -17,6 +20,7 @@ pub(super) fn inspect_pool_slot(
     slot_id: &str,
 ) -> ParallelModePoolSlotSnapshot {
     let slot_path = context.pool_root.join(slot_id);
+    let baseline_branch = pool_baseline_branch_for_repo(&context.repo_root);
     let base_worktree_label = display_pool_path(&context.canonical_repo_root, &slot_path);
     let slot_lease = context.slot_leases.get(slot_id);
     if context.invalid_slot_leases.contains(slot_id) {
@@ -73,12 +77,12 @@ pub(super) fn inspect_pool_slot(
         return ParallelModePoolSlotSnapshot::new(
             slot_id,
             ParallelModePoolSlotState::Missing,
-            pool_baseline_branch(),
+            baseline_branch.clone(),
             base_worktree_label,
             "reconcile pending",
         );
     };
-    let Some(slot_status) = inspect_slot_git_status(&slot_path) else {
+    let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
         /*
         git status를 읽지 못하면 이 slot이 clean baseline인지, rebase/cherry-pick 중인지,
         untracked 파일을 품고 있는지 알 수 없다. unknown 상태에서 idle이나 cleanup-ready로 분류하면
@@ -96,7 +100,7 @@ pub(super) fn inspect_pool_slot(
                 .unwrap_or_else(|| "operator recovery".to_string()),
         );
     };
-    if worktree_record.branch_name.as_deref() == Some(pool_baseline_branch())
+    if worktree_record.branch_name.as_deref() == Some(baseline_branch.as_str())
         || (worktree_record.detached && worktree_record.head_sha == context.baseline_head)
     {
         /*
@@ -106,9 +110,9 @@ pub(super) fn inspect_pool_slot(
         자동 재사용을 막는다.
         */
         let branch_label = if worktree_record.detached {
-            format!("{} (detached)", pool_baseline_branch())
+            format!("{} (detached)", baseline_branch)
         } else {
-            pool_baseline_branch().to_string()
+            baseline_branch.clone()
         };
         if let Some(slot_lease) = slot_lease {
             return ParallelModePoolSlotSnapshot::new(
@@ -169,10 +173,16 @@ pub(super) fn inspect_pool_slot(
             }
             let worktree_clean = slot_status.is_clean_baseline();
             let cleanup_ready = slot_lease.is_none()
+                && context.integration_target_proof_is_fresh
                 && ParallelModePoolSlotCleanupDecision::new(
                     None,
                     worktree_clean,
-                    worktree_clean && branch_is_cleanup_ready(&context.repo_root, branch_name),
+                    worktree_clean
+                        && branch_patch_is_integrated(
+                            &context.repo_root,
+                            branch_name,
+                            &context.baseline_head,
+                        ),
                 )
                 .is_cleanup_ready();
             if cleanup_ready {
@@ -204,7 +214,7 @@ pub(super) fn inspect_pool_slot(
                     annotate_worktree_label(
                         base_worktree_label,
                         &orphan_agent_branch_without_lease_detail(
-                            &context.repo_root,
+                            context,
                             branch_name,
                             slot_status,
                         ),
@@ -287,7 +297,7 @@ pub(super) fn inspect_pool_slot(
         detached_label,
         annotate_worktree_label(
             base_worktree_label,
-            &format!("detached away from `{}` baseline", pool_baseline_branch()),
+            &format!("detached away from `{}` baseline", baseline_branch),
         ),
         slot_lease
             .map(ParallelModeSlotLeaseSnapshot::owner_label)
@@ -307,6 +317,7 @@ adapter 역할을 한다.
 pub(super) fn summarize_pool_reconcile_status(
     slots: &[ParallelModePoolSlotSnapshot],
     pool_root: &Path,
+    baseline_branch: &str,
     execution: Option<PoolReconcileExecution>,
 ) -> String {
     let idle_slots = slots
@@ -329,7 +340,7 @@ pub(super) fn summarize_pool_reconcile_status(
     if let Some(execution) = execution.filter(|execution| execution.has_actions()) {
         let mut action_parts = Vec::new();
         if execution.created_baseline_branch {
-            action_parts.push(format!("created `{}`", pool_baseline_branch()));
+            action_parts.push(format!("created `{baseline_branch}`"));
         }
         if execution.created_pool_root {
             action_parts.push("created pool root".to_string());
@@ -343,6 +354,14 @@ pub(super) fn summarize_pool_reconcile_status(
         prefix = format!("actions: {} / ", action_parts.join(", "));
     }
     if blocked_slots > 0 {
+        if let Some(slot) = find_proof_unavailable_orphan_slot_branch(slots) {
+            return format!(
+                "{}reconcile blocked / cause: {} / blocked: {blocked_slots} / missing: {missing_slots} / cleanup: {awaiting_cleanup_slots} / root {}",
+                prefix,
+                proof_unavailable_orphan_slot_branch_notice(&slot.slot_id, &slot.branch_name),
+                pool_root.display()
+            );
+        }
         if let Some(slot) = find_non_merged_orphan_slot_branch(slots) {
             return format!(
                 "{}reconcile blocked / cause: {} / blocked: {blocked_slots} / missing: {missing_slots} / cleanup: {awaiting_cleanup_slots} / root {}",
@@ -374,15 +393,13 @@ pub(super) fn summarize_pool_reconcile_status(
     if awaiting_cleanup_slots > 0 {
         return format!(
             "{}cleanup pending / {awaiting_cleanup_slots} slot(s) still need reset to `{}`",
-            prefix,
-            pool_baseline_branch()
+            prefix, baseline_branch
         );
     }
     if idle_slots == slots.len() && !slots.is_empty() {
         return format!(
             "{}reconcile complete / all slots are clean on `{}` baseline",
-            prefix,
-            pool_baseline_branch()
+            prefix, baseline_branch
         );
     }
 
@@ -399,12 +416,14 @@ cleanup만 남은 branch이거나, 아직 통합되지 않은 작업 branch가 �
 함수는 git ancestry와 worktree 청결도를 합쳐 어떤 복구 문구를 보여 줄지 결정한다.
 */
 fn orphan_agent_branch_without_lease_detail(
-    repo_root: &str,
+    context: &PoolRuntimeContext,
     branch_name: &str,
     slot_status: SlotGitStatus,
 ) -> String {
     let mut parts = Vec::new();
-    if branch_is_cleanup_ready(repo_root, branch_name) {
+    if !context.integration_target_proof_is_fresh {
+        parts.push(INTEGRATION_PROOF_UNAVAILABLE_DETAIL.to_string());
+    } else if branch_patch_is_integrated(&context.repo_root, branch_name, &context.baseline_head) {
         parts.push("cleanup-ready agent branch has no lease metadata".to_string());
     } else {
         parts.push(NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_DETAIL.to_string());
@@ -433,6 +452,24 @@ fn find_non_merged_orphan_slot_branch(
     })
 }
 
+fn find_proof_unavailable_orphan_slot_branch(
+    slots: &[ParallelModePoolSlotSnapshot],
+) -> Option<&ParallelModePoolSlotSnapshot> {
+    slots.iter().find(|slot| {
+        slot.state == ParallelModePoolSlotState::Blocked
+            && slot.owner_label == "operator recovery"
+            && slot
+                .worktree_label
+                .contains(INTEGRATION_PROOF_UNAVAILABLE_DETAIL)
+    })
+}
+
+fn proof_unavailable_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> String {
+    format!(
+        "{slot_id} branch `{branch_name}` has no lease metadata and its remote integration proof is unavailable / next action: run a remote reconcile fetch before cleanup"
+    )
+}
+
 /*
 supervisor 상단 notice는 pool board 전체에서 가장 시급한 operator recovery 메시지를 하나만 고른다.
 여기서는 non-merged orphan branch를 별도 notice로 승격한다. 이 상태는 reconcile을 반복해도
@@ -442,6 +479,12 @@ supervisor 상단 notice는 pool board 전체에서 가장 시급한 operator re
 pub(in crate::application::service::parallel_mode) fn pool_operator_recovery_notice(
     pool: &ParallelModePoolBoardSnapshot,
 ) -> Option<String> {
+    if let Some(slot) = find_proof_unavailable_orphan_slot_branch(&pool.slots) {
+        return Some(format!(
+            "pool: blocked / cause: {}",
+            proof_unavailable_orphan_slot_branch_notice(&slot.slot_id, &slot.branch_name)
+        ));
+    }
     let slot = find_non_merged_orphan_slot_branch(&pool.slots)?;
     Some(format!(
         "pool: blocked / cause: {}",
@@ -450,7 +493,6 @@ pub(in crate::application::service::parallel_mode) fn pool_operator_recovery_not
 }
 fn non_merged_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> String {
     format!(
-        "{slot_id} branch `{branch_name}` is not integrated into `{}` and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}",
-        pool_baseline_branch()
+        "{slot_id} branch `{branch_name}` is not integrated into the configured integration branch and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}"
     )
 }

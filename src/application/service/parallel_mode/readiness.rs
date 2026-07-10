@@ -1,8 +1,7 @@
+#[cfg(test)]
 use super::{
-    AKRA_AGENT_BRANCH_PREFIX, current_branch_name, pool_baseline_branch, push_remote_name,
-    remote_branch_name, remote_tracking_branch_ref,
+    remote_branch_name, try_parallel_mode_integration_branch_for_repo, try_push_remote_name,
 };
-use crate::application::port::outbound::github_automation_port::GITHUB_AUTOMATION_SCRIPT_RELATIVE_PATH as GITHUB_SCRIPT_RELATIVE_PATH;
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::service::planning::{
@@ -11,9 +10,9 @@ use crate::application::service::planning::{
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
 };
+use crate::git_subprocess;
 use crate::subprocess;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /*
 readiness의 첫 단계는 현재 workspace가 git repository 안에 있는지 찾는 것이다. 병렬 모드는 git
@@ -59,27 +58,59 @@ pub(super) fn inspect_git_worktree(
 }
 
 /*
-akra branch capability는 pool baseline이 될 표준 integration branch를 찾는다. remote tracking
-branch가 있으면 그대로 사용하고, fresh repository처럼 local/remote 표준 branch가 모두 없으면
-reconcile 단계가 현재 workspace HEAD를 표준 branch로 seed한 뒤 push할 수 있게 ready로 둔다.
-agent slot worktree에서 seed하면 병렬 작업 결과를 baseline으로 승격할 수 있으므로 그 경우는 막는다.
+The following remote/GitHub probes are retained only as deterministic service-level test fixtures.
+Production readiness authority is `GithubAutomationAdapter::inspect_readiness`; source-repository
+credential helpers, dry-run pushes, and legacy gh probes must not be compiled into this service path.
+
+akra branch capability는 pool baseline이 될 표준 integration branch가 configured push remote에
+실제로 존재하는지 확인한다. 로컬 remote-tracking ref는 stale할 수 있으므로 readiness는
+`ls-remote`를 사용한다. Akra는 현재 HEAD에서 integration branch를 암묵적으로 만들거나 push하지
+않으며, 원격 branch가 없으면 운영자가 명시적으로 준비할 때까지 병렬 모드를 막는다.
 */
+#[cfg(test)]
 pub(super) fn inspect_akra_branch(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> ParallelModeCapabilitySnapshot {
-    let push_remote = push_remote_name(repo_root);
-    let remote_branch = remote_branch_name(push_remote.as_str(), pool_baseline_branch());
-    let remote_ref = remote_tracking_branch_ref(push_remote.as_str(), pool_baseline_branch());
+    let push_remote = match try_push_remote_name(repo_root) {
+        Ok(push_remote) => push_remote,
+        Err(detail) => {
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::AkraBranch,
+                ParallelModeCapabilityState::Blocked,
+                detail,
+                Some(
+                    "repair the explicit push remote setting before enabling parallel mode"
+                        .to_string(),
+                ),
+            );
+        }
+    };
+    let integration_branch = match try_parallel_mode_integration_branch_for_repo(repo_root) {
+        Ok(integration_branch) => integration_branch,
+        Err(detail) => {
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::AkraBranch,
+                ParallelModeCapabilityState::Blocked,
+                detail,
+                Some(
+                    "repair the explicit integration branch setting before enabling parallel mode"
+                        .to_string(),
+                ),
+            );
+        }
+    };
+    let remote_branch = remote_branch_name(push_remote.as_str(), &integration_branch);
     if runtime.command_succeeds(
         "git",
         &[
             "-C",
             repo_root,
-            "show-ref",
-            "--verify",
-            "--quiet",
-            remote_ref.as_str(),
+            "ls-remote",
+            "--exit-code",
+            "--heads",
+            push_remote.as_str(),
+            &format!("refs/heads/{integration_branch}"),
         ],
     ) {
         return ParallelModeCapabilitySnapshot::new(
@@ -90,57 +121,12 @@ pub(super) fn inspect_akra_branch(
         );
     }
 
-    let agent_branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/");
-    if current_branch_name(Path::new(repo_root))
-        .is_some_and(|branch_name| branch_name.starts_with(&agent_branch_prefix))
-    {
-        return ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::AkraBranch,
-            ParallelModeCapabilityState::Blocked,
-            format!("{remote_branch} is missing"),
-            Some(format!(
-                "checkout a non-agent workspace before seeding {remote_branch}"
-            )),
-        );
-    }
-
-    if !runtime.command_succeeds(
-        "git",
-        &[
-            "-C",
-            repo_root,
-            "remote",
-            "get-url",
-            "--push",
-            push_remote.as_str(),
-        ],
-    ) {
-        return ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::AkraBranch,
-            ParallelModeCapabilityState::Blocked,
-            format!("{remote_branch} is missing and cannot be seeded"),
-            Some(format!(
-                "configure push remote `{}` before seeding {remote_branch}",
-                push_remote
-            )),
-        );
-    }
-
-    if runtime.command_succeeds("git", &["-C", repo_root, "rev-parse", "--verify", "HEAD"]) {
-        return ParallelModeCapabilitySnapshot::new(
-            ParallelModeCapabilityKey::AkraBranch,
-            ParallelModeCapabilityState::Ready,
-            format!("{remote_branch} will be seeded from current HEAD"),
-            None,
-        );
-    }
-
     ParallelModeCapabilitySnapshot::new(
         ParallelModeCapabilityKey::AkraBranch,
         ParallelModeCapabilityState::Blocked,
-        format!("{remote_branch} is missing"),
+        format!("required remote integration branch `{remote_branch}` is unavailable"),
         Some(format!(
-            "fetch {remote_branch} or create a commit before enabling parallel mode"
+            "create `{integration_branch}` on remote `{push_remote}` explicitly, then fetch it before enabling parallel mode"
         )),
     )
 }
@@ -152,6 +138,7 @@ branch가 있으면 기본적으로 `git push --dry-run`까지 실행해 SSH/HTT
 git push 경로로 확인한다. degraded는 병렬 모드 자체를 완전히 막지는 않지만, delivery 자동화가
 나중에 blocked될 수 있음을 supervisor에 보여 준다.
 */
+#[cfg(test)]
 pub(super) fn inspect_push_remote(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
@@ -161,7 +148,17 @@ pub(super) fn inspect_push_remote(
     pool supervision can still run. The distributor will later surface a harder
     delivery failure only if a commit-ready result actually needs GitHub push.
     */
-    let push_remote = push_remote_name(repo_root);
+    let push_remote = match try_push_remote_name(repo_root) {
+        Ok(push_remote) => push_remote,
+        Err(detail) => {
+            return ParallelModeCapabilitySnapshot::new(
+                ParallelModeCapabilityKey::PushRemote,
+                ParallelModeCapabilityState::Blocked,
+                detail,
+                Some("repair the explicit push remote setting".to_string()),
+            );
+        }
+    };
     let Some(push_url) = runtime.run_command(
         "git",
         &[
@@ -274,19 +271,14 @@ pub(super) fn inspect_push_remote(
 }
 
 /*
-GitHub automation은 `gh` CLI가 있으면 그것을 쓰고, 없으면 Akra
-`scripts/gh-akra.sh` fallback을 허용한다. 이 capability는 실제 auth 여부가 아니라
-"GitHub 조작을 시도할 실행 경로가 있는가"를 확인한다. auth 여부는 다음 `inspect_gh_auth`가
-별도로 판단한다.
+이 legacy readiness 경로는 trusted `gh` CLI 존재만 확인한다. production GitHub delivery의 embedded
+helper capability는 `GithubAutomationAdapter`가 별도로 판정하며, repository script를 실행 경로로
+사용하지 않는다.
 */
+#[cfg(test)]
 pub(super) fn inspect_gh_binary(
     runtime: &dyn ParallelModeRuntimePort,
 ) -> ParallelModeCapabilitySnapshot {
-    /*
-    Binary readiness accepts either the public gh CLI or the repo wrapper. That
-    mirrors the write adapter: capability checks should predict the same execution
-    path the distributor will use instead of forcing an unnecessary gh install.
-    */
     match runtime.find_executable("gh") {
         Some(path) => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
@@ -294,33 +286,21 @@ pub(super) fn inspect_gh_binary(
             format!("gh found at {}", path.display()),
             None,
         ),
-        None if github_fallback_script_path(runtime).is_some() => {
-            let script_path = github_fallback_script_path(runtime)
-                .expect("script path should exist after availability check");
-            ParallelModeCapabilitySnapshot::new(
-                ParallelModeCapabilityKey::GhBinary,
-                ParallelModeCapabilityState::Ready,
-                format!(
-                    "gh is not installed; Akra GitHub API fallback is available at {}",
-                    script_path.display()
-                ),
-                None,
-            )
-        }
         None => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhBinary,
             ParallelModeCapabilityState::Degraded,
-            "gh is not installed on PATH and the Akra GitHub fallback script is missing",
-            Some("install GitHub CLI or restore scripts/gh-akra.sh".to_string()),
+            "trusted gh is not installed on PATH",
+            Some("install GitHub CLI in a trusted executable location".to_string()),
         ),
     }
 }
 
 /*
 GitHub auth capability는 실제로 PR 생성/조회/close 같은 GitHub API 작업을 할 수 있는지 확인한다.
-`gh`가 있으면 `gh auth status` 계열을, fallback script만 있으면 script의 auth status를 사용한다.
+trusted `gh`가 있으면 `gh auth status`를 사용한다.
 binary capability가 ready가 아니면 auth도 degraded로 두어 원인 체인이 화면에 드러나게 한다.
 */
+#[cfg(test)]
 pub(super) fn inspect_gh_auth(
     runtime: &dyn ParallelModeRuntimePort,
     gh_binary: &ParallelModeCapabilitySnapshot,
@@ -339,21 +319,8 @@ pub(super) fn inspect_gh_auth(
             Some("install gh first, then run `gh auth login`".to_string()),
         );
     }
-    let auth_succeeded = if runtime.find_executable("gh").is_some() {
-        /*
-        Prefer gh auth status when available because it is the user's familiar
-        diagnostic surface. The fallback script path below is only for workspaces
-        where gh is absent but the Akra GitHub API wrapper exists.
-        */
-        runtime.gh_auth_status(repo_root)
-    } else if let Some(script_path) = github_fallback_script_path(runtime) {
-        let script_path = script_path.to_string_lossy().into_owned();
-        runtime
-            .run_command("bash", &[script_path.as_str(), "auth", "status"], repo_root)
-            .is_some()
-    } else {
-        false
-    };
+    let auth_succeeded =
+        runtime.find_executable("gh").is_some() && runtime.gh_auth_status(repo_root);
     match auth_succeeded {
         true => ParallelModeCapabilitySnapshot::new(
             ParallelModeCapabilityKey::GhAuth,
@@ -369,24 +336,6 @@ pub(super) fn inspect_gh_auth(
         ),
     }
 }
-fn github_fallback_script_path(runtime: &dyn ParallelModeRuntimePort) -> Option<PathBuf> {
-    github_fallback_script_candidates()
-        .into_iter()
-        .find(|path| runtime.path_exists(path))
-}
-
-fn github_fallback_script_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(installed) = std::env::current_exe().ok().and_then(|path| {
-        path.parent()
-            .map(|parent| parent.join(GITHUB_SCRIPT_RELATIVE_PATH))
-    }) {
-        candidates.push(installed);
-    }
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GITHUB_SCRIPT_RELATIVE_PATH));
-    candidates
-}
-
 /*
 planning capability는 병렬 mode가 배정할 queue와 official completion ledger를 신뢰할 수 있는지
 확인한다. workspace가 없거나 invalid면 blocked이고, ready 상태에서는 task가 있든 없든 병렬
@@ -572,6 +521,7 @@ pub(super) fn blocked_prerequisite_capability(
 credential fill에는 protocol, host, path를 분리해 넘겨야 하므로 HTTPS remote URL을 간단히
 파싱한다. SSH remote는 credential helper가 아니라 `git push --dry-run`으로 검증한다.
 */
+#[cfg(test)]
 pub(super) fn parse_https_remote(push_url: &str) -> Option<(String, String)> {
     let stripped = push_url.trim().strip_prefix("https://")?;
     let mut parts = stripped.splitn(2, '/');
@@ -594,12 +544,15 @@ TUI를 멈추지 않게 한다. 값이 필요한 경우에는 `run_command`, 성
 함수를 사용한다.
 */
 pub(super) fn command_succeeds<const N: usize>(program: &str, args: [&str; N]) -> bool {
-    let mut command = Command::new(program);
-    command.args(args);
+    if crate::git_execution_guard::ensure_git_command_execution_config_safe(program, &args, None)
+        .is_err()
+    {
+        return false;
+    }
+    let mut command = git_subprocess::command_for_program(program, args);
     command.stdin(Stdio::null());
     command.stdout(Stdio::null());
     command.stderr(Stdio::null());
-    command.env("GIT_TERMINAL_PROMPT", "0");
     subprocess::command_output(&mut command, &format!("{program} {}", args.join(" ")))
         .is_ok_and(|output| output.status.success())
 }
@@ -614,14 +567,21 @@ pub(super) fn run_command<const N: usize>(
     args: [&str; N],
     current_dir: Option<&str>,
 ) -> Option<String> {
-    let mut command = Command::new(program);
-    command.args(args);
+    if crate::git_execution_guard::ensure_git_command_execution_config_safe(
+        program,
+        &args,
+        current_dir,
+    )
+    .is_err()
+    {
+        return None;
+    }
+    let mut command = git_subprocess::command_for_program(program, args);
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
     command.stdin(Stdio::null());
     command.stderr(Stdio::null());
-    command.env("GIT_TERMINAL_PROMPT", "0");
     let output =
         subprocess::command_output(&mut command, &format!("{program} {}", args.join(" "))).ok()?;
     if !output.status.success() {

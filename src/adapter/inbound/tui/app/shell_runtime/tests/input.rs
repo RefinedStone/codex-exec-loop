@@ -8,13 +8,14 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnQueuedPrompt,
 };
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
+use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeAutomationTrigger,
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
-    ParallelModePoolSlotState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
-    ParallelModeSupervisorState,
+    ParallelModePoolSlotState, ParallelModePostTurnQueueSignal, ParallelModeReadinessSnapshot,
+    ParallelModeReadinessState, ParallelModeSupervisorDetailSnapshot,
+    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::sync::atomic::Ordering;
@@ -210,7 +211,8 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(event_lines.contains("You: run next"));
+    assert!(event_lines.contains("You: operator prompt submitted / chars: 8"));
+    assert!(!event_lines.contains("You: run next"));
     assert!(
         event_lines.contains("Task Intake: committed task"),
         "Enter should route the buffered prompt through task intake: {event_lines}"
@@ -484,6 +486,12 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
      * app-server conversation snapshot without switching the main shell thread.
      */
     let mut runtime = make_test_runtime();
+    let main_conversation_identity = match &runtime.app().conversation_state {
+        ConversationState::Ready(conversation) => {
+            (conversation.thread_id.clone(), conversation.title.clone())
+        }
+        _ => panic!("expected ready main conversation"),
+    };
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     runtime
@@ -554,12 +562,43 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
         .expect("selected active agent should open a preview");
     assert_eq!(preview.agent_id, "agent-1");
     assert_eq!(preview.thread_id.as_deref(), Some("thread-1"));
+    assert!(preview.snapshot.is_none());
+    assert_eq!(preview.status_text, "conversation snapshot loading");
+
+    for _ in 0..50 {
+        runtime.poll_background_messages();
+        if runtime
+            .app()
+            .parallel_peek_overlay_ui_state
+            .preview()
+            .is_some_and(|preview| preview.snapshot.is_some())
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let preview = runtime
+        .app()
+        .parallel_peek_overlay_ui_state
+        .preview()
+        .expect("selected active agent should keep its preview");
     assert_eq!(
         preview
             .snapshot
             .as_ref()
             .map(|snapshot| snapshot.title.as_str()),
         Some("Loaded thread")
+    );
+    let current_main_conversation_identity = match &runtime.app().conversation_state {
+        ConversationState::Ready(conversation) => {
+            (conversation.thread_id.clone(), conversation.title.clone())
+        }
+        _ => panic!("peek load must not replace the main conversation"),
+    };
+    assert_eq!(
+        current_main_conversation_identity,
+        main_conversation_identity
     );
     assert_eq!(
         runtime
@@ -651,7 +690,10 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             "thread-1",
             "turn-1",
             PostTurnEvaluationOutcome {
-                provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
+                provenance: PostTurnEvaluationProvenance::new("turn-1".to_string())
+                    .with_parallel_queue_signal(Some(
+                        ParallelModePostTurnQueueSignal::AutoFollowQueued,
+                    )),
                 runtime_projection: planning_projection,
                 planning_repair_state: None,
                 runtime_notices: Vec::new(),
@@ -701,6 +743,150 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             .as_ref()
             .map(|activity| activity.summary.as_str()),
         Some("delegated: parallel dispatch")
+    );
+}
+
+#[test]
+fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only_prompt() {
+    let fixture = make_dispatch_ready_parallel_runtime("post-turn-parallel-disable-race");
+    let mut runtime = fixture.runtime;
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
+    let captured_permit = runtime.app().post_turn_continuation_gate.capture();
+    let planning_projection = runtime
+        .app()
+        .application
+        .planning()
+        .runtime()
+        .load_runtime_projection_or_invalid(&workspace_directory);
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-disable-race".to_string();
+    conversation.turn_activity.last_completed_turn_id = Some("turn-disable-race".to_string());
+    mark_core_turn_completed(&mut runtime, "thread-disable-race", "turn-disable-race");
+
+    runtime.app_mut().close_parallel_mode_automation_epoch();
+    assert!(
+        !captured_permit.is_current(),
+        "parallel off must cancel a post-turn evaluator that captured the parallel opt-in"
+    );
+
+    runtime
+        .app
+        .tx
+        .send(post_turn_evaluation_completed_message(
+            "thread-disable-race",
+            "turn-disable-race",
+            PostTurnEvaluationOutcome {
+                provenance: PostTurnEvaluationProvenance::new("turn-disable-race".to_string())
+                    .with_parallel_queue_signal(Some(
+                        ParallelModePostTurnQueueSignal::AutoFollowQueued,
+                    )),
+                runtime_projection: planning_projection,
+                planning_repair_state: None,
+                runtime_notices: Vec::new(),
+                action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
+                    PostTurnQueuedPrompt {
+                        prompt: "must not run after parallel off".to_string(),
+                        mode_label: "parallel-only".to_string(),
+                        transcript_text: "stale parallel continuation".to_string(),
+                    },
+                )),
+                operator_alerts: Vec::new(),
+            },
+            Default::default(),
+        ))
+        .expect("late post-turn result should enqueue");
+
+    runtime.poll_background_messages();
+
+    assert_eq!(fixture.launch_count.load(Ordering::SeqCst), 0);
+    assert!(!runtime.app().parallel_mode_enabled());
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(
+        !conversation.auto_follow_state.has_live_activity(),
+        "discarded parallel-only result must not leave a queued phase"
+    );
+    assert!(conversation.can_accept_manual_prompt());
+    assert!(conversation.messages.iter().all(|message| {
+        message.text != "stale parallel continuation"
+            && message.text != "must not run after parallel off"
+    }));
+    assert!(
+        conversation
+            .status_text
+            .contains("parallel continuation cancelled")
+    );
+}
+
+#[test]
+fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
+    let planning_projection = runtime
+        .app()
+        .application
+        .planning()
+        .runtime()
+        .load_runtime_projection_or_invalid(&workspace_directory);
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.auto_follow_state.set_max_auto_turns(1);
+    conversation.thread_id = "thread-single-follow".to_string();
+    conversation.turn_activity.last_completed_turn_id = Some("turn-single-follow".to_string());
+    mark_core_turn_completed(&mut runtime, "thread-single-follow", "turn-single-follow");
+    runtime.app_mut().close_parallel_mode_automation_epoch();
+
+    runtime
+        .app
+        .tx
+        .send(post_turn_evaluation_completed_message(
+            "thread-single-follow",
+            "turn-single-follow",
+            PostTurnEvaluationOutcome {
+                provenance: PostTurnEvaluationProvenance::new("turn-single-follow".to_string())
+                    .with_parallel_queue_signal(Some(
+                        ParallelModePostTurnQueueSignal::AutoFollowQueued,
+                    )),
+                runtime_projection: planning_projection,
+                planning_repair_state: None,
+                runtime_notices: Vec::new(),
+                action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
+                    PostTurnQueuedPrompt {
+                        prompt: "continue in the main session".to_string(),
+                        mode_label: "planning queue".to_string(),
+                        transcript_text: "explicit single-session continuation".to_string(),
+                    },
+                )),
+                operator_alerts: Vec::new(),
+            },
+            Default::default(),
+        ))
+        .expect("late post-turn result should enqueue");
+
+    runtime.poll_background_messages();
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(
+        conversation
+            .messages
+            .last()
+            .map(|message| message.text.as_str()),
+        Some("explicit single-session continuation")
+    );
+    assert!(
+        conversation
+            .status_text
+            .starts_with("auto-follow submitted")
     );
 }
 
@@ -1219,4 +1405,30 @@ fn paste_event_inserts_multiline_text_without_submit() {
     assert!(conversation.messages.is_empty());
     assert!(conversation.can_accept_manual_prompt());
     assert!(runtime.take_redraw_request());
+}
+
+#[test]
+fn approval_overlay_consumes_paste_without_mutating_the_prompt() {
+    let mut runtime = make_test_runtime();
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.input_buffer = "existing prompt".to_string();
+    conversation.pending_approval_request = Some(ConversationApprovalRequest {
+        approval_id: "approval-paste".to_string(),
+        server_request_id: "server-paste".to_string(),
+        method: "item/fileChange/requestApproval".to_string(),
+        kind: ConversationApprovalRequestKind::FileChange,
+        summary: "File changes requested.".to_string(),
+        details: vec!["Inspect the current diff before accepting.".to_string()],
+    });
+    runtime.app_mut().shell_overlay = ShellOverlay::Approval;
+
+    runtime.handle_terminal_event(Event::Paste("must not leak".to_string()));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "existing prompt");
+    assert!(conversation.pending_approval_request.is_some());
 }

@@ -14,8 +14,8 @@ pub(super) enum AutoFollowControlEvent {
      */
     DraftWorkspaceSynced { workspace_directory: String },
     /*
-     * AutoFollowPaused는 실행 중인 내부 continuation을 중단하라는 operator intent다.
-     * 완료 turn 수는 유지해야 하므로 AutoFollowState의 phase를 통째로 reset하지 않는다.
+     * AutoFollowPaused는 실행 중인 내부 continuation을 중단하고 명시적인 `:turns`
+     * 재설정 전까지 자동화를 disarm하라는 operator intent다.
      */
     AutoFollowPaused,
     /*
@@ -77,13 +77,15 @@ pub(super) fn reduce_auto_follow_controls(
         }
         AutoFollowControlEvent::AutoFollowPaused => {
             /*
-             * pause_post_turn_continuation은 다음 자동 turn 제출을 막는 operator flag를 세운다.
-             * record_internal_continuation_paused는 tail/footer가 "사용자가 멈췄다"는 이유를 표시하게 하며,
+             * pause_post_turn_continuation은 이후 자동 turn 제출을 막는 sticky operator flag를 세운다.
+             * record_internal_continuation_paused는 tail/footer가 재무장이 필요하다는 이유를 표시하게 하며,
              * running phase 자체는 유지해 turn budget accounting이 중간에 사라지지 않게 한다.
              */
             state.pause_post_turn_continuation();
             state.record_internal_continuation_paused();
-            state.status_text = "internal continuation paused".to_string();
+            state.status_text =
+                "auto-follow stopped and disarmed / use :turns <positive|infinite> to re-enable"
+                    .to_string();
         }
         AutoFollowControlEvent::MaxAutoTurnsUpdated { value } => {
             /*
@@ -91,7 +93,9 @@ pub(super) fn reduce_auto_follow_controls(
              * AutoFollowState가 canonical parser를 소유하게 해서 runtime limit 판단과 UI 저장 검증이 분리되지 않게 한다.
              */
             let Some(value) = AutoFollowState::normalize_max_auto_turns_candidate(&value) else {
-                state.status_text = "auto-follow max turns must be a whole number greater than 0 or the word infinite".to_string();
+                state.status_text =
+                    "auto-follow unchanged / use a positive whole number, infinite, off, or 0"
+                        .to_string();
                 return AutoFollowControlReduction { state, effects };
             };
 
@@ -101,10 +105,14 @@ pub(super) fn reduce_auto_follow_controls(
              */
             state.auto_follow_state.set_max_auto_turns(value);
             state.clear_auto_follow_skip();
-            state.status_text = format!(
-                "auto-follow max turns {}",
-                state.auto_follow_state.max_auto_turns_label()
-            );
+            state.status_text = if state.auto_follow_state.is_enabled() {
+                format!(
+                    "auto-follow enabled / turn budget {}",
+                    state.auto_follow_state.max_auto_turns_label()
+                )
+            } else {
+                "auto-follow disabled / use :turns <positive|infinite> to enable".to_string()
+            };
             effects.push(AutoFollowControlEffect::MaxAutoTurnsEditor {
                 value: state.auto_follow_state.max_auto_turns_label(),
             });
@@ -117,7 +125,7 @@ pub(super) fn reduce_auto_follow_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::inbound::tui::app::{AutoFollowSkipReason, DEFAULT_AUTO_FOLLOW_MAX_TURNS};
+    use crate::adapter::inbound::tui::app::AutoFollowSkipReason;
 
     #[test]
     fn draft_workspace_sync_updates_blank_draft_and_emits_ui_sync() {
@@ -185,12 +193,14 @@ mod tests {
     }
 
     #[test]
-    fn invalid_max_auto_turns_keeps_existing_limit() {
+    fn disabling_auto_follow_accepts_zero_and_emits_canonical_off_label() {
         /*
-         * invalid raw input must not partially update conversation policy or close/sync the editor.
-         * status_text is enough feedback; empty effects keeps the user in the editing context.
+         * Both `0` and `off` are explicit disable operations. The policy keeps a
+         * prior :stop sticky and returns one canonical label to every editor.
          */
-        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.auto_follow_state.set_max_auto_turns(5);
+        state.pause_post_turn_continuation();
 
         let reduced = reduce_auto_follow_controls(
             state,
@@ -199,11 +209,62 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            reduced.state.auto_follow_state.max_auto_turns_value(),
-            DEFAULT_AUTO_FOLLOW_MAX_TURNS
+        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 0);
+        assert!(!reduced.state.auto_follow_state.can_queue_next());
+        assert!(
+            reduced
+                .state
+                .auto_follow_state
+                .post_turn_continuation_paused()
         );
+        assert_eq!(
+            reduced.effects,
+            vec![AutoFollowControlEffect::MaxAutoTurnsEditor {
+                value: "off".to_string()
+            }]
+        );
+        assert!(reduced.state.status_text.contains("auto-follow disabled"));
+    }
+
+    #[test]
+    fn invalid_max_auto_turns_keeps_auto_follow_disabled() {
+        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
+
+        let reduced = reduce_auto_follow_controls(
+            state,
+            AutoFollowControlEvent::MaxAutoTurnsUpdated {
+                value: "not-a-budget".to_string(),
+            },
+        );
+
+        assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 0);
         assert!(reduced.effects.is_empty());
+        assert!(reduced.state.status_text.contains("auto-follow unchanged"));
+    }
+
+    #[test]
+    fn positive_budget_is_an_explicit_opt_in_and_clears_chain_pause() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.pause_post_turn_continuation();
+
+        let reduced = reduce_auto_follow_controls(
+            state,
+            AutoFollowControlEvent::MaxAutoTurnsUpdated {
+                value: "3".to_string(),
+            },
+        );
+
+        assert!(reduced.state.auto_follow_state.can_queue_next());
+        assert!(
+            !reduced
+                .state
+                .auto_follow_state
+                .post_turn_continuation_paused()
+        );
+        assert_eq!(
+            reduced.state.status_text,
+            "auto-follow enabled / turn budget 3"
+        );
     }
 
     #[test]

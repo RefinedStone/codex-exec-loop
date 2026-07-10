@@ -20,13 +20,12 @@ distributor queue root는 pool root 아래의 durable queue mirror이다. 실제
 truth는 planning authority의 runtime queue projection이지만, `.distributor-queue/<id>.json` 파일은
 운영자가 queue item을 확인하고 테스트가 store-backed recovery를 검증하는 데 쓰인다.
 */
-fn distributor_queue_root(pool_root: &Path) -> PathBuf {
-    pool_root.join(".distributor-queue")
+fn distributor_queue_relative_root() -> &'static Path {
+    Path::new(".distributor-queue")
 }
 
-// queue record path 계산을 한 곳에 두어 writer와 test loader가 같은 mirror layout을 공유한다.
-fn distributor_queue_record_path(pool_root: &Path, queue_item_id: &str) -> PathBuf {
-    distributor_queue_root(pool_root).join(format!("{queue_item_id}.json"))
+fn distributor_queue_record_relative_path(queue_item_id: &str) -> PathBuf {
+    distributor_queue_relative_root().join(format!("{queue_item_id}.json"))
 }
 
 /*
@@ -77,8 +76,9 @@ pub(crate) fn load_distributor_queue_records(
     runtime: &dyn ParallelModeRuntimePort,
     pool_root: &Path,
 ) -> Vec<ParallelModeDistributorQueueRecord> {
-    let queue_root = distributor_queue_root(pool_root);
-    let Ok(entries) = runtime.read_dir_paths(&queue_root) else {
+    let Ok(entries) =
+        runtime.read_runtime_mirror_directory(pool_root, distributor_queue_relative_root())
+    else {
         // mirror directory가 없다는 것은 아직 distributor queue가 생성되지 않았다는 정상 상태다.
         return Vec::new();
     };
@@ -89,9 +89,8 @@ pub(crate) fn load_distributor_queue_records(
      */
     let mut records = entries
         .into_iter()
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .filter_map(|path| runtime.read_to_string(&path).ok())
-        .filter_map(|content| {
+        .filter(|(path, _)| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|(_, content)| {
             serde_json::from_str::<ParallelModeDistributorQueueRecord>(&content).ok()
         })
         .collect::<Vec<_>>();
@@ -107,8 +106,8 @@ pub(crate) fn load_distributor_queue_records(
 /*
 queue record 저장은 planning authority와 filesystem mirror를 모두 갱신한다.
 먼저 authority projection을 upsert해 application이 읽는 실시간 상태를 갱신하고, 그 다음 JSON
-파일을 temp file + rename으로 쓴다. 이 순서와 atomic-ish rename은 프로세스 중단 시 부분
-JSON이 최종 파일명으로 남는 위험을 줄인다.
+파일을 private atomic mirror capability로 쓴다. adapter가 pinned directory 아래에서 무작위
+exclusive temp를 완성하고 fsync/identity 검증 뒤 교체하므로 부분 JSON과 link alias를 막는다.
 */
 pub(super) fn write_distributor_queue_record(
     planning_authority: &dyn PlanningAuthorityPort,
@@ -127,28 +126,20 @@ pub(super) fn write_distributor_queue_record(
             )
         })?;
 
-    let queue_root = distributor_queue_root(pool_root);
-    runtime
-        .ensure_directory_exists(&queue_root)
-        .map_err(|error| format!("failed to create distributor queue directory: {error}"))?;
-
-    let path = distributor_queue_record_path(pool_root, &record.queue_item_id);
-    let temp_path = path.with_extension("json.tmp");
     let body = serde_json::to_string_pretty(record)
         .map_err(|error| format!("failed to serialize distributor queue record: {error}"))?;
-    // temp file write가 성공한 뒤 rename해야 partially written JSON이 canonical path에 남지 않는다.
-    runtime.write_string(&temp_path, &body).map_err(|error| {
-        format!(
-            "failed to write temporary distributor queue record `{}`: {error}",
-            record.queue_item_id
+    runtime
+        .write_runtime_mirror_atomic(
+            pool_root,
+            &distributor_queue_record_relative_path(&record.queue_item_id),
+            &body,
         )
-    })?;
-    runtime.rename(&temp_path, &path).map_err(|error| {
-        format!(
-            "failed to persist distributor queue record `{}`: {error}",
-            record.queue_item_id
-        )
-    })
+        .map_err(|error| {
+            format!(
+                "failed to persist distributor queue record `{}`: {error}",
+                record.queue_item_id
+            )
+        })
 }
 
 /*

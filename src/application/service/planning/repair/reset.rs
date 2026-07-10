@@ -1,9 +1,16 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDocumentCommit, PlanningAuthorityPort,
+};
+#[cfg(test)]
+use crate::application::port::outbound::planning_task_repository_port::PlanningAuthoritySnapshotCommit;
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    load_consistent_planning_authority_snapshots,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -12,6 +19,7 @@ use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapArtifacts, PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, PLANNING_DIRECTION_DOCS_DIRECTORY,
     PLANNING_DRAFTS_DIRECTORY, PLANNING_PROMPTS_DIRECTORY, PLANNING_REJECTED_DIRECTORY,
@@ -73,6 +81,7 @@ pub struct PlanningResetService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     planning_bootstrap_service: PlanningBootstrapService,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     planning_validation_service: PlanningValidationService,
     priority_queue_service: PriorityQueueService,
 }
@@ -82,6 +91,7 @@ impl PlanningResetService {
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         planning_bootstrap_service: PlanningBootstrapService,
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+        planning_authority_port: Arc<dyn PlanningAuthorityPort>,
         planning_validation_service: PlanningValidationService,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
@@ -89,6 +99,7 @@ impl PlanningResetService {
             planning_workspace_port,
             planning_bootstrap_service,
             planning_task_repository_port,
+            planning_authority_port,
             planning_validation_service,
             priority_queue_service,
         }
@@ -104,18 +115,29 @@ impl PlanningResetService {
         workspace_dir: &str,
         target: PlanningResetTarget,
     ) -> Result<PlanningWorkspaceResetResult> {
-        let workspace = self.load_existing_workspace(workspace_dir)?;
         let bootstrap = self
             .planning_bootstrap_service
             .build_artifacts_for_mode(PlanningBootstrapMode::Simple);
-        match target {
-            PlanningResetTarget::Queue => self.reset_queue(workspace_dir, &workspace, &bootstrap),
-            PlanningResetTarget::Directions => {
-                self.ensure_directions_reset_is_safe(workspace_dir)?;
-                self.reset_directions(workspace_dir, &workspace, &bootstrap)
-            }
-            PlanningResetTarget::All => self.reset_all(workspace_dir, &bootstrap),
-        }
+        with_authority_mutation_guard(
+            self.planning_authority_port.as_ref(),
+            workspace_dir,
+            &format!("reset planning {}", target.label()),
+            |owner_token| {
+                let workspace = self.load_existing_workspace(workspace_dir)?;
+                match target {
+                    PlanningResetTarget::Queue => {
+                        self.reset_queue(workspace_dir, &workspace, &bootstrap, owner_token)
+                    }
+                    PlanningResetTarget::Directions => {
+                        self.ensure_directions_reset_is_safe(workspace_dir)?;
+                        self.reset_directions(workspace_dir, &workspace, &bootstrap, owner_token)
+                    }
+                    PlanningResetTarget::All => {
+                        self.reset_all(workspace_dir, &bootstrap, owner_token)
+                    }
+                }
+            },
+        )
     }
 
     // reset은 완전히 없는 workspace를 암묵적으로 초기화하지 않는다. bootstrap 생성은 init/doctor 책임이다.
@@ -142,12 +164,15 @@ impl PlanningResetService {
         workspace_dir: &str,
         workspace: &PlanningWorkspaceLoadRecord,
         bootstrap: &PlanningBootstrapArtifacts,
+        authority_mutation_owner_token: &str,
     ) -> Result<PlanningWorkspaceResetResult> {
         self.commit_task_authority_from_document(
             workspace_dir,
             None,
             &bootstrap.task_authority,
             workspace.result_output_markdown.as_deref(),
+            &[],
+            authority_mutation_owner_token,
         )?;
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::Queue,
@@ -206,18 +231,40 @@ impl PlanningResetService {
         workspace_dir: &str,
         workspace: &PlanningWorkspaceLoadRecord,
         bootstrap: &PlanningBootstrapArtifacts,
+        authority_mutation_owner_token: &str,
     ) -> Result<PlanningWorkspaceResetResult> {
-        self.reset_directions_side_artifacts(workspace_dir, bootstrap)?;
-        let task_authority = self
+        let mut task_authority = self
             .planning_task_repository_port
             .load_task_authority_snapshot(workspace_dir)?
             .map(|snapshot| snapshot.task_authority)
             .unwrap_or_else(|| bootstrap.task_authority.clone());
+        let retained_direction_ids = bootstrap
+            .directions
+            .directions
+            .iter()
+            .map(|direction| direction.id.as_str())
+            .collect::<BTreeSet<_>>();
+        task_authority
+            .tasks
+            .retain(|task| retained_direction_ids.contains(task.direction_id.as_str()));
+        let repo_scoped_atomic_documents = self.repo_scoped_atomic_documents(workspace_dir);
+        let active_document_mutations =
+            reset_active_document_mutations(PlanningResetTarget::Directions, bootstrap);
+        if !repo_scoped_atomic_documents {
+            self.require_direct_filesystem_reset_fallback_for_tests()?;
+            self.reset_directions_side_artifacts(workspace_dir, bootstrap)?;
+        }
         self.commit_task_authority_from_document(
             workspace_dir,
             Some(&bootstrap.directions),
             &task_authority,
             workspace.result_output_markdown.as_deref(),
+            if repo_scoped_atomic_documents {
+                &active_document_mutations
+            } else {
+                &[]
+            },
+            authority_mutation_owner_token,
         )?;
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::Directions,
@@ -235,20 +282,33 @@ impl PlanningResetService {
         &self,
         workspace_dir: &str,
         bootstrap: &PlanningBootstrapArtifacts,
+        authority_mutation_owner_token: &str,
     ) -> Result<PlanningWorkspaceResetResult> {
-        self.reset_all_generated_artifacts(workspace_dir)?;
-        self.reset_directions_side_artifacts(workspace_dir, bootstrap)?;
-        self.planning_workspace_port
-            .replace_planning_workspace_file(
-                workspace_dir,
-                RESULT_OUTPUT_FILE_PATH,
-                Some(&bootstrap.result_output_markdown),
-            )?;
+        let repo_scoped_atomic_documents = self.repo_scoped_atomic_documents(workspace_dir);
+        let active_document_mutations =
+            reset_active_document_mutations(PlanningResetTarget::All, bootstrap);
+        if !repo_scoped_atomic_documents {
+            self.require_direct_filesystem_reset_fallback_for_tests()?;
+            self.reset_all_generated_artifacts(workspace_dir)?;
+            self.reset_directions_side_artifacts(workspace_dir, bootstrap)?;
+            self.planning_workspace_port
+                .replace_planning_workspace_file(
+                    workspace_dir,
+                    RESULT_OUTPUT_FILE_PATH,
+                    Some(&bootstrap.result_output_markdown),
+                )?;
+        }
         self.commit_task_authority_from_document(
             workspace_dir,
             Some(&bootstrap.directions),
             &bootstrap.task_authority,
             Some(&bootstrap.result_output_markdown),
+            if repo_scoped_atomic_documents {
+                &active_document_mutations
+            } else {
+                &[]
+            },
+            authority_mutation_owner_token,
         )?;
         Ok(PlanningWorkspaceResetResult {
             target: PlanningResetTarget::All,
@@ -271,8 +331,8 @@ impl PlanningResetService {
 
     /*
      * direction side 산출물은 direction authority를 보조하는 file-backed 자료다.
-     * DB direction snapshot을 supplemental file보다 먼저 commit한다. 뒤쪽 파일 쓰기가 실패해도
-     * authority source는 갱신되고, operator는 반환된 error로 실패한 path를 볼 수 있다.
+     * direct-filesystem fallback만 이 helper를 사용한다. Repo-scoped mode는
+     * active-document mutations를 authority transaction 안에서 처리한다.
      */
     fn reset_directions_side_artifacts(
         &self,
@@ -283,7 +343,6 @@ impl PlanningResetService {
             self.planning_workspace_port
                 .remove_planning_workspace_entry(workspace_dir, path)?;
         }
-        self.commit_direction_authority_from_bootstrap(workspace_dir, &bootstrap.directions)?;
         for supplemental_file in &bootstrap.supplemental_files {
             self.planning_workspace_port
                 .replace_planning_workspace_file(
@@ -298,7 +357,7 @@ impl PlanningResetService {
     /*
      * 전체 planning runtime 계약을 검증할 context가 충분할 때만 task authority를 commit한다.
      * directions나 result-output이 없으면 active workspace authority로 증명할 수 없는 queue projection을
-     * commit하기보다 DB task snapshot을 지우는 편이 더 안전한 reset 효과다.
+     * 삭제로 낮추지 않고 실패 처리한다.
      */
     fn commit_task_authority_from_document(
         &self,
@@ -306,6 +365,8 @@ impl PlanningResetService {
         directions: Option<&DirectionCatalogDocument>,
         task_authority: &TaskAuthorityDocument,
         result_output_markdown: Option<&str>,
+        active_document_mutations: &[PlanningAuthorityActiveDocumentMutation<'_>],
+        authority_mutation_owner_token: &str,
     ) -> Result<()> {
         let loaded_directions;
         let directions = match directions {
@@ -320,9 +381,9 @@ impl PlanningResetService {
         };
         let (Some(directions), Some(result_output_markdown)) = (directions, result_output_markdown)
         else {
-            return self
-                .planning_task_repository_port
-                .clear_task_authority_snapshot(workspace_dir);
+            return Err(anyhow!(
+                "planning reset requires complete direction and result-output authority"
+            ));
         };
         let task_authority_json = serde_json::to_string(task_authority)?;
         let validation_result = self.planning_validation_service.validate_workspace_files(
@@ -333,7 +394,16 @@ impl PlanningResetService {
             },
         );
         if !validation_result.is_valid() {
-            return Ok(());
+            return Err(anyhow!(
+                "planning reset failed validation: {}",
+                validation_result
+                    .report
+                    .issues
+                    .iter()
+                    .map(|issue| issue.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
         }
 
         // validation은 승인된 direction/task 문서를 다시 parse하므로, commit에는 normalized domain 값을 사용한다.
@@ -349,36 +419,198 @@ impl PlanningResetService {
             .priority_queue_service
             .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid reset queue build failed: {error}"))?;
-        // reset은 incremental task mutation이 아니라 operator/system authority rewrite 경계다.
-        // caller가 파괴적 reset target을 명시적으로 선택했으므로 revision guard 없이 commit한다.
-        self.planning_task_repository_port
-            .commit_task_authority_snapshot(
-                workspace_dir,
-                PlanningTaskAuthorityCommit {
-                    observed_planning_revision: None,
-                    task_authority,
-                    queue_projection: &queue_projection,
-                },
-            )
-            .map(|_| ())
+        self.commit_complete_reset_authority(
+            workspace_dir,
+            CompleteResetAuthorityRewrite {
+                directions,
+                task_authority,
+                queue_projection: &queue_projection,
+                result_output_markdown,
+                active_document_mutations,
+            },
+            authority_mutation_owner_token,
+        )
     }
 
-    // direction authority reset은 queue projection이 필요 없다. task는 검증 뒤 별도로 commit된다.
-    fn commit_direction_authority_from_bootstrap(
+    fn commit_complete_reset_authority(
         &self,
         workspace_dir: &str,
-        directions: &DirectionCatalogDocument,
+        rewrite: CompleteResetAuthorityRewrite<'_>,
+        authority_mutation_owner_token: &str,
     ) -> Result<()> {
-        self.planning_task_repository_port
-            .commit_direction_authority_snapshot(
-                workspace_dir,
-                PlanningDirectionAuthorityCommit {
-                    observed_planning_revision: None,
-                    directions,
-                },
-            )
-            .map(|_| ())
+        let (observed_planning_revision, previous_task_ids) =
+            self.load_authority_rewrite_baseline(workspace_dir)?;
+        let retained_task_ids = rewrite
+            .task_authority
+            .tasks
+            .iter()
+            .map(|task| task.id.trim())
+            .collect::<BTreeSet<_>>();
+        let retired_task_ids = previous_task_ids
+            .into_iter()
+            .filter(|task_id| !retained_task_ids.contains(task_id.as_str()))
+            .collect::<Vec<_>>();
+        let result = if self
+            .planning_authority_port
+            .supports_atomic_planning_authority_documents()
+        {
+            self.planning_authority_port
+                .commit_planning_authority_documents(
+                    workspace_dir,
+                    PlanningAuthorityDocumentCommit {
+                        observed_planning_revision,
+                        directions: rewrite.directions,
+                        task_authority: rewrite.task_authority,
+                        queue_projection: rewrite.queue_projection,
+                        result_output_markdown: rewrite.result_output_markdown,
+                        active_document_mutations: rewrite.active_document_mutations,
+                        retired_task_ids: &retired_task_ids,
+                        authority_mutation_owner_token: Some(authority_mutation_owner_token),
+                    },
+                )?
+        } else {
+            #[cfg(test)]
+            {
+                if !self
+                    .planning_authority_port
+                    .allows_non_atomic_planning_authority_rewrite_for_tests()
+                {
+                    return Err(anyhow!(
+                        "planning authority adapter does not support atomic document rewrites"
+                    ));
+                }
+                self.planning_task_repository_port
+                    .commit_planning_authority_snapshot(
+                        workspace_dir,
+                        PlanningAuthoritySnapshotCommit {
+                            observed_planning_revision,
+                            directions: rewrite.directions,
+                            task_authority: rewrite.task_authority,
+                            queue_projection: rewrite.queue_projection,
+                        },
+                    )?
+            }
+            #[cfg(not(test))]
+            {
+                return Err(anyhow!(
+                    "planning authority adapter does not support atomic document rewrites"
+                ));
+            }
+        };
+        match result {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(()),
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => Err(anyhow!(
+                "planning authority changed during reset (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+            )),
+        }
     }
+
+    fn load_authority_rewrite_baseline(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<(Option<i64>, Vec<String>)> {
+        if let Some(snapshot) = self
+            .planning_authority_port
+            .load_planning_authority_documents(workspace_dir)?
+        {
+            return Ok((
+                Some(snapshot.planning_revision),
+                snapshot
+                    .task_authority
+                    .tasks
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect(),
+            ));
+        }
+        let (directions, tasks) = load_consistent_planning_authority_snapshots(
+            self.planning_task_repository_port.as_ref(),
+            workspace_dir,
+        )?;
+        match (directions, tasks) {
+            (Some(_), Some(tasks)) => Ok((
+                Some(tasks.planning_revision),
+                tasks
+                    .task_authority
+                    .tasks
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect(),
+            )),
+            (None, None) => Ok((None, Vec::new())),
+            _ => Err(anyhow!(
+                "planning authority is incomplete; repair it before reset"
+            )),
+        }
+    }
+
+    fn repo_scoped_atomic_documents(&self, workspace_dir: &str) -> bool {
+        self.planning_workspace_port
+            .uses_repo_scoped_authority(workspace_dir)
+            && self
+                .planning_authority_port
+                .supports_atomic_planning_authority_documents()
+    }
+
+    fn require_direct_filesystem_reset_fallback_for_tests(&self) -> Result<()> {
+        #[cfg(test)]
+        {
+            if self
+                .planning_authority_port
+                .allows_non_atomic_planning_authority_rewrite_for_tests()
+            {
+                return Ok(());
+            }
+        }
+        Err(anyhow!(
+            "destructive planning reset requires a repo-scoped atomic authority store"
+        ))
+    }
+}
+
+struct CompleteResetAuthorityRewrite<'a> {
+    directions: &'a DirectionCatalogDocument,
+    task_authority: &'a TaskAuthorityDocument,
+    queue_projection: &'a crate::domain::planning::PriorityQueueProjection,
+    result_output_markdown: &'a str,
+    active_document_mutations: &'a [PlanningAuthorityActiveDocumentMutation<'a>],
+}
+
+fn reset_active_document_mutations<'a>(
+    target: PlanningResetTarget,
+    bootstrap: &'a PlanningBootstrapArtifacts,
+) -> Vec<PlanningAuthorityActiveDocumentMutation<'a>> {
+    let mut mutations = Vec::new();
+    if matches!(
+        target,
+        PlanningResetTarget::Directions | PlanningResetTarget::All
+    ) {
+        mutations.extend(RESET_DIRECTIONS_REMOVED_PATHS.iter().map(|relative_path| {
+            PlanningAuthorityActiveDocumentMutation::RemoveEntry { relative_path }
+        }));
+        mutations.extend(bootstrap.supplemental_files.iter().map(|file| {
+            PlanningAuthorityActiveDocumentMutation::Replace {
+                relative_path: file.active_path.as_str(),
+                body: file.body.as_str(),
+            }
+        }));
+    }
+    if target == PlanningResetTarget::All {
+        mutations.push(PlanningAuthorityActiveDocumentMutation::ClearStagedDrafts);
+        mutations.extend(
+            RESET_ALL_GENERATED_ARTIFACT_PATHS
+                .iter()
+                .map(
+                    |relative_path| PlanningAuthorityActiveDocumentMutation::RemoveEntry {
+                        relative_path,
+                    },
+                ),
+        );
+    }
+    mutations
 }
 
 // full-reset report에 쓰려고 direction-side 제거 목록과 generated-artifact 제거 목록을 합친다.
@@ -398,9 +630,20 @@ fn removed_path_strings(paths: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::{
-        NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    };
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningDraftFileRecord, PlanningWorkspacePort,
+    };
+    use crate::application::service::planning::authoring::init::PlanningInitService;
+    use crate::domain::parallel_mode::{
+        ParallelModeDispatchBlockReason, ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
+        ParallelModeTaskDispatchBlockSnapshot,
     };
     use crate::domain::planning::{
         DirectionDefinition, DirectionState, OriginSessionKind, PLANNING_FORMAT_VERSION,
@@ -408,6 +651,7 @@ mod tests {
     };
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Barrier};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -447,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_reset_clears_task_authority_when_direction_context_is_missing() {
+    fn queue_reset_fails_closed_when_direction_context_is_missing() {
         let fixture = ResetFixture::new("queue-clear-missing-context");
         fixture.write_result_output("# Result Output\n\n- Keep the operator contract.\n");
         let directions =
@@ -460,21 +704,21 @@ mod tests {
             },
         );
 
-        let result = fixture
+        let error = fixture
             .service
             .reset_workspace(fixture.workspace.path_str(), PlanningResetTarget::Queue)
-            .expect("queue reset should clear task authority without direction context");
+            .expect_err("queue reset must not clear authority without direction context");
 
-        assert_eq!(result.target, PlanningResetTarget::Queue);
-        assert!(result.rewritten_paths.is_empty());
-        assert!(result.removed_paths.is_empty());
-        assert!(
-            fixture
-                .repository
-                .load_task_authority_snapshot(fixture.workspace.path_str())
-                .expect("task authority snapshot should load")
-                .is_none()
+        assert_eq!(
+            error.to_string(),
+            "planning reset requires complete direction and result-output authority"
         );
+        let persisted = fixture
+            .repository
+            .load_task_authority_snapshot(fixture.workspace.path_str())
+            .expect("task authority snapshot should load")
+            .expect("task authority must remain present");
+        assert_eq!(persisted.task_authority.tasks[0].id, "live-task");
     }
 
     #[test]
@@ -673,6 +917,252 @@ mod tests {
         assert!(task_snapshot.task_authority.tasks.is_empty());
     }
 
+    #[test]
+    fn repo_scoped_full_reset_atomically_retires_tasks_and_support_documents() {
+        let workspace = TempPlanningWorkspace::new("repo-scoped-atomic-reset");
+        workspace.initialize_git();
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+            FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(authority.clone()),
+        );
+        let repository: Arc<dyn PlanningTaskRepositoryPort> = authority.clone();
+        let authority_port: Arc<dyn PlanningAuthorityPort> = authority.clone();
+        let bootstrap = PlanningBootstrapService::new();
+        let validation = PlanningValidationService::new();
+        let priority_queue = PriorityQueueService::new();
+        PlanningInitService::with_task_repository(
+            workspace_port.clone(),
+            bootstrap.clone(),
+            validation.clone(),
+            repository.clone(),
+            authority_port.clone(),
+            priority_queue.clone(),
+        )
+        .initialize_simple_workspace(workspace.path_str())
+        .expect("repo-scoped planning should initialize");
+
+        let current = authority
+            .load_planning_authority_documents(workspace.path_str())
+            .expect("initialized authority should load")
+            .expect("initialized authority should exist");
+        let task_authority = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![task(
+                "task-retired-by-reset",
+                "general-workstream",
+                TaskStatus::Done,
+            )],
+        };
+        let queue_projection = priority_queue
+            .build_projection(&current.directions, &task_authority)
+            .expect("seeded task queue should build");
+        authority
+            .commit_planning_authority_documents(
+                workspace.path_str(),
+                PlanningAuthorityDocumentCommit {
+                    observed_planning_revision: Some(current.planning_revision),
+                    directions: &current.directions,
+                    task_authority: &task_authority,
+                    queue_projection: &queue_projection,
+                    result_output_markdown: &current.result_output_markdown,
+                    active_document_mutations: &[],
+                    retired_task_ids: &[],
+                    authority_mutation_owner_token: None,
+                },
+            )
+            .expect("task authority should commit");
+        workspace_port
+            .stage_planning_draft_files(
+                workspace.path_str(),
+                "stale-db-draft",
+                &[PlanningDraftFileRecord {
+                    active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+                    body: "stale staged draft".to_string(),
+                }],
+            )
+            .expect("stale repo-scoped draft rows should seed");
+        for (path, body) in [
+            (
+                ".codex-exec-loop/planning/directions/stale.md",
+                "stale direction detail",
+            ),
+            (".codex-exec-loop/planning/prompts/stale.md", "stale prompt"),
+            (
+                ".codex-exec-loop/planning/drafts/stale/result-output.md",
+                "stale draft",
+            ),
+            (
+                ".codex-exec-loop/planning/rejected/stale.md",
+                "stale rejection",
+            ),
+        ] {
+            workspace_port
+                .replace_planning_workspace_file(workspace.path_str(), path, Some(body))
+                .expect("stale repo-scoped support document should seed");
+        }
+        let dispatch_block = ParallelModeTaskDispatchBlockSnapshot::new(
+            "task-retired-by-reset",
+            "2026-07-10T00:00:00Z",
+            "2026-07-10T00:01:00Z",
+            ParallelModeDispatchBlockReason::StartupFailedUntilTaskChanges,
+        );
+        authority
+            .upsert_runtime_task_dispatch_block(workspace.path_str(), &dispatch_block)
+            .expect("terminal runtime residue should seed");
+
+        let result = PlanningResetService::with_task_repository(
+            workspace_port.clone(),
+            bootstrap.clone(),
+            repository,
+            authority_port,
+            validation,
+            priority_queue,
+        )
+        .reset_workspace(workspace.path_str(), PlanningResetTarget::All)
+        .expect("repo-scoped full reset should commit atomically");
+        assert_eq!(result.target, PlanningResetTarget::All);
+        for path in [
+            ".codex-exec-loop/planning/directions/stale.md",
+            ".codex-exec-loop/planning/prompts/stale.md",
+            ".codex-exec-loop/planning/drafts/stale/result-output.md",
+            ".codex-exec-loop/planning/rejected/stale.md",
+        ] {
+            assert!(
+                workspace_port
+                    .load_optional_planning_file(workspace.path_str(), path)
+                    .expect("removed support document should inspect")
+                    .is_none(),
+                "{path} should be removed"
+            );
+        }
+        let stale_draft_error = workspace_port
+            .load_planning_draft_files(workspace.path_str(), "stale-db-draft")
+            .expect_err("full reset must clear repo-scoped staged draft rows");
+        assert!(stale_draft_error.to_string().contains("does not exist"));
+        let reset_bootstrap = bootstrap.build_artifacts_for_mode(PlanningBootstrapMode::Simple);
+        assert_eq!(
+            workspace_port
+                .load_optional_planning_file(
+                    workspace.path_str(),
+                    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH,
+                )
+                .expect("queue-idle prompt should load")
+                .as_deref(),
+            Some(reset_bootstrap.supplemental_files[0].body.as_str())
+        );
+        let reset_authority = authority
+            .load_planning_authority_documents(workspace.path_str())
+            .expect("reset authority should load")
+            .expect("reset authority should exist");
+        assert!(reset_authority.task_authority.tasks.is_empty());
+        assert_eq!(
+            reset_authority.result_output_markdown,
+            reset_bootstrap.result_output_markdown
+        );
+        assert!(
+            authority
+                .load_runtime_projections(workspace.path_str())
+                .expect("runtime projection should load")
+                .task_dispatch_blocks
+                .is_empty()
+        );
+        let late_lease = ParallelModeSlotLeaseSnapshot::new(
+            "slot-retired",
+            "task-retired-by-reset",
+            "Retired task",
+            "agent-retired",
+            "agent/retired",
+            workspace.path_str(),
+            ParallelModeSlotLeaseState::Running,
+            "2026-07-10T00:02:00Z",
+            None,
+        );
+        let error = authority
+            .upsert_runtime_slot_lease(workspace.path_str(), &late_lease)
+            .expect_err("retired task must reject late runtime resurrection");
+        assert!(error.to_string().contains("retired planning task"));
+    }
+
+    #[test]
+    fn runtime_claim_first_blocks_reset_before_any_authority_mutation() {
+        let workspace = TempPlanningWorkspace::new("repo-scoped-runtime-first-reset");
+        workspace.initialize_git();
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+            FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(authority.clone()),
+        );
+        let repository: Arc<dyn PlanningTaskRepositoryPort> = authority.clone();
+        let authority_port: Arc<dyn PlanningAuthorityPort> = authority.clone();
+        let bootstrap = PlanningBootstrapService::new();
+        let validation = PlanningValidationService::new();
+        let priority_queue = PriorityQueueService::new();
+        PlanningInitService::with_task_repository(
+            workspace_port.clone(),
+            bootstrap.clone(),
+            validation.clone(),
+            repository.clone(),
+            authority_port.clone(),
+            priority_queue.clone(),
+        )
+        .initialize_simple_workspace(workspace.path_str())
+        .expect("repo-scoped planning should initialize");
+        let baseline = authority
+            .load_planning_authority_documents(workspace.path_str())
+            .expect("baseline authority should load")
+            .expect("baseline authority should exist");
+
+        let claim_persisted = Arc::new(Barrier::new(2));
+        let reset_attempted = Arc::new(Barrier::new(2));
+        let worker_authority = authority.clone();
+        let worker_workspace = workspace.path_text.clone();
+        let worker_claim_persisted = claim_persisted.clone();
+        let worker_reset_attempted = reset_attempted.clone();
+        let worker = std::thread::spawn(move || {
+            let refresh_order = worker_authority
+                .reserve_next_official_refresh_order(&worker_workspace)
+                .expect("refresh order should reserve");
+            assert_eq!(
+                worker_authority
+                    .acquire_official_refresh_claim(
+                        &worker_workspace,
+                        refresh_order,
+                        "runtime-first-owner",
+                    )
+                    .expect("runtime-first claim should acquire"),
+                crate::application::port::outbound::planning_authority_port::PlanningAuthorityOfficialRefreshClaimStatus::Acquired
+            );
+            worker_claim_persisted.wait();
+            worker_reset_attempted.wait();
+            worker_authority
+                .release_official_refresh_claim(
+                    &worker_workspace,
+                    refresh_order,
+                    "runtime-first-owner",
+                )
+                .expect("runtime-first claim should release");
+        });
+
+        claim_persisted.wait();
+        let error = PlanningResetService::with_task_repository(
+            workspace_port,
+            bootstrap,
+            repository,
+            authority_port,
+            validation,
+            priority_queue,
+        )
+        .reset_workspace(workspace.path_str(), PlanningResetTarget::All)
+        .expect_err("active runtime claim must block reset admission");
+        reset_attempted.wait();
+        worker.join().expect("runtime-first worker should join");
+        assert!(error.to_string().contains("official-refresh"), "{error}");
+        let after = authority
+            .load_planning_authority_documents(workspace.path_str())
+            .expect("authority should reload")
+            .expect("authority should remain present");
+        assert_eq!(after, baseline);
+    }
+
     fn direction_catalog(directions: Vec<DirectionDefinition>) -> DirectionCatalogDocument {
         DirectionCatalogDocument {
             version: PLANNING_FORMAT_VERSION,
@@ -740,6 +1230,7 @@ mod tests {
                 workspace_port.clone(),
                 bootstrap.clone(),
                 repository.clone(),
+                Arc::new(NoopPlanningAuthorityPort::default()),
                 validation,
                 priority_queue.clone(),
             );
@@ -783,6 +1274,7 @@ mod tests {
                     PlanningDirectionAuthorityCommit {
                         observed_planning_revision: None,
                         directions,
+                        authority_mutation_owner_token: None,
                     },
                 )
                 .expect("direction authority should be seeded");
@@ -833,6 +1325,20 @@ mod tests {
 
         fn path_str(&self) -> &str {
             &self.path_text
+        }
+
+        fn initialize_git(&self) {
+            let output = std::process::Command::new("git")
+                .arg("init")
+                .arg("--quiet")
+                .current_dir(&self.path)
+                .output()
+                .expect("git init should spawn");
+            assert!(
+                output.status.success(),
+                "git init failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 

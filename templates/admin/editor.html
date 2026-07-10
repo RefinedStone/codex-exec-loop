@@ -29,10 +29,6 @@
           type="submit"
           formaction="{{ action_paths.validate }}"
           class="secondary"
-          hx-post="{{ action_paths.validate }}"
-          hx-target="#draft-status-panel"
-          hx-swap="outerHTML"
-          hx-include="closest form"
         >
           Validate
         </button>

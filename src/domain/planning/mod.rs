@@ -40,13 +40,15 @@ pub use runtime_contracts::{
 };
 pub(crate) use runtime_contracts::{
     ExecutionSnapshot, MainSessionHandoff, ManualPlanningBootstrapFailureKind,
-    ManualPlanningBootstrapReview, ManualPromptIntakeOutcome, ManualPromptIntakeRequest,
-    ManualPromptMainSessionHandoff, ManualPromptOutcome, ManualPromptRequest, ParallelTurnHandoff,
-    PlanningRepairRequestSnapshot, PlanningWorkerPanelState, PlanningWorkerStatus,
-    PostTurnAutoFollowSkipReason, PostTurnContext, PostTurnContinuationAction, PostTurnExecution,
-    PostTurnOutcome, PostTurnPlanningRepairState, PostTurnProvenance, PostTurnQueuedPrompt,
-    PostTurnRequest, RuntimeProjection, RuntimeQueuedAutoFollowPrompt, RuntimeWorkspaceStatus,
-    SubSessionHandoff, TaskHandoff, TurnSnapshotCapture, TurnSnapshotCaptureState,
+    ManualPlanningBootstrapReview, ManualPromptCorrelation, ManualPromptIntakeOutcome,
+    ManualPromptIntakeRequest, ManualPromptMainSessionHandoff, ManualPromptOutcome,
+    ManualPromptRequest, ParallelTurnHandoff, PlanningRepairRequestSnapshot,
+    PlanningWorkerPanelState, PlanningWorkerStatus, PostTurnAutoFollowSkipReason, PostTurnContext,
+    PostTurnContinuationAction, PostTurnContinuationGate, PostTurnContinuationPermit,
+    PostTurnExecution, PostTurnOutcome, PostTurnPlanningRepairState, PostTurnProvenance,
+    PostTurnQueuedPrompt, PostTurnRequest, RuntimeProjection, RuntimeQueuedAutoFollowPrompt,
+    RuntimeWorkspaceStatus, SubSessionHandoff, TaskHandoff, TurnSnapshotCapture,
+    TurnSnapshotCaptureState,
 };
 pub(crate) use task_id::PlanningTaskIdPolicy;
 pub(crate) use task_references::PlanningTaskReferencePolicy;
@@ -74,8 +76,10 @@ pub enum PlanningWorkspaceState {
 pub struct PlanningAuthorityLocation {
     // workspace root는 operator가 작업 중인 repo/worktree 기준점이다.
     pub workspace_root: String,
-    // canonical repo root는 shadow store와 branch/worktree bookkeeping이 공유하는 정규화된 root다.
+    // canonical repo root는 branch/worktree bookkeeping이 사용하는 대표 checkout root다.
     pub canonical_repo_root: String,
+    // repository identity는 Git common-dir의 private incarnation marker 기반 store binding이다.
+    pub repository_identity: String,
     // runtime dir은 planning authority mirror와 transient runtime artifacts가 놓이는 위치다.
     pub runtime_dir: String,
     // authority store path는 DB/filesystem adapter가 실제 planning authority를 찾는 persistent boundary다.

@@ -1075,6 +1075,73 @@ fn pool_board_compact_summary_lists_all_non_idle_pressure_states() {
     );
 }
 
+#[test]
+fn lease_generation_distinguishes_identical_reallocations() {
+    let first = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Leased,
+        "2026-07-10T12:00:00Z",
+        None,
+    )
+    .with_lease_generation("1111111111111111111111111111111111111111111111111111111111111111");
+    let second = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Leased,
+        "2026-07-10T12:00:00Z",
+        None,
+    )
+    .with_lease_generation("2222222222222222222222222222222222222222222222222222222222222222");
+    let legacy = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Leased,
+        "2026-07-10T12:00:00Z",
+        None,
+    );
+
+    assert_ne!(first.session_key(), second.session_key());
+    assert_eq!(legacy.session_key(), "slot-1@2026-07-10T12:00:00Z");
+}
+
+#[test]
+fn lease_generation_deserialization_accepts_legacy_none_and_rejects_malformed_values() {
+    let legacy = lease(
+        "slot-1",
+        "task-1",
+        "Task One",
+        "agent-1",
+        ParallelModeSlotLeaseState::Leased,
+        "2026-07-10T12:00:00Z",
+        None,
+    );
+    let legacy_json = serde_json::to_value(&legacy).expect("legacy lease should serialize");
+    assert!(
+        serde_json::from_value::<ParallelModeSlotLeaseSnapshot>(legacy_json)
+            .expect("missing generation should remain legacy-compatible")
+            .has_valid_lease_generation()
+    );
+
+    for malformed in [
+        "short",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+    ] {
+        let mut value = serde_json::to_value(&legacy).expect("lease should serialize");
+        value["lease_generation"] = serde_json::Value::String(malformed.to_string());
+        let error = serde_json::from_value::<ParallelModeSlotLeaseSnapshot>(value)
+            .expect_err("malformed persisted generation must fail closed");
+        assert!(error.to_string().contains("64 lowercase hexadecimal"));
+    }
+}
+
 // 테스트 fixture lease는 실제 pool allocation이 만드는 branch/worktree naming을 축약한다.
 // session_key, owner label, runtime fallback이 같은 데이터 모양을 전제로 동작한다.
 fn lease(

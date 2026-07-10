@@ -13,6 +13,8 @@ The current stack remains the default posture for native runtime proof.
 Manual terminal capture stays primitive-sensitive only.
 The first-class rendering contract does not replace the broader terminal-baseline rows in
 `docs/plan/12-platform-validation-matrix.md` for shipped/default terminal behavior.
+That broader required baseline includes macOS Terminal.app and iTerm2; naming those environments
+here does not mark either row as passed without a real capture.
 The smaller-representative-set rule below can reduce the number of supplemental captures a PR needs, but it does not waive counted baseline rows by itself.
 
 

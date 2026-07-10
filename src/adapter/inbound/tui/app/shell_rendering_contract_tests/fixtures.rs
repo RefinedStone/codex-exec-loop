@@ -8,7 +8,6 @@ use crate::application::port::outbound::session_catalog_port::SessionCatalogPort
 use crate::application::port::outbound::startup_probe_port::{
     AppServerStartupContext, StartupProbePort,
 };
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::planning::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningRuntimeProjection,
@@ -102,7 +101,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         _cwd: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         // Streaming events are injected directly into app state by tests that need transcript output.
         Ok(())
@@ -113,7 +112,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         _thread_id: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: std::sync::mpsc::Sender<ConversationStreamEvent>,
+        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
     ) -> Result<()> {
         // Existing-thread turns use the same no-op boundary; rendering tests should not spawn workers.
         Ok(())

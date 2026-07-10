@@ -23,8 +23,9 @@ use crate::core::app::conversation::ConversationThreadReviewSnapshot;
 
 use crate::application::service::planning::{PlanningRuntimeProjection, PlanningTaskHandoff};
 use crate::domain::conversation::{
-    ConversationApprovalReview, ConversationMessage, ConversationMessageKind,
-    ConversationRuntimeControlTruth, ConversationSnapshot,
+    ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalReview,
+    ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
+    ConversationSnapshot,
 };
 use crate::domain::planning::PlanningRepairRequestSnapshot;
 
@@ -33,6 +34,12 @@ use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommand
 use super::auto_follow::AutoFollowDecision;
 use super::auto_follow::{AutoFollowSkipReason, AutoFollowState};
 use super::turn_activity::TurnActivityState;
+
+const MAX_BASE_WARNINGS: usize = 128;
+const MAX_RUNTIME_NOTICES: usize = 256;
+const MAX_AUXILIARY_HISTORY_BYTES: usize = 1024 * 1024;
+const MAX_AUXILIARY_ITEM_BYTES: usize = 64 * 1024;
+const MAX_AUXILIARY_ITEM_LINES: usize = 128;
 
 // Shell rendering keeps this presentation mirror around core conversation
 // lifecycle snapshots so loading/failed panels do not fabricate a view model.
@@ -86,6 +93,12 @@ struct HydratedThreadReviewStatusProjection {
     manual_handoff_context: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingApprovalResolution {
+    approval_id: String,
+    decision: ConversationApprovalDecision,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ConversationViewModel {
     pub(crate) thread_id: String,
@@ -118,6 +131,10 @@ pub(crate) struct ConversationViewModel {
     pub(crate) active_turn_id: Option<String>,
     pub(crate) active_turn_workspace_directory: Option<String>,
     pub(crate) active_turn_started_at: Option<Instant>,
+    // Set after the shell has forwarded one interrupt for the active turn. It
+    // prevents repeated Ctrl-C/:stop input from incrementing the global runtime
+    // interrupt generation until this turn starts, finishes, or the request fails.
+    pub(crate) interrupt_request_pending: bool,
     pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
@@ -127,6 +144,10 @@ pub(crate) struct ConversationViewModel {
     pub(crate) turn_activity: TurnActivityState,
     // Approval review is tied to the currently streaming turn and cleared on a new turn.
     pub(crate) approval_review: Option<ConversationApprovalReview>,
+    pub(crate) pending_approval_request: Option<ConversationApprovalRequest>,
+    // The first submitted choice is immutable until the runtime resolves or terminates the request.
+    pending_approval_resolution: Option<PendingApprovalResolution>,
+    pub(crate) approval_detail_scroll_offset: usize,
     pub(crate) turn_control_truth: ConversationRuntimeControlTruth,
     pub(crate) last_auto_follow_activity: Option<RecordedAutoFollowActivity>,
     hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection,
@@ -162,12 +183,16 @@ impl ConversationViewModel {
             active_turn_id: None,
             active_turn_workspace_directory: None,
             active_turn_started_at: None,
+            interrupt_request_pending: false,
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(),
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
+            pending_approval_request: None,
+            pending_approval_resolution: None,
+            approval_detail_scroll_offset: 0,
             turn_control_truth,
             last_auto_follow_activity: None,
             hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection::default(
@@ -175,6 +200,10 @@ impl ConversationViewModel {
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
+        view_model.enforce_transcript_retention();
+        retain_bounded_string_history(&mut view_model.base_warnings, MAX_BASE_WARNINGS);
+        view_model.warnings = view_model.base_warnings.clone();
+        retain_bounded_string_history(&mut view_model.runtime_notices, MAX_RUNTIME_NOTICES);
         view_model.set_status_with_warnings(base_status);
         view_model.refresh_conversation_lines();
         view_model
@@ -228,18 +257,26 @@ impl ConversationViewModel {
             active_turn_id: None,
             active_turn_workspace_directory: None,
             active_turn_started_at: None,
+            interrupt_request_pending: false,
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(),
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             approval_review: None,
+            pending_approval_request: None,
+            pending_approval_resolution: None,
+            approval_detail_scroll_offset: 0,
             turn_control_truth,
             hydrated_thread_review_status_projection,
             last_auto_follow_activity: None,
             last_planning_task_handoff: None,
             status_text: String::new(),
         };
+        view_model.enforce_transcript_retention();
+        retain_bounded_string_history(&mut view_model.base_warnings, MAX_BASE_WARNINGS);
+        view_model.warnings = view_model.base_warnings.clone();
+        retain_bounded_string_history(&mut view_model.runtime_notices, MAX_RUNTIME_NOTICES);
         view_model.set_status_with_warnings(base_status);
         view_model.refresh_conversation_lines();
         view_model
@@ -418,6 +455,7 @@ impl ConversationViewModel {
     }
     pub(crate) fn mark_turn_submitting(&mut self, workspace_directory: String) {
         self.startup_submit_armed = false;
+        self.interrupt_request_pending = false;
         self.input_state = ConversationInputState::SubmittingTurn;
         self.active_turn_workspace_directory = Some(workspace_directory);
         self.active_turn_started_at = Some(Instant::now());
@@ -427,18 +465,114 @@ impl ConversationViewModel {
     }
     pub(crate) fn mark_turn_started(&mut self, turn_id: String) {
         self.active_turn_id = Some(turn_id);
+        // Keep a submitting-phase stop sticky. The runtime reducer resends that
+        // interrupt after the concrete turn id arrives, closing the race where
+        // app-server samples the first stop generation while starting the turn.
         self.input_state = ConversationInputState::StreamingTurn;
         // A recovered start may arrive without a prior submitting phase, so seed the timer here too.
         self.active_turn_started_at.get_or_insert_with(Instant::now);
         self.turn_activity.start_new_turn();
         self.approval_review = None;
+        self.pending_approval_request = None;
+        self.pending_approval_resolution = None;
+        self.approval_detail_scroll_offset = 0;
         self.buffered_tool_messages.clear();
     }
     pub(crate) fn mark_turn_finished(&mut self) {
         self.active_turn_id = None;
         self.active_turn_workspace_directory = None;
         self.active_turn_started_at = None;
+        self.interrupt_request_pending = false;
+        self.pending_approval_request = None;
+        self.pending_approval_resolution = None;
+        self.approval_detail_scroll_offset = 0;
         self.input_state = self.ready_input_state();
+    }
+    pub(crate) fn set_pending_approval_request(&mut self, request: ConversationApprovalRequest) {
+        let is_same_request = self
+            .pending_approval_request
+            .as_ref()
+            .is_some_and(|current| current.approval_id == request.approval_id);
+        if !is_same_request {
+            self.pending_approval_resolution = None;
+        }
+        self.pending_approval_request = Some(request);
+        self.approval_detail_scroll_offset = 0;
+    }
+    pub(crate) fn pending_approval_decision(&self) -> Option<ConversationApprovalDecision> {
+        let request = self.pending_approval_request.as_ref()?;
+        self.pending_approval_resolution
+            .as_ref()
+            .filter(|resolution| resolution.approval_id == request.approval_id)
+            .map(|resolution| resolution.decision)
+    }
+    pub(crate) fn mark_approval_decision_submitted(
+        &mut self,
+        approval_id: &str,
+        decision: ConversationApprovalDecision,
+    ) -> bool {
+        let resolves_current_request = self
+            .pending_approval_request
+            .as_ref()
+            .is_some_and(|request| request.approval_id == approval_id);
+        if !resolves_current_request || self.pending_approval_resolution.is_some() {
+            return false;
+        }
+
+        self.pending_approval_resolution = Some(PendingApprovalResolution {
+            approval_id: approval_id.to_string(),
+            decision,
+        });
+        true
+    }
+    pub(crate) fn clear_pending_approval_request(&mut self, approval_id: &str) {
+        if self
+            .pending_approval_request
+            .as_ref()
+            .is_some_and(|request| request.approval_id == approval_id)
+        {
+            self.pending_approval_request = None;
+            self.pending_approval_resolution = None;
+            self.approval_detail_scroll_offset = 0;
+        }
+    }
+    pub(crate) fn clear_pending_approval_resolution(&mut self, approval_id: &str) -> bool {
+        let resolves_current_request = self
+            .pending_approval_request
+            .as_ref()
+            .is_some_and(|request| request.approval_id == approval_id);
+        let clears_submitted_decision = self
+            .pending_approval_resolution
+            .as_ref()
+            .is_some_and(|resolution| resolution.approval_id == approval_id);
+        if resolves_current_request && clears_submitted_decision {
+            self.pending_approval_resolution = None;
+            return true;
+        }
+        false
+    }
+    pub(crate) fn move_approval_detail_scroll(&mut self, delta: isize) {
+        if self.pending_approval_request.is_none() {
+            self.approval_detail_scroll_offset = 0;
+            return;
+        }
+        // Rendered approval rows depend on terminal width, so the reducer cannot
+        // clamp against logical detail count. The renderer applies the exact
+        // wrapped-row maximum for the current frame.
+        self.approval_detail_scroll_offset = self
+            .approval_detail_scroll_offset
+            .saturating_add_signed(delta)
+            .min(u16::MAX as usize);
+    }
+    pub(crate) fn mark_interrupt_requested_once(&mut self) -> bool {
+        if !self.has_running_turn() || self.interrupt_request_pending {
+            return false;
+        }
+        self.interrupt_request_pending = true;
+        true
+    }
+    pub(crate) fn clear_interrupt_request(&mut self) {
+        self.interrupt_request_pending = false;
     }
     pub(crate) fn finish_turn(
         &mut self,
@@ -476,18 +610,24 @@ impl ConversationViewModel {
     {
         // Runtime recovery can emit the same notice on several ticks; keep the operator copy stable.
         for notice in notices {
+            let mut notice = notice;
+            messages::truncate_text_to_limits(
+                &mut notice,
+                MAX_AUXILIARY_ITEM_BYTES,
+                MAX_AUXILIARY_ITEM_LINES,
+            );
             if !self.runtime_notices.contains(&notice) {
                 self.runtime_notices.push(notice);
             }
         }
+        retain_bounded_string_history(&mut self.runtime_notices, MAX_RUNTIME_NOTICES);
     }
     pub(crate) fn record_auto_follow_skip(&mut self, reason: AutoFollowSkipReason) {
         let detail = reason.detail(&self.auto_follow_state, &self.turn_activity);
         // A skip ends post-turn evaluation but keeps a readable activity record for the footer.
         self.auto_follow_state.clear_runtime_phase();
-        self.auto_follow_state.clear_post_turn_continuation_pause();
         self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
-            summary: reason.activity_summary().to_string(),
+            summary: reason.activity_summary(&self.auto_follow_state).to_string(),
             detail,
         });
     }
@@ -497,10 +637,18 @@ impl ConversationViewModel {
     pub(crate) fn pause_post_turn_continuation(&mut self) {
         self.auto_follow_state.pause_post_turn_continuation();
     }
+    pub(crate) fn rearm_parallel_post_turn_continuation(&mut self) {
+        self.auto_follow_state
+            .rearm_parallel_post_turn_continuation();
+    }
+    pub(crate) fn disarm_parallel_post_turn_continuation(&mut self) {
+        self.auto_follow_state
+            .disarm_parallel_post_turn_continuation();
+    }
     pub(crate) fn record_internal_continuation_paused(&mut self) {
         self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
-            summary: "paused: internal continuation".to_string(),
-            detail: "post-turn continuation is paused for this internal runtime cycle".to_string(),
+            summary: "stopped: auto-follow disarmed".to_string(),
+            detail: "auto-follow remains disarmed until :turns is explicitly set again".to_string(),
         });
     }
     pub(crate) fn clear_last_planning_task_handoff(&mut self) {
@@ -558,18 +706,32 @@ impl ConversationViewModel {
                 .to_string(),
         });
     }
+    pub(crate) fn record_stale_parallel_only_continuation_cancelled(&mut self) {
+        /*
+         * A parallel-only post-turn decision can reach the UI after `:parallel
+         * off` closed its epoch. It must not leave the conversation in Queued,
+         * because that phase intentionally blocks manual input until submission.
+         */
+        self.auto_follow_state.clear_runtime_phase();
+        self.last_auto_follow_activity = Some(RecordedAutoFollowActivity {
+            summary: "cancelled: parallel mode disabled".to_string(),
+            detail: "discarded a stale parallel-only continuation after the operator disabled parallel mode"
+                .to_string(),
+        });
+        self.status_text =
+            "turn completed / parallel continuation cancelled; auto-follow remains disabled"
+                .to_string();
+        self.append_status_message(self.status_text.clone());
+    }
     pub(crate) fn begin_auto_follow_evaluation(&mut self) {
-        // Keep the phase idle when an evaluation would immediately skip; this avoids stale spinners.
-        if self.auto_follow_state.post_turn_continuation_paused()
-            || !self.auto_follow_state.can_queue_next()
-            || self.latest_agent_message_text().is_none()
-        {
-            self.auto_follow_state.clear_runtime_phase();
-            return;
-        }
-
+        /*
+         * Every completed turn queues post-turn evaluation, including parallel
+         * continuation when the single-session turn budget is off. Keep manual
+         * intake closed until that exact evaluation settles; otherwise an
+         * operator Enter can race the planning worker and parallel dispatcher.
+         */
         self.auto_follow_state.begin_post_turn_evaluation();
-        self.status_text = "turn completed / auto-follow evaluating next turn".to_string();
+        self.status_text = "turn completed / evaluating post-turn continuation".to_string();
     }
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
         self.last_planning_task_handoff.as_ref()
@@ -638,6 +800,28 @@ impl ConversationViewModel {
                 })
             }
         }
+    }
+}
+
+fn retain_bounded_string_history(values: &mut Vec<String>, max_items: usize) {
+    for value in values.iter_mut() {
+        messages::truncate_text_to_limits(
+            value,
+            MAX_AUXILIARY_ITEM_BYTES,
+            MAX_AUXILIARY_ITEM_LINES,
+        );
+    }
+    let mut retained_bytes = values.iter().map(String::len).sum::<usize>();
+    let mut remove_count = 0;
+    while remove_count < values.len()
+        && (values.len().saturating_sub(remove_count) > max_items
+            || retained_bytes > MAX_AUXILIARY_HISTORY_BYTES)
+    {
+        retained_bytes = retained_bytes.saturating_sub(values[remove_count].len());
+        remove_count += 1;
+    }
+    if remove_count > 0 {
+        values.drain(0..remove_count);
     }
 }
 

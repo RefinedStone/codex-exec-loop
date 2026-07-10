@@ -13,6 +13,32 @@ The operator-facing current contract lives in
 - Git-backed runtime no longer writes task authority or queue projection JSON files during normal authority updates.
 - Tracked planning files under `.codex-exec-loop/planning/` remain operator-authored prompts, direction detail docs, and result-output guidance only.
 - Authority inspection reports store health directly from SQLite state.
+- Git-backed repository identity is an owner-private 256-bit incarnation marker stored in the
+  canonical Git common directory, not the checkout basename or remote URL. Linked worktrees and a
+  moved common directory therefore retain one authority database, while independent repositories,
+  fresh clones, bare repositories, and separate-git-dir repositories receive isolated namespaces
+  even when a checkout path is reused. Marker installation is atomic/no-clobber and unsafe marker
+  file types, ownership, permissions, or link counts fail closed.
+- A non-Git workspace uses its canonical workspace path as the identity and still receives the same
+  private SQLite authority-store protections. Windows supports both Git-backed and non-Git SQLite
+  authority; only direct planning-artifact filesystem access, candidate inspection, and external
+  file export/apply remain fail-closed until they use pinned NT relative handles.
+- `AKRA_HOME`, when set, must be a non-empty absolute normalized path. Akra never falls back to the
+  current working directory, so authority data cannot silently land inside a repository when profile
+  discovery is unavailable. On Unix the selected root and its resolved ancestor chain must also be
+  trusted and protected from cross-user replacement (non-writable by group/other, or sticky); Akra
+  rejects an unsafe root without changing its permissions or creating managed data below it.
+- The authority database and any pre-existing SQLite `-journal`, `-wal`, or `-shm` sidecar must be a
+  current-user-owned, private, regular single-link file. Akra validates them before SQLite opens the
+  store, checkpoints a legacy WAL store into `DELETE` rollback-journal mode, and validates the file
+  family again after schema work. `DELETE` mode trades WAL reader/writer overlap for a smaller,
+  auditable transient-file surface; the five-second busy timeout absorbs ordinary short planning,
+  admin, and Telegram write overlap, while a persistently busy migration fails closed.
+
+These checks prevent a pre-existing hardlink or symlink from redirecting SQLite writes. They do not
+claim isolation from a malicious process already running as the same OS user: such a process can race
+an absent sidecar name after preflight (and can generally access that user's data directly). OS-user
+separation or an external sandbox remains the boundary for that threat.
 
 ## Planning Artifacts
 
@@ -87,17 +113,52 @@ snapshot, regenerates any colliding id suffix, revalidates, and retries within a
 ## Protection And Recovery Rules
 
 - DB direction authority and `result-output.md` are protected during automated execution.
+- Protected-file reconciliation reads the candidate after a turn and restores its captured snapshot
+  only through a storage-atomic compare-and-swap. A concurrent operator update wins, is left intact,
+  and blocks continuation for explicit review instead of being overwritten by a late worker.
 - Invalid hidden-session task authority payloads are rejected and may trigger a bounded repair retry.
-- Queue refresh and repair work run through the planning worker boundary.
+- Queue refresh and repair work run through an ephemeral planning worker that is always
+  `read-only`; validated final `planning_task_commands` are applied by the host service. A captured
+  post-turn permit is watched during the hidden turn and invalidation interrupts only that worker's
+  app-server process, without stopping the main or parallel sessions.
 - If the queue is valid but idle, runtime behavior follows `queue_idle.policy`.
 - If automation sees the same accepted queue head again, queue-driven follow-up pauses until the queue advances.
+
+## App-Server Execution And Diagnostic Retention
+
+App-server startup does not execute a mutable command name after discovery. Akra pins a trusted
+native Codex executable, or a narrowly recognized npm launcher plus its native Node interpreter,
+before creating the connection. Unix launchers must have a bounded supported Node shebang; Windows
+launchers must be the bounded standard npm `.cmd` form targeting
+`node_modules/@openai/codex/bin/codex.js`. Relative `PATH` entries, repository/pool-controlled
+executables, unsafe owner/mode/ACL chains, arbitrary shell or batch launchers, and unsupported
+interpreters fail closed. Hidden planning workers inherit the same pinned command plan in addition
+to their fixed read-only sandbox and unattended-decline policy.
+
+Prompt/response body persistence is a diagnostic opt-in, not a planning authority prerequisite.
+When `AKRA_APP_SERVER_PROMPT_LOG=1` is absent or invalid, every production composition startup
+invokes an all-row and metadata clear through the private authority SQLite connection with
+`secure_delete=ON`, including unexpired rows from an earlier opted-in process. A cleanup failure
+emits a body-free warning and does not enable capture. Only an enabled process retains records: at
+most 100 interactions, no more than seven days, and bounded item/body content. Trace JSONL is
+separately opt-in and body-redacted. These filesystem and database controls reduce
+accidental/cross-user exposure but do not isolate data from a malicious process already running as
+the same OS user.
+
+Only the interactive main conversation can answer a reviewable command/additional-permission
+approval. Explicit `Y` is the sole accept input; `Enter` is inert and `N`/`Esc` declines. Receipt
+deadline, timeout, interrupt, disconnect, bounded-channel saturation, malformed payload, or an
+unattended worker all decline, and an apparent accept rechecks deadline and interrupt immediately
+before sending the response. No session-wide grant is cached.
 
 ## Current Limits
 
 - Non-git workspaces still use workspace-local authority storage instead of a shared repo-scoped store.
 - Operator-edited planning support files require explicit draft promotion or admin apply before they are accepted.
 - Real-terminal validation is still required for restart recovery, distributor delivery, and multi-worktree operator flow.
-- The checked-in schema snapshot still predates newer app-server approval response methods, so the TUI does not expose approve or deny actions yet.
+- Hidden planning workers are unattended, fixed to read-only sandboxing, and decline any unexpected
+  app-server approval request; only the main interactive conversation exposes the one-shot approval
+  modal.
 
 ## Current Authority Baseline
 

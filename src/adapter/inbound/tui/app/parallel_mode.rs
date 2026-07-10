@@ -33,8 +33,8 @@ use super::parallel_presentation_bridge::{
     pending_parallel_mode_supervisor_snapshot,
 };
 use super::{
-    ConversationInputEvent, ConversationRuntimeEvent, NativeTuiApp, ParallelPanelStateController,
-    ParallelPanelUiEvent, ParallelPanelUiState,
+    ConversationInputEvent, ConversationRuntimeEvent, ConversationState, NativeTuiApp,
+    ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
 };
 
 impl NativeTuiApp {
@@ -52,13 +52,14 @@ impl NativeTuiApp {
         &mut self,
         events: Vec<ParallelModeControlPlanePresentationEvent>,
     ) -> bool {
-        let changed = !events.is_empty();
         let current_workspace_directory = self.planning_workspace_directory();
         let context = ParallelModePresentationBridgeContext::new(
             current_workspace_directory,
             self.parallel_mode_enabled(),
         );
-        for action in parallel_mode_presentation_actions(&context, events) {
+        let actions = parallel_mode_presentation_actions(&context, events);
+        let changed = !actions.is_empty();
+        for action in actions {
             self.apply_parallel_mode_presentation_action(action);
         }
         changed
@@ -344,6 +345,9 @@ impl NativeTuiApp {
                 // The runtime owns mode and initial-reset policy; this adapter
                 // only projects the loading state.
                 let workspace_directory = self.planning_workspace_directory();
+                if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+                    conversation.rearm_parallel_post_turn_continuation();
+                }
                 self.sync_core_parallel_mode_readiness_projection(None);
                 self.sync_core_parallel_mode_supervisor_projection(Some(
                     pending_parallel_mode_supervisor_snapshot(
@@ -395,6 +399,14 @@ impl NativeTuiApp {
     }
 
     pub(super) fn close_parallel_mode_automation_epoch(&mut self) {
+        // A post-turn evaluator can have captured parallel mode as its only
+        // continuation opt-in. Closing the epoch must invalidate that evaluator
+        // as well as the control-plane workers; otherwise a late result can
+        // recreate a queued continuation after the operator turned parallel off.
+        self.post_turn_continuation_gate.advance();
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.disarm_parallel_post_turn_continuation();
+        }
         let (workspace_directory, epoch_id) = {
             let snapshot = self.parallel_mode_control_plane.epoch_snapshot();
             (
@@ -417,6 +429,18 @@ impl NativeTuiApp {
                     "epoch_id": epoch_id,
                 })
             });
+        }
+    }
+
+    pub(super) fn close_parallel_mode_epoch_before_workspace_transition(
+        &mut self,
+        target_workspace_directory: &str,
+    ) {
+        let epoch = self.parallel_mode_control_plane.epoch_snapshot();
+        let leaves_active_workspace = epoch.current_epoch_id.is_some()
+            && epoch.workspace_directory.as_deref() != Some(target_workspace_directory);
+        if leaves_active_workspace {
+            self.close_parallel_mode_automation_epoch();
         }
     }
 

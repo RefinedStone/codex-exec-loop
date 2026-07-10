@@ -605,6 +605,7 @@ mod tests {
                 PlanningDirectionAuthorityCommit {
                     observed_planning_revision: None,
                     directions,
+                    authority_mutation_owner_token: None,
                 },
             )
             .expect("direction authority should commit");

@@ -1,263 +1,705 @@
-use super::super::ensure_directory_exists;
 use super::{derive_default_pool_root, detect_canonical_repo_root};
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
-use std::fs;
+use rand::RngCore;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::process::Stdio;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
-const POOL_ALLOCATION_LOCK_DIR: &str = ".allocation-lock";
-const POOL_ALLOCATION_LOCK_OWNER_FILE: &str = "owner";
-const POOL_ALLOCATION_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
-const POOL_ALLOCATION_LOCK_RETRY: Duration = Duration::from_millis(25);
-const POOL_ALLOCATION_LOCK_STALE_AFTER: Duration = Duration::from_secs(300);
+use std::time::{Duration, Instant};
 
-/*
-allocation lock은 여러 turn submission이 동시에 빈 slot을 잡으려 할 때 같은
-slot을 중복 배정하지 않게 하는 파일시스템 락이다. lock directory 생성은 대부분의
-파일시스템에서 원자적이므로, 성공한 프로세스 하나만 lease 선택과 branch 생성 구간에
-들어갈 수 있다.
+pub(super) const POOL_MUTATION_LOCK_FILE: &str = ".allocation-lock";
+const POOL_MUTATION_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
+const POOL_MUTATION_LOCK_RETRY: Duration = Duration::from_millis(25);
 
-`Drop`에서 release를 호출하므로, acquire 후 중간에 에러가 나도 스코프를 벗어나며 락이
-해제된다. owner token을 함께 저장하는 이유는 stale lock 제거와 잘못된 owner의 release를
-구분하기 위해서이다.
-*/
-pub(in crate::application::service::parallel_mode) struct PoolAllocationLock {
+pub(in crate::application::service::parallel_mode) struct PoolMutationLock {
+    platform_lock: platform::PlatformPoolMutationLock,
     lock_path: PathBuf,
-    owner_token: String,
+    pool_root: PathBuf,
 }
-impl Drop for PoolAllocationLock {
-    fn drop(&mut self) {
-        release_pool_allocation_lock(&self.lock_path, &self.owner_token);
+
+impl PoolMutationLock {
+    pub(in crate::application::service::parallel_mode) fn verify_pool_root(
+        &self,
+        pool_root: &Path,
+    ) -> Result<(), String> {
+        if self.pool_root != pool_root {
+            return Err(format!(
+                "pool mutation permit for `{}` cannot mutate `{}`",
+                self.pool_root.display(),
+                pool_root.display()
+            ));
+        }
+        self.platform_lock
+            .verify_paths(pool_root, &self.lock_path)
+            .map_err(|error| format!("pool mutation permit identity changed: {error}"))
     }
 }
 
-/*
-public acquire 함수는 먼저 canonical repo root와 default pool root를 찾고,
-pool root 디렉터리를 보장한 뒤 실제 lock acquire로 들어간다. 호출자가 workspace 하위
-디렉터리에서 시작해도 같은 canonical root를 기준으로 같은 pool lock을 사용해야 병렬
-slot 배정이 하나의 임계구역으로 묶인다.
-*/
-pub(in crate::application::service::parallel_mode) fn acquire_pool_allocation_lock(
+pub(in crate::application::service::parallel_mode) fn acquire_pool_mutation_lock(
     planning_authority: &dyn PlanningAuthorityPort,
     workspace_dir: &str,
-) -> Result<PoolAllocationLock, String> {
+) -> Result<PoolMutationLock, String> {
     let canonical_repo_root = detect_canonical_repo_root(planning_authority, workspace_dir)
         .ok_or_else(|| "canonical root inspection failed".to_string())?;
     let pool_root = derive_default_pool_root(&canonical_repo_root);
-    ensure_directory_exists(&pool_root)
-        .map_err(|error| format!("pool root creation failed before allocation lock: {error}"))?;
-    acquire_pool_allocation_lock_at(&pool_root)
+    platform::ensure_private_pool_root(&canonical_repo_root, &pool_root)
+        .map_err(|error| format!("pool root could not be created before mutation lock: {error}"))?;
+    acquire_pool_mutation_lock_at(&pool_root)
 }
 
-/*
-실제 lock 획득 루프는 `.allocation-lock` 디렉터리 생성을 시도한다. 이미 있으면
-stale lock인지 확인한 뒤 짧게 sleep하고 재시도한다. timeout을 둔 이유는 다른 프로세스가
-정상적으로 slot을 배정 중일 때 무한정 TUI turn submission이 멈추지 않게 하기 위해서이다.
-
-owner 파일 쓰기에 실패하면 방금 만든 lock directory를 지우고 실패한다. owner token 없는
-lock은 누가 소유하는지 검증할 수 없어서 release 안전성이 떨어지기 때문이다.
-*/
-fn acquire_pool_allocation_lock_at(pool_root: &Path) -> Result<PoolAllocationLock, String> {
-    let lock_path = pool_root.join(POOL_ALLOCATION_LOCK_DIR);
-    let deadline = Instant::now() + POOL_ALLOCATION_LOCK_TIMEOUT;
-    let owner_token = pool_allocation_lock_owner_token();
+fn acquire_pool_mutation_lock_at(pool_root: &Path) -> Result<PoolMutationLock, String> {
+    let lock_path = pool_root.join(POOL_MUTATION_LOCK_FILE);
+    let deadline = Instant::now() + POOL_MUTATION_LOCK_TIMEOUT;
+    let owner_record = pool_mutation_lock_owner_record()?;
     loop {
-        match fs::create_dir(&lock_path) {
-            Ok(()) => {
-                if let Err(error) = fs::write(
-                    lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE),
-                    &owner_token,
-                ) {
-                    let _ = fs::remove_dir_all(&lock_path);
-                    return Err(format!(
-                        "pool allocation lock owner could not be written at `{}`: {error}",
-                        lock_path.display()
-                    ));
-                }
-                return Ok(PoolAllocationLock {
+        match platform::try_acquire(pool_root, &lock_path, &owner_record) {
+            Ok(Some(platform_lock)) => {
+                return Ok(PoolMutationLock {
+                    platform_lock,
                     lock_path,
-                    owner_token,
+                    pool_root: pool_root.to_path_buf(),
                 });
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                remove_stale_pool_allocation_lock(&lock_path);
-                if Instant::now() >= deadline {
-                    return Err(format!(
-                        "pool allocation lock is busy at `{}`",
-                        lock_path.display()
-                    ));
-                }
-                thread::sleep(POOL_ALLOCATION_LOCK_RETRY);
+            Ok(None) if Instant::now() < deadline => thread::sleep(POOL_MUTATION_LOCK_RETRY),
+            Ok(None) => {
+                return Err(format!(
+                    "pool mutation lock is busy at `{}`",
+                    lock_path.display()
+                ));
             }
             Err(error) => {
                 return Err(format!(
-                    "pool allocation lock could not be acquired at `{}`: {error}",
+                    "pool mutation lock could not be acquired at `{}`: {error}",
                     lock_path.display()
                 ));
             }
         }
     }
 }
-fn pool_allocation_lock_owner_token() -> String {
-    /*
-    owner token은 lock directory를 만든 실행 주체를 최소 정보로 식별한다. pid는
-    stale lock을 정리할 때 아직 살아 있는 프로세스인지 확인하는 단서이고, created_at_ms는
-    사람이 pool root를 열어 봤을 때 언제 생긴 lock인지 판단하는 운영 단서이다. token 전체를
-    release 시 비교하므로, 같은 pid가 재사용되더라도 이전 permit이 새 lock을 삭제할 위험을
-    줄인다.
-    */
-    let created_at = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("pid={}\ncreated_at_ms={created_at}\n", std::process::id())
+
+fn pool_mutation_lock_owner_record() -> Result<String, String> {
+    let mut nonce = [0_u8; 32];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| {
+            format!("operating-system randomness is required for pool locking: {error}")
+        })?;
+    let process_start_identity =
+        crate::process_liveness::required_process_start_identity(std::process::id())
+            .map_err(|error| format!("pool lock process identity is unavailable: {error:#}"))?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!(
+        "pid={}\nprocess_start_identity={}\nnonce={}\n",
+        std::process::id(),
+        process_start_identity,
+        nonce
+    ))
 }
 
-/*
-release는 owner 파일의 내용이 현재 permit의 owner token과 같을 때만 lock directory를
-지운다. acquire timeout 중 stale lock 제거가 일어났거나 다른 프로세스가 새 lock을 잡은
-상태에서 이전 permit이 drop될 수 있으므로, token 확인 없이 삭제하면 남의 lock을 풀 수
-있다.
-*/
-fn release_pool_allocation_lock(lock_path: &Path, owner_token: &str) {
-    let owner_path = lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE);
-    let Ok(current_owner) = fs::read_to_string(&owner_path) else {
-        return;
-    };
-    if current_owner == owner_token {
-        let _ = fs::remove_dir_all(lock_path);
+fn write_owner_record(file: &mut std::fs::File, owner_record: &str) -> std::io::Result<()> {
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(owner_record.as_bytes())?;
+    file.sync_all()
+}
+
+fn pool_root_creation_chain(
+    canonical_repo_root: &Path,
+    pool_root: &Path,
+) -> std::io::Result<Vec<PathBuf>> {
+    let parent = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
+    let relative = pool_root.strip_prefix(parent).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pool root must be beneath the canonical repository parent",
+        )
+    })?;
+    let mut current = parent.to_path_buf();
+    let mut chain = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "pool root creation chain contains a non-normal component",
+            ));
+        };
+        current.push(component);
+        chain.push(current.clone());
     }
-}
-
-/*
-stale lock 제거는 오래된 lock directory가 있고, owner pid가 없거나 죽은 것으로
-확인될 때만 실행된다. 수정 시간이 짧으면 정상 작업 중일 수 있어 건드리지 않고, pid 상태가
-Unknown이면 보수적으로 유지한다. slot 중복 배정보다 잠시 busy로 남는 편이 안전하기
-때문이다.
-*/
-fn remove_stale_pool_allocation_lock(lock_path: &Path) {
-    /*
-    stale 제거는 allocation lock에서 가장 보수적이어야 하는 경로이다. 여기서 실수로
-    살아 있는 lock을 지우면 두 agent가 같은 idle slot을 동시에 lease할 수 있다. 그래서
-    directory 수정 시간이 충분히 오래됐는지 먼저 확인하고, 그 다음 owner pid가 없거나 명확히
-    죽었다고 확인되는 경우에만 directory를 지운다.
-    */
-    let Ok(metadata) = fs::metadata(lock_path) else {
-        return;
-    };
-    let Ok(modified_at) = metadata.modified() else {
-        return;
-    };
-    let Ok(age) = SystemTime::now().duration_since(modified_at) else {
-        return;
-    };
-    if age >= POOL_ALLOCATION_LOCK_STALE_AFTER {
-        /*
-        owner 파일을 읽을 수 없으면 `None`으로 이어지고 stale 제거 대상이 된다. 오래된
-        lock에 owner가 없다는 것은 acquire 도중 owner write 전에 죽었거나 파일이 손상된 상태라,
-        새 lease 배정을 영원히 막기보다 lock을 회수하는 쪽이 낫다. 하지만 owner pid가 있고
-        liveness가 Alive 또는 Unknown이면 lock을 보존한다.
-        */
-        let owner_path = lock_path.join(POOL_ALLOCATION_LOCK_OWNER_FILE);
-        if !matches!(
-            fs::read_to_string(owner_path)
-                .ok()
-                .and_then(|owner| pool_allocation_lock_owner_pid(&owner))
-                .map(pool_allocation_lock_owner_liveness),
-            None | Some(PoolAllocationLockOwnerLiveness::Dead)
-        ) {
-            return;
-        }
-        let _ = fs::remove_dir_all(lock_path);
+    if chain.len() != 3 || chain.last().is_none_or(|path| path != pool_root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pool root must contain the repository pool, identity, and leaf components",
+        ));
     }
-}
-fn pool_allocation_lock_owner_pid(owner_token: &str) -> Option<u32> {
-    /*
-    owner token은 사람이 읽기 쉬운 key=value 줄 목록이다. pid parsing은 그중
-    `pid=` 줄만 골라 process liveness check로 넘기는 좁은 helper이다. 형식이 깨졌거나 숫자로
-    파싱되지 않으면 None으로 두어 stale cleanup이 "소유자를 확인할 수 없는 오래된 lock"으로
-    처리하게 한다.
-    */
-    owner_token
-        .lines()
-        .find_map(|line| line.strip_prefix("pid=")?.parse::<u32>().ok())
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PoolAllocationLockOwnerLiveness {
-    /*
-    Alive는 lock을 유지해야 한다는 강한 신호이고, Dead는 오래된 lock을 회수해도 되는
-    신호이다. Unknown은 보수적 안전 상태로, process lookup 실패나 권한 문제처럼 "죽었다고
-    증명하지 못한" 경우이다. remove_stale 경로는 Unknown을 Dead처럼 취급하지 않는다.
-    */
-    Alive,
-    Dead,
-    Unknown,
+    Ok(chain)
 }
 
-/*
-owner liveness는 플랫폼별 process table을 아주 얕게 확인한다. Unix에서는
-`kill -0`, Windows에서는 `tasklist`를 사용하고, 둘 다 실패하면 Unknown으로 둔다.
-Unknown을 Dead로 취급하지 않는 이유는 권한 문제나 플랫폼 차이로 살아 있는 프로세스를
-잘못 죽은 것으로 판단해 lock을 훔치는 일을 피하기 위해서이다.
-*/
-fn pool_allocation_lock_owner_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
-    platform_process_liveness(pid)
-}
 #[cfg(unix)]
-fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
-    /*
-    Unix의 `kill -0`은 실제 signal을 보내지 않고 process 존재/접근 가능 여부만
-    검사한다. 성공은 pid가 살아 있거나 접근 가능하다는 의미로 Alive이고, non-zero status는
-    process가 없거나 접근할 수 없다는 뜻이다. 이 구현은 allocation lock recovery의 보조
-    판단일 뿐이라, command 실행 자체가 실패하면 Unknown으로 둔다.
-    */
-    match std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(status) if status.success() => PoolAllocationLockOwnerLiveness::Alive,
-        Ok(_) => PoolAllocationLockOwnerLiveness::Dead,
-        Err(_) => PoolAllocationLockOwnerLiveness::Unknown,
+mod platform {
+    use super::{pool_root_creation_chain, write_owner_record};
+    use std::fs::{DirBuilder, File, OpenOptions};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    use std::path::Path;
+
+    pub(super) struct PlatformPoolMutationLock {
+        file: File,
+        root_device: u64,
+        root_inode: u64,
+        lock_device: u64,
+        lock_inode: u64,
     }
-}
-#[cfg(windows)]
-fn platform_process_liveness(pid: u32) -> PoolAllocationLockOwnerLiveness {
-    /*
-    Windows에는 `kill -0`과 같은 portable primitive가 없으므로 `tasklist` 필터로
-    pid가 현재 process table에 있는지 확인한다. 출력 형식은 locale이나 Windows 버전에 따라
-    달라질 수 있어, 명령 실패는 Unknown으로 보수 처리하고, 성공 출력에 pid field가 있을 때만
-    Alive로 판단한다.
-    */
-    let filter = format!("PID eq {pid}");
-    match std::process::Command::new("tasklist")
-        .args(["/FI", filter.as_str(), "/NH"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout
-                .split_whitespace()
-                .any(|field| field.trim() == pid.to_string())
+
+    impl PlatformPoolMutationLock {
+        pub(super) fn verify_paths(
+            &self,
+            pool_root: &Path,
+            lock_path: &Path,
+        ) -> std::io::Result<()> {
+            let root = open_private_pool_root(pool_root)?;
+            let root_metadata = root.metadata()?;
+            let lock_metadata = std::fs::symlink_metadata(lock_path)?;
+            if root_metadata.dev() != self.root_device
+                || root_metadata.ino() != self.root_inode
+                || lock_metadata.dev() != self.lock_device
+                || lock_metadata.ino() != self.lock_inode
+                || self.file.metadata()?.dev() != self.lock_device
+                || self.file.metadata()?.ino() != self.lock_inode
             {
-                PoolAllocationLockOwnerLiveness::Alive
-            } else {
-                PoolAllocationLockOwnerLiveness::Dead
+                return Err(std::io::Error::other(
+                    "pool root or mutation lock path no longer identifies the acquired object",
+                ));
+            }
+            validate_lock_metadata(&lock_metadata)
+        }
+    }
+
+    impl Drop for PlatformPoolMutationLock {
+        fn drop(&mut self) {
+            // SAFETY: the descriptor remains owned by self for the duration of this call.
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
             }
         }
-        Ok(_) => PoolAllocationLockOwnerLiveness::Dead,
-        Err(_) => PoolAllocationLockOwnerLiveness::Unknown,
+    }
+
+    pub(super) fn ensure_private_pool_root(
+        canonical_repo_root: &Path,
+        pool_root: &Path,
+    ) -> std::io::Result<()> {
+        let creation_parent = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
+        let creation_parent_handle = open_trusted_creation_parent(creation_parent)?;
+        for path in pool_root_creation_chain(canonical_repo_root, pool_root)? {
+            match DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            open_private_pool_root(&path)?;
+        }
+        validate_trusted_creation_parent(creation_parent, &creation_parent_handle)
+    }
+
+    pub(super) fn try_acquire(
+        pool_root: &Path,
+        lock_path: &Path,
+        owner_record: &str,
+    ) -> std::io::Result<Option<PlatformPoolMutationLock>> {
+        let root = open_private_pool_root(pool_root)?;
+        let root_metadata = root.metadata()?;
+        reject_legacy_lock_directory(lock_path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(lock_path)?;
+        let metadata = file.metadata()?;
+        validate_lock_metadata(&metadata)?;
+        // SAFETY: flock only observes the live owned descriptor and does not retain a Rust pointer.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EWOULDBLOCK)
+                || error.raw_os_error() == Some(libc::EAGAIN)
+            {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+        let path_metadata = std::fs::symlink_metadata(lock_path)?;
+        if path_metadata.dev() != metadata.dev() || path_metadata.ino() != metadata.ino() {
+            return Err(std::io::Error::other(
+                "pool mutation lock path changed during acquisition",
+            ));
+        }
+        write_owner_record(&mut file, owner_record)?;
+        let lock = PlatformPoolMutationLock {
+            file,
+            root_device: root_metadata.dev(),
+            root_inode: root_metadata.ino(),
+            lock_device: metadata.dev(),
+            lock_inode: metadata.ino(),
+        };
+        lock.verify_paths(pool_root, lock_path)?;
+        Ok(Some(lock))
+    }
+
+    fn open_private_pool_root(pool_root: &Path) -> std::io::Result<File> {
+        let root = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(pool_root)?;
+        let metadata = root.metadata()?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o022 != 0
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "pool root must be an owner-controlled non-writable-by-others directory",
+            ));
+        }
+        Ok(root)
+    }
+
+    fn open_trusted_creation_parent(path: &Path) -> std::io::Result<File> {
+        let parent = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(path)?;
+        validate_trusted_creation_parent(path, &parent)?;
+        Ok(parent)
+    }
+
+    fn validate_trusted_creation_parent(path: &Path, parent: &File) -> std::io::Result<()> {
+        let opened = parent.metadata()?;
+        let current = std::fs::symlink_metadata(path)?;
+        let owner_is_trusted = opened.uid() == unsafe { libc::geteuid() } || opened.uid() == 0;
+        let mode = opened.permissions().mode();
+        let entry_mutation_is_restricted = mode & 0o022 == 0 || mode & 0o1000 != 0;
+        if !opened.is_dir()
+            || opened.dev() != current.dev()
+            || opened.ino() != current.ino()
+            || !owner_is_trusted
+            || !entry_mutation_is_restricted
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "pool creation parent must be root/current-user owned and either non-writable by others or sticky",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_lock_metadata(metadata: &std::fs::Metadata) -> std::io::Result<()> {
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.nlink() != 1
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "pool mutation lock must be an owner-private single-link regular file",
+            ));
+        }
+        Ok(())
+    }
+
+    fn reject_legacy_lock_directory(lock_path: &Path) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(lock_path) {
+            Ok(metadata) if metadata.file_type().is_dir() => Err(std::io::Error::other(
+                "legacy `.allocation-lock` directory found; confirm no older Akra process is running, remove that directory, and retry",
+            )),
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 }
+
+#[cfg(windows)]
+mod platform {
+    use super::{pool_root_creation_chain, write_owner_record};
+    use crate::private_fs::{
+        WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT, WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ,
+        WINDOWS_GENERIC_WRITE, WINDOWS_READ_CONTROL, WINDOWS_WRITE_DAC, set_windows_private_acl,
+        validate_windows_path_identity, validate_windows_path_identity_only,
+        validate_windows_private_owner_and_acl, validate_windows_trusted_executable_acl,
+    };
+    use std::fs::{File, OpenOptions};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::Path;
+    use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
+    use windows_sys::Win32::Storage::FileSystem::{LockFile, UnlockFile};
+
+    pub(super) struct PlatformPoolMutationLock {
+        file: File,
+        root: File,
+    }
+
+    impl PlatformPoolMutationLock {
+        pub(super) fn verify_paths(
+            &self,
+            pool_root: &Path,
+            lock_path: &Path,
+        ) -> std::io::Result<()> {
+            validate_windows_path_identity(pool_root, &self.root, true)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            validate_windows_private_owner_and_acl(pool_root, &self.root)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            validate_windows_path_identity(lock_path, &self.file, false)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            validate_windows_private_owner_and_acl(lock_path, &self.file)
+                .map_err(|error| std::io::Error::other(error.to_string()))
+        }
+    }
+
+    impl Drop for PlatformPoolMutationLock {
+        fn drop(&mut self) {
+            // SAFETY: the owned file handle remains valid and the same byte range was locked.
+            unsafe {
+                UnlockFile(self.file.as_raw_handle() as HANDLE, 0, 0, 1, 0);
+            }
+        }
+    }
+
+    pub(super) fn ensure_private_pool_root(
+        canonical_repo_root: &Path,
+        pool_root: &Path,
+    ) -> std::io::Result<()> {
+        let creation_parent = canonical_repo_root.parent().unwrap_or(canonical_repo_root);
+        let creation_parent_handle = open_trusted_creation_parent(creation_parent)?;
+        for path in pool_root_creation_chain(canonical_repo_root, pool_root)? {
+            let created = match std::fs::create_dir(&path) {
+                Ok(()) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+                Err(error) => return Err(error),
+            };
+            let directory = OpenOptions::new()
+                .read(true)
+                .access_mode(
+                    WINDOWS_GENERIC_READ
+                        | WINDOWS_READ_CONTROL
+                        | if created { WINDOWS_WRITE_DAC } else { 0 },
+                )
+                .share_mode(WINDOWS_FILE_SHARE_ALL)
+                .custom_flags(
+                    crate::private_fs::WINDOWS_FILE_FLAG_BACKUP_SEMANTICS
+                        | WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+                )
+                .open(&path)?;
+            validate_windows_path_identity(&path, &directory, true)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            if created {
+                set_windows_private_acl(&directory, true)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+            }
+            validate_windows_private_owner_and_acl(&path, &directory)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            validate_windows_path_identity(&path, &directory, true)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+        }
+        validate_windows_path_identity_only(creation_parent, &creation_parent_handle, true)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    pub(super) fn try_acquire(
+        pool_root: &Path,
+        lock_path: &Path,
+        owner_record: &str,
+    ) -> std::io::Result<Option<PlatformPoolMutationLock>> {
+        let root = OpenOptions::new()
+            .read(true)
+            .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+            .share_mode(WINDOWS_FILE_SHARE_ALL)
+            .custom_flags(
+                crate::private_fs::WINDOWS_FILE_FLAG_BACKUP_SEMANTICS
+                    | WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+            )
+            .open(pool_root)?;
+        validate_windows_path_identity(pool_root, &root, true)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        validate_windows_private_owner_and_acl(pool_root, &root)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        reject_legacy_lock_directory(lock_path)?;
+
+        let mut create_options = OpenOptions::new();
+        create_options
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .access_mode(
+                WINDOWS_GENERIC_READ
+                    | WINDOWS_GENERIC_WRITE
+                    | WINDOWS_READ_CONTROL
+                    | WINDOWS_WRITE_DAC,
+            )
+            .share_mode(WINDOWS_FILE_SHARE_ALL)
+            .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT);
+        let (mut file, created) = match create_options.open(lock_path) {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .access_mode(
+                        WINDOWS_GENERIC_READ | WINDOWS_GENERIC_WRITE | WINDOWS_READ_CONTROL,
+                    )
+                    .share_mode(WINDOWS_FILE_SHARE_ALL)
+                    .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT)
+                    .open(lock_path)?,
+                false,
+            ),
+            Err(error) => return Err(error),
+        };
+        validate_windows_path_identity(lock_path, &file, false)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        if created {
+            set_windows_private_acl(&file, false)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+        }
+        validate_windows_private_owner_and_acl(lock_path, &file)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        validate_windows_path_identity(lock_path, &file, false)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        // SAFETY: LockFile receives a valid owned handle and a one-byte range at offset zero.
+        if unsafe { LockFile(file.as_raw_handle() as HANDLE, 0, 0, 1, 0) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+        validate_windows_path_identity(lock_path, &file, false)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        validate_windows_private_owner_and_acl(lock_path, &file)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        write_owner_record(&mut file, owner_record)?;
+        let lock = PlatformPoolMutationLock { file, root };
+        lock.verify_paths(pool_root, lock_path)?;
+        Ok(Some(lock))
+    }
+
+    fn reject_legacy_lock_directory(lock_path: &Path) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(lock_path) {
+            Ok(metadata) if metadata.file_type().is_dir() => Err(std::io::Error::other(
+                "legacy `.allocation-lock` directory found; confirm no older Akra process is running, remove that directory, and retry",
+            )),
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn open_trusted_creation_parent(path: &Path) -> std::io::Result<File> {
+        let parent = OpenOptions::new()
+            .read(true)
+            .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+            .share_mode(WINDOWS_FILE_SHARE_ALL)
+            .custom_flags(
+                crate::private_fs::WINDOWS_FILE_FLAG_BACKUP_SEMANTICS
+                    | WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+            )
+            .open(path)?;
+        validate_windows_path_identity_only(path, &parent, true)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        validate_windows_trusted_executable_acl(path, &parent, true)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        validate_windows_path_identity_only(path, &parent, true)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        Ok(parent)
+    }
+}
+
 #[cfg(not(any(unix, windows)))]
-fn platform_process_liveness(_pid: u32) -> PoolAllocationLockOwnerLiveness {
-    /*
-    지원하지 않는 platform에서는 process liveness를 안전하게 증명할 방법이 없으므로
-    Unknown을 반환한다. 이 값은 stale cleanup에서 lock 보존으로 이어져, 자동 회수보다 중복
-    slot 배정 방지를 우선한다.
-    */
-    PoolAllocationLockOwnerLiveness::Unknown
+mod platform {
+    use std::path::Path;
+
+    pub(super) struct PlatformPoolMutationLock;
+
+    impl PlatformPoolMutationLock {
+        pub(super) fn verify_paths(
+            &self,
+            _pool_root: &Path,
+            _lock_path: &Path,
+        ) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "pool mutation locking is unsupported on this platform",
+            ))
+        }
+    }
+
+    pub(super) fn ensure_private_pool_root(
+        _canonical_repo_root: &Path,
+        _pool_root: &Path,
+    ) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "pool mutation locking is unsupported on this platform",
+        ))
+    }
+
+    pub(super) fn try_acquire(
+        _pool_root: &Path,
+        _lock_path: &Path,
+        _owner_record: &str,
+    ) -> std::io::Result<Option<PlatformPoolMutationLock>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "pool mutation locking is unsupported on this platform",
+        ))
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{POOL_MUTATION_LOCK_FILE, acquire_pool_mutation_lock_at, platform};
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    fn private_pool_root(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "akra-pool-lock-{label}-{}-{}",
+            std::process::id(),
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).expect("private pool root should create");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+            .expect("private pool root should be owner-only");
+        path
+    }
+
+    #[test]
+    fn mutation_lock_rejects_owner_path_symlink_without_touching_target() {
+        let pool_root = private_pool_root("symlink");
+        let sentinel = pool_root.parent().unwrap().join(format!(
+            "akra-pool-lock-sentinel-{}",
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&sentinel, "sentinel").expect("sentinel should write");
+        symlink(&sentinel, pool_root.join(POOL_MUTATION_LOCK_FILE))
+            .expect("lock symlink should create");
+
+        let error = acquire_pool_mutation_lock_at(&pool_root)
+            .err()
+            .expect("symlink lock path must be rejected");
+        assert!(error.contains("could not be acquired"));
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "sentinel");
+        let _ = fs::remove_dir_all(pool_root);
+        let _ = fs::remove_file(sentinel);
+    }
+
+    #[test]
+    fn private_pool_setup_creates_and_validates_the_full_missing_ancestor_chain() {
+        let fixture_root = private_pool_root("missing-chain");
+        let canonical_repo_root = fixture_root.join("repo");
+        fs::create_dir(&canonical_repo_root).expect("canonical repository root should create");
+        fs::set_permissions(&canonical_repo_root, fs::Permissions::from_mode(0o700))
+            .expect("canonical repository root should be private");
+        let pool_root = fixture_root
+            .join("repo-akra-worktrees")
+            .join("0123456789ab")
+            .join("akra-pool");
+
+        platform::ensure_private_pool_root(&canonical_repo_root, &pool_root)
+            .expect("fresh pool setup should create every missing ancestor");
+
+        for path in [
+            fixture_root.join("repo-akra-worktrees"),
+            fixture_root
+                .join("repo-akra-worktrees")
+                .join("0123456789ab"),
+            pool_root,
+        ] {
+            let metadata = fs::metadata(path).expect("pool chain component should exist");
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+            assert_eq!(metadata.permissions().mode() & 0o077, 0);
+        }
+        let _ = fs::remove_dir_all(fixture_root);
+    }
+
+    #[test]
+    fn private_pool_setup_rejects_a_non_sticky_shared_creation_parent() {
+        let fixture_root = private_pool_root("unsafe-shared-parent");
+        let shared_parent = fixture_root.join("shared");
+        fs::create_dir(&shared_parent).expect("shared creation parent should create");
+        fs::set_permissions(&shared_parent, fs::Permissions::from_mode(0o777))
+            .expect("shared creation parent should become writable by other users");
+        let canonical_repo_root = shared_parent.join("repo");
+        fs::create_dir(&canonical_repo_root).expect("canonical repository root should create");
+        fs::set_permissions(&canonical_repo_root, fs::Permissions::from_mode(0o700))
+            .expect("canonical repository root should be private");
+        let pool_root = shared_parent
+            .join("repo-akra-worktrees")
+            .join("0123456789ab")
+            .join("akra-pool");
+
+        let error = platform::ensure_private_pool_root(&canonical_repo_root, &pool_root)
+            .expect_err("non-sticky shared parent must not authorize pool entries");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("pool creation parent"));
+        assert!(!pool_root.exists());
+        let _ = fs::remove_dir_all(fixture_root);
+    }
+
+    #[test]
+    fn dropping_permits_never_deletes_or_replaces_the_persistent_lock_object() {
+        let pool_root = private_pool_root("persistent");
+        let first = acquire_pool_mutation_lock_at(&pool_root).expect("first lock should acquire");
+        let lock_path = pool_root.join(POOL_MUTATION_LOCK_FILE);
+        let first_metadata = fs::metadata(&lock_path).expect("lock file should exist");
+        drop(first);
+        let second = acquire_pool_mutation_lock_at(&pool_root).expect("second lock should acquire");
+        let second_metadata = fs::metadata(&lock_path).expect("lock file should remain");
+        assert_eq!(first_metadata.dev(), second_metadata.dev());
+        assert_eq!(first_metadata.ino(), second_metadata.ino());
+        drop(second);
+        assert!(lock_path.is_file());
+        let _ = fs::remove_dir_all(pool_root);
+    }
+
+    #[test]
+    fn mutation_permit_rejects_a_different_pool_root() {
+        let acquired_root = private_pool_root("scope-acquired");
+        let replacement_root = private_pool_root("scope-replacement");
+        let permit =
+            acquire_pool_mutation_lock_at(&acquired_root).expect("mutation lock should acquire");
+
+        let error = permit
+            .verify_pool_root(&replacement_root)
+            .expect_err("one repository permit must not authorize another pool root");
+
+        assert!(error.contains("cannot mutate"));
+        assert!(!replacement_root.join(POOL_MUTATION_LOCK_FILE).exists());
+        drop(permit);
+        let _ = fs::remove_dir_all(acquired_root);
+        let _ = fs::remove_dir_all(replacement_root);
+    }
+
+    #[test]
+    fn legacy_directory_lock_fails_with_explicit_recovery_guidance() {
+        let pool_root = private_pool_root("legacy-directory");
+        fs::create_dir(pool_root.join(POOL_MUTATION_LOCK_FILE))
+            .expect("legacy lock directory should create");
+
+        let error = acquire_pool_mutation_lock_at(&pool_root)
+            .err()
+            .expect("legacy lock directory must not be migrated while ownership is ambiguous");
+
+        assert!(error.contains("legacy `.allocation-lock` directory"));
+        assert!(error.contains("older Akra process"));
+        let _ = fs::remove_dir_all(pool_root);
+    }
 }

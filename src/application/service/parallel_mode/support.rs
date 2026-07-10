@@ -7,10 +7,11 @@ use std::path::Path;
 // UTC timestamp는 parallel mode record들이 서로 다른 process에서 생성되어도 비교 가능한 시간 언어이다.
 use chrono::Utc;
 
-// git sequence는 rollback처럼 여러 git command를 하나의 diagnostic unit으로 실행할 때 쓴다.
-use super::git_sequence::{GitCommandStep, run_git_sequence};
 // slot reset helper는 unstarted branch discard 전에 worktree를 akra baseline으로 되돌린다.
-use super::pool::reset_slot_worktree_to_akra;
+use super::pool::{
+    PoolMutationLock, delete_cleaned_slot_branch_if_unchanged, inspect_slot_git_status,
+    reset_slot_worktree_to_ref,
+};
 // readiness command runner는 git query 실패를 Option/String 형태로 접는 공통 command boundary이다.
 use super::readiness::run_command;
 
@@ -90,13 +91,16 @@ unstarted slot branch discard는 lease 저장 실패나 stream startup failure�
 "결과가 없는 시작 실패"를 pool 오염 없이 되돌리는 것이 목적이다.
 */
 // 이 rollback helper는 agent가 작업을 시작하기 전에 만들어진 slot branch만 폐기한다.
-pub(crate) fn discard_unstarted_slot_branch(
+pub(in crate::application::service::parallel_mode) fn discard_unstarted_slot_branch(
     // repo_root는 branch delete command를 실행할 canonical repository root이다.
     repo_root: &str,
     // slot_path는 reset 대상 worktree이다. branch 삭제 전에 먼저 baseline으로 되돌린다.
     slot_path: &Path,
     // branch_name은 unstarted agent branch 이름이다. Running 이후 branch를 넘기면 안 된다.
     branch_name: &str,
+    // expected_baseline_oid는 caller가 exact remote transport로 동결한 reset 대상이다.
+    expected_baseline_oid: &str,
+    mutation_lock: &PoolMutationLock,
 ) -> bool {
     /*
     이 rollback은 "lease를 만들려 했지만 agent가 아직 작업을 시작하지 못한" 짧은 실패
@@ -104,14 +108,35 @@ pub(crate) fn discard_unstarted_slot_branch(
     그 branch를 삭제하면 실제 산출물을 잃을 수 있다. 그래서 이름도 discard_unstarted로 제한해
     호출자가 lifecycle 전제를 의식하게 한다.
     */
-    reset_slot_worktree_to_akra(slot_path).succeeded()
-        && run_git_sequence(
-            "delete unstarted slot branch",
-            vec![GitCommandStep::new(
-                "delete agent branch",
-                ["-C", repo_root, "branch", "-D", branch_name],
-            )],
+    if slot_path
+        .parent()
+        .is_none_or(|pool_root| mutation_lock.verify_pool_root(pool_root).is_err())
+    {
+        return false;
+    }
+    let Some(source_oid) = run_command(
+        "git",
+        [
+            "-C",
+            repo_root,
+            "rev-parse",
+            &format!("{branch_name}^{{commit}}"),
+        ],
+        None,
+    ) else {
+        return false;
+    };
+    let slot_path_string = slot_path.display().to_string();
+    inspect_slot_git_status(slot_path).is_ok_and(|status| status.is_clean_baseline())
+        && current_branch_name(slot_path).as_deref() == Some(branch_name)
+        && run_command(
+            "git",
+            ["-C", slot_path_string.as_str(), "rev-parse", "HEAD"],
+            None,
         )
-        // worktree reset과 branch delete가 모두 성공해야 rollback 성공으로 본다.
-        .succeeded()
+        .as_deref()
+            == Some(source_oid.as_str())
+        && reset_slot_worktree_to_ref(slot_path, expected_baseline_oid).succeeded()
+        && inspect_slot_git_status(slot_path).is_ok_and(|status| status.is_clean_baseline())
+        && delete_cleaned_slot_branch_if_unchanged(repo_root, branch_name, &source_oid)
 }

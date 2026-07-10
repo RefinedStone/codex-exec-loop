@@ -10,6 +10,7 @@
  * - runtime.rs: 여러 짧은 조회 요청이 하나의 app-server connection을 재사용하도록 shared runtime을 관리한다.
  * - 이 mod.rs: port trait 구현체로서 TUI/application service가 호출하는 공개 메서드를 조립한다.
  */
+mod approval;
 pub(crate) mod connection;
 mod execution_policy;
 mod planning_worker;
@@ -18,32 +19,38 @@ pub(crate) mod protocol;
 pub(crate) mod runtime;
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 
+use self::approval::AppServerApprovalBroker;
 use self::connection::{
-    AppServerConnection, AppServerConnectionConfig, AppServerTurnInterruptSignal,
+    AppServerApprovalMode, AppServerConnection, AppServerConnectionConfig,
+    AppServerTurnInterruptSignal,
 };
 use self::execution_policy::AppServerExecutionPolicy;
 pub use self::planning_worker::AppServerPlanningWorkerAdapter;
 pub(crate) use self::planning_worker::PlanningThreadLauncher;
 use self::planning_worker_skill::PlanningWorkerSkillAdapter;
 use self::protocol::{
-    ReasoningEffortValue, ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputItem,
-    TurnStartParams, initialize_detail, sort_and_dedup_warnings, thread_title,
-    to_conversation_snapshot, to_session_summary,
+    ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
+    ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputItem, TurnStartParams,
+    initialize_detail, sort_and_dedup_warnings, thread_title, to_conversation_snapshot,
+    to_session_summary,
 };
 use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
 };
 use crate::application::port::outbound::app_server_prompt_log_port::{
-    AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptLogPort,
-    AppServerPromptOutputRecord, NoopAppServerPromptLogPort,
+    APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS, APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION,
+    APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS, AppServerPromptInputRecord,
+    AppServerPromptInteractionRecord, AppServerPromptLogPort, AppServerPromptOutputRecord,
+    NoopAppServerPromptLogPort, bounded_prompt_log_string,
 };
 use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
 use crate::application::port::outbound::parallel_agent_worker_port::{
@@ -54,13 +61,15 @@ use crate::application::port::outbound::startup_probe_port::{
     AppServerStartupContext, StartupProbePort,
 };
 use crate::application::service::conversation_runtime_event::{
-    ConversationStreamEvent, emit_codex_app_server_launch_attachment,
+    ConversationStreamEvent, ConversationStreamSender, emit_codex_app_server_launch_attachment,
     emit_codex_app_server_reattach_attachment,
 };
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{
+    ConversationApprovalDecision, ConversationApprovalReviewStatus,
     ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
 };
+use crate::domain::planning::PostTurnContinuationPermit;
 use crate::domain::recent_sessions::{
     RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
 };
@@ -69,11 +78,216 @@ use serde_json::json;
 
 const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
 const PLANNING_WORKER_SERVICE_NAME: &str = "akra-planning-worker";
+const PROMPT_LOG_CAPTURE_CHANNEL_CAPACITY: usize = APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION;
+const MAX_STREAM_IDENTIFIER_BYTES: usize = 4 * 1024;
+const MAX_STREAM_METADATA_BYTES: usize = 64 * 1024;
+const MAX_STREAM_DELTA_BYTES: usize = 256 * 1024;
+const MAX_STREAM_COMPLETED_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_STREAM_CHANGED_PATHS: usize = 256;
+const MAX_STREAM_PATH_BYTES: usize = 16 * 1024;
+const MAX_SNAPSHOT_MESSAGES: usize = 2_048;
+const MAX_SNAPSHOT_TOTAL_TEXT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SESSION_CATALOG_ITEMS: usize = 1_000;
+const STREAM_TRUNCATION_MARKER: &str = "\n[truncated by Akra at app-server boundary]";
 const PLANNING_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra planning-only sub-session.
 Evaluate accepted DB direction authority, accepted DB task authority, and DB queue projection only.
 Do not edit planning files, source files, SQL, or JSON authority directly.
 Use the attached queue-mutation skill and `akra planning-tool run .` before falling back to final planning_task_commands."#;
 static NEXT_PROMPT_LOG_INTERACTION_ID: AtomicU64 = AtomicU64::new(1);
+const PLANNING_WORKER_CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+struct PlanningWorkerContinuationWatcher {
+    stop_sender: Option<mpsc::Sender<()>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl PlanningWorkerContinuationWatcher {
+    fn start(
+        continuation_permit: Option<PostTurnContinuationPermit>,
+        interrupt_signal: AppServerTurnInterruptSignal,
+    ) -> Option<Self> {
+        let continuation_permit = continuation_permit?;
+        let (stop_sender, stop_receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            loop {
+                if !continuation_permit.is_current() {
+                    interrupt_signal.request_stop_all_sessions();
+                    break;
+                }
+                match stop_receiver.recv_timeout(PLANNING_WORKER_CANCELLATION_POLL_INTERVAL) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+        });
+        Some(Self {
+            stop_sender: Some(stop_sender),
+            worker: Some(worker),
+        })
+    }
+}
+
+impl Drop for PlanningWorkerContinuationWatcher {
+    fn drop(&mut self) {
+        self.stop_sender.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+pub(super) trait AppServerEventSender {
+    fn send(&self, event: ConversationStreamEvent) -> std::result::Result<(), ()>;
+
+    fn try_send(
+        &self,
+        event: ConversationStreamEvent,
+    ) -> std::result::Result<(), AppServerEventTrySendError>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AppServerEventTrySendError {
+    Full,
+    Disconnected,
+}
+
+impl AppServerEventSender for ConversationStreamSender {
+    fn send(&self, event: ConversationStreamEvent) -> std::result::Result<(), ()> {
+        ConversationStreamSender::send(self, bounded_app_server_stream_event(event)).map_err(|_| ())
+    }
+
+    fn try_send(
+        &self,
+        event: ConversationStreamEvent,
+    ) -> std::result::Result<(), AppServerEventTrySendError> {
+        match ConversationStreamSender::try_send(self, bounded_app_server_stream_event(event)) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err(AppServerEventTrySendError::Full),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(AppServerEventTrySendError::Disconnected)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl AppServerEventSender for mpsc::Sender<ConversationStreamEvent> {
+    fn send(&self, event: ConversationStreamEvent) -> std::result::Result<(), ()> {
+        mpsc::Sender::send(self, bounded_app_server_stream_event(event)).map_err(|_| ())
+    }
+
+    fn try_send(
+        &self,
+        event: ConversationStreamEvent,
+    ) -> std::result::Result<(), AppServerEventTrySendError> {
+        mpsc::Sender::send(self, bounded_app_server_stream_event(event))
+            .map_err(|_| AppServerEventTrySendError::Disconnected)
+    }
+}
+
+fn bounded_app_server_stream_event(event: ConversationStreamEvent) -> ConversationStreamEvent {
+    match event {
+        ConversationStreamEvent::AttachmentObserved { .. }
+        | ConversationStreamEvent::ApprovalRequested { .. } => event,
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id,
+            title,
+            cwd,
+        } => ConversationStreamEvent::ThreadPrepared {
+            thread_id: bounded_stream_text(thread_id, MAX_STREAM_IDENTIFIER_BYTES),
+            title: bounded_stream_text(title, MAX_STREAM_METADATA_BYTES),
+            cwd: bounded_stream_text(cwd, MAX_STREAM_METADATA_BYTES),
+        },
+        ConversationStreamEvent::TurnStarted { turn_id } => ConversationStreamEvent::TurnStarted {
+            turn_id: bounded_stream_text(turn_id, MAX_STREAM_IDENTIFIER_BYTES),
+        },
+        ConversationStreamEvent::StatusUpdated { text } => ConversationStreamEvent::StatusUpdated {
+            text: bounded_stream_text(text, MAX_STREAM_METADATA_BYTES),
+        },
+        ConversationStreamEvent::AgentMessageDelta {
+            item_id,
+            phase,
+            delta,
+        } => ConversationStreamEvent::AgentMessageDelta {
+            item_id: bounded_stream_text(item_id, MAX_STREAM_IDENTIFIER_BYTES),
+            phase: phase.map(|phase| bounded_stream_text(phase, MAX_STREAM_IDENTIFIER_BYTES)),
+            delta: bounded_stream_text(delta, MAX_STREAM_DELTA_BYTES),
+        },
+        ConversationStreamEvent::AgentMessageCompleted {
+            item_id,
+            phase,
+            text,
+        } => ConversationStreamEvent::AgentMessageCompleted {
+            item_id: bounded_stream_text(item_id, MAX_STREAM_IDENTIFIER_BYTES),
+            phase: phase.map(|phase| bounded_stream_text(phase, MAX_STREAM_IDENTIFIER_BYTES)),
+            text: bounded_stream_text(text, MAX_STREAM_COMPLETED_MESSAGE_BYTES),
+        },
+        ConversationStreamEvent::ToolActivity { mut activity } => {
+            activity.text = bounded_stream_text(activity.text, MAX_STREAM_METADATA_BYTES);
+            ConversationStreamEvent::ToolActivity { activity }
+        }
+        ConversationStreamEvent::ApprovalReviewUpdated { mut review } => {
+            review.target_item_id =
+                bounded_stream_text(review.target_item_id, MAX_STREAM_IDENTIFIER_BYTES);
+            review.risk_level = review
+                .risk_level
+                .map(|risk| bounded_stream_text(risk, MAX_STREAM_IDENTIFIER_BYTES));
+            review.rationale = review
+                .rationale
+                .map(|rationale| bounded_stream_text(rationale, MAX_STREAM_METADATA_BYTES));
+            review.status = match review.status {
+                ConversationApprovalReviewStatus::Unknown(status) => {
+                    ConversationApprovalReviewStatus::Unknown(bounded_stream_text(
+                        status,
+                        MAX_STREAM_IDENTIFIER_BYTES,
+                    ))
+                }
+                status => status,
+            };
+            ConversationStreamEvent::ApprovalReviewUpdated { review }
+        }
+        ConversationStreamEvent::ApprovalResolved {
+            approval_id,
+            resolution,
+        } => ConversationStreamEvent::ApprovalResolved {
+            approval_id: bounded_stream_text(approval_id, MAX_STREAM_IDENTIFIER_BYTES),
+            resolution,
+        },
+        ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
+            ConversationStreamEvent::TurnInterruptRequestFailed {
+                message: bounded_stream_text(message, MAX_STREAM_METADATA_BYTES),
+            }
+        }
+        ConversationStreamEvent::TurnCompleted {
+            turn_id,
+            changed_planning_file_paths,
+        } => ConversationStreamEvent::TurnCompleted {
+            turn_id: bounded_stream_text(turn_id, MAX_STREAM_IDENTIFIER_BYTES),
+            changed_planning_file_paths: changed_planning_file_paths
+                .into_iter()
+                .take(MAX_STREAM_CHANGED_PATHS)
+                .map(|path| bounded_stream_text(path, MAX_STREAM_PATH_BYTES))
+                .collect(),
+        },
+        ConversationStreamEvent::Failed { message } => ConversationStreamEvent::Failed {
+            message: bounded_stream_text(message, MAX_STREAM_METADATA_BYTES),
+        },
+    }
+}
+
+fn bounded_stream_text(mut value: String, maximum_bytes: usize) -> String {
+    if value.len() <= maximum_bytes {
+        return value;
+    }
+
+    let mut boundary = maximum_bytes.min(value.len());
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
+    value.push_str(STREAM_TRUNCATION_MARKER);
+    value
+}
 
 #[derive(Clone)]
 pub struct CodexAppServerAdapter {
@@ -88,6 +302,7 @@ pub struct CodexAppServerAdapter {
     execution_policy: AppServerExecutionPolicy,
     shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
     turn_interrupt_signal: AppServerTurnInterruptSignal,
+    approval_broker: Arc<AppServerApprovalBroker>,
     planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
     prompt_log_port: Arc<dyn AppServerPromptLogPort>,
 }
@@ -157,6 +372,7 @@ impl CodexAppServerAdapter {
             execution_policy,
             shared_runtime: Arc::new(Mutex::new(SharedAppServerRuntime::default())),
             turn_interrupt_signal: AppServerTurnInterruptSignal::default(),
+            approval_broker: Arc::new(AppServerApprovalBroker::default()),
             planning_worker_skill_adapter: PlanningWorkerSkillAdapter::new(),
             prompt_log_port,
         }
@@ -172,16 +388,30 @@ impl CodexAppServerAdapter {
             self.client_name.clone(),
             self.client_version.clone(),
             self.connection_config.clone(),
+            self.approval_broker.clone(),
+            AppServerApprovalMode::Interactive,
+            self.turn_interrupt_signal.clone(),
         )
     }
 
-    #[tracing::instrument(level = "trace", skip(self, event_sender))]
+    fn open_unattended_connection(&self) -> Result<AppServerConnection> {
+        AppServerConnection::spawn(
+            self.client_name.clone(),
+            self.client_version.clone(),
+            self.connection_config.clone(),
+            self.approval_broker.clone(),
+            AppServerApprovalMode::Unattended,
+            self.turn_interrupt_signal.clone(),
+        )
+    }
+
+    #[tracing::instrument(level = "trace", skip(self, cwd, prompt, event_sender))]
     fn run_new_thread_stream_request(
         &self,
         cwd: &str,
         prompt: &str,
         options: ConversationTurnOptions,
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()> {
         /*
          * New conversation streaming creates a thread, emits ThreadPrepared for immediate TUI state, then starts a turn.
@@ -199,11 +429,14 @@ impl CodexAppServerAdapter {
             })?;
             let thread_id = thread_response.thread.id.clone();
             emit_codex_app_server_launch_attachment(&event_sender);
-            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
-                thread_id: thread_id.clone(),
-                title: thread_title(&thread_response.thread),
-                cwd: thread_response.thread.cwd.clone(),
-            });
+            let _ = AppServerEventSender::send(
+                &event_sender,
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: thread_id.clone(),
+                    title: thread_title(&thread_response.thread),
+                    cwd: thread_response.thread.cwd.clone(),
+                },
+            );
 
             self.start_turn_and_wait_for_stream(
                 connection,
@@ -225,12 +458,16 @@ impl CodexAppServerAdapter {
         finish_stream_result(result, &event_sender)
     }
 
-    #[tracing::instrument(level = "trace", skip(self, event_sender))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, workspace_directory, prompt, event_sender, continuation_permit)
+    )]
     fn run_hidden_planning_thread_stream(
         &self,
         workspace_directory: &str,
         prompt: &str,
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
+        continuation_permit: Option<PostTurnContinuationPermit>,
     ) -> Result<()> {
         /*
          * Hidden planning workers are app-server threads, but they are isolated from the main user conversation.
@@ -253,11 +490,19 @@ impl CodexAppServerAdapter {
             })
         });
         let result = self.with_isolated_streaming_runtime(|connection| {
+            if continuation_permit
+                .as_ref()
+                .is_some_and(|permit| !permit.is_current())
+            {
+                anyhow::bail!(
+                    "post-turn continuation was superseded before hidden planning thread launch"
+                );
+            }
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace_directory.to_string()),
-                approval_policy: Some(self.execution_policy.approval_policy),
-                approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(self.execution_policy.sandbox_mode),
+                approval_policy: Some(ApprovalPolicyValue::Never),
+                approvals_reviewer: None,
+                sandbox: Some(SandboxModeValue::ReadOnly),
                 model: Some(PLANNING_WORKER_MODEL.to_string()),
                 developer_instructions: Some(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
                 service_name: Some(PLANNING_WORKER_SERVICE_NAME.to_string()),
@@ -265,13 +510,30 @@ impl CodexAppServerAdapter {
             })?;
             let thread_id = thread_response.thread.id.clone();
             emit_codex_app_server_launch_attachment(&event_sender);
-            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
-                thread_id: thread_id.clone(),
-                title: thread_title(&thread_response.thread),
-                cwd: thread_response.thread.cwd.clone(),
-            });
+            let _ = AppServerEventSender::send(
+                &event_sender,
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: thread_id.clone(),
+                    title: thread_title(&thread_response.thread),
+                    cwd: thread_response.thread.cwd.clone(),
+                },
+            );
 
-            self.start_turn_and_wait_for_stream(
+            if continuation_permit
+                .as_ref()
+                .is_some_and(|permit| !permit.is_current())
+            {
+                anyhow::bail!(
+                    "post-turn continuation was superseded before hidden planning turn launch"
+                );
+            }
+            let local_interrupt_signal = AppServerTurnInterruptSignal::default();
+            let observed_interrupt_generation = local_interrupt_signal.current_generation();
+            let _continuation_watcher = PlanningWorkerContinuationWatcher::start(
+                continuation_permit.clone(),
+                local_interrupt_signal.clone(),
+            );
+            self.start_turn_and_wait_for_stream_with_policy(
                 connection,
                 self.planning_worker_turn_input(prompt),
                 Some(PLANNING_WORKER_MODEL),
@@ -287,6 +549,11 @@ impl CodexAppServerAdapter {
                     ),
                     thread_id: thread_id.clone(),
                 },
+                &local_interrupt_signal,
+                observed_interrupt_generation,
+                ApprovalPolicyValue::Never,
+                None,
+                SandboxModeValue::ReadOnly,
             )
         });
         match &result {
@@ -306,7 +573,7 @@ impl CodexAppServerAdapter {
                     "phase": "failed",
                     "decision": "return_error",
                     "service_name": PLANNING_WORKER_SERVICE_NAME,
-                    "error": error.to_string(),
+                    "error_summary": persisted_error_summary(error),
                 })
             }),
         }
@@ -416,9 +683,12 @@ impl CodexAppServerAdapter {
          * child is busy streaming. It intentionally does not mutate shared runtime
          * state, because the lock holder may still be reducing the authoritative turn.
          */
-        let mut connection = self.open_connection()?;
+        let mut connection = self.open_unattended_connection()?;
         let initialize_response = connection.initialize()?;
-        let initialize_detail = initialize_detail(&initialize_response);
+        let initialize_detail = bounded_stream_text(
+            initialize_detail(&initialize_response),
+            MAX_STREAM_METADATA_BYTES,
+        );
         let attachment_profile = TerminalBridgeAttachmentProfile::codex_app_server_launch();
         let value = operation(&mut connection, &initialize_detail)?;
         let mut warnings = connection.take_warnings();
@@ -444,7 +714,7 @@ impl CodexAppServerAdapter {
          * Any warnings are drained locally because hidden workers report meaningful
          * output through the stream events and worker result reduction.
          */
-        let mut connection = self.open_connection()?;
+        let mut connection = self.open_unattended_connection()?;
         connection.initialize()?;
         let result = operation(&mut connection);
         let _ = connection.take_warnings();
@@ -494,15 +764,60 @@ impl CodexAppServerAdapter {
         }
     }
 
-    #[tracing::instrument(level = "trace", skip(self, connection, event_sender))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, connection, input, event_sender, prompt_trace_context)
+    )]
     fn start_turn_and_wait_for_stream(
         &self,
         connection: &mut AppServerConnection,
         input: Vec<TurnInputItem>,
         model: Option<&str>,
         effort: Option<ReasoningEffortValue>,
-        event_sender: &Sender<ConversationStreamEvent>,
+        event_sender: &ConversationStreamSender,
         prompt_trace_context: AppServerPromptTraceContext,
+    ) -> Result<()> {
+        let observed_interrupt_generation = self.turn_interrupt_signal.current_generation();
+        self.start_turn_and_wait_for_stream_with_policy(
+            connection,
+            input,
+            model,
+            effort,
+            event_sender,
+            prompt_trace_context,
+            &self.turn_interrupt_signal,
+            observed_interrupt_generation,
+            self.execution_policy.approval_policy,
+            self.execution_policy.approvals_reviewer,
+            self.execution_policy.sandbox_mode,
+        )
+    }
+
+    #[tracing::instrument(
+        level = "trace",
+        skip(
+            self,
+            connection,
+            input,
+            event_sender,
+            prompt_trace_context,
+            interrupt_signal
+        )
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn start_turn_and_wait_for_stream_with_policy(
+        &self,
+        connection: &mut AppServerConnection,
+        input: Vec<TurnInputItem>,
+        model: Option<&str>,
+        effort: Option<ReasoningEffortValue>,
+        event_sender: &ConversationStreamSender,
+        prompt_trace_context: AppServerPromptTraceContext,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+        approval_policy: ApprovalPolicyValue,
+        approvals_reviewer: Option<ApprovalsReviewerValue>,
+        sandbox_mode: SandboxModeValue,
     ) -> Result<()> {
         /*
          * The interrupt generation is sampled before turn/start so a stale stop from a
@@ -510,66 +825,85 @@ impl CodexAppServerAdapter {
          * against this snapshot and translates only later generations into
          * turn/interrupt.
          */
-        let observed_interrupt_generation = self.turn_interrupt_signal.current_generation();
-        let started_at = Utc::now().to_rfc3339();
-        let input_records = prompt_log_input_records(&input);
+        let prompt_logging_enabled = self.prompt_log_port.is_enabled();
+        let started_at = prompt_logging_enabled.then(|| Utc::now().to_rfc3339());
+        let mut input_records = prompt_logging_enabled.then(|| prompt_log_input_records(&input));
         let trace_thread_id = prompt_trace_context.thread_id.clone();
-        let turn_response = match connection.start_turn(TurnStartParams {
-            thread_id: trace_thread_id.clone(),
-            input,
-            approval_policy: Some(self.execution_policy.approval_policy),
-            approvals_reviewer: self.execution_policy.approvals_reviewer,
-            sandbox_policy: Some(self.execution_policy.sandbox_mode.as_turn_sandbox_policy()),
-            model: model.map(str::to_string),
-            effort,
-        }) {
+        let turn_response = match connection.start_turn_with_event_sender(
+            TurnStartParams {
+                thread_id: trace_thread_id.clone(),
+                input,
+                approval_policy: Some(approval_policy),
+                approvals_reviewer,
+                sandbox_policy: Some(sandbox_mode.as_turn_sandbox_policy()),
+                model: model.map(str::to_string),
+                effort,
+            },
+            event_sender,
+            interrupt_signal,
+            observed_interrupt_generation,
+        ) {
             Ok(response) => response,
             Err(error) => {
-                self.record_prompt_interaction(AppServerPromptInteractionRecord {
-                    sequence: 0,
-                    interaction_id: next_prompt_log_interaction_id(),
-                    session_kind: prompt_trace_context.session_kind,
-                    operation: prompt_trace_context.operation,
-                    status: "failed".to_string(),
-                    workspace_dir: prompt_trace_context.workspace_dir,
-                    thread_id: Some(trace_thread_id),
-                    turn_id: None,
-                    service_name: prompt_trace_context.service_name,
-                    model: model.map(str::to_string),
-                    reasoning_effort: effort.map(reasoning_effort_label).map(str::to_string),
-                    developer_instructions: prompt_trace_context.developer_instructions,
-                    input_items: input_records,
-                    output_items: Vec::new(),
-                    error_message: Some(error.to_string()),
-                    started_at,
-                    completed_at: Utc::now().to_rfc3339(),
-                });
+                if prompt_logging_enabled {
+                    self.record_prompt_interaction(AppServerPromptInteractionRecord {
+                        sequence: 0,
+                        interaction_id: next_prompt_log_interaction_id(),
+                        session_kind: prompt_trace_context.session_kind,
+                        operation: prompt_trace_context.operation,
+                        status: "failed".to_string(),
+                        workspace_dir: prompt_trace_context.workspace_dir,
+                        thread_id: Some(trace_thread_id),
+                        turn_id: None,
+                        service_name: prompt_trace_context.service_name,
+                        model: model.map(str::to_string),
+                        reasoning_effort: effort.map(reasoning_effort_label).map(str::to_string),
+                        developer_instructions: prompt_trace_context.developer_instructions,
+                        input_items: input_records.take().unwrap_or_default(),
+                        output_items: Vec::new(),
+                        error_message: Some(persisted_error_summary(&error)),
+                        started_at: started_at.unwrap_or_default(),
+                        completed_at: Utc::now().to_rfc3339(),
+                    });
+                }
                 return Err(error);
             }
         };
 
-        let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
-            turn_id: turn_response.turn.id.clone(),
-        });
+        let _ = AppServerEventSender::send(
+            event_sender,
+            ConversationStreamEvent::TurnStarted {
+                turn_id: turn_response.turn.id.clone(),
+            },
+        );
 
-        let output_capture = Arc::new(Mutex::new(AppServerPromptOutputCapture::default()));
-        let (stream_event_sender, forwarder) =
-            prompt_log_stream_forwarder(event_sender.clone(), output_capture.clone());
+        if !prompt_logging_enabled {
+            return connection.wait_for_turn_stream(
+                &trace_thread_id,
+                &turn_response.turn.id,
+                interrupt_signal,
+                observed_interrupt_generation,
+                event_sender,
+            );
+        }
+
+        let (stream_event_sender, capture_worker) =
+            prompt_log_stream_forwarder(event_sender.clone());
         let stream_result = connection.wait_for_turn_stream(
             &trace_thread_id,
             &turn_response.turn.id,
-            &self.turn_interrupt_signal,
+            interrupt_signal,
             observed_interrupt_generation,
             &stream_event_sender,
         );
         drop(stream_event_sender);
-        if forwarder.join().is_err() {
-            tracing::warn!("app-server prompt log stream forwarder panicked");
-        }
-        let output_items = output_capture
-            .lock()
-            .map(|capture| capture.output_items.clone())
-            .unwrap_or_default();
+        let output_items = match capture_worker.join() {
+            Ok(capture) => capture.output_items,
+            Err(_) => {
+                tracing::warn!("app-server prompt log capture worker panicked");
+                Vec::new()
+            }
+        };
         self.record_prompt_interaction(AppServerPromptInteractionRecord {
             sequence: 0,
             interaction_id: next_prompt_log_interaction_id(),
@@ -587,10 +921,10 @@ impl CodexAppServerAdapter {
             model: model.map(str::to_string),
             reasoning_effort: effort.map(reasoning_effort_label).map(str::to_string),
             developer_instructions: prompt_trace_context.developer_instructions,
-            input_items: input_records,
+            input_items: input_records.unwrap_or_default(),
             output_items,
-            error_message: stream_result.as_ref().err().map(ToString::to_string),
-            started_at,
+            error_message: stream_result.as_ref().err().map(persisted_error_summary),
+            started_at: started_at.unwrap_or_default(),
             completed_at: Utc::now().to_rfc3339(),
         });
 
@@ -629,6 +963,7 @@ impl CodexAppServerAdapter {
     }
 
     fn record_prompt_interaction(&self, record: AppServerPromptInteractionRecord) {
+        let record = record.into_bounded();
         let workspace_dir = record.workspace_dir.clone();
         if let Err(error) = self
             .prompt_log_port
@@ -636,6 +971,39 @@ impl CodexAppServerAdapter {
         {
             tracing::warn!(%workspace_dir, %error, "failed to record app-server prompt interaction");
         }
+    }
+
+    fn active_policy_summary(&self) -> String {
+        format!(
+            "app-server policy: {}, {}",
+            self.execution_policy.summary(),
+            self.connection_config.environment_policy_summary()
+        )
+    }
+
+    fn elevated_policy_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut elevated_risks = self
+            .execution_policy
+            .elevated_risk_labels()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if self.connection_config.uses_full_process_environment() {
+            elevated_risks.push("process-env=all inherits parent secrets".to_string());
+        }
+        if self.connection_config.uses_api_key_auth() {
+            elevated_risks.push(
+                "api-key-auth forwards OPENAI_API_KEY/CODEX_API_KEY to app-server".to_string(),
+            );
+        }
+        if !elevated_risks.is_empty() {
+            warnings.push(format!(
+                "elevated-risk app-server policy: {}",
+                elevated_risks.join(", ")
+            ));
+        }
+        warnings
     }
 }
 
@@ -654,13 +1022,20 @@ impl StartupProbePort for CodexAppServerAdapter {
             },
         )?;
         let (initialize_detail, account_response) = output.value;
+        let initialize_detail = format!("{initialize_detail} / {}", self.active_policy_summary());
 
+        let mut warnings = output.warnings;
+        warnings.extend(self.elevated_policy_warnings());
+        sort_and_dedup_warnings(&mut warnings);
         Ok(AppServerStartupContext {
             attachment_profile: output.attachment_profile,
             initialize_detail,
-            account_detail: account_response.to_summary_text(),
+            account_detail: bounded_stream_text(
+                account_response.to_summary_text(),
+                MAX_STREAM_METADATA_BYTES,
+            ),
             account_ok: account_response.is_authenticated(),
-            warnings: output.warnings,
+            warnings,
         })
     }
 }
@@ -672,17 +1047,26 @@ impl SessionCatalogPort for CodexAppServerAdapter {
          * pagination, and source metadata. This adapter only maps wire records to
          * SessionSummary and preserves next_cursor for future catalog expansion.
          */
+        let catalog_limit = request.limit.min(MAX_SESSION_CATALOG_ITEMS);
         let output =
             self.with_shared_runtime(SharedRuntimeRequestKind::RecentSessions, |connection, _| {
                 connection.list_threads(ThreadListParams {
-                    limit: Some(request.limit),
+                    limit: Some(catalog_limit),
                     ..ThreadListParams::default()
                 })
             })?;
+        let mut warnings = output.warnings;
+        if output.value.data.len() > catalog_limit {
+            warnings.push(format!(
+                "app-server returned {} sessions for a bounded catalog limit of {catalog_limit}; extra records were ignored",
+                output.value.data.len()
+            ));
+        }
         let items = output
             .value
             .data
             .into_iter()
+            .take(catalog_limit)
             .map(to_session_summary)
             .collect::<Vec<_>>();
 
@@ -690,8 +1074,11 @@ impl SessionCatalogPort for CodexAppServerAdapter {
             SessionCatalogTier::ProviderBackedCatalog,
             RecentSessions {
                 items,
-                warnings: output.warnings,
-                next_cursor: output.value.next_cursor,
+                warnings,
+                next_cursor: output
+                    .value
+                    .next_cursor
+                    .map(|cursor| bounded_stream_text(cursor, MAX_STREAM_IDENTIFIER_BYTES)),
             },
         ))
     }
@@ -728,23 +1115,31 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         Ok(())
     }
 
+    fn resolve_approval_request(
+        &self,
+        approval_id: &str,
+        decision: ConversationApprovalDecision,
+    ) -> Result<()> {
+        self.approval_broker.resolve(approval_id, decision)
+    }
+
     fn run_new_thread_stream(
         &self,
         cwd: &str,
         prompt: &str,
         options: ConversationTurnOptions,
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()> {
         self.run_new_thread_stream_request(cwd, prompt, options, event_sender)
     }
 
-    #[tracing::instrument(level = "trace", skip(self, event_sender))]
+    #[tracing::instrument(level = "trace", skip(self, thread_id, prompt, event_sender))]
     fn run_turn_stream(
         &self,
         thread_id: &str,
         prompt: &str,
         options: ConversationTurnOptions,
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()> {
         /*
          * Existing-thread streaming reattaches before turn/start so app-server restores
@@ -784,24 +1179,33 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
 }
 
 impl PlanningThreadLauncher for CodexAppServerAdapter {
-    #[tracing::instrument(level = "trace", skip(self, event_sender))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, workspace_directory, prompt, event_sender, continuation_permit)
+    )]
     fn run_hidden_planning_thread(
         &self,
         workspace_directory: &str,
         prompt: &str,
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
+        continuation_permit: Option<PostTurnContinuationPermit>,
     ) -> Result<()> {
         // PlanningWorkerPort depends on this narrow launcher trait so tests can fake the stream source.
-        self.run_hidden_planning_thread_stream(workspace_directory, prompt, event_sender)
+        self.run_hidden_planning_thread_stream(
+            workspace_directory,
+            prompt,
+            event_sender,
+            continuation_permit,
+        )
     }
 }
 
 impl ParallelAgentWorkerPort for CodexAppServerAdapter {
-    #[tracing::instrument(level = "trace", skip(self, event_sender))]
+    #[tracing::instrument(level = "trace", skip(self, request, event_sender))]
     fn run_isolated_new_thread_stream(
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()> {
         // Parallel worker sessions use isolated processes but persist app-server threads so `:peek` can read them later.
         let result = self.with_isolated_streaming_runtime(|connection| {
@@ -817,11 +1221,14 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
             })?;
             let thread_id = thread_response.thread.id.clone();
             emit_codex_app_server_launch_attachment(&event_sender);
-            let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
-                thread_id: thread_id.clone(),
-                title: thread_title(&thread_response.thread),
-                cwd: thread_response.thread.cwd.clone(),
-            });
+            let _ = AppServerEventSender::send(
+                &event_sender,
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: thread_id.clone(),
+                    title: thread_title(&thread_response.thread),
+                    cwd: thread_response.thread.cwd.clone(),
+                },
+            );
 
             let stream_result = self.start_turn_and_wait_for_stream(
                 connection,
@@ -843,7 +1250,7 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
             {
                 tracing::warn!(
                     %thread_id,
-                    %error,
+                    error_chain_depth = error.chain().count(),
                     "failed to archive completed parallel worker thread"
                 );
             }
@@ -870,48 +1277,113 @@ struct AppServerPromptOutputCapture {
 }
 
 impl AppServerPromptOutputCapture {
-    fn record_event(&mut self, event: &ConversationStreamEvent) {
-        if let ConversationStreamEvent::AgentMessageCompleted {
-            item_id,
-            phase,
-            text,
-        } = event
+    fn record(&mut self, record: AppServerPromptOutputRecord) {
+        if self.output_items.len() < APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION {
+            self.output_items.push(record);
+        }
+    }
+}
+
+struct PromptLogStreamSender {
+    event_sender: ConversationStreamSender,
+    capture_sender: mpsc::SyncSender<AppServerPromptOutputRecord>,
+}
+
+impl AppServerEventSender for PromptLogStreamSender {
+    fn send(&self, event: ConversationStreamEvent) -> std::result::Result<(), ()> {
+        let event = bounded_app_server_stream_event(event);
+        let capture_record = prompt_log_output_record(&event);
+        let result = self.event_sender.send(event).map_err(|_| ());
+        if result.is_ok()
+            && let Some(record) = capture_record
         {
-            self.output_items.push(AppServerPromptOutputRecord::new(
-                item_id.clone(),
-                phase.clone(),
-                text.clone(),
-            ));
+            // Prompt logging is diagnostic-only. A saturated queue drops capture
+            // records instead of delaying the authoritative UI event stream.
+            let _ = self.capture_sender.try_send(record);
+        }
+        result
+    }
+
+    fn try_send(
+        &self,
+        event: ConversationStreamEvent,
+    ) -> std::result::Result<(), AppServerEventTrySendError> {
+        let event = bounded_app_server_stream_event(event);
+        let capture_record = prompt_log_output_record(&event);
+        match self.event_sender.try_send(event) {
+            Ok(()) => {
+                if let Some(record) = capture_record {
+                    let _ = self.capture_sender.try_send(record);
+                }
+                Ok(())
+            }
+            Err(mpsc::TrySendError::Full(_)) => Err(AppServerEventTrySendError::Full),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(AppServerEventTrySendError::Disconnected)
+            }
         }
     }
 }
 
 fn prompt_log_stream_forwarder(
-    event_sender: Sender<ConversationStreamEvent>,
-    output_capture: Arc<Mutex<AppServerPromptOutputCapture>>,
-) -> (Sender<ConversationStreamEvent>, thread::JoinHandle<()>) {
-    let (forward_tx, forward_rx) = mpsc::channel();
+    event_sender: ConversationStreamSender,
+) -> (
+    PromptLogStreamSender,
+    thread::JoinHandle<AppServerPromptOutputCapture>,
+) {
+    let (capture_sender, capture_receiver) =
+        mpsc::sync_channel(PROMPT_LOG_CAPTURE_CHANNEL_CAPACITY);
     let handle = thread::spawn(move || {
-        for event in forward_rx {
-            if let Ok(mut capture) = output_capture.lock() {
-                capture.record_event(&event);
-            }
-            let _ = event_sender.send(event);
+        let mut capture = AppServerPromptOutputCapture::default();
+        for record in capture_receiver {
+            capture.record(record);
         }
+        capture
     });
-    (forward_tx, handle)
+    (
+        PromptLogStreamSender {
+            event_sender,
+            capture_sender,
+        },
+        handle,
+    )
+}
+
+fn prompt_log_output_record(
+    event: &ConversationStreamEvent,
+) -> Option<AppServerPromptOutputRecord> {
+    let ConversationStreamEvent::AgentMessageCompleted {
+        item_id,
+        phase,
+        text,
+    } = event
+    else {
+        return None;
+    };
+    Some(AppServerPromptOutputRecord::new(
+        bounded_prompt_log_string(item_id, APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS),
+        phase.as_deref().map(|phase| {
+            bounded_prompt_log_string(phase, APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS)
+        }),
+        bounded_prompt_log_string(text, APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS),
+    ))
 }
 
 fn prompt_log_input_records(input: &[TurnInputItem]) -> Vec<AppServerPromptInputRecord> {
     input
         .iter()
+        .take(APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION)
         .map(|item| match item {
-            TurnInputItem::Text { text } => {
-                AppServerPromptInputRecord::new("text", "turn input", text.clone())
-            }
-            TurnInputItem::Skill { name, path } => {
-                AppServerPromptInputRecord::new("skill", name.clone(), path.clone())
-            }
+            TurnInputItem::Text { text } => AppServerPromptInputRecord::new(
+                "text",
+                "turn input",
+                bounded_prompt_log_string(text, APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS),
+            ),
+            TurnInputItem::Skill { name, path } => AppServerPromptInputRecord::new(
+                "skill",
+                bounded_prompt_log_string(name, APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS),
+                bounded_prompt_log_string(path, APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS),
+            ),
         })
         .collect()
 }
@@ -936,77 +1408,107 @@ fn next_prompt_log_interaction_id() -> String {
     )
 }
 
-fn finish_stream_result(
-    result: Result<()>,
-    event_sender: &Sender<ConversationStreamEvent>,
-) -> Result<()> {
+fn finish_stream_result(result: Result<()>, event_sender: &ConversationStreamSender) -> Result<()> {
     /*
      * Stream callers need both an Err return and a Failed event. The Err drives
      * service-level error handling, while the event lets TUI state leave streaming
      * mode even when the caller does not own the render state directly.
      */
     if let Err(error) = &result {
-        let _ = event_sender.send(ConversationStreamEvent::Failed {
-            message: error.to_string(),
-        });
+        let _ = AppServerEventSender::send(
+            event_sender,
+            ConversationStreamEvent::Failed {
+                message: error.to_string(),
+            },
+        );
     }
 
     result
 }
 
+pub(super) fn persisted_error_summary(error: &anyhow::Error) -> String {
+    format!(
+        "app-server error redacted (message_chars={}, chain_depth={})",
+        error.to_string().chars().count(),
+        error.chain().count()
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-    use std::sync::mpsc;
-    use std::sync::{Mutex, MutexGuard};
+    #[cfg(unix)]
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+    #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
     use anyhow::Result;
+    #[cfg(unix)]
     use serde_json::Value;
 
-    use super::connection::AppServerConnectionConfig;
+    #[cfg(unix)]
+    use super::PlanningThreadLauncher;
+    use super::connection::{AppServerConnectionConfig, AppServerTurnInterruptSignal};
     use super::execution_policy::AppServerExecutionPolicy;
-    use super::protocol::{ReasoningEffortValue, ThreadStartParams, TurnInputItem};
+    use super::protocol::{
+        ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
+        ThreadStartParams, TurnInputItem,
+    };
     use super::{
-        AppServerPromptOutputCapture, CodexAppServerAdapter,
+        AppServerEventSender, AppServerPromptOutputCapture, CodexAppServerAdapter,
+        MAX_STREAM_CHANGED_PATHS, MAX_STREAM_COMPLETED_MESSAGE_BYTES, MAX_STREAM_DELTA_BYTES,
         PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
-        PlanningThreadLauncher, finish_stream_result, prompt_log_input_records,
+        PlanningWorkerContinuationWatcher, STREAM_TRUNCATION_MARKER,
+        bounded_app_server_stream_event, finish_stream_result, persisted_error_summary,
+        prompt_log_input_records, prompt_log_output_record, prompt_log_stream_forwarder,
         reasoning_effort_label,
     };
+    #[cfg(unix)]
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot,
         AppServerPromptLogPort,
     };
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+    #[cfg(unix)]
     use crate::application::port::outbound::parallel_agent_worker_port::{
         ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
     };
+    #[cfg(unix)]
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    #[cfg(unix)]
     use crate::application::port::outbound::startup_probe_port::StartupProbePort;
-    use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
-    use crate::domain::conversation::{
-        ConversationReasoningEffort, ConversationRuntimeControlTruth, ConversationTurnOptions,
+    use crate::application::service::conversation_runtime_event::{
+        ConversationStreamEvent, conversation_stream_channel,
     };
+    use crate::domain::conversation::{
+        ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationRuntimeControlTruth,
+    };
+    #[cfg(unix)]
+    use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
+    #[cfg(unix)]
     use crate::domain::recent_sessions::{
         SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
     };
 
-    static FAKE_CODEX_ENV_LOCK: Mutex<()> = Mutex::new(());
-
+    #[cfg(unix)]
     #[test]
     fn startup_catalog_and_snapshot_ports_reuse_shared_app_server_runtime() {
         let fake_codex = FakeCodex::install("shared-runtime");
-        let adapter = test_adapter();
+        let adapter = test_adapter_with_fake(&fake_codex);
 
         let startup = adapter
             .load_startup_context()
             .expect("startup context should come from fake app-server");
         assert_eq!(
             startup.initialize_detail,
-            "linux-x64 / unix / codex-app-server/fake"
+            "linux-x64 / unix / codex-app-server/fake / app-server policy: approval=on-request, reviewer=user, sandbox=workspace-write, process-env=scrubbed, api-key-auth=disabled, shell-env=core"
         );
         assert_eq!(
             startup.account_detail,
@@ -1050,11 +1552,12 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn shared_runtime_retries_after_first_failure_and_returns_retry_notice() {
-        let _fake_codex =
+        let fake_codex =
             FakeCodex::install_with_scenario("shared-runtime-retry", "fail_account_once");
-        let adapter = test_adapter();
+        let adapter = test_adapter_with_fake(&fake_codex);
 
         let startup = adapter
             .load_startup_context()
@@ -1067,11 +1570,12 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
     #[test]
     fn shared_runtime_final_failure_keeps_request_kind_context() {
-        let _fake_codex =
+        let fake_codex =
             FakeCodex::install_with_scenario("shared-runtime-final-failure", "fail_account_always");
-        let adapter = test_adapter();
+        let adapter = test_adapter_with_fake(&fake_codex);
 
         let error = adapter
             .load_startup_context()
@@ -1082,10 +1586,11 @@ mod tests {
         assert!(message.contains("forced account/read failure"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn short_requests_use_isolated_fallback_while_shared_runtime_is_locked() {
-        let _fake_codex = FakeCodex::install("isolated-fallback-success");
-        let adapter = test_adapter();
+        let fake_codex = FakeCodex::install("isolated-fallback-success");
+        let adapter = test_adapter_with_fake(&fake_codex);
         let _stream_guard = adapter
             .shared_runtime
             .lock()
@@ -1111,13 +1616,14 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
     #[test]
     fn isolated_fallback_final_failure_reports_busy_stream_context() {
-        let _fake_codex = FakeCodex::install_with_scenario(
+        let fake_codex = FakeCodex::install_with_scenario(
             "isolated-fallback-final-failure",
             "fail_thread_list_always",
         );
-        let adapter = test_adapter();
+        let adapter = test_adapter_with_fake(&fake_codex);
         let _stream_guard = adapter
             .shared_runtime
             .lock()
@@ -1132,12 +1638,13 @@ mod tests {
         assert!(message.contains("forced thread/list failure"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn user_thread_streams_emit_launch_reattach_and_completion_events() {
         let fake_codex = FakeCodex::install("user-streams");
-        let adapter = test_adapter();
+        let adapter = test_adapter_with_fake(&fake_codex);
 
-        let (new_tx, new_rx) = mpsc::channel();
+        let (new_tx, new_rx) = conversation_stream_channel();
         adapter
             .run_new_thread_stream(
                 "/repo",
@@ -1151,7 +1658,7 @@ mod tests {
         assert!(has_thread_prepared(&new_events, "started-thread"));
         assert!(has_turn_completed(&new_events));
 
-        let (resume_tx, resume_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = conversation_stream_channel();
         adapter
             .run_turn_stream(
                 "resume-thread",
@@ -1187,22 +1694,23 @@ mod tests {
         assert_eq!(turn_starts[1]["params"]["effort"], "high");
     }
 
+    #[cfg(unix)]
     #[test]
     fn user_thread_streams_pass_turn_option_overrides_to_app_server() {
         let fake_codex = FakeCodex::install("user-turn-options");
-        let adapter = test_adapter();
+        let adapter = test_adapter_with_fake(&fake_codex);
         let options = ConversationTurnOptions {
             model: Some("gpt-5.4".to_string()),
             reasoning_effort: Some(ConversationReasoningEffort::High),
         };
 
-        let (new_tx, new_rx) = mpsc::channel();
+        let (new_tx, new_rx) = conversation_stream_channel();
         adapter
             .run_new_thread_stream("/repo", "start with overrides", options.clone(), new_tx)
             .expect("new thread stream should complete");
         assert!(has_turn_completed(&new_rx.try_iter().collect::<Vec<_>>()));
 
-        let (resume_tx, resume_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = conversation_stream_channel();
         adapter
             .run_turn_stream(
                 "resume-thread",
@@ -1232,20 +1740,21 @@ mod tests {
         assert_eq!(turn_starts[1]["params"]["effort"], "high");
     }
 
+    #[cfg(unix)]
     #[test]
     fn hidden_planning_stays_ephemeral_while_parallel_threads_are_readable_for_peek() {
         let fake_codex = FakeCodex::install("isolated-workers");
-        let adapter = test_adapter();
+        let adapter = test_adapter_with_fake(&fake_codex);
 
-        let (planning_tx, planning_rx) = mpsc::channel();
+        let (planning_tx, planning_rx) = conversation_stream_channel();
         adapter
-            .run_hidden_planning_thread("/repo", "refresh queue", planning_tx)
+            .run_hidden_planning_thread("/repo", "refresh queue", planning_tx, None)
             .expect("hidden planning worker stream should complete");
         let planning_events = planning_rx.try_iter().collect::<Vec<_>>();
         assert!(has_thread_prepared(&planning_events, "started-thread"));
         assert!(has_turn_completed(&planning_events));
 
-        let (parallel_tx, parallel_rx) = mpsc::channel();
+        let (parallel_tx, parallel_rx) = conversation_stream_channel();
         adapter
             .run_isolated_new_thread_stream(
                 ParallelAgentWorkerStreamRequest {
@@ -1274,6 +1783,8 @@ mod tests {
         );
         assert_eq!(thread_starts[0]["params"]["model"], "gpt-5.4");
         assert_eq!(thread_starts[0]["params"]["ephemeral"], true);
+        assert_eq!(thread_starts[0]["params"]["approvalPolicy"], "never");
+        assert_eq!(thread_starts[0]["params"]["sandbox"], "read-only");
         assert!(
             thread_starts[0]["params"]["developerInstructions"]
                 .as_str()
@@ -1289,6 +1800,15 @@ mod tests {
             thread_starts[1]["params"]["developerInstructions"],
             "You are an isolated worker."
         );
+        let turn_starts = requests
+            .iter()
+            .filter(|request| request["method"] == "turn/start")
+            .collect::<Vec<_>>();
+        assert_eq!(turn_starts[0]["params"]["approvalPolicy"], "never");
+        assert_eq!(
+            turn_starts[0]["params"]["sandboxPolicy"]["type"],
+            "readOnly"
+        );
         let thread_archives = requests
             .iter()
             .filter(|request| request["method"] == "thread/archive")
@@ -1298,18 +1818,42 @@ mod tests {
     }
 
     #[test]
+    fn hidden_planning_continuation_watcher_interrupts_only_its_local_signal() {
+        let gate = crate::domain::planning::PostTurnContinuationGate::default();
+        let permit = gate.capture();
+        let local_signal = AppServerTurnInterruptSignal::default();
+        let unrelated_signal = AppServerTurnInterruptSignal::default();
+        let local_generation = local_signal.current_generation();
+        let unrelated_generation = unrelated_signal.current_generation();
+        let _watcher = PlanningWorkerContinuationWatcher::start(Some(permit), local_signal.clone())
+            .expect("continuation permit should create a watcher");
+
+        gate.advance();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while local_signal.current_generation() == local_generation
+            && std::time::Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(local_signal.current_generation() > local_generation);
+        assert_eq!(unrelated_signal.current_generation(), unrelated_generation);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn app_server_streams_record_prompt_log_entries() {
         let fake_codex = FakeCodex::install("prompt-log");
         let prompt_log = Arc::new(RecordingPromptLogPort::default());
         let adapter = CodexAppServerAdapter::with_configs_and_prompt_log(
             "test-client",
             "test-version",
-            AppServerConnectionConfig::default(),
+            fake_codex.connection_config(),
             AppServerExecutionPolicy::default(),
             prompt_log.clone(),
         );
 
-        let (main_tx, main_rx) = mpsc::channel();
+        let (main_tx, main_rx) = conversation_stream_channel();
         adapter
             .run_new_thread_stream(
                 "/repo",
@@ -1320,7 +1864,7 @@ mod tests {
             .expect("main stream should complete");
         assert!(has_turn_completed(&main_rx.try_iter().collect::<Vec<_>>()));
 
-        let (worker_tx, worker_rx) = mpsc::channel();
+        let (worker_tx, worker_rx) = conversation_stream_channel();
         adapter
             .run_isolated_new_thread_stream(
                 ParallelAgentWorkerStreamRequest {
@@ -1354,20 +1898,48 @@ mod tests {
         assert!(!fake_codex.logged_methods().is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn disabled_prompt_log_skips_recording_and_stream_capture_path() {
+        let fake_codex = FakeCodex::install("prompt-log-disabled");
+        let adapter = CodexAppServerAdapter::with_configs_and_prompt_log(
+            "test-client",
+            "test-version",
+            fake_codex.connection_config(),
+            AppServerExecutionPolicy::default(),
+            Arc::new(DisabledPromptLogPort),
+        );
+        let (event_sender, event_receiver) = conversation_stream_channel();
+
+        adapter
+            .run_new_thread_stream(
+                "/repo",
+                "do not retain this prompt",
+                ConversationTurnOptions::default(),
+                event_sender,
+            )
+            .expect("disabled prompt logging should use the direct stream path");
+
+        assert!(has_turn_completed(
+            &event_receiver.try_iter().collect::<Vec<_>>()
+        ));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn stream_start_failures_emit_failed_event_and_failed_prompt_log_record() {
-        let _fake_codex =
+        let fake_codex =
             FakeCodex::install_with_scenario("stream-start-failure", "fail_turn_start");
         let prompt_log = Arc::new(RecordingPromptLogPort::default());
         let adapter = CodexAppServerAdapter::with_configs_and_prompt_log(
             "test-client",
             "test-version",
-            AppServerConnectionConfig::default(),
+            fake_codex.connection_config(),
             AppServerExecutionPolicy::default(),
             prompt_log.clone(),
         );
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = conversation_stream_channel();
         let error = adapter
             .run_new_thread_stream(
                 "/repo",
@@ -1392,6 +1964,12 @@ mod tests {
             records[0]
                 .error_message
                 .as_deref()
+                .is_some_and(|message| message.starts_with("app-server error redacted"))
+        );
+        assert!(
+            !records[0]
+                .error_message
+                .as_deref()
                 .is_some_and(|message| message.contains("forced turn/start failure"))
         );
 
@@ -1404,18 +1982,19 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
     #[test]
     fn prompt_log_append_errors_do_not_fail_streams() {
-        let _fake_codex = FakeCodex::install("prompt-log-append-failure");
+        let fake_codex = FakeCodex::install("prompt-log-append-failure");
         let adapter = CodexAppServerAdapter::with_configs_and_prompt_log(
             "test-client",
             "test-version",
-            AppServerConnectionConfig::default(),
+            fake_codex.connection_config(),
             AppServerExecutionPolicy::default(),
             Arc::new(FailingPromptLogPort),
         );
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = conversation_stream_channel();
         adapter
             .run_new_thread_stream(
                 "/repo",
@@ -1442,8 +2021,56 @@ mod tests {
     }
 
     #[test]
+    fn startup_policy_summary_is_informational_and_only_elevated_risks_warn() {
+        let adapter = test_adapter();
+        assert_eq!(
+            adapter.active_policy_summary(),
+            "app-server policy: approval=on-request, reviewer=user, sandbox=workspace-write, process-env=scrubbed, api-key-auth=disabled, shell-env=core"
+        );
+        assert!(adapter.elevated_policy_warnings().is_empty());
+
+        let elevated = CodexAppServerAdapter::with_configs(
+            "test-client",
+            "test-version",
+            AppServerConnectionConfig::default().with_test_elevated_environment(),
+            AppServerExecutionPolicy {
+                approval_policy: ApprovalPolicyValue::Never,
+                approvals_reviewer: Some(ApprovalsReviewerValue::GuardianSubagent),
+                sandbox_mode: SandboxModeValue::DangerFullAccess,
+            },
+        )
+        .elevated_policy_warnings();
+
+        assert_eq!(elevated.len(), 1);
+        assert!(elevated[0].starts_with("elevated-risk app-server policy:"));
+        for risk in [
+            "approval=never",
+            "sandbox=danger-full-access",
+            "automatic reviewer may auto-approve",
+            "process-env=all inherits parent secrets",
+        ] {
+            assert!(elevated[0].contains(risk));
+        }
+
+        let api_key_adapter = CodexAppServerAdapter::with_configs(
+            "test-client",
+            "test-version",
+            AppServerConnectionConfig::default().with_test_api_key_auth(),
+            AppServerExecutionPolicy::default(),
+        );
+        assert!(
+            api_key_adapter
+                .active_policy_summary()
+                .contains("api-key-auth=enabled")
+        );
+        let api_key_warnings = api_key_adapter.elevated_policy_warnings();
+        assert_eq!(api_key_warnings.len(), 1);
+        assert!(api_key_warnings[0].contains("OPENAI_API_KEY/CODEX_API_KEY"));
+    }
+
+    #[test]
     fn finish_stream_result_reports_failed_event_and_returns_error() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = conversation_stream_channel();
         let result = finish_stream_result(anyhow::Result::<()>::Err(anyhow::anyhow!("boom")), &tx);
 
         assert!(result.is_err());
@@ -1453,6 +2080,94 @@ mod tests {
                 message: "boom".to_string()
             }
         );
+    }
+
+    #[test]
+    fn app_server_stream_boundary_bounds_large_text_and_path_payloads() {
+        let completed =
+            bounded_app_server_stream_event(ConversationStreamEvent::AgentMessageCompleted {
+                item_id: "item-1".to_string(),
+                phase: Some("final".to_string()),
+                text: "a".repeat(MAX_STREAM_COMPLETED_MESSAGE_BYTES + 1),
+            });
+        let ConversationStreamEvent::AgentMessageCompleted { text, .. } = completed else {
+            panic!("completed message should remain the same event kind");
+        };
+        assert_eq!(
+            text.len(),
+            MAX_STREAM_COMPLETED_MESSAGE_BYTES + STREAM_TRUNCATION_MARKER.len()
+        );
+        assert!(text.ends_with(STREAM_TRUNCATION_MARKER));
+
+        let delta = bounded_app_server_stream_event(ConversationStreamEvent::AgentMessageDelta {
+            item_id: "item-1".to_string(),
+            phase: None,
+            delta: "한".repeat(MAX_STREAM_DELTA_BYTES),
+        });
+        let ConversationStreamEvent::AgentMessageDelta { delta, .. } = delta else {
+            panic!("delta should remain the same event kind");
+        };
+        assert!(delta.len() <= MAX_STREAM_DELTA_BYTES + STREAM_TRUNCATION_MARKER.len());
+        assert!(delta.ends_with(STREAM_TRUNCATION_MARKER));
+
+        let completion = bounded_app_server_stream_event(ConversationStreamEvent::TurnCompleted {
+            turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: (0..MAX_STREAM_CHANGED_PATHS + 1)
+                .map(|index| format!("docs/plan/{index}.md"))
+                .collect(),
+        });
+        let ConversationStreamEvent::TurnCompleted {
+            changed_planning_file_paths,
+            ..
+        } = completion
+        else {
+            panic!("turn completion should remain the same event kind");
+        };
+        assert_eq!(changed_planning_file_paths.len(), MAX_STREAM_CHANGED_PATHS);
+    }
+
+    #[test]
+    fn app_server_stream_boundary_preserves_approval_control_event_exactly() {
+        let event = ConversationStreamEvent::ApprovalRequested {
+            request: ConversationApprovalRequest {
+                approval_id: "approval-1".to_string(),
+                server_request_id: "request-1".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind: ConversationApprovalRequestKind::CommandExecution,
+                summary: "approve command".to_string(),
+                details: vec!["cargo test".to_string()],
+            },
+        };
+
+        assert_eq!(bounded_app_server_stream_event(event.clone()), event);
+    }
+
+    #[test]
+    fn app_server_sender_normalizes_payload_before_queue_admission() {
+        let (sender, receiver) = conversation_stream_channel();
+        AppServerEventSender::send(
+            &sender,
+            ConversationStreamEvent::StatusUpdated {
+                text: "x".repeat(super::MAX_STREAM_METADATA_BYTES + 1),
+            },
+        )
+        .expect("bounded event should be admitted");
+
+        let ConversationStreamEvent::StatusUpdated { text } =
+            receiver.recv().expect("normalized event should arrive")
+        else {
+            panic!("status event should remain the same event kind");
+        };
+        assert!(text.ends_with(STREAM_TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn persisted_error_summary_never_contains_the_error_payload() {
+        let secret = "private-app-server-error-payload";
+        let summary = persisted_error_summary(&anyhow::anyhow!(secret));
+
+        assert!(summary.starts_with("app-server error redacted"));
+        assert!(!summary.contains(secret));
     }
 
     #[test]
@@ -1531,18 +2246,70 @@ mod tests {
         assert_eq!(reasoning_effort_label(ReasoningEffortValue::XHigh), "xhigh");
 
         let mut capture = AppServerPromptOutputCapture::default();
-        capture.record_event(&ConversationStreamEvent::TurnCompleted {
-            turn_id: "turn-1".to_string(),
-            changed_planning_file_paths: Vec::new(),
-        });
+        assert!(
+            prompt_log_output_record(&ConversationStreamEvent::TurnCompleted {
+                turn_id: "turn-1".to_string(),
+                changed_planning_file_paths: Vec::new(),
+            })
+            .is_none()
+        );
         assert!(capture.output_items.is_empty());
-        capture.record_event(&ConversationStreamEvent::AgentMessageCompleted {
-            item_id: "agent-1".to_string(),
-            phase: Some("final".to_string()),
-            text: "done".to_string(),
-        });
+        capture.record(
+            prompt_log_output_record(&ConversationStreamEvent::AgentMessageCompleted {
+                item_id: "agent-1".to_string(),
+                phase: Some("final".to_string()),
+                text: "done".to_string(),
+            })
+            .expect("completed agent message should be captured"),
+        );
         assert_eq!(capture.output_items.len(), 1);
         assert_eq!(capture.output_items[0].text, "done");
+    }
+
+    #[test]
+    fn prompt_log_capture_bounds_large_utf8_streams_without_blocking_ui_delivery() {
+        let oversized = "한".repeat(super::APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS + 4_096);
+        let input = (0..(super::APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION + 8))
+            .map(|_| TurnInputItem::text(oversized.clone()))
+            .collect::<Vec<_>>();
+        let input_records = prompt_log_input_records(&input);
+        assert_eq!(
+            input_records.len(),
+            super::APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION
+        );
+        assert!(input_records.iter().all(|record| {
+            record.content.chars().count() == super::APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS
+        }));
+
+        let (ui_sender, ui_receiver) = conversation_stream_channel();
+        let ui_worker = std::thread::spawn(move || ui_receiver.iter().count());
+        let (capture_sender, capture_worker) = prompt_log_stream_forwarder(ui_sender);
+        let event_count = super::APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION * 16;
+        for index in 0..event_count {
+            capture_sender
+                .send(ConversationStreamEvent::AgentMessageCompleted {
+                    item_id: format!("agent-{index}"),
+                    phase: Some("final".to_string()),
+                    text: oversized.clone(),
+                })
+                .expect("prompt capture must not interrupt UI event delivery");
+        }
+        drop(capture_sender);
+
+        let capture = capture_worker
+            .join()
+            .expect("bounded prompt capture worker should complete");
+        assert_eq!(
+            ui_worker
+                .join()
+                .expect("UI stream collector should observe channel closure"),
+            event_count
+        );
+        assert!(capture.output_items.len() <= super::APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION);
+        assert!(!capture.output_items.is_empty());
+        assert!(capture.output_items.iter().all(|record| {
+            record.text.chars().count() == super::APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS
+        }));
     }
 
     fn test_adapter() -> CodexAppServerAdapter {
@@ -1554,11 +2321,23 @@ mod tests {
         )
     }
 
+    #[cfg(unix)]
+    fn test_adapter_with_fake(fake_codex: &FakeCodex) -> CodexAppServerAdapter {
+        CodexAppServerAdapter::with_configs(
+            "test-client",
+            "test-version",
+            fake_codex.connection_config(),
+            AppServerExecutionPolicy::default(),
+        )
+    }
+
+    #[cfg(unix)]
     #[derive(Default)]
     struct RecordingPromptLogPort {
         records: Mutex<Vec<AppServerPromptInteractionRecord>>,
     }
 
+    #[cfg(unix)]
     impl RecordingPromptLogPort {
         fn records(&self) -> Vec<AppServerPromptInteractionRecord> {
             self.records
@@ -1568,9 +2347,40 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct FailingPromptLogPort;
+    #[cfg(unix)]
+    struct DisabledPromptLogPort;
 
+    #[cfg(unix)]
+    impl AppServerPromptLogPort for DisabledPromptLogPort {
+        fn is_enabled(&self) -> bool {
+            false
+        }
+
+        fn append_app_server_prompt_interaction(
+            &self,
+            _workspace_dir: &str,
+            _record: AppServerPromptInteractionRecord,
+        ) -> Result<()> {
+            panic!("disabled prompt log must not receive records")
+        }
+
+        fn load_recent_app_server_prompt_interactions(
+            &self,
+            _workspace_dir: &str,
+            _limit: usize,
+        ) -> Result<AppServerPromptInteractionSnapshot> {
+            Ok(AppServerPromptInteractionSnapshot::empty())
+        }
+    }
+
+    #[cfg(unix)]
     impl AppServerPromptLogPort for FailingPromptLogPort {
+        fn is_enabled(&self) -> bool {
+            true
+        }
+
         fn append_app_server_prompt_interaction(
             &self,
             _workspace_dir: &str,
@@ -1590,7 +2400,12 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl AppServerPromptLogPort for RecordingPromptLogPort {
+        fn is_enabled(&self) -> bool {
+            true
+        }
+
         fn append_app_server_prompt_interaction(
             &self,
             _workspace_dir: &str,
@@ -1614,6 +2429,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn has_launch_attachment(events: &[ConversationStreamEvent]) -> bool {
         events.iter().any(|event| {
             matches!(
@@ -1624,6 +2440,7 @@ mod tests {
         })
     }
 
+    #[cfg(unix)]
     fn has_reattach_attachment(events: &[ConversationStreamEvent]) -> bool {
         events.iter().any(|event| {
             matches!(
@@ -1634,6 +2451,7 @@ mod tests {
         })
     }
 
+    #[cfg(unix)]
     fn has_thread_prepared(events: &[ConversationStreamEvent], thread_id: &str) -> bool {
         events.iter().any(|event| {
             matches!(
@@ -1644,63 +2462,70 @@ mod tests {
         })
     }
 
+    #[cfg(unix)]
     fn has_turn_completed(events: &[ConversationStreamEvent]) -> bool {
         events
             .iter()
             .any(|event| matches!(event, ConversationStreamEvent::TurnCompleted { .. }))
     }
 
+    #[cfg(unix)]
     struct FakeCodex {
-        _guard: MutexGuard<'static, ()>,
         temp_dir: PathBuf,
+        codex_path: PathBuf,
         log_path: PathBuf,
-        previous_path: Option<OsString>,
-        previous_log: Option<OsString>,
-        previous_scenario: Option<OsString>,
-        previous_marker: Option<OsString>,
+        scenario: String,
+        marker_path: PathBuf,
+        process_path: Option<std::ffi::OsString>,
     }
 
+    #[cfg(unix)]
     impl FakeCodex {
         fn install(name: &str) -> Self {
             Self::install_with_scenario(name, "")
         }
 
         fn install_with_scenario(name: &str, scenario: &str) -> Self {
-            let guard = FAKE_CODEX_ENV_LOCK
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let temp_dir = unique_temp_dir(name);
             let codex_path = temp_dir.join("codex");
             let log_path = temp_dir.join("requests.jsonl");
             let marker_path = temp_dir.join("scenario-marker");
             fs::write(&codex_path, fake_codex_script()).expect("fake codex script should write");
             make_executable(&codex_path);
-
-            let previous_path = std::env::var_os("PATH");
-            let previous_log = std::env::var_os("AKRA_FAKE_APP_SERVER_LOG");
-            let previous_scenario = std::env::var_os("AKRA_FAKE_APP_SERVER_SCENARIO");
-            let previous_marker = std::env::var_os("AKRA_FAKE_APP_SERVER_MARKER");
-            let mut paths = vec![temp_dir.clone()];
-            if let Some(path) = &previous_path {
-                paths.extend(std::env::split_paths(path));
-            }
-            let joined_path = std::env::join_paths(paths).expect("PATH should join");
-            unsafe {
-                std::env::set_var("PATH", joined_path);
-                std::env::set_var("AKRA_FAKE_APP_SERVER_LOG", &log_path);
-                std::env::set_var("AKRA_FAKE_APP_SERVER_SCENARIO", scenario);
-                std::env::set_var("AKRA_FAKE_APP_SERVER_MARKER", &marker_path);
-            }
+            // Some overlay filesystems briefly report ETXTBSY when a freshly
+            // written executable is spawned from another test thread.
+            std::thread::sleep(std::time::Duration::from_millis(2));
 
             Self {
-                _guard: guard,
                 temp_dir,
+                codex_path,
                 log_path,
-                previous_path,
-                previous_log,
-                previous_scenario,
-                previous_marker,
+                scenario: scenario.to_string(),
+                marker_path,
+                process_path: std::env::var_os("PATH"),
             }
+        }
+
+        fn connection_config(&self) -> AppServerConnectionConfig {
+            let mut environment = vec![
+                (
+                    "AKRA_FAKE_APP_SERVER_LOG".into(),
+                    self.log_path.as_os_str().to_owned(),
+                ),
+                (
+                    "AKRA_FAKE_APP_SERVER_SCENARIO".into(),
+                    self.scenario.as_str().into(),
+                ),
+                (
+                    "AKRA_FAKE_APP_SERVER_MARKER".into(),
+                    self.marker_path.as_os_str().to_owned(),
+                ),
+            ];
+            if let Some(path) = &self.process_path {
+                environment.push(("PATH".into(), path.clone()));
+            }
+            AppServerConnectionConfig::default()
+                .with_test_process(self.codex_path.clone(), environment)
         }
 
         fn logged_requests(&self) -> Vec<Value> {
@@ -1724,37 +2549,14 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for FakeCodex {
         fn drop(&mut self) {
-            unsafe {
-                if let Some(path) = &self.previous_path {
-                    std::env::set_var("PATH", path);
-                } else {
-                    std::env::remove_var("PATH");
-                }
-
-                if let Some(log) = &self.previous_log {
-                    std::env::set_var("AKRA_FAKE_APP_SERVER_LOG", log);
-                } else {
-                    std::env::remove_var("AKRA_FAKE_APP_SERVER_LOG");
-                }
-
-                if let Some(scenario) = &self.previous_scenario {
-                    std::env::set_var("AKRA_FAKE_APP_SERVER_SCENARIO", scenario);
-                } else {
-                    std::env::remove_var("AKRA_FAKE_APP_SERVER_SCENARIO");
-                }
-
-                if let Some(marker) = &self.previous_marker {
-                    std::env::set_var("AKRA_FAKE_APP_SERVER_MARKER", marker);
-                } else {
-                    std::env::remove_var("AKRA_FAKE_APP_SERVER_MARKER");
-                }
-            }
             let _ = fs::remove_dir_all(&self.temp_dir);
         }
     }
 
+    #[cfg(unix)]
     fn unique_temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1779,6 +2581,7 @@ mod tests {
         fs::set_permissions(path, permissions).expect("fake codex should be executable");
     }
 
+    #[cfg(unix)]
     fn fake_codex_script() -> &'static str {
         r#"#!/usr/bin/env python3
 import json

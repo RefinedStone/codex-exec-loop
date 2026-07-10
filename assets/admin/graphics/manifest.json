@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "route_prefix": "/admin/assets/graphics/",
+  "policy": "Every tracked PNG in this directory is embedded by the admin API and consumed by the dashboard template or diorama TypeScript. Source and reference artwork must live outside this directory with its own provenance.",
+  "runtime_assets": [
+    "final-draft-map-sprite.png",
+    "gamebaljeonguk_atlas_128x192.png",
+    "gamebaljeonguk_atlas_64x96.png",
+    "sprite_fd_boss_desk.png",
+    "sprite_fd_desk_1.png",
+    "sprite_fd_desk_2.png",
+    "sprite_fd_desk_3.png",
+    "sprite_fd_desk_4.png",
+    "sprite_fd_desk_5.png",
+    "sprite_fd_distributor_desk.png",
+    "sprite_fd_event_log_tower.png",
+    "sprite_fd_potted_plant.png",
+    "sprite_fd_sofa.png"
+  ]
+}

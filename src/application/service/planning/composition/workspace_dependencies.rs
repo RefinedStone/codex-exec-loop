@@ -2,6 +2,7 @@
 // 한다. Arc는 포트 trait object를 builder와 downstream service가 같은 handle로 나누어 갖게 하는 소유권 장치이다.
 use std::sync::Arc;
 
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 // task repository port는 workspace use case가 task authority snapshot과 queue 상태를 읽거나 저장할 때 쓰는 outbound 경계이다.
 use crate::application::port::outbound::planning_task_repository_port::PlanningTaskRepositoryPort;
 // workspace port는 draft, active planning 파일, runtime projection 같은 파일 workspace 작업의 실제 I/O 경계이다.
@@ -33,6 +34,9 @@ pub(super) struct PlanningWorkspaceUseCaseDependencies {
     pub(super) workspace: Arc<dyn PlanningWorkspacePort>,
     // task_repository는 workspace summary가 task authority와 queue 정보를 함께 보여줄 수 있게 하는 저장소 경계이다.
     pub(super) task_repository: Arc<dyn PlanningTaskRepositoryPort>,
+    // authority serializes operator rewrites against runtime ownership and
+    // provides the atomic direction/task/result document transaction.
+    pub(super) authority: Arc<dyn PlanningAuthorityPort>,
     // bootstrap은 workspace 생성/초기화 명령 전용 서비스이다. 공유 서비스에 넣지 않고 여기서 새로 만드는 이유는
     // 현재 workspace use case만 bootstrap을 직접 필요로 하기 때문이다.
     pub(super) bootstrap: PlanningBootstrapService,
@@ -57,6 +61,7 @@ impl PlanningWorkspaceUseCaseDependencies {
             workspace: ports.workspace.clone(),
             // task repository도 같은 방식으로 공유되어 workspace summary와 runtime/worker 경로가 같은 저장소를 본다.
             task_repository: ports.task_repository.clone(),
+            authority: ports.authority.clone(),
             // bootstrap은 상태 없는 작성 서비스라서 workspace dependency 조립 시점에 직접 생성해도 공유 의미가 깨지지 않는다.
             bootstrap: PlanningBootstrapService::new(),
             // validation clone은 runtime/prompt/directions와 같은 검증 정책을 workspace use case에도 주입한다.

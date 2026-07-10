@@ -8,7 +8,7 @@ Akra  |  thread: new draft  |  turn: working  |
 input: streaming
 status: new thread draft
 ◦ Working (0s • turn running / interrupt
-unsupported)
+runtime-native)
 >
 prompt: turn running  |  type now, Enter when
 idle

@@ -86,6 +86,7 @@ fn distributor_snapshot_surfaces_rebase_provenance_for_blocked_head() {
         &repo.repo_root,
         &["commit", "-qm", "advance prerelease baseline"],
     );
+    run_git(&repo.repo_root, &["push", "origin", "prerelease"]);
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
 
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
@@ -148,7 +149,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         &repo.repo_root,
         &["commit", "-qm", "seed conflict baseline"],
     );
-    repo.set_remote_tracking_branch("origin/prerelease", "prerelease");
+    run_git(&repo.repo_root, &["push", "origin", "prerelease"]);
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
     let lease = service
         .acquire_slot_lease(
@@ -203,6 +204,7 @@ fn distributor_queue_blocks_rebase_conflict_for_operator_recovery() {
         &repo.repo_root,
         &["commit", "-qm", "advance conflicting prerelease baseline"],
     );
+    run_git(&repo.repo_root, &["push", "origin", "prerelease"]);
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
     let notices = service
         .process_distributor_queue(&repo.workspace_dir())

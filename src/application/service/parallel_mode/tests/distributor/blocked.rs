@@ -46,7 +46,20 @@ fn push_unavailable_capabilities() -> GithubAutomationCapabilities {
     )
 }
 
-fn enqueue_single_commit_ready_result(
+pub(super) fn enqueue_single_commit_ready_result(
+    service: &ParallelModeService,
+    repo: &TempGitRepo,
+    turn_id: &str,
+) -> ParallelModeSlotLeaseSnapshot {
+    let lease = prepare_single_commit_ready_result(service, repo, turn_id);
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("commit-ready result should be enqueued")
+        .expect("queue item should be created");
+    lease
+}
+
+fn prepare_single_commit_ready_result(
     service: &ParallelModeService,
     repo: &TempGitRepo,
     turn_id: &str,
@@ -81,10 +94,6 @@ fn enqueue_single_commit_ready_result(
             "official ledger refresh succeeded: distributor delivery approved",
         )
         .expect("commit-ready should be recorded");
-    service
-        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
-        .expect("commit-ready result should be enqueued")
-        .expect("queue item should be created");
     lease
 }
 
@@ -148,6 +157,231 @@ fn assert_pr_readiness_blocks(prefix: &str, github: FakeGithubAutomationPort, ex
         queue_record.integration_note.contains(expected_note),
         "queue record should persist the same block note: {}",
         queue_record.integration_note
+    );
+}
+
+#[test]
+fn distributor_rearms_epoch_closed_integrated_worktree_and_resumes_exact_push() {
+    let repo = TempGitRepo::new("distributor-epoch-rearm-integration-resume");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    enqueue_single_commit_ready_result(&service, &repo, "turn-epoch-rearm");
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    let target = record
+        .delivery_target
+        .clone()
+        .expect("delivery target should be frozen");
+    let integration_path = derive_integration_worktree_path(
+        &repo.pool_root(),
+        &target.push_remote,
+        &target.github_repository,
+        &target.integration_branch,
+    );
+    fs::create_dir_all(
+        integration_path
+            .parent()
+            .expect("integration worktree should have a parent"),
+    )
+    .expect("integration parent should be created");
+    run_git(
+        &repo.repo_root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            integration_path
+                .to_str()
+                .expect("integration path should be utf-8"),
+            "origin/prerelease",
+        ],
+    );
+    let integration_base = run_command(
+        "git",
+        [
+            "-C",
+            integration_path
+                .to_str()
+                .expect("integration path should be utf-8"),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .expect("integration base should resolve");
+    let source_committer_date = run_command(
+        "git",
+        [
+            "-C",
+            integration_path
+                .to_str()
+                .expect("integration path should be utf-8"),
+            "show",
+            "-s",
+            "--format=%cI",
+            record.source_commit_sha.as_str(),
+        ],
+        None,
+    )
+    .expect("source committer date should resolve");
+    let cherry_pick = Command::new("git")
+        .current_dir(&integration_path)
+        .args(["cherry-pick", record.source_commit_sha.as_str()])
+        .env("GIT_COMMITTER_DATE", source_committer_date)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git cherry-pick should spawn");
+    assert!(
+        cherry_pick.status.success(),
+        "git cherry-pick should succeed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&cherry_pick.stdout),
+        String::from_utf8_lossy(&cherry_pick.stderr),
+    );
+    let recovered_integration_head = run_command(
+        "git",
+        [
+            "-C",
+            integration_path
+                .to_str()
+                .expect("integration path should be utf-8"),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .expect("integrated head should resolve");
+    assert_eq!(
+        recovered_integration_head, record.source_commit_sha,
+        "matching parent and committer metadata must exercise the literal source commit recovery case"
+    );
+
+    record.queue_state = ParallelModeQueueItemState::Blocked;
+    record.integration_state = "blocked".to_string();
+    record.integration_base_commit_sha = Some(integration_base);
+    // Simulate the narrow crash after git cherry-pick completed but before the
+    // resulting detached HEAD was written to the authority record.
+    record.integration_commit_sha = None;
+    record.integration_note =
+        "parallel automation epoch closed before distributor integration push; no new side effect was started"
+            .to_string();
+    record.recovery_note = Some(record.integration_note.clone());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("epoch-closed queue record should persist");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("rearmed distributor should resume the reviewed result");
+
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("distributor integrated queue head into prerelease")
+                || notice.contains("distributor returned slot to idle")
+        }),
+        "epoch rearm should resume the frozen integration: {notices:?}"
+    );
+    let recovered = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("recovered queue record should persist");
+    assert_eq!(recovered.queue_state, ParallelModeQueueItemState::Done);
+    assert_eq!(
+        recovered.integration_commit_sha.as_deref(),
+        Some(recovered_integration_head.as_str())
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .iter()
+            .any(|operation| operation == "push-integration:prerelease")
+    );
+}
+
+fn assert_pre_push_pr_gate_drift_blocks(
+    prefix: &str,
+    github: FakeGithubAutomationPort,
+    expected_note: &str,
+) {
+    let repo = TempGitRepo::new(prefix);
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    enqueue_single_commit_ready_result(&service, &repo, "turn-pre-push-pr-drift");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("pre-push PR drift should be durably blocked");
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("pre-push pull request gate changed") && notice.contains(expected_note)
+        }),
+        "pre-push PR gate block should mention `{expected_note}`: {notices:?}"
+    );
+    let operations = operations
+        .lock()
+        .expect("fake github operations mutex poisoned")
+        .clone();
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|operation| operation.starts_with("inspect-pr:"))
+            .count(),
+        2,
+        "readiness must be inspected once initially and once immediately before target push: {operations:?}"
+    );
+    assert!(
+        operations
+            .iter()
+            .all(|operation| !operation.starts_with("push-integration:")),
+        "changed PR gate must block the integration target push: {operations:?}"
+    );
+    let record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("blocked queue record should remain durable");
+    assert_eq!(record.queue_state, ParallelModeQueueItemState::Blocked);
+}
+
+#[test]
+fn distributor_rechecks_visibility_after_final_pr_round_trip_before_integration_push() {
+    let repo = TempGitRepo::new("distributor-final-visibility-recheck");
+    let github = FakeGithubAutomationPort::with_repository_visibility_after_inspections(
+        2,
+        GithubRepositoryVisibility::Public,
+    );
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    enqueue_single_commit_ready_result(&service, &repo, "turn-final-visibility-recheck");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("visibility drift should be durably blocked");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("delivery target drifted")
+            && notice.contains("repository visibility `Private` -> `Public`")
+    }));
+    let operations = operations
+        .lock()
+        .expect("fake github operations mutex poisoned");
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|operation| operation.starts_with("inspect-pr:"))
+            .count(),
+        2,
+        "the visibility drift should occur only after the final PR reinspection"
+    );
+    assert!(
+        operations
+            .iter()
+            .all(|operation| !operation.starts_with("push-integration:")),
+        "integration push must not run after private-to-public drift: {operations:?}"
     );
 }
 
@@ -258,11 +492,21 @@ fn distributor_queue_blocks_after_push_when_pull_request_workflow_is_required_an
 #[test]
 fn distributor_auto_mode_direct_integrates_when_pull_request_workflow_is_unavailable() {
     let repo = TempGitRepo::new("distributor-auto-direct-delivery");
+    run_git(&repo.repo_root, &["config", "akra.githubPrMode", "auto"]);
     let github =
         FakeGithubAutomationPort::with_capabilities(push_ready_pr_unavailable_capabilities());
     let operations = github.operations.clone();
-    let service = test_parallel_mode_service_with_github(Arc::new(github));
-    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-auto-direct");
+    let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github));
+    let lease = prepare_single_commit_ready_result(&service, &repo, "turn-auto-direct");
+    fs::write(
+        Path::new(&lease.worktree_path).join("parallel-build.tmp"),
+        "ignored build output\n",
+    )
+    .expect("ignored source build output should write");
+    service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect("ignored build output must not block distributor enqueue")
+        .expect("queue item should be created");
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
 
     let notices = service
@@ -302,6 +546,12 @@ fn distributor_auto_mode_direct_integrates_when_pull_request_workflow_is_unavail
             .integration_note
             .contains("direct delivery completed without PR automation")
     );
+    assert!(
+        !Path::new(&lease.worktree_path)
+            .join("parallel-build.tmp")
+            .exists(),
+        "post-integration cleanup should purge the worker-owned ignored output"
+    );
 }
 
 // disabled 모드는 gh/인증이 준비되어 있어도 PR surface를 사용하지 않는다. 이 설정은
@@ -315,7 +565,7 @@ fn distributor_disabled_mode_skips_pull_request_workflow_even_when_available() {
     );
     let github = FakeGithubAutomationPort::ready();
     let operations = github.operations.clone();
-    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github));
     let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-disabled-direct");
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
 
@@ -347,6 +597,40 @@ fn distributor_disabled_mode_skips_pull_request_workflow_even_when_available() {
     assert!(queue_record.pull_request_number.is_none());
 }
 
+#[test]
+fn worker_repo_config_cannot_enable_autonomous_delivery() {
+    let repo = TempGitRepo::new("distributor-worker-autonomous-config-blocked");
+    run_git(
+        &repo.repo_root,
+        &["config", "akra.githubPrMode", "disabled"],
+    );
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-config-cannot-relax");
+    run_git(
+        Path::new(&lease.worktree_path),
+        &["config", "akra.parallelAutonomousDelivery", "true"],
+    );
+    run_git(&repo.repo_root, &["checkout", "prerelease"]);
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("repo config must be durably blocked");
+
+    assert!(notices.iter().any(|notice| {
+        notice.contains("direct integration is disabled unless")
+            && notice.contains("parent process")
+    }));
+    assert!(
+        !operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .iter()
+            .any(|operation| operation.starts_with("push-integration:"))
+    );
+}
+
 // direct delivery로 전환하더라도 이미 durable record에 남아 있던 PR metadata는
 // 보존해야 한다. 그래야 재시도 중 정책이 바뀌어도 integration 이후 기존 PR close 경로가
 // 실행되고, 열린 PR을 잃어버리지 않는다.
@@ -359,13 +643,22 @@ fn distributor_skip_preserves_existing_pull_request_metadata_for_close() {
     );
     let github = FakeGithubAutomationPort::ready();
     let operations = github.operations.clone();
-    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let inspect_head_branch = github.inspect_head_branch.clone();
+    let inspect_head_commit_sha = github.inspect_head_commit_sha.clone();
+    let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github));
     let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-preserve-pr");
     let mut queue_record =
         load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
             .into_iter()
             .next()
             .expect("queue record should exist");
+    *inspect_head_branch
+        .lock()
+        .expect("fake github inspect head branch mutex poisoned") = Some(lease.branch_name.clone());
+    *inspect_head_commit_sha
+        .lock()
+        .expect("fake github inspect head commit mutex poisoned") =
+        Some(queue_record.effective_source_commit_sha());
     queue_record.pull_request_number = Some(123);
     queue_record.pull_request_url = Some("https://example.invalid/pr/123".to_string());
     SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
@@ -608,6 +901,122 @@ fn distributor_blocks_when_pull_request_readiness_drifts() {
         FakeGithubAutomationPort::with_inspect_head_branch("akra-agent/slot-9/other"),
         "pull request #77 head drifted",
     );
+    assert_pr_readiness_blocks(
+        "distributor-pr-unapproved",
+        FakeGithubAutomationPort::with_review_decision("CHANGES_REQUESTED"),
+        "has not received an explicit APPROVED review decision",
+    );
+    assert_pr_readiness_blocks(
+        "distributor-pr-head-oid-drift",
+        FakeGithubAutomationPort::with_inspect_head_commit_sha("deadbeef"),
+        "head commit does not match frozen source commit",
+    );
+    assert_pr_readiness_blocks(
+        "distributor-pr-stale-approved-review",
+        FakeGithubAutomationPort::with_approved_review_commit_sha("deadbeef"),
+        "has no APPROVED review bound to frozen source commit",
+    );
+}
+
+#[test]
+fn distributor_rechecks_close_review_and_checks_immediately_before_target_push() {
+    assert_pre_push_pr_gate_drift_blocks(
+        "distributor-pre-push-pr-closed",
+        FakeGithubAutomationPort::with_pre_push_state("CLOSED"),
+        "is not open",
+    );
+    assert_pre_push_pr_gate_drift_blocks(
+        "distributor-pre-push-review-dismissed",
+        FakeGithubAutomationPort::with_pre_push_review_decision("REVIEW_REQUIRED"),
+        "has not received an explicit APPROVED review decision",
+    );
+    assert_pre_push_pr_gate_drift_blocks(
+        "distributor-pre-push-review-head-stale",
+        FakeGithubAutomationPort::with_pre_push_approved_review_commit_sha("deadbeef"),
+        "has no APPROVED review bound to frozen source commit",
+    );
+    assert_pre_push_pr_gate_drift_blocks(
+        "distributor-pre-push-check-failed",
+        FakeGithubAutomationPort::with_pre_push_required_checks_passed(false),
+        "required checks are failing or unknown",
+    );
+}
+
+#[test]
+fn distributor_rechecks_required_review_and_completes_after_approval() {
+    let repo = TempGitRepo::new("distributor-review-awaiting-approval");
+    let github = FakeGithubAutomationPort::with_review_decision("CHANGES_REQUESTED");
+    let review_decision = github.inspect_review_decision.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let _lease = enqueue_single_commit_ready_result(&service, &repo, "turn-review-awaiting");
+
+    let first = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("first delivery should block for review");
+    assert!(first.iter().any(|notice| notice.contains("APPROVED")));
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("blocked queue record should persist");
+    record.retry_attempts = 8;
+    record.retry_not_before = Some("2020-01-01T00:00:00Z".to_string());
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("max-attempt human gate fixture should persist");
+    *review_decision
+        .lock()
+        .expect("fake review decision mutex poisoned") = Some("APPROVED".to_string());
+
+    let second = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("approved delivery should be retried");
+    assert!(
+        second
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head")),
+        "approval should release the review gate even after the transient retry budget: {second:?}"
+    );
+}
+
+#[test]
+fn repeated_retryable_review_failure_is_durably_backed_off() {
+    let repo = TempGitRepo::new("distributor-review-backoff");
+    let github = FakeGithubAutomationPort::with_review_decision("CHANGES_REQUESTED");
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let _lease = enqueue_single_commit_ready_result(&service, &repo, "turn-review-backoff");
+
+    service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("first review check should block");
+    service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("one immediate retry should be admitted");
+    let operations_after_retry = operations
+        .lock()
+        .expect("fake github operations mutex poisoned")
+        .len();
+    service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("third tick should schedule backoff");
+
+    assert_eq!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .len(),
+        operations_after_retry,
+        "backoff tick must not issue another remote command"
+    );
+    let record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should persist");
+    assert_eq!(record.retry_attempts, 1);
+    assert!(record.retry_not_before.is_some());
+    assert_eq!(record.queue_state, ParallelModeQueueItemState::Blocked);
 }
 
 #[test]
@@ -680,7 +1089,8 @@ fn distributor_blocks_when_slot_has_pending_operation_metadata() {
             .lock()
             .expect("fake github operations mutex poisoned")
             .clone(),
-        vec![format!("push:{}:false", lease.branch_name)]
+        Vec::<String>::new(),
+        "pending source metadata must block before push or PR creation"
     );
     let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
@@ -732,7 +1142,8 @@ fn distributor_blocks_when_source_branch_head_drifts_after_enqueue() {
             .lock()
             .expect("fake github operations mutex poisoned")
             .clone(),
-        vec![format!("push:{}:false", lease.branch_name)]
+        Vec::<String>::new(),
+        "source HEAD drift must block before any remote mutation"
     );
     let queue_record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
         .into_iter()
@@ -750,6 +1161,75 @@ fn distributor_blocks_when_source_branch_head_drifts_after_enqueue() {
 }
 
 #[test]
+fn distributor_blocks_dirty_frozen_source_before_any_remote_operation() {
+    let repo = TempGitRepo::new("distributor-source-dirty-before-push");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-source-dirty");
+    fs::write(
+        Path::new(&lease.worktree_path).join("unreviewed.txt"),
+        "dirty\n",
+    )
+    .expect("unreviewed source file should be writable");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("dirty source should be durably blocked");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("staged, unstaged, nonignored-untracked")),
+        "dirty source reason should be explicit: {notices:?}"
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty(),
+        "dirty frozen source must not reach push or PR operations"
+    );
+}
+
+#[test]
+fn distributor_blocks_queue_and_live_lease_identity_drift_before_remote_operation() {
+    let repo = TempGitRepo::new("distributor-source-lease-identity-drift");
+    let github = FakeGithubAutomationPort::ready();
+    let operations = github.operations.clone();
+    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    enqueue_single_commit_ready_result(&service, &repo, "turn-source-identity-drift");
+    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+        .into_iter()
+        .next()
+        .expect("queue record should exist");
+    record.agent_id = "different-agent".to_string();
+    SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
+        &repo.workspace_dir(),
+        &record,
+    )
+    .expect("drifted queue identity should persist");
+
+    let notices = service
+        .process_distributor_queue(&repo.workspace_dir())
+        .expect("lease identity drift should be durably blocked");
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("lease identity no longer matches")),
+        "lease identity mismatch should be explicit: {notices:?}"
+    );
+    assert!(
+        operations
+            .lock()
+            .expect("fake github operations mutex poisoned")
+            .is_empty(),
+        "identity drift must not reach push or PR operations"
+    );
+}
+
+#[test]
 fn distributor_blocks_when_integration_branch_push_is_rejected_without_remote_equivalence() {
     let repo = TempGitRepo::new("distributor-integration-push-rejection");
     run_git(
@@ -758,7 +1238,7 @@ fn distributor_blocks_when_integration_branch_push_is_rejected_without_remote_eq
     );
     let github = FakeGithubAutomationPort::with_integration_push_error("non-fast-forward");
     let operations = github.operations.clone();
-    let service = test_parallel_mode_service_with_github(Arc::new(github));
+    let service = test_parallel_mode_service_with_autonomous_github(Arc::new(github));
     let lease = enqueue_single_commit_ready_result(&service, &repo, "turn-integration-push");
     run_git(&repo.repo_root, &["checkout", "prerelease"]);
 
@@ -791,6 +1271,8 @@ fn distributor_blocks_when_integration_branch_push_is_rejected_without_remote_eq
         queue_record.queue_state,
         ParallelModeQueueItemState::Blocked
     );
+    assert!(queue_record.integration_base_commit_sha.is_some());
+    assert!(queue_record.integration_commit_sha.is_some());
     assert!(
         queue_record
             .integration_note
@@ -826,6 +1308,7 @@ fn distributor_blocks_when_pull_request_close_fails_after_integration_push() {
         vec![
             format!("push:{}:false", lease.branch_name),
             format!("ensure-pr:prerelease:{}", lease.branch_name),
+            "inspect-pr:77".to_string(),
             "inspect-pr:77".to_string(),
             "push-integration:prerelease".to_string(),
             "inspect-pr:77".to_string(),
@@ -978,10 +1461,13 @@ fn distributor_retries_blocked_head_after_clean_slot_branch_recovery() {
         .process_distributor_queue(&repo.workspace_dir())
         .expect("distributor queue should recover and process");
 
-    assert!(notices.iter().any(|notice| {
-        notice.contains("distributor integrated queue head into prerelease")
-            || notice.contains("distributor returned slot to idle")
-    }));
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("distributor integrated queue head into prerelease")
+                || notice.contains("distributor returned slot to idle")
+        }),
+        "clean slot branch recovery should resume the existing queue item: {notices:?}"
+    );
     assert_eq!(current_branch(&slot_path), "HEAD");
     let recovered_record =
         load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())

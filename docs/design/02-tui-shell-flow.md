@@ -68,7 +68,10 @@ interaction flow and surface roles.
 - Repeated queue task:
   queue-driven continuation pauses until the planning queue advances beyond the previously handed-off task.
 - Manual approval review:
-  approval state is surfaced, but the shell still lacks interactive approve or deny actions.
+  command execution and validated turn-scoped permission requests own a modal until the operator
+  explicitly presses `Y` to accept once or `N`/`Esc` to decline. `Enter` is inert in this modal;
+  uninspectable file-change requests, timeout, interrupt, disconnect, and invalid requests fail
+  closed.
 
 ## Code Entry
 

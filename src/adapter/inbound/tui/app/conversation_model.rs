@@ -1,6 +1,7 @@
 pub(super) use super::{
     DEFAULT_AUTO_FOLLOW_MAX_TURNS, DEFAULT_AUTO_FOLLOW_STOP_KEYWORD,
-    INFINITE_AUTO_FOLLOW_MAX_TURNS, INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
+    DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN, INFINITE_AUTO_FOLLOW_MAX_TURNS,
+    INFINITE_AUTO_FOLLOW_MAX_TURNS_TOKEN,
 };
 // 테스트 fixture는 domain message를 직접 만들어 shell runtime을 띄우지 않고도
 // view model mapping 회귀를 좁게 확인한다.

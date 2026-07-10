@@ -35,16 +35,495 @@ use super::store::{upsert_authority_metadata, upsert_metadata};
 // adapter 본체의 위치 해석/DB 열기 함수와 클레임 상수들을 가져온다.
 // 이 파일은 `runtime_claims`, distributor queue, snapshot projection만 분리한 impl 조각이다.
 use super::{
-    CLAIM_STALE_AFTER_SECS, DISTRIBUTOR_QUEUE_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY,
-    SqlitePlanningAuthorityAdapter, open_authority_connection, read_metadata_i64,
+    ADMIN_AUTHORITY_MUTATION_CLAIM_KIND, ADMIN_AUTHORITY_MUTATION_SCOPE_KEY,
+    ADMIN_TASK_MUTATION_CLAIM_KIND, CLAIM_STALE_AFTER_SECS, DISTRIBUTOR_QUEUE_CLAIM_KIND,
+    OFFICIAL_REFRESH_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY, SqlitePlanningAuthorityAdapter,
+    open_authority_connection, read_metadata_i64,
 };
 
 const RUNTIME_EVENT_FEED_LIMIT: i64 = 8;
+
+pub(super) fn retire_task_runtime_projections(
+    transaction: &Transaction<'_>,
+    task_ids: &[String],
+) -> Result<()> {
+    let task_ids = task_ids
+        .iter()
+        .map(|task_id| task_id.trim())
+        .filter(|task_id| !task_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    if task_ids.is_empty() {
+        return Ok(());
+    }
+
+    let snapshot = load_runtime_projection_snapshot(transaction)?;
+    if let Some(lease) = snapshot
+        .slot_leases
+        .values()
+        .find(|lease| task_ids.contains(lease.task_id.trim()))
+    {
+        anyhow::bail!(
+            "planning task `{}` cannot be deleted while slot `{}` is {}",
+            lease.task_id,
+            lease.slot_id,
+            lease.state.label()
+        );
+    }
+    if let Some(record) = snapshot
+        .distributor_queue_records
+        .iter()
+        .find(|record| task_ids.contains(record.task_id.trim()) && record.queue_state.is_active())
+    {
+        anyhow::bail!(
+            "planning task `{}` cannot be deleted while distributor item `{}` is {}",
+            record.task_id,
+            record.queue_item_id,
+            record.queue_state.label()
+        );
+    }
+    if let Some(detail) = snapshot.session_details.iter().find(|detail| {
+        task_ids.contains(detail.task_id.trim())
+            && !matches!(
+                detail.completion_state_label.trim(),
+                "cleaned" | "failed" | "aborted"
+            )
+    }) {
+        anyhow::bail!(
+            "planning task `{}` cannot be deleted while session `{}` is {}",
+            detail.task_id,
+            detail.session_key,
+            detail.completion_state_label
+        );
+    }
+    if let Some(command) = snapshot
+        .dispatch_commands
+        .iter()
+        .find(|command| !command.is_terminal())
+    {
+        // Dispatch commands select from the live queue when claimed. They do not
+        // retain a stable task id, so any non-terminal command can still select
+        // a task being deleted and must conservatively block the edit.
+        anyhow::bail!(
+            "planning tasks cannot be deleted while dispatch command `{}` is {}",
+            command.command_id,
+            command.state.label()
+        );
+    }
+
+    for task_id in task_ids {
+        let queue_item_ids = runtime_queue_item_ids_for_task(transaction, task_id)?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_session_details
+                 WHERE json_extract(content, '$.task_id') = ?1",
+                params![task_id],
+            )
+            .with_context(|| format!("failed to retire session details for `{task_id}`"))?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_task_dispatch_blocks WHERE task_id = ?1",
+                params![task_id],
+            )
+            .with_context(|| format!("failed to retire dispatch block for `{task_id}`"))?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_distributor_queue
+                 WHERE json_extract(content, '$.task_id') = ?1",
+                params![task_id],
+            )
+            .with_context(|| format!("failed to retire distributor rows for `{task_id}`"))?;
+        for queue_item_id in queue_item_ids {
+            transaction
+                .execute(
+                    "DELETE FROM runtime_claims
+                     WHERE claim_kind = ?1 AND scope_key = ?2",
+                    params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id],
+                )
+                .with_context(|| format!("failed to retire distributor claim `{queue_item_id}`"))?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO retired_planning_tasks (task_id, retired_at, reason)
+                 VALUES (?1, ?2, 'admin authority deletion')
+                 ON CONFLICT(task_id) DO UPDATE
+                 SET retired_at = excluded.retired_at,
+                     reason = excluded.reason",
+                params![task_id, Utc::now().to_rfc3339()],
+            )
+            .with_context(|| format!("failed to retire planning task `{task_id}`"))?;
+    }
+    Ok(())
+}
+
+fn ensure_task_not_retired(
+    transaction: &Transaction<'_>,
+    task_id: &str,
+    projection_kind: &str,
+) -> Result<()> {
+    let retired = transaction
+        .query_row(
+            "SELECT 1 FROM retired_planning_tasks WHERE task_id = ?1",
+            params![task_id.trim()],
+            |_| Ok(()),
+        )
+        .optional()
+        .with_context(|| format!("failed to inspect retired task `{task_id}`"))?
+        .is_some();
+    if retired {
+        anyhow::bail!(
+            "refusing to persist {projection_kind} for retired planning task `{}`",
+            task_id.trim()
+        );
+    }
+    clear_stale_runtime_claim(transaction, ADMIN_TASK_MUTATION_CLAIM_KIND, task_id.trim())?;
+    let guarded = transaction
+        .query_row(
+            "SELECT owner_token FROM runtime_claims
+             WHERE claim_kind = ?1 AND scope_key = ?2",
+            params![ADMIN_TASK_MUTATION_CLAIM_KIND, task_id.trim()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to inspect admin mutation guard for `{task_id}`"))?;
+    if let Some(owner) = guarded {
+        anyhow::bail!(
+            "refusing to persist {projection_kind} for planning task `{}` while admin mutation guard `{owner}` is active",
+            task_id.trim()
+        );
+    }
+    ensure_no_admin_authority_mutation_guard(transaction, projection_kind, None)?;
+    Ok(())
+}
+
+pub(super) fn ensure_no_admin_authority_mutation_guard(
+    transaction: &Transaction<'_>,
+    projection_kind: &str,
+    permitted_owner_token: Option<&str>,
+) -> Result<()> {
+    clear_stale_runtime_claim(
+        transaction,
+        ADMIN_AUTHORITY_MUTATION_CLAIM_KIND,
+        ADMIN_AUTHORITY_MUTATION_SCOPE_KEY,
+    )?;
+    let authority_mutation_owner = transaction
+        .query_row(
+            "SELECT owner_token FROM runtime_claims
+             WHERE claim_kind = ?1 AND scope_key = ?2",
+            params![
+                ADMIN_AUTHORITY_MUTATION_CLAIM_KIND,
+                ADMIN_AUTHORITY_MUTATION_SCOPE_KEY
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to inspect admin authority mutation guard")?;
+    if let Some(owner) = authority_mutation_owner
+        && permitted_owner_token != Some(owner.as_str())
+    {
+        anyhow::bail!(
+            "refusing to persist {projection_kind} while admin authority mutation guard `{owner}` is active"
+        );
+    }
+    Ok(())
+}
+
+fn active_runtime_claim_for_kinds(
+    transaction: &Transaction<'_>,
+    claim_kinds: &[&str],
+) -> Result<Option<(String, String, String)>> {
+    let load_matching_claims =
+        |transaction: &Transaction<'_>| -> Result<Vec<(String, String, String)>> {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT claim_kind, scope_key, owner_token
+                 FROM runtime_claims
+                 ORDER BY claim_kind, scope_key",
+                )
+                .context("failed to inspect runtime claims before admin authority mutation")?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .context("failed to iterate runtime claims before admin authority mutation")?;
+            let mut claims = Vec::new();
+            for row in rows {
+                let claim = row.context("failed to decode runtime claim")?;
+                if claim_kinds.contains(&claim.0.as_str()) {
+                    claims.push(claim);
+                }
+            }
+            Ok(claims)
+        };
+
+    for (claim_kind, scope_key, _) in load_matching_claims(transaction)? {
+        clear_stale_runtime_claim(transaction, &claim_kind, &scope_key)?;
+    }
+    Ok(load_matching_claims(transaction)?.into_iter().next())
+}
+
+fn load_claimable_distributor_record(
+    transaction: &Transaction<'_>,
+    queue_item_id: &str,
+) -> Result<Option<PlanningAuthorityDistributorQueueRecord>> {
+    let payload = transaction
+        .query_row(
+            "SELECT content FROM runtime_distributor_queue WHERE queue_item_id = ?1",
+            params![queue_item_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .with_context(|| format!("failed to load distributor item `{queue_item_id}` for claim"))?;
+    let Some(payload) = payload else {
+        return Ok(None);
+    };
+    let record = serde_json::from_str::<PlanningAuthorityDistributorQueueRecord>(&payload)
+        .with_context(|| format!("failed to deserialize distributor item `{queue_item_id}`"))?;
+    Ok(record.queue_state.is_active().then_some(record))
+}
 
 // 이 impl 블록은 `SqlitePlanningAuthorityAdapter`의 런타임 상태 책임을 담는다.
 // 영구 planning authority 문서가 아니라, 여러 실행 주체가 동시에 움직일 때 필요한
 // 순번, 임시 소유권, 큐 상태, agent session 투영을 SQLite에 기록하고 다시 읽는다.
 impl SqlitePlanningAuthorityAdapter {
+    pub(crate) fn acquire_admin_task_mutation_guard(
+        workspace_dir: &str,
+        task_ids: &[String],
+        owner_token: &str,
+    ) -> Result<()> {
+        let task_ids = task_ids
+            .iter()
+            .map(|task_id| task_id.trim())
+            .filter(|task_id| !task_id.is_empty())
+            .collect::<BTreeSet<_>>();
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open admin task mutation guard transaction")?;
+        ensure_no_admin_authority_mutation_guard(&transaction, "admin task mutation guard", None)?;
+        let snapshot = load_runtime_projection_snapshot(&transaction)?;
+        if let Some(lease) = snapshot
+            .slot_leases
+            .values()
+            .find(|lease| task_ids.contains(lease.task_id.trim()))
+        {
+            anyhow::bail!(
+                "planning task `{}` cannot be edited while slot `{}` is {}",
+                lease.task_id,
+                lease.slot_id,
+                lease.state.label()
+            );
+        }
+        if let Some(record) = snapshot.distributor_queue_records.iter().find(|record| {
+            task_ids.contains(record.task_id.trim()) && record.queue_state.is_active()
+        }) {
+            anyhow::bail!(
+                "planning task `{}` cannot be edited while distributor item `{}` is {}",
+                record.task_id,
+                record.queue_item_id,
+                record.queue_state.label()
+            );
+        }
+        if let Some(detail) = snapshot.session_details.iter().find(|detail| {
+            task_ids.contains(detail.task_id.trim())
+                && !matches!(
+                    detail.completion_state_label.trim(),
+                    "cleaned" | "failed" | "aborted"
+                )
+        }) {
+            anyhow::bail!(
+                "planning task `{}` cannot be edited while session `{}` is {}",
+                detail.task_id,
+                detail.session_key,
+                detail.completion_state_label
+            );
+        }
+        if let Some((claim_kind, scope_key, claim_owner)) =
+            active_runtime_claim_for_kinds(&transaction, &[OFFICIAL_REFRESH_CLAIM_KIND])?
+        {
+            anyhow::bail!(
+                "planning task edit is blocked while runtime claim {claim_kind}:{scope_key} is owned by `{claim_owner}`"
+            );
+        }
+        for task_id in &task_ids {
+            clear_stale_runtime_claim(&transaction, ADMIN_TASK_MUTATION_CLAIM_KIND, task_id)?;
+            let inserted = transaction
+                .execute(
+                    "INSERT OR IGNORE INTO runtime_claims
+                     (claim_kind, scope_key, owner_token, claim_value, claimed_at)
+                     VALUES (?1, ?2, ?3, 'operator edit', ?4)",
+                    params![
+                        ADMIN_TASK_MUTATION_CLAIM_KIND,
+                        task_id,
+                        owner_token,
+                        Utc::now().to_rfc3339()
+                    ],
+                )
+                .with_context(|| format!("failed to guard admin edit for `{task_id}`"))?;
+            if inserted == 0 {
+                anyhow::bail!("planning task `{task_id}` is already being edited");
+            }
+        }
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        transaction
+            .commit()
+            .context("failed to commit admin task mutation guard")
+    }
+
+    pub(crate) fn release_admin_task_mutation_guard(
+        workspace_dir: &str,
+        task_ids: &[String],
+        owner_token: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open admin task mutation guard release transaction")?;
+        for task_id in task_ids
+            .iter()
+            .map(|task_id| task_id.trim())
+            .filter(|task_id| !task_id.is_empty())
+        {
+            transaction
+                .execute(
+                    "DELETE FROM runtime_claims
+                     WHERE claim_kind = ?1 AND scope_key = ?2 AND owner_token = ?3",
+                    params![ADMIN_TASK_MUTATION_CLAIM_KIND, task_id, owner_token],
+                )
+                .with_context(|| format!("failed to release admin edit guard for `{task_id}`"))?;
+        }
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        transaction
+            .commit()
+            .context("failed to commit admin task mutation guard release")
+    }
+
+    pub(crate) fn acquire_admin_authority_mutation_guard(
+        workspace_dir: &str,
+        owner_token: &str,
+        action: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open admin authority mutation guard transaction")?;
+        let snapshot = load_runtime_projection_snapshot(&transaction)?;
+        if let Some(lease) = snapshot.slot_leases.values().next() {
+            anyhow::bail!(
+                "{action} is blocked while parallel work is active: slot {} is {} for task {}",
+                lease.slot_id,
+                lease.state.label(),
+                lease.task_id
+            );
+        }
+        if let Some(record) = snapshot
+            .distributor_queue_records
+            .iter()
+            .find(|record| record.queue_state.is_active())
+        {
+            anyhow::bail!(
+                "{action} is blocked while parallel work is active: distributor item {} is {} for task {}",
+                record.queue_item_id,
+                record.queue_state.label(),
+                record.task_id
+            );
+        }
+        if let Some(detail) = snapshot.session_details.iter().find(|detail| {
+            !matches!(
+                detail.completion_state_label.trim(),
+                "cleaned" | "failed" | "aborted"
+            )
+        }) {
+            anyhow::bail!(
+                "{action} is blocked while parallel work is active: session {} is {} for task {}",
+                detail.session_key,
+                detail.completion_state_label,
+                detail.task_id
+            );
+        }
+        if let Some(command) = snapshot
+            .dispatch_commands
+            .iter()
+            .find(|command| !command.is_terminal())
+        {
+            anyhow::bail!(
+                "{action} is blocked while parallel work is active: dispatch command {} is {}",
+                command.command_id,
+                command.state.label()
+            );
+        }
+        if let Some((claim_kind, scope_key, claim_owner)) = active_runtime_claim_for_kinds(
+            &transaction,
+            &[
+                ADMIN_TASK_MUTATION_CLAIM_KIND,
+                DISTRIBUTOR_QUEUE_CLAIM_KIND,
+                OFFICIAL_REFRESH_SCOPE_KEY,
+            ],
+        )? {
+            anyhow::bail!(
+                "{action} is blocked while runtime claim {claim_kind}:{scope_key} is owned by `{claim_owner}`"
+            );
+        }
+        clear_stale_runtime_claim(
+            &transaction,
+            ADMIN_AUTHORITY_MUTATION_CLAIM_KIND,
+            ADMIN_AUTHORITY_MUTATION_SCOPE_KEY,
+        )?;
+        let inserted = transaction
+            .execute(
+                "INSERT OR IGNORE INTO runtime_claims
+                 (claim_kind, scope_key, owner_token, claim_value, claimed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    ADMIN_AUTHORITY_MUTATION_CLAIM_KIND,
+                    ADMIN_AUTHORITY_MUTATION_SCOPE_KEY,
+                    owner_token,
+                    action,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .context("failed to acquire admin authority mutation guard")?;
+        if inserted == 0 {
+            anyhow::bail!("an admin authority mutation is already in progress");
+        }
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        transaction
+            .commit()
+            .context("failed to commit admin authority mutation guard")
+    }
+
+    pub(crate) fn release_admin_authority_mutation_guard(
+        workspace_dir: &str,
+        owner_token: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open admin authority mutation guard release transaction")?;
+        transaction
+            .execute(
+                "DELETE FROM runtime_claims
+                 WHERE claim_kind = ?1 AND scope_key = ?2 AND owner_token = ?3",
+                params![
+                    ADMIN_AUTHORITY_MUTATION_CLAIM_KIND,
+                    ADMIN_AUTHORITY_MUTATION_SCOPE_KEY,
+                    owner_token
+                ],
+            )
+            .context("failed to release admin authority mutation guard")?;
+        upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        transaction
+            .commit()
+            .context("failed to commit admin authority mutation guard release")
+    }
+
     // 공식 refresh는 여러 worker가 동시에 시작할 수 있으므로 먼저 단조 증가 순번을 예약한다.
     // `next_official_refresh_order`는 "발급할 번호"이고, 아래에서 발급 직후 +1로 저장해 다음 호출과 충돌하지 않게 한다.
     pub(crate) fn reserve_next_official_refresh_order(workspace_dir: &str) -> Result<u64> {
@@ -120,17 +599,33 @@ impl SqlitePlanningAuthorityAdapter {
             return Ok(PlanningAuthorityOfficialRefreshClaimStatus::Waiting);
         }
 
+        ensure_no_admin_authority_mutation_guard(&transaction, "official refresh claim", None)?;
+        if active_runtime_claim_for_kinds(&transaction, &[ADMIN_TASK_MUTATION_CLAIM_KIND])?
+            .is_some()
+        {
+            transaction
+                .rollback()
+                .context("failed to roll back admin-contended official refresh claim")?;
+            return Ok(PlanningAuthorityOfficialRefreshClaimStatus::Waiting);
+        }
+
         // 실행 가능한 순번이라도 이전 owner가 죽고 클레임만 남았을 수 있다.
         // stale이면 제거한 뒤 metadata를 다시 만져 polling 쪽이 "상태 변화"를 볼 수 있게 한다.
-        if clear_stale_runtime_claim(&transaction, "official-refresh", OFFICIAL_REFRESH_SCOPE_KEY)?
-        {
+        if clear_stale_runtime_claim(
+            &transaction,
+            OFFICIAL_REFRESH_CLAIM_KIND,
+            OFFICIAL_REFRESH_SCOPE_KEY,
+        )? {
             upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
         }
         // 공식 refresh는 scope key가 하나뿐인 전역 클레임이다.
         // 이미 row가 있으면 owner_token만 비교해 재진입인지 경합인지 판단한다.
-        let existing_owner =
-            load_runtime_claim(&transaction, "official-refresh", OFFICIAL_REFRESH_SCOPE_KEY)?
-                .map(|claim| claim.owner_token);
+        let existing_owner = load_runtime_claim(
+            &transaction,
+            OFFICIAL_REFRESH_CLAIM_KIND,
+            OFFICIAL_REFRESH_SCOPE_KEY,
+        )?
+        .map(|claim| claim.owner_token);
         // 같은 owner가 이미 잡은 클레임이면 멱등 성공으로 처리한다.
         // 이 덕분에 caller가 네트워크/프로세스 경계에서 같은 시도를 반복해도 중복 실행으로 번지지 않는다.
         if let Some(existing_owner) = existing_owner {
@@ -170,6 +665,40 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(PlanningAuthorityOfficialRefreshClaimStatus::Acquired)
     }
 
+    pub(crate) fn renew_official_refresh_claim(
+        workspace_dir: &str,
+        refresh_order: u64,
+        owner_token: &str,
+    ) -> Result<bool> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open official refresh renewal transaction")?;
+        let updated = transaction
+            .execute(
+                "UPDATE runtime_claims
+                 SET claimed_at = ?1
+                 WHERE claim_kind = ?2 AND scope_key = ?3
+                   AND owner_token = ?4 AND claim_value = ?5",
+                params![
+                    Utc::now().to_rfc3339(),
+                    OFFICIAL_REFRESH_CLAIM_KIND,
+                    OFFICIAL_REFRESH_SCOPE_KEY,
+                    owner_token,
+                    refresh_order.to_string()
+                ],
+            )
+            .context("failed to renew official refresh claim")?;
+        if updated > 0 {
+            upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit official refresh renewal")?;
+        Ok(updated > 0)
+    }
+
     // refresh worker가 작업을 끝낸 뒤 자기 클레임을 지우고 실행 포인터를 다음 순번으로 넘긴다.
     // 삭제 조건에 owner와 순번을 모두 넣어, 늦게 도착한 release가 남의 새 클레임을 지우지 못하게 막는다.
     pub(crate) fn release_official_refresh_claim(
@@ -195,8 +724,13 @@ impl SqlitePlanningAuthorityAdapter {
         let deleted_rows = transaction
             .execute(
                 "DELETE FROM runtime_claims
-                 WHERE claim_kind = 'official-refresh' AND scope_key = ?1 AND owner_token = ?2 AND claim_value = ?3",
-                params![OFFICIAL_REFRESH_SCOPE_KEY, owner_token, refresh_order.to_string()],
+                 WHERE claim_kind = ?1 AND scope_key = ?2 AND owner_token = ?3 AND claim_value = ?4",
+                params![
+                    OFFICIAL_REFRESH_CLAIM_KIND,
+                    OFFICIAL_REFRESH_SCOPE_KEY,
+                    owner_token,
+                    refresh_order.to_string()
+                ],
             )
             .context("failed to release official refresh claim")?;
         // 실제로 삭제한 owner만 실행 포인터를 전진시킨다.
@@ -219,6 +753,39 @@ impl SqlitePlanningAuthorityAdapter {
         transaction
             .commit()
             .context("failed to commit official refresh release transaction")?;
+        Ok(())
+    }
+
+    // Abort an unfinished refresh without consuming its order. Matching both owner and order makes
+    // cancellation safe when a stale worker returns after another owner has acquired the same head.
+    pub(crate) fn cancel_official_refresh_claim(
+        workspace_dir: &str,
+        refresh_order: u64,
+        owner_token: &str,
+    ) -> Result<()> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction()
+            .context("failed to open official refresh cancellation transaction")?;
+        let deleted_rows = transaction
+            .execute(
+                "DELETE FROM runtime_claims
+                 WHERE claim_kind = ?1 AND scope_key = ?2 AND owner_token = ?3 AND claim_value = ?4",
+                params![
+                    OFFICIAL_REFRESH_CLAIM_KIND,
+                    OFFICIAL_REFRESH_SCOPE_KEY,
+                    owner_token,
+                    refresh_order.to_string()
+                ],
+            )
+            .context("failed to cancel official refresh claim")?;
+        if deleted_rows > 0 {
+            upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit official refresh cancellation transaction")?;
         Ok(())
     }
 
@@ -247,12 +814,16 @@ impl SqlitePlanningAuthorityAdapter {
 
         let stale_claim_cleared = clear_stale_runtime_claim(
             &transaction,
-            "official-refresh",
+            OFFICIAL_REFRESH_CLAIM_KIND,
             OFFICIAL_REFRESH_SCOPE_KEY,
         )?;
         if !stale_claim_cleared
-            && load_runtime_claim(&transaction, "official-refresh", OFFICIAL_REFRESH_SCOPE_KEY)?
-                .is_some()
+            && load_runtime_claim(
+                &transaction,
+                OFFICIAL_REFRESH_CLAIM_KIND,
+                OFFICIAL_REFRESH_SCOPE_KEY,
+            )?
+            .is_some()
         {
             transaction
                 .rollback()
@@ -301,8 +872,21 @@ impl SqlitePlanningAuthorityAdapter {
         let mut connection = open_authority_connection(&location)?;
         // 이 트랜잭션 안에서만 "기존 클레임이 사라졌으니 내가 삽입한다"는 판단이 안전한다.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("failed to open distributor queue claim transaction")?;
+        let Some(record) = load_claimable_distributor_record(&transaction, queue_item_id)? else {
+            transaction
+                .execute(
+                    "DELETE FROM runtime_claims WHERE claim_kind = ?1 AND scope_key = ?2",
+                    params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id],
+                )
+                .context("failed to clear orphan distributor queue claim")?;
+            transaction
+                .commit()
+                .context("failed to commit rejected distributor queue claim")?;
+            return Ok(false);
+        };
+        ensure_task_not_retired(&transaction, &record.task_id, "distributor queue claim")?;
         // queue claim 시도도 runtime projection의 관찰 가능한 변화이므로 metadata heartbeat를 갱신한다.
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
         // 이전 worker가 죽어 같은 queue item의 클레임이 오래 남았으면 먼저 삭제한다.
@@ -335,6 +919,60 @@ impl SqlitePlanningAuthorityAdapter {
             .context("failed to commit distributor queue claim transaction")?;
         // bool 반환은 caller가 "내가 처리해야 함"과 "다른 worker가 이미 처리 중"을 즉시 구분하게 한다.
         Ok(inserted_rows > 0)
+    }
+
+    // 현재 owner가 계속 처리 중임을 표시하도록 queue claim의 stale 기준 시각을 갱신한다.
+    // kind/scope/owner를 모두 WHERE 조건에 둔 단일 UPDATE 결과가 곧 소유권 유지 여부이다.
+    pub(crate) fn renew_distributor_queue_claim(
+        // claim row가 저장된 authority DB를 찾기 위한 workspace 경로이다.
+        workspace_dir: &str,
+        // 갱신할 queue item scope이다.
+        queue_item_id: &str,
+        // acquire 때 저장한 owner token이다.
+        owner_token: &str,
+    ) -> Result<bool> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open distributor queue claim renewal transaction")?;
+        let Some(record) = load_claimable_distributor_record(&transaction, queue_item_id)? else {
+            transaction
+                .execute(
+                    "DELETE FROM runtime_claims WHERE claim_kind = ?1 AND scope_key = ?2",
+                    params![DISTRIBUTOR_QUEUE_CLAIM_KIND, queue_item_id],
+                )
+                .context("failed to clear orphan distributor queue claim during renewal")?;
+            transaction
+                .commit()
+                .context("failed to commit rejected distributor queue claim renewal")?;
+            return Ok(false);
+        };
+        ensure_task_not_retired(
+            &transaction,
+            &record.task_id,
+            "distributor queue claim renewal",
+        )?;
+        let renewed_rows = transaction
+            .execute(
+                "UPDATE runtime_claims
+                 SET claimed_at = ?4
+                 WHERE claim_kind = ?1 AND scope_key = ?2 AND owner_token = ?3",
+                params![
+                    DISTRIBUTOR_QUEUE_CLAIM_KIND,
+                    queue_item_id,
+                    owner_token,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .context("failed to renew distributor queue claim")?;
+        if renewed_rows > 0 {
+            upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit distributor queue claim renewal transaction")?;
+        Ok(renewed_rows > 0)
     }
 
     // queue item 처리가 끝났거나 포기할 때 현재 owner의 클레임만 해제한다.
@@ -384,6 +1022,13 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open runtime dispatch command enqueue transaction")?;
+        if !command.is_terminal() {
+            ensure_no_admin_authority_mutation_guard(
+                &transaction,
+                "dispatch command enqueue",
+                None,
+            )?;
+        }
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         let mut changed_rows = transaction
             .execute(
@@ -538,6 +1183,7 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open runtime dispatch command claim transaction")?;
+        ensure_no_admin_authority_mutation_guard(&transaction, "dispatch command claim", None)?;
         upsert_authority_metadata(&transaction, &location, "last_claim_updated_at")?;
         let pending_row = transaction
             .query_row(
@@ -662,6 +1308,13 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open runtime dispatch command update transaction")?;
+        if !command.is_terminal() {
+            ensure_no_admin_authority_mutation_guard(
+                &transaction,
+                "dispatch command update",
+                None,
+            )?;
+        }
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         transaction
             .execute(
@@ -762,6 +1415,12 @@ impl SqlitePlanningAuthorityAdapter {
         // domain layer가 만든 slot lease 상태이다. 이 adapter는 내용을 해석하지 않고 JSON으로 보존한다.
         lease: &ParallelModeSlotLeaseSnapshot,
     ) -> Result<()> {
+        if !lease.has_valid_lease_generation() {
+            anyhow::bail!(
+                "runtime slot lease `{}` has an invalid lease generation",
+                lease.slot_id
+            );
+        }
         // 같은 workspace의 parallel runtime 상태는 같은 authority DB에 모이다.
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         // upsert, invalid marker 삭제, event append를 원자적으로 묶기 위해 mutable connection을 연다.
@@ -775,6 +1434,7 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open runtime slot lease transaction")?;
+        ensure_task_not_retired(&transaction, &lease.task_id, "slot lease")?;
         // projection 쪽 변경 신호는 claim heartbeat와 별도로 `last_runtime_projection_at`에 남긴다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         // slot_id를 primary identity로 보고, 같은 slot의 lease가 오면 updated_at/content만 최신화한다.
@@ -874,6 +1534,188 @@ impl SqlitePlanningAuthorityAdapter {
         Ok(())
     }
 
+    pub(crate) fn remove_runtime_slot_lease_if_matches(
+        workspace_dir: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let expected_json = serde_json::to_string(expected)
+            .context("failed to serialize expected runtime slot lease projection")?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open runtime slot lease compare-and-delete transaction")?;
+        let current_json = transaction
+            .query_row(
+                "SELECT content FROM runtime_slot_leases WHERE slot_id = ?1",
+                params![expected.slot_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .with_context(|| {
+                format!(
+                    "failed to inspect runtime slot lease `{}` before compare-and-delete",
+                    expected.slot_id
+                )
+            })?;
+        if current_json.as_deref() != Some(expected_json.as_str()) {
+            transaction
+                .commit()
+                .context("failed to close unmatched runtime slot lease transaction")?;
+            return Ok(false);
+        }
+
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let deleted_rows = transaction
+            .execute(
+                "DELETE FROM runtime_slot_leases WHERE slot_id = ?1 AND content = ?2",
+                params![expected.slot_id, expected_json],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to compare-and-delete runtime slot lease `{}`",
+                    expected.slot_id
+                )
+            })?;
+        if deleted_rows != 1 {
+            transaction
+                .commit()
+                .context("failed to close lost runtime slot lease transaction")?;
+            return Ok(false);
+        }
+        transaction
+            .execute(
+                "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
+                params![expected.slot_id],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to clear invalid runtime slot lease `{}`",
+                    expected.slot_id
+                )
+            })?;
+        append_runtime_event(
+            &transaction,
+            "slot_lease_removed",
+            "slot_lease",
+            &expected.slot_id,
+            &format!(
+                "runtime slot lease compare-and-delete completed / slot: {} / session: {}",
+                expected.slot_id,
+                expected.session_key()
+            ),
+            &expected_json,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime slot lease compare-and-delete transaction")?;
+        Ok(true)
+    }
+
+    pub(crate) fn replace_runtime_slot_lease_if_matches(
+        workspace_dir: &str,
+        expected_current: &ParallelModeSlotLeaseSnapshot,
+        replacement: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        if expected_current.slot_id != replacement.slot_id {
+            anyhow::bail!("runtime slot lease compare-and-replace requires one slot identity");
+        }
+        if !expected_current.has_valid_lease_generation()
+            || !replacement.has_valid_lease_generation()
+        {
+            anyhow::bail!("runtime slot lease compare-and-replace requires valid generations");
+        }
+        if !expected_current.same_generation_as(replacement) {
+            anyhow::bail!(
+                "runtime slot lease compare-and-replace cannot change immutable generation identity"
+            );
+        }
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let mut connection = open_authority_connection(&location)?;
+        let expected_json = serde_json::to_string(expected_current)
+            .context("failed to serialize expected runtime slot lease projection")?;
+        let replacement_json = serde_json::to_string(replacement)
+            .context("failed to serialize replacement runtime slot lease projection")?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to open runtime slot lease compare-and-replace transaction")?;
+        let current_json = transaction
+            .query_row(
+                "SELECT content FROM runtime_slot_leases WHERE slot_id = ?1",
+                params![expected_current.slot_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .with_context(|| {
+                format!(
+                    "failed to inspect runtime slot lease `{}` before compare-and-replace",
+                    expected_current.slot_id
+                )
+            })?;
+        if current_json.as_deref() != Some(expected_json.as_str()) {
+            transaction
+                .commit()
+                .context("failed to close unmatched runtime slot lease replacement transaction")?;
+            return Ok(false);
+        }
+
+        ensure_task_not_retired(&transaction, &replacement.task_id, "slot lease transition")?;
+        upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
+        let replaced_rows = transaction
+            .execute(
+                "UPDATE runtime_slot_leases
+                 SET updated_at = ?1, content = ?2
+                 WHERE slot_id = ?3 AND content = ?4",
+                params![
+                    Utc::now().to_rfc3339(),
+                    replacement_json,
+                    expected_current.slot_id,
+                    expected_json
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to compare-and-replace runtime slot lease `{}`",
+                    expected_current.slot_id
+                )
+            })?;
+        if replaced_rows != 1 {
+            transaction
+                .commit()
+                .context("failed to close lost runtime slot lease replacement transaction")?;
+            return Ok(false);
+        }
+        transaction
+            .execute(
+                "DELETE FROM runtime_invalid_slot_leases WHERE slot_id = ?1",
+                params![expected_current.slot_id],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to clear invalid runtime slot lease `{}`",
+                    expected_current.slot_id
+                )
+            })?;
+        append_runtime_event(
+            &transaction,
+            "slot_lease_replaced_if_matches",
+            "slot_lease",
+            &expected_current.slot_id,
+            &format!(
+                "runtime slot lease compare-and-replace completed / slot: {} / state: {} / session: {}",
+                expected_current.slot_id,
+                replacement.state.label(),
+                expected_current.session_key()
+            ),
+            &serde_json::to_string(replacement)
+                .context("failed to serialize runtime slot lease replacement event payload")?,
+        )?;
+        transaction
+            .commit()
+            .context("failed to commit runtime slot lease compare-and-replace transaction")?;
+        Ok(true)
+    }
+
     pub(crate) fn clear_parallel_runtime_projections(
         workspace_dir: &str,
         reason: &str,
@@ -904,13 +1746,8 @@ impl SqlitePlanningAuthorityAdapter {
         let claim_rows = transaction
             .execute(
                 "DELETE FROM runtime_claims
-                 WHERE claim_kind IN (?1, ?2)
-                    OR scope_key = ?3",
-                params![
-                    DISTRIBUTOR_QUEUE_CLAIM_KIND,
-                    "official-refresh",
-                    OFFICIAL_REFRESH_SCOPE_KEY
-                ],
+                 WHERE claim_kind IN (?1, ?2)",
+                params![DISTRIBUTOR_QUEUE_CLAIM_KIND, "official-refresh"],
             )
             .context("failed to clear parallel runtime claims")?;
         append_runtime_event(
@@ -1156,6 +1993,7 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open runtime session detail transaction")?;
+        ensure_task_not_retired(&transaction, &detail.task_id, "session detail")?;
         // runtime projection 변경이므로 claim용 metadata가 아니라 projection용 metadata를 갱신한다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         // session_key가 같은 row는 업데이트해 한 session의 최신 상태만 남긴다.
@@ -1214,6 +2052,7 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open runtime task dispatch block transaction")?;
+        ensure_task_not_retired(&transaction, &block.task_id, "task dispatch block")?;
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         let changed_rows = transaction
             .execute(
@@ -1282,6 +2121,7 @@ impl SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction()
             .context("failed to open runtime distributor queue transaction")?;
+        ensure_task_not_retired(&transaction, &record.task_id, "distributor queue record")?;
         // projection 변경 시각을 갱신해 외부 polling이 queue snapshot을 다시 읽을 수 있게 한다.
         upsert_authority_metadata(&transaction, &location, "last_runtime_projection_at")?;
         // queue_item_id가 같은 row는 최신 상태로 덮어쓴다.
@@ -1830,6 +2670,11 @@ fn clear_stale_runtime_claim(
     if !claim_is_stale(&existing_claim.claimed_at) {
         return Ok(false);
     }
+    if claim_kind == OFFICIAL_REFRESH_CLAIM_KIND
+        && official_refresh_owner_is_alive(&existing_claim.owner_token)
+    {
+        return Ok(false);
+    }
 
     // stale이라고 판단된 row만 kind/scope 기준으로 삭제한다.
     // owner_token을 조건에 넣지 않는 이유는 "이 scope의 오래된 소유권을 회수한다"가 목적이기 때문이다.
@@ -1842,6 +2687,33 @@ fn clear_stale_runtime_claim(
             format!("failed to clear stale runtime claim `{claim_kind}:{scope_key}`")
         })?;
     Ok(true)
+}
+
+fn official_refresh_owner_is_alive(owner_token: &str) -> bool {
+    let Some(owner_suffix) = owner_token.strip_prefix("official-refresh-") else {
+        return false;
+    };
+    let Some((pid, owner_suffix)) = owner_suffix.split_once('-') else {
+        return false;
+    };
+    let Ok(pid) = pid.parse::<u32>() else {
+        return false;
+    };
+    // Probe failures are ambiguous, so ownership remains live and recovery fails closed. Legacy
+    // tokens have no start identity and retain this PID-only behavior for on-disk compatibility.
+    if !crate::process_liveness::process_is_alive(pid).unwrap_or(true) {
+        return false;
+    }
+    let Some((_, expected_start_identity)) = owner_suffix.rsplit_once("-process-start:") else {
+        return true;
+    };
+    if expected_start_identity.is_empty() || expected_start_identity.chars().any(char::is_control) {
+        return true;
+    }
+    match crate::process_liveness::process_start_identity(pid) {
+        Ok(Some(current_start_identity)) => current_start_identity == expected_start_identity,
+        Ok(None) | Err(_) => true,
+    }
 }
 
 // claimed_at 문자열이 stale 임계값을 넘었는지 판단한다.

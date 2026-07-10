@@ -27,9 +27,10 @@ Akra should be presented as a repository that directly implements those workflow
 - local-first safety controls: CSRF, Telegram allowlists, GitHub identity verification, explicit
   reset confirmation, isolated worktrees, and architecture-boundary tests
 
-## Current Public Signals
+## Archived Public-Signal Snapshot (Not Current)
 
-As of 2026-06-04:
+The following values are an archival snapshot from 2026-06-04. They are retained only to explain
+the original draft and must not be represented as current or copied into a submission:
 
 - Repository visibility: public
 - GitHub stars: 0
@@ -38,7 +39,11 @@ As of 2026-06-04:
 - npm package: `@refinedstone/akra`
 - npm downloads, last month: 523
 
-Refresh before submission:
+## Submission-Time Signal Capture
+
+Refresh immediately before submission. Record the command output and observation date in the
+submission review, then update any metric-bearing prose from that captured result. A prior snapshot
+is never a fallback when either command fails.
 
 ```bash
 gh api repos/RefinedStone/codex-exec-loop \
@@ -73,7 +78,7 @@ Suggested text:
 Use this for the 500-character field:
 
 ```text
-Akra는 codex app-server 위에서 OSS 메인테이너의 반복 업무를 다루는 공개 Rust 프로젝트입니다. TUI, CLI, admin API, Telegram, planning-tool이 같은 서비스로 PR 리뷰 대기열, 이슈/작업 분류, release/validation, GitHub PR delivery를 운영합니다. GitHub 지표는 초기 단계지만 npm @refinedstone/akra는 최근 1개월 523 downloads이고, Codex를 이용한 maintainer workflow 자체를 재현·개선합니다.
+Akra는 codex app-server 위에서 OSS 메인테이너의 반복 업무를 다루는 공개 Rust 프로젝트입니다. TUI, CLI, admin API, Telegram, planning-tool이 같은 서비스로 PR 리뷰 대기열, 이슈/작업 분류, release/validation, GitHub PR delivery를 운영합니다. 공개 지표는 제출 직전 검증한 수치만 사용하며, Codex를 이용한 maintainer workflow 자체를 재현·개선합니다.
 ```
 
 ### Interested Benefits
@@ -102,7 +107,9 @@ Akra는 Codex를 대체하려는 도구가 아니라 Codex app-server를 native-
 
 ## Submission Notes
 
-- Do not claim broad adoption through GitHub stars; the current public star/fork signals are early.
-- Lead with the program-relevant maintainer workflow implementation and npm usage signal.
+- Do not claim broad adoption through GitHub stars; evaluate submission-time public signals
+  conservatively.
+- Lead with the program-relevant maintainer workflow implementation. Mention npm usage only after
+  capturing a fresh value with the command above.
 - Keep all statements factual and verifiable from this repository.
 - Do not submit secrets, private user data, or confidential maintainer details in the form.

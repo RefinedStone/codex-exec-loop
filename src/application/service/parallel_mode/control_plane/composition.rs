@@ -5,7 +5,8 @@ use crate::application::port::outbound::parallel_agent_worker_port::ParallelAgen
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::parallel_mode::{
-    ParallelModeOrchestratorTickResult, ParallelModeOrchestratorTrigger, ParallelModeService,
+    ParallelModeAutomationGuard, ParallelModeOrchestratorTickResult,
+    ParallelModeOrchestratorTrigger, ParallelModeService,
 };
 use crate::application::service::planning::{PlanningApplicationProjection, PlanningServices};
 use crate::domain::parallel_mode::{
@@ -25,6 +26,7 @@ pub struct ParallelModeControlPlaneComposition {
     parallel_mode_service: ParallelModeService,
     planning: PlanningServices,
     worker_port: Arc<dyn ParallelAgentWorkerPort>,
+    automation_guard: ParallelModeAutomationGuard,
 }
 
 pub struct ParallelModeControlPlaneDashboardSnapshot {
@@ -54,11 +56,13 @@ impl ParallelModeControlPlaneComposition {
             parallel_mode_service,
             planning,
             worker_port,
+            automation_guard: ParallelModeAutomationGuard::default(),
         }
     }
 
     pub fn parallel_mode_turn_service(&self) -> ParallelModeTurnService {
         ParallelModeTurnService::new(self.parallel_mode_service.clone())
+            .with_automation_guard(self.automation_guard.clone())
     }
 
     pub fn planning(&self) -> &PlanningServices {
@@ -73,12 +77,13 @@ impl ParallelModeControlPlaneComposition {
     ) -> ParallelModeControlPlaneDashboardSnapshot {
         let readiness = self
             .parallel_mode_service
-            .inspect_readiness_from_planning_projection(workspace_directory, planning_projection);
-        let supervisor = self.parallel_mode_service.build_supervisor_snapshot(
-            workspace_directory,
-            true,
-            Some(&readiness),
-        );
+            .inspect_readiness_passively_from_planning_projection(
+                workspace_directory,
+                planning_projection,
+            );
+        let supervisor = self
+            .parallel_mode_service
+            .build_passive_supervisor_snapshot(workspace_directory, Some(&readiness));
         let events = self
             .parallel_mode_service
             .build_runtime_events_snapshot(workspace_directory, event_request);
@@ -154,14 +159,16 @@ impl ParallelModeControlPlaneComposition {
     where
         S: ParallelModeControlPlaneEventSink,
     {
-        let service =
-            ParallelModeControlPlaneService::new(ParallelModeControlPlaneEffectRunner::new(
+        let service = ParallelModeControlPlaneService::new(
+            ParallelModeControlPlaneEffectRunner::new_with_automation_guard(
                 self.parallel_mode_service.clone(),
                 self.planning.clone(),
                 self.worker_port.clone(),
-                ParallelModeTurnService::new(self.parallel_mode_service.clone()),
+                self.parallel_mode_turn_service(),
+                self.automation_guard.clone(),
                 event_sink,
-            ));
+            ),
+        );
         ParallelModeControlPlaneHandle::new(service)
     }
 }

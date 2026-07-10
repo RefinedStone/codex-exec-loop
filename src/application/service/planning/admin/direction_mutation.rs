@@ -59,16 +59,37 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
         Self { facade }
     }
 
+    #[cfg(test)]
     pub(super) fn apply(
         &self,
         // caller가 upsert/delete 중 하나로 정규화한 admin mutation command다.
         command: PlanningAdminDirectionMutationCommand,
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
+        self.apply_inner(command, None)
+    }
+
+    pub(super) fn apply_with_authority_guard(
+        &self,
+        command: PlanningAdminDirectionMutationCommand,
+        authority_mutation_owner_token: &str,
+    ) -> Result<PlanningAdminDirectionMutationOutcome> {
+        self.apply_inner(command, Some(authority_mutation_owner_token))
+    }
+
+    fn apply_inner(
+        &self,
+        command: PlanningAdminDirectionMutationCommand,
+        authority_mutation_owner_token: Option<&str>,
+    ) -> Result<PlanningAdminDirectionMutationOutcome> {
         // apply는 command router다. 실제 문서 load/commit과 cascade cleanup은 각 private method에 나눠 두어
         // upsert와 delete의 정책 차이를 드러낸다.
         match command {
-            PlanningAdminDirectionMutationCommand::Upsert(request) => self.upsert(request),
-            PlanningAdminDirectionMutationCommand::Delete(request) => self.delete(request),
+            PlanningAdminDirectionMutationCommand::Upsert(request) => {
+                self.upsert(request, authority_mutation_owner_token)
+            }
+            PlanningAdminDirectionMutationCommand::Delete(request) => {
+                self.delete(request, authority_mutation_owner_token)
+            }
         }
     }
 
@@ -76,6 +97,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
         &self,
         // direction 생성 또는 갱신 request다. documents helper가 id/title/detail 정규화를 수행한다.
         request: PlanningAdminDirectionMutationRequest,
+        authority_mutation_owner_token: Option<&str>,
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
         // direction catalog와 task authority를 같은 document snapshot으로 읽는다. upsert는 direction catalog만
         // 바꾸지만 commit 단위는 operator planning documents 전체다.
@@ -99,7 +121,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
             false
         };
         // mutation은 in-memory document를 모두 갱신한 뒤 한 번만 commit한다.
-        self.facade.commit_operator_planning_documents(documents)?;
+        self.commit_documents(documents, authority_mutation_owner_token)?;
 
         // upsert는 direction 삭제나 task cascade를 수행하지 않으므로 deleted와 removed_task_count는 고정값이다.
         Ok(PlanningAdminDirectionMutationOutcome {
@@ -115,6 +137,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
         &self,
         // 삭제할 direction id request다.
         request: PlanningAdminDirectionDeleteRequest,
+        authority_mutation_owner_token: Option<&str>,
     ) -> Result<PlanningAdminDirectionMutationOutcome> {
         // blank id는 admin command contract 위반이므로 문서를 읽기 전에 실패시킨다.
         let direction_id = normalized_required_id(&request.id, "direction id")?.to_string();
@@ -124,7 +147,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
         // 있다면 다시 보장하고 no-op outcome을 반환한다.
         if direction_id == DEFAULT_DIRECTION_ID {
             ensure_default_direction(&mut documents.directions)?;
-            self.facade.commit_operator_planning_documents(documents)?;
+            self.commit_documents(documents, authority_mutation_owner_token)?;
             return Ok(PlanningAdminDirectionMutationOutcome {
                 direction_id,
                 updated: false,
@@ -156,7 +179,7 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
         let removed_task_count = removed_task_ids.len();
         // 삭제 후에도 direction catalog에는 항상 default direction이 남아야 한다.
         ensure_default_direction(&mut documents.directions)?;
-        self.facade.commit_operator_planning_documents(documents)?;
+        self.commit_documents(documents, authority_mutation_owner_token)?;
 
         // 이 outcome은 direction 자체가 삭제되었고 task cascade가 몇 건 있었는지 보고한다.
         Ok(PlanningAdminDirectionMutationOutcome {
@@ -166,6 +189,19 @@ impl<'a> PlanningAdminDirectionMutationService<'a> {
             removed_task_count,
             removed_task_ids,
         })
+    }
+
+    fn commit_documents(
+        &self,
+        documents: super::documents::PlanningOperatorPlanningDocuments,
+        authority_mutation_owner_token: Option<&str>,
+    ) -> Result<()> {
+        match authority_mutation_owner_token {
+            Some(owner_token) => self
+                .facade
+                .commit_operator_planning_documents_with_guard(documents, owner_token),
+            None => self.facade.commit_operator_planning_documents(documents),
+        }
     }
 }
 

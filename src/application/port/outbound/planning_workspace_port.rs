@@ -80,6 +80,18 @@ pub struct PlanningWorkspaceLoadRecord {
     pub result_output_markdown: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningFileSyncCandidateRecord {
+    pub body: String,
+    pub observed_planning_revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningFileSyncBaselineRecord {
+    pub relative_path: String,
+    pub observed_planning_revision: Option<i64>,
+}
+
 impl PlanningWorkspaceLoadRecord {
     // commit/render 전에 "실제로 다룰 planning 파일이 있는가"를 빠르게 판단하는 도우미이다.
     pub fn has_any_files(&self) -> bool {
@@ -93,6 +105,32 @@ impl PlanningWorkspaceLoadRecord {
  * repo-scoped SQLite authority인지 판단하는 책임은 adapter 쪽에 둔다.
  */
 pub trait PlanningWorkspacePort: Send + Sync {
+    // True when active planning files are rows in the same repo-scoped
+    // authority store used by PlanningAuthorityPort. Operator rewrites use
+    // this capability to avoid a second result-output write outside the
+    // authority transaction.
+    fn uses_repo_scoped_authority(&self, _workspace_dir: &str) -> bool {
+        false
+    }
+
+    fn export_planning_file_sync_candidate(
+        &self,
+        _workspace_dir: &str,
+        _relative_path: &str,
+        _body: &str,
+        _observed_planning_revision: Option<i64>,
+    ) -> Result<String> {
+        anyhow::bail!("planning candidate file sync is unsupported by this workspace adapter")
+    }
+
+    fn load_planning_file_sync_candidate(
+        &self,
+        _workspace_dir: &str,
+        _relative_path: &str,
+    ) -> Result<Option<PlanningFileSyncCandidateRecord>> {
+        anyhow::bail!("planning candidate file sync is unsupported by this workspace adapter")
+    }
+
     // 새 draft 파일 묶음을 안전한 staging 영역에 저장하고, 저장된 위치를 호출자에게 돌려준다.
     fn stage_planning_draft_files(
         &self,
@@ -148,6 +186,22 @@ pub trait PlanningWorkspacePort: Send + Sync {
         // 파일별 존재/부재를 포함한 canonical workspace 스냅샷이다.
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()>;
+
+    /*
+     * Restore a protected snapshot only while the active record still equals
+     * the candidate observed by reconciliation. Production adapters override
+     * this with a storage-atomic compare-and-swap. Adapters that do not expose
+     * that primitive fail closed and leave the current operator content intact.
+     */
+    fn compare_and_swap_planning_workspace_files(
+        &self,
+        workspace_dir: &str,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool> {
+        let _ = (workspace_dir, observed, replacement);
+        Ok(false)
+    }
 
     // active workspace에서 단일 planning 파일을 선택적으로 읽는다.
     fn load_optional_planning_file(
@@ -207,6 +261,18 @@ pub trait PlanningWorkspacePort: Send + Sync {
  * 이 trait로 위임해 active 루트, draft 저장, 파일 교체를 repository authority 관점에서 처리한다.
  */
 pub trait RepoScopedPlanningWorkspacePort: Send + Sync {
+    fn store_repo_scoped_file_sync_baseline(
+        &self,
+        workspace_dir: &str,
+        baseline: &PlanningFileSyncBaselineRecord,
+    ) -> Result<()>;
+
+    fn load_repo_scoped_file_sync_baseline(
+        &self,
+        workspace_dir: &str,
+        relative_path: &str,
+    ) -> Result<Option<PlanningFileSyncBaselineRecord>>;
+
     // 주어진 workspace가 repo authority를 통해 관리되는 git-backed workspace인지 판단한다.
     fn is_git_backed_workspace(&self, workspace_dir: &str) -> bool;
 
@@ -261,6 +327,14 @@ pub trait RepoScopedPlanningWorkspacePort: Send + Sync {
         // 저장할 planning workspace 파일 스냅샷이다.
         record: &PlanningWorkspaceLoadRecord,
     ) -> Result<()>;
+
+    // SQLite-backed implementations compare and replace in one transaction.
+    fn compare_and_swap_active_workspace_files(
+        &self,
+        workspace_dir: &str,
+        observed: &PlanningWorkspaceLoadRecord,
+        replacement: &PlanningWorkspaceLoadRecord,
+    ) -> Result<bool>;
 
     // repo authority의 active workspace에서 단일 파일을 선택적으로 읽는다.
     fn load_active_planning_file(

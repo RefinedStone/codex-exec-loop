@@ -27,6 +27,35 @@ struct ScriptedWorkerPort {
     requests: Mutex<Vec<PlanningWorkerRequest>>,
 }
 
+struct CancelAfterFirstWorkerPort {
+    gate: crate::domain::planning::PostTurnContinuationGate,
+    calls: Mutex<usize>,
+    message: &'static str,
+}
+
+impl PlanningWorkerPort for CancelAfterFirstWorkerPort {
+    fn run_planning_session(
+        &self,
+        request: PlanningWorkerRequest,
+    ) -> Result<PlanningWorkerResponse> {
+        let mut calls = self
+            .calls
+            .lock()
+            .expect("worker call count should not be poisoned");
+        *calls += 1;
+        if *calls == 1 {
+            self.gate.advance();
+        }
+        Ok(PlanningWorkerResponse {
+            operation: request.operation,
+            thread_id: Some("worker-thread".to_string()),
+            turn_id: Some("worker-turn".to_string()),
+            final_agent_message: Some(self.message.to_string()),
+            changed_planning_file_paths: Vec::new(),
+        })
+    }
+}
+
 enum ScriptedWorkerAction {
     Message(&'static str),
     Error(&'static str),
@@ -475,6 +504,8 @@ fn repair_post_turn_task_authority_reports_worker_failure_and_retry_exhaustion()
         )])),
     );
     let repair_request = sample_repair_request();
+    let failure_gate = crate::domain::planning::PostTurnContinuationGate::default();
+    let failure_permit = failure_gate.capture();
     let failed = failing
         .worker
         .repair_post_turn_task_authority(PlanningPostTurnRepairRequest {
@@ -484,6 +515,7 @@ fn repair_post_turn_task_authority_reports_worker_failure_and_retry_exhaustion()
             repair_request: &repair_request,
             previous_handoff_task: Some(&sample_handoff()),
             max_attempts: 3,
+            continuation_permit: &failure_permit,
         });
     assert!(!failed.resolved);
     assert_eq!(failed.attempts.len(), 1);
@@ -495,6 +527,8 @@ fn repair_post_turn_task_authority_reports_worker_failure_and_retry_exhaustion()
 
     let retry_workspace = TempPlanningWorkspace::new("planning-use-cases-repair-retry");
     let invalid_commands = r#"{"planning_task_commands":{"version":2,"commands":[]}}"#;
+    let retry_gate = crate::domain::planning::PostTurnContinuationGate::default();
+    let retry_permit = retry_gate.capture();
     let retrying = planning_services(
         Arc::new(NoopPlanningTaskRepositoryPort),
         Arc::new(ScriptedWorkerPort::new([
@@ -512,6 +546,7 @@ fn repair_post_turn_task_authority_reports_worker_failure_and_retry_exhaustion()
                 repair_request: &repair_request,
                 previous_handoff_task: Some(&sample_handoff()),
                 max_attempts: 2,
+                continuation_permit: &retry_permit,
             });
 
     assert!(!exhausted.resolved);
@@ -540,6 +575,43 @@ fn repair_post_turn_task_authority_reports_worker_failure_and_retry_exhaustion()
             ..
         }
     ));
+}
+
+#[test]
+fn repair_retry_stops_when_continuation_is_superseded_mid_evaluation() {
+    let workspace = TempPlanningWorkspace::new("planning-use-cases-repair-canceled");
+    let gate = crate::domain::planning::PostTurnContinuationGate::default();
+    let permit = gate.capture();
+    let worker = Arc::new(CancelAfterFirstWorkerPort {
+        gate,
+        calls: Mutex::new(0),
+        message: r#"{"planning_task_commands":{"version":2,"commands":[]}}"#,
+    });
+    let planning = planning_services(Arc::new(NoopPlanningTaskRepositoryPort), worker.clone());
+    let repair_request = sample_repair_request();
+
+    let outcome = planning
+        .worker
+        .repair_post_turn_task_authority(PlanningPostTurnRepairRequest {
+            workspace_directory: workspace.path_str(),
+            parent_thread_id: Some("thread-canceled"),
+            completed_turn_id: "turn-canceled",
+            repair_request: &repair_request,
+            previous_handoff_task: None,
+            max_attempts: 3,
+            continuation_permit: &permit,
+        });
+
+    assert!(!outcome.resolved);
+    assert_eq!(outcome.attempts.len(), 1);
+    assert_eq!(
+        *worker
+            .calls
+            .lock()
+            .expect("worker call count should not be poisoned"),
+        1,
+        "a canceled repair chain must not launch its second worker"
+    );
 }
 
 #[test]
@@ -650,6 +722,7 @@ fn seed_direction_catalog(
             PlanningDirectionAuthorityCommit {
                 observed_planning_revision: None,
                 directions: &directions,
+                authority_mutation_owner_token: None,
             },
         )
         .expect("direction authority should seed");

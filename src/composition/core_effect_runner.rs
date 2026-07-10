@@ -1,4 +1,3 @@
-use std::sync::mpsc::Sender;
 use std::thread;
 
 use anyhow::Result;
@@ -6,9 +5,7 @@ use anyhow::Result;
 use crate::application::service::conversation_service::{
     ConversationService, LoadedConversationThreadSnapshot,
 };
-use crate::application::service::manual_prompt_preparation::{
-    ManualPromptPreparationRequest, ManualPromptPreparationService,
-};
+use crate::application::service::manual_prompt_preparation::ManualPromptPreparationService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{PlanningRuntimeUseCases, PlanningServices};
 use crate::application::service::post_turn_evaluation::{
@@ -17,9 +14,13 @@ use crate::application::service::post_turn_evaluation::{
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
-use crate::core::app::{ConversationReadySnapshot, SessionCatalogReadySnapshot};
+use crate::core::app::{
+    ConversationLoadCorrelation, ConversationReadySnapshot, ConversationThreadReviewSnapshot,
+    SessionCatalogReadySnapshot, StartupCheckCorrelation,
+};
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
+use crate::core::runtime::CoreInputSender;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 
@@ -32,7 +33,7 @@ pub struct CoreEffectRunner {
     parallel_mode_turn_service: ParallelModeTurnService,
     manual_prompt_preparation_service: ManualPromptPreparationService,
     post_turn_evaluation_service: PostTurnEvaluationService,
-    input_sender: Sender<CoreInput>,
+    input_sender: CoreInputSender,
 }
 
 impl CoreEffectRunner {
@@ -43,7 +44,7 @@ impl CoreEffectRunner {
         planning_feature: PlanningServices,
         parallel_mode_turn_service: ParallelModeTurnService,
         post_turn_evaluation_service: PostTurnEvaluationService,
-        input_sender: Sender<CoreInput>,
+        input_sender: CoreInputSender,
     ) -> Self {
         Self {
             startup_service,
@@ -59,31 +60,55 @@ impl CoreEffectRunner {
         }
     }
 
-    pub fn spawn_startup_checks(&self) {
+    pub fn spawn_startup_checks(&self, correlation: StartupCheckCorrelation) {
         let startup_service = self.startup_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
-            let completion = startup_checks_completion(startup_service.run_checks());
+            let completion = startup_checks_completion(correlation, startup_service.run_checks());
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
 
-    pub fn run_effect(&self, effect: CoreEffect) {
+    pub fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
         match effect {
-            CoreEffect::RunStartupChecks => self.spawn_startup_checks(),
+            CoreEffect::RunStartupChecks { correlation } => {
+                self.spawn_startup_checks(correlation);
+                None
+            }
             CoreEffect::LoadSessionCatalog {
                 limit,
                 workspace_directory,
-            } => self.spawn_session_catalog_load(limit, workspace_directory),
-            CoreEffect::LoadConversation {
-                thread_id,
-                fallback_workspace_directory,
-            } => self.spawn_conversation_load(thread_id, fallback_workspace_directory),
-            CoreEffect::PrepareManualPrompt(request) => {
-                self.spawn_manual_prompt_preparation(*request)
+            } => {
+                self.spawn_session_catalog_load(limit, workspace_directory);
+                None
             }
-            CoreEffect::SubmitTurn(request) => self.spawn_turn_submission(request),
-            CoreEffect::EvaluatePostTurn(request) => self.spawn_post_turn_evaluation(*request),
+            CoreEffect::LoadConversation {
+                correlation,
+                fallback_workspace_directory,
+            } => {
+                self.spawn_conversation_load(correlation, fallback_workspace_directory);
+                None
+            }
+            CoreEffect::LoadParallelPeekConversation {
+                request_id,
+                thread_id,
+            } => {
+                self.spawn_parallel_peek_conversation_load(request_id, thread_id);
+                None
+            }
+            CoreEffect::PrepareManualPrompt(request) => Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::ManualPromptPrepared(Box::new(
+                    self.manual_prompt_preparation_service.prepare(*request),
+                )),
+            )),
+            CoreEffect::SubmitTurn(request) => {
+                self.spawn_turn_submission(request);
+                None
+            }
+            CoreEffect::EvaluatePostTurn(request) => {
+                self.spawn_post_turn_evaluation(*request);
+                None
+            }
         }
     }
 
@@ -98,15 +123,29 @@ impl CoreEffectRunner {
         });
     }
 
-    pub fn spawn_conversation_load(&self, thread_id: String, fallback_workspace_directory: String) {
+    pub fn spawn_conversation_load(
+        &self,
+        correlation: ConversationLoadCorrelation,
+        fallback_workspace_directory: String,
+    ) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
-            let completion =
-                conversation_snapshot_completion(conversation_service.load_thread_snapshot(
-                    thread_id.as_str(),
-                    fallback_workspace_directory.as_str(),
-                ));
+            let result = conversation_service.load_thread_snapshot(
+                correlation.requested_thread_id.as_str(),
+                fallback_workspace_directory.as_str(),
+            );
+            let completion = conversation_snapshot_completion(correlation, result);
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
+    pub fn spawn_parallel_peek_conversation_load(&self, request_id: u64, thread_id: String) {
+        let conversation_service = self.conversation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = conversation_service.load_snapshot(thread_id.as_str());
+            let completion = parallel_peek_conversation_completion(request_id, thread_id, result);
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -119,17 +158,6 @@ impl CoreEffectRunner {
             self.parallel_mode_turn_service.clone(),
             self.input_sender.clone(),
         );
-    }
-
-    pub fn spawn_manual_prompt_preparation(&self, request: ManualPromptPreparationRequest) {
-        let service = self.manual_prompt_preparation_service.clone();
-        let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let result = service.prepare(request);
-            let _ = input_sender.send(CoreInput::EffectCompleted(
-                CoreEffectCompletion::ManualPromptPrepared(Box::new(result)),
-            ));
-        });
     }
 
     pub fn spawn_post_turn_evaluation(&self, request: crate::domain::planning::PostTurnRequest) {
@@ -145,18 +173,22 @@ impl CoreEffectRunner {
 }
 
 impl CoreEffectExecutor for CoreEffectRunner {
-    fn run_effect(&self, effect: CoreEffect) {
-        CoreEffectRunner::run_effect(self, effect);
+    fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+        CoreEffectRunner::run_effect(self, effect)
     }
 }
 
-fn startup_checks_completion(result: Result<StartupDiagnostics>) -> CoreEffectCompletion {
-    CoreEffectCompletion::StartupChecksLoaded(
-        result
+fn startup_checks_completion(
+    correlation: StartupCheckCorrelation,
+    result: Result<StartupDiagnostics>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::StartupChecksLoaded {
+        correlation,
+        result: result
             .map(StartupReadySnapshot::from_diagnostics)
             .map(Box::new)
             .map_err(|error| error.to_string()),
-    )
+    }
 }
 
 fn session_catalog_completion(result: Result<SessionCatalog>) -> CoreEffectCompletion {
@@ -168,14 +200,51 @@ fn session_catalog_completion(result: Result<SessionCatalog>) -> CoreEffectCompl
 }
 
 fn conversation_snapshot_completion(
+    correlation: ConversationLoadCorrelation,
     result: Result<LoadedConversationThreadSnapshot>,
 ) -> CoreEffectCompletion {
-    CoreEffectCompletion::ConversationLoaded(
-        result
+    let requested_thread_id = correlation.requested_thread_id.clone();
+    CoreEffectCompletion::ConversationLoaded {
+        correlation,
+        result: result
+            .and_then(|snapshot| {
+                if snapshot.conversation.thread_id == requested_thread_id {
+                    Ok(snapshot)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "conversation provider returned a different thread"
+                    ))
+                }
+            })
             .map(conversation_ready_snapshot)
             .map(Box::new)
             .map_err(|error| error.to_string()),
-    )
+    }
+}
+
+fn parallel_peek_conversation_completion(
+    request_id: u64,
+    thread_id: String,
+    result: Result<crate::domain::conversation::ConversationSnapshot>,
+) -> CoreEffectCompletion {
+    let result = result
+        .and_then(|snapshot| {
+            if snapshot.thread_id == thread_id {
+                Ok(snapshot)
+            } else {
+                Err(anyhow::anyhow!(
+                    "conversation provider returned a different thread"
+                ))
+            }
+        })
+        .map(ConversationReadySnapshot::from)
+        .map(Box::new)
+        .map_err(|error| error.to_string());
+    CoreEffectCompletion::ParallelPeekConversationLoaded {
+        request_id,
+        thread_id,
+        result,
+    }
 }
 
 fn conversation_ready_snapshot(
@@ -186,18 +255,16 @@ fn conversation_ready_snapshot(
         snapshot
             .thread_review
             .into_iter()
-            .map(|review| {
-                ConversationReadySnapshot::thread_review_snapshot(
-                    review.thread_id,
-                    review.review_id,
-                    review.review_label,
-                    review.review_state,
-                    review.review_summary,
-                    review.requested_at,
-                    review.updated_at,
-                    review.handoff_target,
-                    review.handoff_note,
-                )
+            .map(|review| ConversationThreadReviewSnapshot {
+                thread_id: review.thread_id,
+                review_id: review.review_id,
+                review_label: review.review_label,
+                review_state: review.review_state,
+                review_summary: review.review_summary,
+                requested_at: review.requested_at,
+                updated_at: review.updated_at,
+                handoff_target: review.handoff_target,
+                handoff_note: review.handoff_note,
             })
             .collect(),
     )
@@ -210,6 +277,14 @@ mod tests {
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalogTier};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+
+    fn startup_correlation() -> StartupCheckCorrelation {
+        StartupCheckCorrelation::new(7)
+    }
+
+    fn conversation_correlation(thread_id: &str) -> ConversationLoadCorrelation {
+        ConversationLoadCorrelation::new(9, thread_id)
+    }
 
     #[test]
     fn startup_success_maps_to_core_completion() {
@@ -230,42 +305,48 @@ mod tests {
         };
 
         assert_eq!(
-            startup_checks_completion(Ok(diagnostics)),
-            CoreEffectCompletion::StartupChecksLoaded(Ok(Box::new(StartupReadySnapshot {
-                cwd: "/tmp/workspace".to_string(),
-                workspace_path: "/tmp/workspace".to_string(),
-                can_continue: true,
-                codex_binary: crate::core::app::StartupDiagnosticSnapshot {
-                    ok: true,
-                    detail: "/usr/bin/codex".to_string(),
-                },
-                workspace: crate::core::app::StartupDiagnosticSnapshot {
-                    ok: true,
-                    detail: "git repo: /tmp/workspace".to_string(),
-                },
-                app_server_initialize: crate::core::app::StartupDiagnosticSnapshot {
-                    ok: true,
-                    detail: "initialized".to_string(),
-                },
-                account: crate::core::app::StartupDiagnosticSnapshot {
-                    ok: true,
-                    detail: "authenticated".to_string(),
-                },
-                attachment: crate::core::app::StartupAttachmentSnapshot {
-                    mode_label: "provider-launched".to_string(),
-                    recovery_anchor_label: "provider-thread-id".to_string(),
-                },
-                warnings: Vec::new(),
-                schema_snapshot: "embedded schema".to_string(),
-            })))
+            startup_checks_completion(startup_correlation(), Ok(diagnostics)),
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_correlation(),
+                result: Ok(Box::new(StartupReadySnapshot {
+                    cwd: "/tmp/workspace".to_string(),
+                    workspace_path: "/tmp/workspace".to_string(),
+                    can_continue: true,
+                    codex_binary: crate::core::app::StartupDiagnosticSnapshot {
+                        ok: true,
+                        detail: "/usr/bin/codex".to_string(),
+                    },
+                    workspace: crate::core::app::StartupDiagnosticSnapshot {
+                        ok: true,
+                        detail: "git repo: /tmp/workspace".to_string(),
+                    },
+                    app_server_initialize: crate::core::app::StartupDiagnosticSnapshot {
+                        ok: true,
+                        detail: "initialized".to_string(),
+                    },
+                    account: crate::core::app::StartupDiagnosticSnapshot {
+                        ok: true,
+                        detail: "authenticated".to_string(),
+                    },
+                    attachment: crate::core::app::StartupAttachmentSnapshot {
+                        mode_label: "provider-launched".to_string(),
+                        recovery_anchor_label: "provider-thread-id".to_string(),
+                    },
+                    warnings: Vec::new(),
+                    schema_snapshot: "embedded schema".to_string(),
+                })),
+            }
         );
     }
 
     #[test]
     fn startup_error_maps_to_core_completion() {
         assert_eq!(
-            startup_checks_completion(Err(anyhow::anyhow!("codex missing"))),
-            CoreEffectCompletion::StartupChecksLoaded(Err("codex missing".to_string()))
+            startup_checks_completion(startup_correlation(), Err(anyhow::anyhow!("codex missing")),),
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_correlation(),
+                result: Err("codex missing".to_string()),
+            }
         );
     }
 
@@ -334,34 +415,112 @@ mod tests {
         thread_review.handoff_note = Some("resume in inbox".to_string());
 
         assert_eq!(
-            conversation_snapshot_completion(Ok(LoadedConversationThreadSnapshot {
-                conversation: conversation.clone(),
-                thread_review: vec![thread_review],
-            })),
-            CoreEffectCompletion::ConversationLoaded(Ok(Box::new(
-                ConversationReadySnapshot::from_parts(
+            conversation_snapshot_completion(
+                conversation_correlation("thread-1"),
+                Ok(LoadedConversationThreadSnapshot {
+                    conversation: conversation.clone(),
+                    thread_review: vec![thread_review],
+                }),
+            ),
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_correlation("thread-1"),
+                result: Ok(Box::new(ConversationReadySnapshot::from_parts(
                     conversation,
-                    vec![ConversationReadySnapshot::thread_review_snapshot(
-                        "thread-1".to_string(),
-                        "review-1".to_string(),
-                        "Manual review".to_string(),
-                        "pending".to_string(),
-                        "Need operator follow-up".to_string(),
-                        "2026-07-06T10:00:00Z".to_string(),
-                        "2026-07-06T11:00:00Z".to_string(),
-                        Some("operator".to_string()),
-                        Some("resume in inbox".to_string()),
-                    )],
-                )
-            )))
+                    vec![ConversationThreadReviewSnapshot {
+                        thread_id: "thread-1".to_string(),
+                        review_id: "review-1".to_string(),
+                        review_label: "Manual review".to_string(),
+                        review_state: "pending".to_string(),
+                        review_summary: "Need operator follow-up".to_string(),
+                        requested_at: "2026-07-06T10:00:00Z".to_string(),
+                        updated_at: "2026-07-06T11:00:00Z".to_string(),
+                        handoff_target: Some("operator".to_string()),
+                        handoff_note: Some("resume in inbox".to_string()),
+                    }],
+                ))),
+            }
         );
     }
 
     #[test]
     fn conversation_snapshot_error_maps_to_core_completion() {
         assert_eq!(
-            conversation_snapshot_completion(Err(anyhow::anyhow!("thread unavailable"))),
-            CoreEffectCompletion::ConversationLoaded(Err("thread unavailable".to_string()))
+            conversation_snapshot_completion(
+                conversation_correlation("thread-1"),
+                Err(anyhow::anyhow!("thread unavailable")),
+            ),
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_correlation("thread-1"),
+                result: Err("thread unavailable".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn conversation_completion_rejects_provider_thread_mismatch() {
+        let snapshot = LoadedConversationThreadSnapshot {
+            conversation: crate::domain::conversation::ConversationSnapshot {
+                thread_id: "thread-other".to_string(),
+                title: "Wrong thread".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+            },
+            thread_review: Vec::new(),
+        };
+
+        let CoreEffectCompletion::ConversationLoaded { result, .. } =
+            conversation_snapshot_completion(conversation_correlation("thread-1"), Ok(snapshot))
+        else {
+            panic!("general conversation load should use its correlated completion variant");
+        };
+        assert_eq!(
+            result,
+            Err("conversation provider returned a different thread".to_string())
+        );
+    }
+
+    #[test]
+    fn parallel_peek_completion_keeps_request_identity_and_validates_thread() {
+        let conversation = crate::domain::conversation::ConversationSnapshot {
+            thread_id: "thread-peek".to_string(),
+            title: "Peek thread".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        };
+
+        assert_eq!(
+            parallel_peek_conversation_completion(
+                7,
+                "thread-peek".to_string(),
+                Ok(conversation.clone()),
+            ),
+            CoreEffectCompletion::ParallelPeekConversationLoaded {
+                request_id: 7,
+                thread_id: "thread-peek".to_string(),
+                result: Ok(Box::new(ConversationReadySnapshot::from(conversation))),
+            }
+        );
+
+        let mismatched = crate::domain::conversation::ConversationSnapshot {
+            thread_id: "wrong-thread".to_string(),
+            title: "Wrong thread".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+        };
+        let CoreEffectCompletion::ParallelPeekConversationLoaded { result, .. } =
+            parallel_peek_conversation_completion(8, "thread-peek".to_string(), Ok(mismatched))
+        else {
+            panic!("parallel peek completion must keep its dedicated variant");
+        };
+        assert_eq!(
+            result,
+            Err("conversation provider returned a different thread".to_string())
         );
     }
 }

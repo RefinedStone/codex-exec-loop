@@ -1,158 +1,22 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
-use super::super::{
-    AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, local_branch_ref, pool_baseline_branch,
-    push_remote_name, remote_tracking_branch_ref,
-};
+use super::super::{DEFAULT_POOL_SIZE, branch_is_integrated_into};
 use super::{
-    GitWorktreeRecord, SlotGitStatus, command_succeeds, current_branch_name,
-    ensure_directory_exists, inspect_slot_git_status, reset_slot_worktree_to_akra,
-    resolve_branch_head, resolve_pool_baseline_head, slot_id,
+    GitWorktreeRecord, PoolMutationLock, command_succeeds, ensure_directory_exists,
+    inspect_slot_git_status, reset_slot_worktree_to_ref, slot_id,
 };
 
 /*
-reconcile은 pool baseline branch가 반드시 존재한다고 가정하고 slot worktree를 만든다. 이
-함수는 표준 branch의 remote-tracking ref가 있으면 거기에서 local branch를 맞추고, fresh
-repository처럼 local/remote 표준 branch가 모두 없으면 현재 workspace HEAD를 표준 branch로 seed한
-뒤 configured push remote에 push한다. local 표준 branch가 drift한 경우에는 remote-tracking ref로 되돌린다.
+reconcile은 pool baseline branch가 configured push remote에 이미 존재한다고 가정하고 slot
+worktree를 만든다. 매 실행에서 원격 branch를 명시적으로 fetch한 뒤 local branch와 같은 commit인지
+검증한다. Akra는 원격 branch를 현재 HEAD로 seed하거나 drift한 local branch를 덮어쓰지 않는다.
 
 반환값의 bool은 branch를 새로 만들었는지를 나타낸다. 상위 reconcile summary는 이 값을
 사용해 사용자가 방금 어떤 pool 구조 변화가 일어났는지 알 수 있게 한다.
 */
-pub(super) fn ensure_pool_baseline_branch(repo_root: &str) -> Result<(String, bool), ()> {
-    let push_remote = push_remote_name(repo_root);
-    let remote_ref = remote_tracking_branch_ref(push_remote.as_str(), pool_baseline_branch());
-    if command_succeeds(
-        "git",
-        [
-            "-C",
-            repo_root,
-            "show-ref",
-            "--verify",
-            "--quiet",
-            remote_ref.as_str(),
-        ],
-    ) {
-        return sync_pool_baseline_branch_from_remote(repo_root, &remote_ref);
-    }
-
-    seed_pool_baseline_branch_from_workspace_head(repo_root, push_remote.as_str(), &remote_ref)
-}
-
-fn sync_pool_baseline_branch_from_remote(
-    repo_root: &str,
-    remote_ref: &str,
-) -> Result<(String, bool), ()> {
-    let remote_head = resolve_branch_head(repo_root, remote_ref).ok_or(())?;
-    let local_head = resolve_branch_head(repo_root, pool_baseline_branch());
-    if local_head.as_deref() == Some(remote_head.as_str()) {
-        return Ok((remote_head, false));
-    }
-    if current_branch_name(Path::new(repo_root)).as_deref() == Some(pool_baseline_branch()) {
-        return Err(());
-    }
-
-    let existed = local_head.is_some();
-    if !command_succeeds(
-        "git",
-        [
-            "-C",
-            repo_root,
-            "branch",
-            "-f",
-            pool_baseline_branch(),
-            remote_ref,
-        ],
-    ) {
-        return Err(());
-    }
-
-    Ok((remote_head, !existed))
-}
-
-fn seed_pool_baseline_branch_from_workspace_head(
-    repo_root: &str,
-    push_remote: &str,
-    remote_ref: &str,
-) -> Result<(String, bool), ()> {
-    let current_branch = current_branch_name(Path::new(repo_root)).ok_or(())?;
-    if current_branch.starts_with(&format!("{AKRA_AGENT_BRANCH_PREFIX}/")) {
-        return Err(());
-    }
-
-    let workspace_head = resolve_branch_head(repo_root, "HEAD").ok_or(())?;
-    let local_head = resolve_branch_head(repo_root, pool_baseline_branch());
-    if let Some(local_head) = local_head {
-        let local_ref = local_branch_ref(pool_baseline_branch());
-        let push_refspec = format!("{local_ref}:{local_ref}");
-        if !command_succeeds(
-            "git",
-            ["-C", repo_root, "push", push_remote, push_refspec.as_str()],
-        ) {
-            return Err(());
-        }
-
-        if !command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "update-ref",
-                remote_ref,
-                local_head.as_str(),
-            ],
-        ) {
-            return Err(());
-        }
-
-        return Ok((local_head, false));
-    }
-
-    if current_branch != pool_baseline_branch()
-        && !command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "branch",
-                "-f",
-                pool_baseline_branch(),
-                "HEAD",
-            ],
-        )
-    {
-        return Err(());
-    }
-
-    let local_ref = local_branch_ref(pool_baseline_branch());
-    let push_refspec = format!("{local_ref}:{local_ref}");
-    if !command_succeeds(
-        "git",
-        ["-C", repo_root, "push", push_remote, push_refspec.as_str()],
-    ) {
-        return Err(());
-    }
-
-    if !command_succeeds(
-        "git",
-        [
-            "-C",
-            repo_root,
-            "update-ref",
-            remote_ref,
-            workspace_head.as_str(),
-        ],
-    ) {
-        return Err(());
-    }
-
-    Ok((workspace_head, true))
-}
-
 /*
 missing slot provisioning은 pool size만큼 정해진 slot path를 확인하고, 아직 git worktree
 inventory에도 없고 파일시스템에도 없는 slot만 새로 만든다. 이미 디렉터리가 있는데 git
@@ -168,17 +32,24 @@ pub(super) fn provision_missing_slots(
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
     slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
-) -> usize {
+    baseline_ref: &str,
+    mutation_lock: &PoolMutationLock,
+) -> Result<usize, String> {
+    mutation_lock.verify_pool_root(pool_root)?;
+    crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(repo_root))
+        .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
     /*
-    provisioning은 missing slot을 "pool이 소유한 disposable cache"로 취급한다. git worktree
-    inventory에는 없지만 slot path만 남은 경우, lease가 없으면 이전 실패나 수동 삭제 뒤의 잔여물로
-    보고 제거한 뒤 새 worktree를 만든다. lease가 남은 slot은 runtime projection이 아직 소유자를
-    말하고 있으므로 여기서 삭제하지 않고 inspection이 split-brain 상태를 드러내게 둔다.
+    git worktree inventory에는 없지만 slot path가 남아 있으면 그 경로의 소유권을 증명할 수 없다.
+    lease 유무와 관계없이 보존하고 slot inspection이 split-brain 상태를 드러내게 둔다. 이전 실패의
+    잔여물처럼 보여도 사용자 파일이나 다른 프로세스의 디렉터리일 수 있으므로 provisioning이 재귀
+    삭제해서는 안 된다.
     */
     let mut provisioned_slots = 0;
-
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
+        if slot_leases.contains_key(&slot_id) {
+            continue;
+        }
         let slot_path = pool_root.join(&slot_id);
         if worktree_records
             .iter()
@@ -191,9 +62,7 @@ pub(super) fn provision_missing_slots(
             */
             continue;
         }
-        if fs::symlink_metadata(&slot_path).is_ok()
-            && (slot_leases.contains_key(&slot_id) || remove_slot_residue(&slot_path).is_err())
-        {
+        if slot_path.symlink_metadata().is_ok() {
             continue;
         }
 
@@ -210,6 +79,9 @@ pub(super) fn provision_missing_slots(
         }
 
         // git command boundary는 Path를 문자열로 넘겨야 하므로 여기서만 display string으로 변환한다.
+        mutation_lock.verify_pool_root(pool_root)?;
+        crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(repo_root))
+            .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
         let slot_path_string = slot_path.display().to_string();
         if command_succeeds(
             "git",
@@ -220,7 +92,7 @@ pub(super) fn provision_missing_slots(
                 "add",
                 "--detach",
                 slot_path_string.as_str(),
-                pool_baseline_branch(),
+                baseline_ref,
             ],
         ) {
             /*
@@ -232,15 +104,7 @@ pub(super) fn provision_missing_slots(
         }
     }
 
-    provisioned_slots
-}
-
-fn remove_slot_residue(slot_path: &Path) -> std::io::Result<()> {
-    if slot_path.is_dir() {
-        fs::remove_dir_all(slot_path)
-    } else {
-        fs::remove_file(slot_path)
-    }
+    Ok(provisioned_slots)
 }
 
 /*
@@ -256,6 +120,8 @@ pub(super) fn reset_reusable_detached_baseline_slots(
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
     slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
+    baseline_ref: &str,
+    mutation_lock: &PoolMutationLock,
 ) -> usize {
     /*
     reusable detached reset은 lease가 없는 idle 후보만 대상으로 한다. 이 함수는 "slot worktree가
@@ -263,9 +129,8 @@ pub(super) fn reset_reusable_detached_baseline_slots(
     active lease가 있는 slot은 branch/head가 baseline과 달라도 agent 작업일 수 있어 절대
     reset하지 않는다.
     */
-    // baseline head를 못 찾으면 reset 기준이 없으므로 모든 slot을 관찰 전용으로 둔다.
-    let baseline_head = resolve_pool_baseline_head(repo_root).unwrap_or_default();
-    if baseline_head.is_empty() {
+    // baseline proof가 없으면 reset 기준이 없으므로 모든 slot을 관찰 전용으로 둔다.
+    if baseline_ref.is_empty() || mutation_lock.verify_pool_root(pool_root).is_err() {
         return 0;
     }
 
@@ -297,10 +162,13 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             continue;
         }
         // head SHA와 worktree dirtiness를 함께 봐야 stale baseline과 dirty idle slot을 모두 잡을 수 있다.
-        let slot_status = inspect_slot_git_status(&slot_path);
-        if worktree_record.head_sha == baseline_head
-            && slot_status.is_some_and(SlotGitStatus::is_clean_baseline)
-        {
+        let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
+            continue;
+        };
+        if !slot_status.is_clean_baseline() {
+            continue;
+        }
+        if worktree_record.head_sha == baseline_ref {
             /*
             head가 현재 baseline이고 git status도 clean이면 reset은 불필요하다. 불필요한 hard
             reset/clean을 피하면 사용자가 보고 있는 idle worktree timestamp나 git metadata churn도
@@ -308,7 +176,10 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             */
             continue;
         }
-        if reset_slot_worktree_to_akra(&slot_path).succeeded() {
+        if !branch_is_integrated_into(repo_root, &worktree_record.head_sha, baseline_ref) {
+            continue;
+        }
+        if reset_slot_worktree_to_ref(&slot_path, baseline_ref).succeeded() {
             reset_slots += 1;
         }
     }

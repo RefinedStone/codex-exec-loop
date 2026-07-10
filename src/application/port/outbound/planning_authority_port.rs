@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::application::port::outbound::github_automation_port::GithubAutomationCapabilities;
+use crate::application::port::outbound::github_automation_port::{
+    GithubAutomationCapabilities, GithubRepositoryVisibility,
+};
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogPort;
 #[cfg(test)]
 use crate::application::port::outbound::parallel_mode_runtime_event_log_port::ParallelModeRuntimeEventLogRequest;
@@ -52,6 +54,41 @@ pub enum PlanningAuthorityOfficialRefreshRecoveryStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningAuthorityDistributorDeliveryTarget {
+    pub push_remote: String,
+    #[serde(default)]
+    pub credential_redacted_push_url: Option<String>,
+    pub github_repository: String,
+    pub repository_visibility: GithubRepositoryVisibility,
+    pub integration_branch: String,
+}
+
+impl PlanningAuthorityDistributorDeliveryTarget {
+    pub fn new(
+        push_remote: impl Into<String>,
+        github_repository: impl Into<String>,
+        repository_visibility: GithubRepositoryVisibility,
+        integration_branch: impl Into<String>,
+    ) -> Self {
+        Self {
+            push_remote: push_remote.into(),
+            credential_redacted_push_url: None,
+            github_repository: github_repository.into(),
+            repository_visibility,
+            integration_branch: integration_branch.into(),
+        }
+    }
+
+    pub fn with_credential_redacted_push_url(
+        mut self,
+        credential_redacted_push_url: impl Into<String>,
+    ) -> Self {
+        self.credential_redacted_push_url = Some(credential_redacted_push_url.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /*
  * distributor queue record는 parallel mode에서 한 agent 결과물을 통합 큐에 올릴 때의 영속 모델입니다.
  * SQLite authority adapter는 이 구조체를 JSON payload로 보관하고, distributor/pool 서비스는 같은 구조체를 읽어
@@ -75,10 +112,16 @@ pub struct PlanningAuthorityDistributorQueueRecord {
     pub task_id: String,
     // Cached title for queue and PR copy without reopening the task authority.
     pub task_title: String,
+    // Immutable remote/repository/base target frozen before queue persistence.
+    #[serde(default)]
+    pub delivery_target: Option<PlanningAuthorityDistributorDeliveryTarget>,
     // Branch the agent started from; legacy records fall back to branch_name.
     #[serde(default)]
     pub source_branch: String,
-    // Start commit for reconstructing delivery diffs and recovery provenance.
+    // Frozen merge-base between the source result and remote integration branch.
+    #[serde(default)]
+    pub source_base_commit_sha: String,
+    // Frozen source branch tip reviewed by GitHub and targeted for delivery.
     #[serde(default)]
     pub source_commit_sha: String,
     // Working branch containing the agent result, also a legacy source fallback.
@@ -96,6 +139,15 @@ pub struct PlanningAuthorityDistributorQueueRecord {
     // Integration phase for carrying the branch result into prerelease.
     #[serde(default)]
     pub integration_state: String,
+    // Remote integration head fetched before the dedicated worktree is mutated.
+    // This is the compare-and-swap base for crash-safe push resumption.
+    #[serde(default)]
+    pub integration_base_commit_sha: Option<String>,
+    // Detached worktree HEAD produced by the reviewed cherry-pick sequence.
+    // Recovery may resume its non-force push only when the worktree still points
+    // at this exact commit and the remote still points at the frozen base.
+    #[serde(default)]
+    pub integration_commit_sha: Option<String>,
     // Rebase/merge conflict files; empty by default for normal records.
     #[serde(default)]
     pub conflict_files: Vec<String>,
@@ -123,6 +175,12 @@ pub struct PlanningAuthorityDistributorQueueRecord {
     pub enqueued_at: String,
     // Last state change time for stale-queue detection and operator diagnostics.
     pub updated_at: String,
+    // Number of automatic retry attempts already admitted for this delivery.
+    #[serde(default)]
+    pub retry_attempts: u32,
+    // Durable RFC3339 lower bound for the next automatic retry.
+    #[serde(default)]
+    pub retry_not_before: Option<String>,
 }
 
 impl PlanningAuthorityDistributorQueueRecord {
@@ -233,6 +291,20 @@ pub struct PlanningAuthorityRuntimeProjectionSnapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum PlanningAuthorityActiveDocumentMutation<'a> {
+    Replace {
+        relative_path: &'a str,
+        body: &'a str,
+    },
+    RemoveEntry {
+        relative_path: &'a str,
+    },
+    // Repo-scoped drafts live outside active_documents. Full reset carries this
+    // explicit operation so draft rows disappear in the same authority transaction.
+    ClearStagedDrafts,
+}
+
+#[derive(Debug, Clone, Copy)]
 /*
  * planning authority 저장소 전체를 한 번에 갱신하기 위한 admin 전용 commit 명령이다.
  * direction/task authority와 operator-facing result output이 같은 logical edit session에 속할 때,
@@ -244,6 +316,17 @@ pub struct PlanningAuthorityDocumentCommit<'a> {
     pub task_authority: &'a TaskAuthorityDocument,
     pub queue_projection: &'a PriorityQueueProjection,
     pub result_output_markdown: &'a str,
+    // Supporting document and staged-draft lifecycle mutations that must become
+    // visible in the same repo-scoped transaction as the authority rewrite.
+    pub active_document_mutations: &'a [PlanningAuthorityActiveDocumentMutation<'a>],
+    // Tasks intentionally removed by this edit. The concrete authority store
+    // validates runtime ownership and retires terminal residue atomically with
+    // the document commit.
+    pub retired_task_ids: &'a [String],
+    // Workspace-wide admin authority mutations hold an exclusive DB claim. The
+    // owner token lets that same mutation commit while every unrelated writer
+    // still fails closed against the claim.
+    pub authority_mutation_owner_token: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,6 +349,18 @@ pub struct PlanningAuthorityDocumentSnapshot {
  * application service는 이 trait만 보고 공식 SQLite authority인지 테스트용 Noop인지 구분하지 않습니다.
  */
 pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
+    // Atomic document rewrites are required for production operator mutations.
+    // Lightweight test adapters may return false and exercise the explicit
+    // sequential fallback owned by the application service.
+    fn supports_atomic_planning_authority_documents(&self) -> bool {
+        false
+    }
+
+    #[cfg(test)]
+    fn allows_non_atomic_planning_authority_rewrite_for_tests(&self) -> bool {
+        false
+    }
+
     /*
      * workspace 문자열에서 authority store의 실제 위치를 해석합니다.
      * repo-scoped workspace에서는 canonical repo root와 runtime dir이 중요하고, admin/readiness 흐름은
@@ -326,6 +421,17 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         owner_token: &str,
     ) -> Result<PlanningAuthorityOfficialRefreshClaimStatus>;
 
+    // Long-running app-server turns renew the claim while they are in flight. A false result
+    // means the exact owner/order fence was lost and no result may be applied.
+    fn renew_official_refresh_claim(
+        &self,
+        _workspace_dir: &str,
+        _refresh_order: u64,
+        _owner_token: &str,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
     /*
      * official refresh claim을 해제하고 다음 refresh order가 실행될 수 있게 진행 포인터를 옮깁니다.
      * release는 acquire와 같은 owner_token을 받으므로, 다른 worker가 실수로 claim을 닫는 상황을 adapter가 막을 수 있습니다.
@@ -337,6 +443,18 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         // Refresh order being marked complete.
         refresh_order: u64,
         // Token that originally acquired the claim.
+        owner_token: &str,
+    ) -> Result<()>;
+
+    /*
+     * A refresh that did not commit host-side authority must relinquish only its claim without
+     * advancing the execution pointer. The exact owner/order fence keeps a late cancellation from
+     * deleting a replacement worker's claim for the same refresh order.
+     */
+    fn cancel_official_refresh_claim(
+        &self,
+        workspace_dir: &str,
+        refresh_order: u64,
         owner_token: &str,
     ) -> Result<()>;
 
@@ -367,6 +485,21 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         owner_token: &str,
     ) -> Result<bool>;
 
+    /*
+     * 현재 dispatcher가 보유한 queue claim의 lease 시각을 갱신합니다.
+     * adapter는 claim kind, queue item scope, owner token이 모두 같은 row만 갱신해야 하며,
+     * bool 반환으로 caller가 갱신 직전에 소유권을 잃었는지 원자적으로 판단할 수 있게 합니다.
+     */
+    fn renew_distributor_queue_claim(
+        &self,
+        // Authority namespace containing the claim.
+        workspace_dir: &str,
+        // Stable queue record id whose claim should be renewed.
+        queue_item_id: &str,
+        // Owner token returned by the successful acquire attempt.
+        owner_token: &str,
+    ) -> Result<bool>;
+
     // Release a queue claim so retry or another dispatcher can proceed.
     fn release_distributor_queue_claim(
         &self,
@@ -388,6 +521,67 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
         // Authority namespace to read.
         workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot>;
+
+    // Serialize an operator task edit against runtime ownership for the same tasks.
+    fn acquire_admin_task_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _task_ids: &[String],
+        _owner_token: &str,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "admin task mutation guards are unsupported by this authority adapter"
+        ))
+    }
+
+    // Release only the task-edit guard owned by this caller.
+    fn release_admin_task_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _task_ids: &[String],
+        _owner_token: &str,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "admin task mutation guard release is unsupported by this authority adapter"
+        ))
+    }
+
+    // Serialize workspace-wide operator authority edits against task/runtime ownership.
+    fn acquire_admin_authority_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _owner_token: &str,
+        _action: &str,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "admin authority mutation guards are unsupported by this authority adapter"
+        ))
+    }
+
+    // Release only the workspace-wide authority guard owned by this caller.
+    fn release_admin_authority_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _owner_token: &str,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "admin authority mutation guard release is unsupported by this authority adapter"
+        ))
+    }
+
+    // Backward-compatible file-sync surface shares the authority mutation fence.
+    fn acquire_admin_file_sync_guard(
+        &self,
+        workspace_dir: &str,
+        owner_token: &str,
+        action: &str,
+    ) -> Result<()> {
+        self.acquire_admin_authority_mutation_guard(workspace_dir, owner_token, action)
+    }
+
+    fn release_admin_file_sync_guard(&self, workspace_dir: &str, owner_token: &str) -> Result<()> {
+        self.release_admin_authority_mutation_guard(workspace_dir, owner_token)
+    }
 
     // Insert a pending dispatch command if the same command id is not already stored.
     fn enqueue_runtime_dispatch_command(
@@ -442,6 +636,23 @@ pub trait PlanningAuthorityPort: ParallelModeRuntimeEventLogPort + Send + Sync {
 
     // Remove a lease projection after cleanup returns a slot to the idle pool.
     fn remove_runtime_slot_lease(&self, workspace_dir: &str, slot_id: &str) -> Result<()>;
+
+    // Cleanup must delete only the lease generation it inspected. Returning false means the row
+    // disappeared or was replaced; callers must preserve the replacement slot generation.
+    fn remove_runtime_slot_lease_if_matches(
+        &self,
+        workspace_dir: &str,
+        expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool>;
+
+    // A failed two-store lifecycle transition may restore only the exact next snapshot it wrote.
+    // Returning false preserves a concurrently installed generation or state.
+    fn replace_runtime_slot_lease_if_matches(
+        &self,
+        workspace_dir: &str,
+        expected_current: &ParallelModeSlotLeaseSnapshot,
+        replacement: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool>;
 
     // Store session detail projection that can outlive an individual slot lease.
     fn upsert_runtime_session_detail(
@@ -534,6 +745,10 @@ impl ParallelModeRuntimeEventLogPort for NoopPlanningAuthorityPort {
 
 #[cfg(test)]
 impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
+    fn allows_non_atomic_planning_authority_rewrite_for_tests(&self) -> bool {
+        true
+    }
+
     // Without a store, the supplied workspace is both workspace root and canonical root.
     fn resolve_authority_location(&self, workspace_dir: &str) -> Result<PlanningAuthorityLocation> {
         if let Some(message) = self.resolve_authority_location_error {
@@ -544,6 +759,8 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
             workspace_root: workspace_dir.to_string(),
             // No repo-scoped normalization exists in the fallback.
             canonical_repo_root: workspace_dir.to_string(),
+            // The fallback has no distinct Git common-dir identity.
+            repository_identity: workspace_dir.to_string(),
             // Runtime projections are not persisted.
             runtime_dir: String::new(),
             // Empty path represents absence of a SQLite authority store.
@@ -590,6 +807,15 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         Ok(PlanningAuthorityOfficialRefreshClaimStatus::Acquired)
     }
 
+    fn renew_official_refresh_claim(
+        &self,
+        _workspace_dir: &str,
+        _refresh_order: u64,
+        _owner_token: &str,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
     // No persisted claim exists, so release is a no-op.
     fn release_official_refresh_claim(
         &self,
@@ -598,6 +824,16 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         // No progress pointer is stored.
         _refresh_order: u64,
         // Owner validation is intentionally absent from the non-persistent fallback.
+        _owner_token: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    // No persisted claim or execution pointer exists in the process-local fallback.
+    fn cancel_official_refresh_claim(
+        &self,
+        _workspace_dir: &str,
+        _refresh_order: u64,
         _owner_token: &str,
     ) -> Result<()> {
         Ok(())
@@ -613,6 +849,19 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
 
     // With no durable queue, every distributor claim succeeds to keep callers moving.
     fn try_acquire_distributor_queue_claim(
+        &self,
+        // Queue namespace is not stored.
+        _workspace_dir: &str,
+        // No per-item lock table exists.
+        _queue_item_id: &str,
+        // Owner token is ignored.
+        _owner_token: &str,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
+    // The non-persistent fallback cannot lose a durable claim, so renewal always retains ownership.
+    fn renew_distributor_queue_claim(
         &self,
         // Queue namespace is not stored.
         _workspace_dir: &str,
@@ -644,6 +893,42 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
         Ok(self.runtime_projection.clone().unwrap_or_default())
+    }
+
+    // This test-only adapter has no concurrent store, so explicit guard calls are no-ops.
+    fn acquire_admin_task_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _task_ids: &[String],
+        _owner_token: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn release_admin_task_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _task_ids: &[String],
+        _owner_token: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn acquire_admin_authority_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _owner_token: &str,
+        _action: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn release_admin_authority_mutation_guard(
+        &self,
+        _workspace_dir: &str,
+        _owner_token: &str,
+    ) -> Result<()> {
+        Ok(())
     }
 
     fn enqueue_runtime_dispatch_command(
@@ -729,6 +1014,23 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         Ok(())
     }
 
+    fn remove_runtime_slot_lease_if_matches(
+        &self,
+        _workspace_dir: &str,
+        _expected: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn replace_runtime_slot_lease_if_matches(
+        &self,
+        _workspace_dir: &str,
+        _expected_current: &ParallelModeSlotLeaseSnapshot,
+        _replacement: &ParallelModeSlotLeaseSnapshot,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     // Session details are discarded; durable session history belongs to SQLite authority.
     fn upsert_runtime_session_detail(
         &self,
@@ -781,7 +1083,14 @@ mod tests {
             agent_id: "agent-a".to_string(),
             task_id: "task-1".to_string(),
             task_title: "Implement coverage guards".to_string(),
+            delivery_target: Some(PlanningAuthorityDistributorDeliveryTarget::new(
+                "origin",
+                "acme/widgets",
+                GithubRepositoryVisibility::Private,
+                "prerelease",
+            )),
             source_branch: source_branch.to_string(),
+            source_base_commit_sha: "0000000000000000".to_string(),
             source_commit_sha: source_commit_sha.to_string(),
             branch_name: "akra-agent/slot-1/task-1".to_string(),
             worktree_path: "/tmp/worktree".to_string(),
@@ -789,6 +1098,8 @@ mod tests {
             original_commit_sha: Some("abcdef1234567890".to_string()),
             planning_refresh_state: "completed".to_string(),
             integration_state: "pr_pending".to_string(),
+            integration_base_commit_sha: None,
+            integration_commit_sha: None,
             conflict_files: Vec::new(),
             recovery_note: None,
             validation_summary: "cargo test passed".to_string(),
@@ -800,6 +1111,8 @@ mod tests {
             integration_note: "waiting for review".to_string(),
             enqueued_at: "2026-05-23T00:00:00Z".to_string(),
             updated_at: "2026-05-23T00:01:00Z".to_string(),
+            retry_attempts: 0,
+            retry_not_before: None,
         }
     }
 
@@ -829,6 +1142,20 @@ mod tests {
     }
 
     #[test]
+    fn distributor_delivery_target_round_trip_never_contains_remote_credentials() {
+        let record = queue_record_with_source("prerelease", "1234567890abcdef");
+        let serialized = serde_json::to_string(&record).expect("queue record should serialize");
+
+        assert!(serialized.contains("acme/widgets"));
+        assert!(!serialized.contains("secret-token"));
+        assert_eq!(
+            serde_json::from_str::<PlanningAuthorityDistributorQueueRecord>(&serialized)
+                .expect("queue record should deserialize"),
+            record
+        );
+    }
+
+    #[test]
     fn noop_planning_authority_reports_empty_in_sync_fallbacks() {
         let port = NoopPlanningAuthorityPort::default();
 
@@ -837,6 +1164,7 @@ mod tests {
             .expect("fallback location should resolve");
         assert_eq!(location.workspace_root, "/tmp/root");
         assert_eq!(location.canonical_repo_root, "/tmp/root");
+        assert_eq!(location.repository_identity, "/tmp/root");
         assert_eq!(location.runtime_dir, "");
         assert_eq!(location.authority_store_path, "");
 
@@ -894,6 +1222,10 @@ mod tests {
         assert!(
             port.try_acquire_distributor_queue_claim("/tmp/root", "queue-1", "owner")
                 .expect("fallback queue claim should acquire")
+        );
+        assert!(
+            port.renew_distributor_queue_claim("/tmp/root", "queue-1", "owner")
+                .expect("fallback queue claim should renew")
         );
         port.release_distributor_queue_claim("/tmp/root", "queue-1", "owner")
             .expect("fallback queue release should succeed");

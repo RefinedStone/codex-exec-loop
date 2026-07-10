@@ -1,5 +1,11 @@
+use crate::application::port::outbound::planning_authority_port::{
+    PlanningAuthorityActiveDocumentMutation, PlanningAuthorityDocumentCommit, PlanningAuthorityPort,
+};
+#[cfg(test)]
+use crate::application::port::outbound::planning_task_repository_port::PlanningAuthoritySnapshotCommit;
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    load_consistent_planning_authority_snapshots,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningStagedFileRecord,
@@ -9,6 +15,7 @@ use crate::application::service::planning::authoring::bootstrap::{
     PlanningBootstrapMode, PlanningBootstrapService,
 };
 use crate::application::service::planning::runtime::validation::PlanningValidationService;
+use crate::application::service::planning::shared::authority_mutation_guard::with_authority_mutation_guard;
 use crate::application::service::planning::shared::contract::{
     DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH,
 };
@@ -19,7 +26,7 @@ use crate::domain::planning::{
 };
 use anyhow::{Result, anyhow};
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 /*
@@ -36,6 +43,7 @@ pub struct PlanningInitService {
     planning_bootstrap_service: PlanningBootstrapService,
     planning_validation_service: PlanningValidationService,
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+    planning_authority_port: Arc<dyn PlanningAuthorityPort>,
     priority_queue_service: PriorityQueueService,
 }
 
@@ -126,6 +134,7 @@ impl PlanningInitService {
         planning_bootstrap_service: PlanningBootstrapService,
         planning_validation_service: PlanningValidationService,
         planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+        planning_authority_port: Arc<dyn PlanningAuthorityPort>,
         priority_queue_service: PriorityQueueService,
     ) -> Self {
         // production composition은 모든 boundary를 명시적으로 주입한다. bootstrap, validation, repository commit,
@@ -135,6 +144,7 @@ impl PlanningInitService {
             planning_bootstrap_service,
             planning_validation_service,
             planning_task_repository_port,
+            planning_authority_port,
             priority_queue_service,
         }
     }
@@ -274,6 +284,23 @@ impl PlanningInitService {
         draft_name: &str,
         loaded: PlanningDraftLoadRecord,
     ) -> Result<PlanningDraftPromoteResult> {
+        with_authority_mutation_guard(
+            self.planning_authority_port.as_ref(),
+            workspace_dir,
+            "promote planning draft",
+            |owner_token| {
+                self.promote_loaded_draft_with_guard(workspace_dir, draft_name, loaded, owner_token)
+            },
+        )
+    }
+
+    fn promote_loaded_draft_with_guard(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        loaded: PlanningDraftLoadRecord,
+        authority_mutation_owner_token: &str,
+    ) -> Result<PlanningDraftPromoteResult> {
         // promotion은 validation-gated다. invalid draft는 error가 아니라 promoted_file_count 0인 정상 결과를 돌려
         // UI가 infrastructure failure처럼 보이지 않고 validation detail을 그대로 보여 줄 수 있게 한다.
         let validation_result = self.validate_loaded_draft_result(workspace_dir, &loaded)?;
@@ -300,22 +327,51 @@ impl PlanningInitService {
             .priority_queue_service
             .build_projection(directions, task_authority)
             .map_err(|error| anyhow!("valid staged draft queue build failed: {error}"))?;
+        let result_output_markdown = loaded
+            .staged_files
+            .iter()
+            .find(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
+            .map(|file| file.body.as_str())
+            .ok_or_else(|| anyhow!("valid staged draft did not include result output"))?;
+        let repo_scoped_atomic_documents = self
+            .planning_workspace_port
+            .uses_repo_scoped_authority(workspace_dir)
+            && self
+                .planning_authority_port
+                .supports_atomic_planning_authority_documents();
+        let active_document_mutations = if repo_scoped_atomic_documents {
+            loaded
+                .staged_files
+                .iter()
+                .filter(|file| file.active_path != RESULT_OUTPUT_FILE_PATH)
+                .map(|file| PlanningAuthorityActiveDocumentMutation::Replace {
+                    relative_path: file.active_path.as_str(),
+                    body: file.body.as_str(),
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         // 교체될 active file마다 pre-promotion snapshot을 저장한다. 뒤에서 workspace write나 authority write가 실패하면
         // 이 body들이 rollback source of truth가 된다.
         let mut previous_active_files = HashMap::new();
-        for file in &loaded.staged_files {
+        let files_to_write = loaded
+            .staged_files
+            .iter()
+            .filter(|_| !repo_scoped_atomic_documents)
+            .collect::<Vec<_>>();
+        for file in &files_to_write {
             previous_active_files.insert(
                 file.active_path.clone(),
                 self.planning_workspace_port
                     .load_optional_planning_file(workspace_dir, &file.active_path)?,
             );
         }
-        let mut applied_paths = Vec::with_capacity(loaded.staged_files.len());
+        let mut applied_paths = Vec::with_capacity(files_to_write.len());
         let promote_result = (|| -> Result<()> {
-            // workspace file을 DB authority보다 먼저 쓴다. 성공 경로에서는 committed authority가 missing active markdown을
-            // 가리키지 않아야 하기 때문이다. partial workspace write는 아래 rollback이 처리한다.
-            // 반대로 DB commit 뒤 file write를 하면 rollback으로 되돌릴 수 없는 accepted authority가 먼저 노출될 수 있다.
-            for file in &loaded.staged_files {
+            // Repo-scoped result output은 direction/task/queue와 같은 SQLite transaction에서 저장한다.
+            // Supplemental files and direct-filesystem result output are reversible prewrites.
+            for file in &files_to_write {
                 self.planning_workspace_port
                     .replace_planning_workspace_file(
                         workspace_dir,
@@ -324,18 +380,17 @@ impl PlanningInitService {
                     )?;
                 applied_paths.push(file.active_path.clone());
             }
-            self.commit_direction_authority_from_bootstrap(workspace_dir, directions)?;
-            // draft promotion은 operator authority rewrite다. incremental task command를 적용하는 것이 아니라,
-            // validation이 끝난 accepted task authority snapshot을 통째로 교체한다.
-            self.planning_task_repository_port
-                .commit_task_authority_snapshot(
-                    workspace_dir,
-                    PlanningTaskAuthorityCommit {
-                        observed_planning_revision: None,
-                        task_authority,
-                        queue_projection: &queue_projection,
-                    },
-                )?;
+            self.commit_complete_authority_rewrite(
+                workspace_dir,
+                CompleteAuthorityRewrite {
+                    directions,
+                    task_authority,
+                    queue_projection: &queue_projection,
+                    result_output_markdown,
+                    active_document_mutations: &active_document_mutations,
+                },
+                authority_mutation_owner_token,
+            )?;
             Ok(())
         })();
         if let Err(error) = promote_result {
@@ -363,6 +418,121 @@ impl PlanningInitService {
             promoted_file_count: loaded.staged_files.len(),
             validation_report,
         })
+    }
+
+    fn commit_complete_authority_rewrite(
+        &self,
+        workspace_dir: &str,
+        rewrite: CompleteAuthorityRewrite<'_>,
+        authority_mutation_owner_token: &str,
+    ) -> Result<()> {
+        let (observed_planning_revision, previous_task_ids) =
+            self.load_authority_rewrite_baseline(workspace_dir)?;
+        let retained_task_ids = rewrite
+            .task_authority
+            .tasks
+            .iter()
+            .map(|task| task.id.trim())
+            .collect::<BTreeSet<_>>();
+        let retired_task_ids = previous_task_ids
+            .into_iter()
+            .filter(|task_id| !retained_task_ids.contains(task_id.as_str()))
+            .collect::<Vec<_>>();
+        let result = if self
+            .planning_authority_port
+            .supports_atomic_planning_authority_documents()
+        {
+            self.planning_authority_port
+                .commit_planning_authority_documents(
+                    workspace_dir,
+                    PlanningAuthorityDocumentCommit {
+                        observed_planning_revision,
+                        directions: rewrite.directions,
+                        task_authority: rewrite.task_authority,
+                        queue_projection: rewrite.queue_projection,
+                        result_output_markdown: rewrite.result_output_markdown,
+                        active_document_mutations: rewrite.active_document_mutations,
+                        retired_task_ids: &retired_task_ids,
+                        authority_mutation_owner_token: Some(authority_mutation_owner_token),
+                    },
+                )?
+        } else {
+            #[cfg(test)]
+            {
+                if !self
+                    .planning_authority_port
+                    .allows_non_atomic_planning_authority_rewrite_for_tests()
+                {
+                    return Err(anyhow!(
+                        "planning authority adapter does not support atomic document rewrites"
+                    ));
+                }
+                self.planning_task_repository_port
+                    .commit_planning_authority_snapshot(
+                        workspace_dir,
+                        PlanningAuthoritySnapshotCommit {
+                            observed_planning_revision,
+                            directions: rewrite.directions,
+                            task_authority: rewrite.task_authority,
+                            queue_projection: rewrite.queue_projection,
+                        },
+                    )?
+            }
+            #[cfg(not(test))]
+            {
+                return Err(anyhow!(
+                    "planning authority adapter does not support atomic document rewrites"
+                ));
+            }
+        };
+        match result {
+            PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(()),
+            PlanningTaskAuthorityCommitResult::Conflict {
+                observed_planning_revision,
+                current_planning_revision,
+            } => Err(anyhow!(
+                "planning authority changed during operator rewrite (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+            )),
+        }
+    }
+
+    fn load_authority_rewrite_baseline(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<(Option<i64>, Vec<String>)> {
+        if let Some(snapshot) = self
+            .planning_authority_port
+            .load_planning_authority_documents(workspace_dir)?
+        {
+            return Ok((
+                Some(snapshot.planning_revision),
+                snapshot
+                    .task_authority
+                    .tasks
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect(),
+            ));
+        }
+        let (directions, tasks) = load_consistent_planning_authority_snapshots(
+            self.planning_task_repository_port.as_ref(),
+            workspace_dir,
+        )?;
+        match (directions, tasks) {
+            (None, None) => Ok((None, Vec::new())),
+            (Some(_directions), Some(tasks)) => Ok((
+                Some(tasks.planning_revision),
+                tasks
+                    .task_authority
+                    .tasks
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect(),
+            )),
+            _ => Err(anyhow!(
+                "planning authority is incomplete; repair direction/task authority before rewriting it"
+            )),
+        }
     }
     fn restore_promoted_active_state(
         &self,
@@ -480,13 +650,6 @@ impl PlanningInitService {
         workspace_dir: &str,
         mode: PlanningBootstrapMode,
     ) -> Result<PlanningWorkspaceInitResult> {
-        // direct init은 기존 active workspace 위에서 실행되지 않는다. 의도적인 교체는 reset이나 draft promotion이
-        // 담당해야 하며, init은 "처음 만드는" 경로로 남긴다.
-        if self.has_planning_workspace(workspace_dir)? {
-            anyhow::bail!(
-                "planning workspace already exists; reset or reuse the existing workspace instead"
-            );
-        }
         let bootstrap = self.prepare_bootstrap_workspace(mode);
         if !bootstrap.validation_report.is_valid() {
             // file이나 authority state를 쓰기 전에 fail-fast한다. bootstrap validation error는 operator가 고쳐야 하는
@@ -499,22 +662,116 @@ impl PlanningInitService {
                 .unwrap_or_else(|| "planning bootstrap validation failed".to_string());
             anyhow::bail!("planning bootstrap validation failed: {first_error}");
         }
-        // initialization 성공 경로에서 accepted authority가 missing bootstrap markdown을 가리키지 않도록 file write를
-        // authority commit보다 먼저 수행한다.
-        for file in &bootstrap.files {
-            self.planning_workspace_port
-                .replace_planning_workspace_file(
-                    workspace_dir,
-                    &file.active_path,
-                    Some(&file.body),
-                )?;
-        }
-        self.commit_direction_authority_from_bootstrap(workspace_dir, &bootstrap.directions)?;
-        self.commit_task_authority_from_bootstrap(
+        with_authority_mutation_guard(
+            self.planning_authority_port.as_ref(),
             workspace_dir,
-            &bootstrap.directions,
-            &bootstrap.task_authority,
+            "initialize planning workspace",
+            |owner_token| {
+                self.initialize_workspace_with_guard(workspace_dir, mode, &bootstrap, owner_token)
+            },
+        )
+    }
+
+    fn initialize_workspace_with_guard(
+        &self,
+        workspace_dir: &str,
+        mode: PlanningBootstrapMode,
+        bootstrap: &BootstrapWorkspacePlan,
+        authority_mutation_owner_token: &str,
+    ) -> Result<PlanningWorkspaceInitResult> {
+        // Recheck every accepted authority surface after acquiring the guard.
+        // A concurrent initializer that won the guard first must never be
+        // overwritten by an earlier preflight result.
+        let (direction_snapshot, task_snapshot) = load_consistent_planning_authority_snapshots(
+            self.planning_task_repository_port.as_ref(),
+            workspace_dir,
         )?;
+        if self.has_planning_workspace(workspace_dir)?
+            || direction_snapshot.is_some()
+            || task_snapshot.is_some()
+        {
+            anyhow::bail!(
+                "planning workspace already exists; reset or reuse the existing workspace instead"
+            );
+        }
+
+        let queue_projection = self
+            .priority_queue_service
+            .build_projection(&bootstrap.directions, &bootstrap.task_authority)
+            .map_err(|error| anyhow!("valid bootstrap queue build failed: {error}"))?;
+        let result_output_markdown = bootstrap
+            .files
+            .iter()
+            .find(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
+            .map(|file| file.body.as_str())
+            .ok_or_else(|| anyhow!("valid bootstrap did not include result output"))?;
+        let repo_scoped_atomic_documents = self
+            .planning_workspace_port
+            .uses_repo_scoped_authority(workspace_dir)
+            && self
+                .planning_authority_port
+                .supports_atomic_planning_authority_documents();
+        let active_document_mutations = if repo_scoped_atomic_documents {
+            bootstrap
+                .files
+                .iter()
+                .filter(|file| file.active_path != RESULT_OUTPUT_FILE_PATH)
+                .map(|file| PlanningAuthorityActiveDocumentMutation::Replace {
+                    relative_path: file.active_path.as_str(),
+                    body: file.body.as_str(),
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let files_to_write = bootstrap
+            .files
+            .iter()
+            .filter(|_| !repo_scoped_atomic_documents)
+            .collect::<Vec<_>>();
+        let mut previous_active_files = HashMap::new();
+        for file in &files_to_write {
+            previous_active_files.insert(
+                file.active_path.clone(),
+                self.planning_workspace_port
+                    .load_optional_planning_file(workspace_dir, &file.active_path)?,
+            );
+        }
+        let mut applied_paths = Vec::with_capacity(files_to_write.len());
+        let initialize_result = (|| -> Result<()> {
+            for file in &files_to_write {
+                self.planning_workspace_port
+                    .replace_planning_workspace_file(
+                        workspace_dir,
+                        &file.active_path,
+                        Some(file.body.as_str()),
+                    )?;
+                applied_paths.push(file.active_path.clone());
+            }
+            self.commit_complete_authority_rewrite(
+                workspace_dir,
+                CompleteAuthorityRewrite {
+                    directions: &bootstrap.directions,
+                    task_authority: &bootstrap.task_authority,
+                    queue_projection: &queue_projection,
+                    result_output_markdown,
+                    active_document_mutations: &active_document_mutations,
+                },
+                authority_mutation_owner_token,
+            )
+        })();
+        if let Err(error) = initialize_result {
+            if let Err(rollback_error) = self.restore_promoted_active_state(
+                workspace_dir,
+                &applied_paths,
+                &previous_active_files,
+            ) {
+                return Err(anyhow!(
+                    "failed to initialize planning workspace: {error}; workspace rollback failed: {rollback_error}"
+                ));
+            }
+            return Err(error);
+        }
         Ok(PlanningWorkspaceInitResult {
             mode,
             created_file_count: bootstrap.files.len(),
@@ -571,48 +828,6 @@ impl PlanningInitService {
             validation_report: validation_result.report,
         }
     }
-    fn commit_direction_authority_from_bootstrap(
-        &self,
-        workspace_dir: &str,
-        directions: &DirectionCatalogDocument,
-    ) -> Result<()> {
-        // bootstrap과 draft promotion은 validation 뒤 accepted direction authority를 교체하는 system-owned rewrite다.
-        // editor session의 optimistic revision check를 사용하지 않는 이유다.
-        self.planning_task_repository_port
-            .commit_direction_authority_snapshot(
-                workspace_dir,
-                PlanningDirectionAuthorityCommit {
-                    observed_planning_revision: None,
-                    directions,
-                },
-            )
-            .map(|_| ())
-    }
-    fn commit_task_authority_from_bootstrap(
-        &self,
-        workspace_dir: &str,
-        directions: &DirectionCatalogDocument,
-        task_authority: &TaskAuthorityDocument,
-    ) -> Result<()> {
-        // queue projection은 task authority와 같은 boundary에서 파생한다. accepted task state와 scheduler-facing
-        // projection이 서로 다른 시점의 데이터를 보지 않게 하기 위해서다.
-        let queue_projection = self
-            .priority_queue_service
-            .build_projection(directions, task_authority)
-            .map_err(|error| anyhow!("valid bootstrap queue build failed: {error}"))?;
-        // bootstrap은 complete system-owned authority snapshot을 seed한다. task-level mutation command는 incremental
-        // change용이므로 이 초기화 경로에서는 의도적으로 우회한다.
-        self.planning_task_repository_port
-            .commit_task_authority_snapshot(
-                workspace_dir,
-                PlanningTaskAuthorityCommit {
-                    observed_planning_revision: None,
-                    task_authority,
-                    queue_projection: &queue_projection,
-                },
-            )
-            .map(|_| ())
-    }
 }
 
 struct BootstrapWorkspacePlan {
@@ -622,6 +837,14 @@ struct BootstrapWorkspacePlan {
     directions: DirectionCatalogDocument,
     task_authority: TaskAuthorityDocument,
     validation_report: PlanningValidationReport,
+}
+
+struct CompleteAuthorityRewrite<'a> {
+    directions: &'a DirectionCatalogDocument,
+    task_authority: &'a TaskAuthorityDocument,
+    queue_projection: &'a crate::domain::planning::PriorityQueueProjection,
+    result_output_markdown: &'a str,
+    active_document_mutations: &'a [PlanningAuthorityActiveDocumentMutation<'a>],
 }
 
 fn is_operator_editable_draft_path(active_path: &str) -> bool {
@@ -661,6 +884,7 @@ fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
 mod tests {
     use super::*;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::{
         NoopPlanningTaskRepositoryPort, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
     };
@@ -956,6 +1180,7 @@ mod tests {
                 PlanningBootstrapService::new(),
                 PlanningValidationService::new(),
                 repository.clone(),
+                Arc::new(NoopPlanningAuthorityPort::default()),
                 PriorityQueueService::new(),
             );
             Self {

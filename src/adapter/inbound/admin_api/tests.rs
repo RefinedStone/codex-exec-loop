@@ -1,9 +1,9 @@
 use super::helpers::{
     encode_uri_component, ensure_csrf_cookie, internal_server_error, is_htmx_request,
     notice_location, render_fragment, render_html, verify_form_csrf, verify_header_csrf,
-    verify_local_admin_request,
 };
 use super::pages::{draft_mutation_path, extract_file_updates, nav_for_kind};
+use super::security::{ADMIN_TOKEN_HEADER, AdminSecurityConfig, verify_local_admin_request};
 use super::views::{EditorActionPaths, EditorTemplate};
 use super::{build_admin_state, build_router, parse_args, parse_reset_target};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
@@ -71,6 +71,8 @@ const GAMEBALJEONGUK_SPRITE_METADATA: &str = include_str!(
 );
 const AKRA_DIORAMA_JS: &str = include_str!("../../../../assets/admin/game/akra-diorama.js");
 const AKRA_DIORAMA_TS: &str = include_str!("../../../../assets/admin/game/src/akra-diorama.ts");
+const ADMIN_SHELL_JS: &str = include_str!("../../../../assets/admin/scripts/admin-shell.js");
+const AKRA_DASHBOARD_JS: &str = include_str!("../../../../assets/admin/scripts/akra-dashboard.js");
 const ADMIN_GAME_PACKAGE_JSON: &str = include_str!("../../../../assets/admin/game/package.json");
 const ADMIN_GAME_VITE_CONFIG: &str = include_str!("../../../../assets/admin/game/vite.config.ts");
 const ADMIN_GAME_PROMOTE_BUILD: &str =
@@ -80,6 +82,8 @@ const AKRA_DASHBOARD_RS: &str = include_str!("akra_dashboard.rs");
 const ADMIN_MOD: &str = include_str!("mod.rs");
 const ADMIN_PAGES: &str = include_str!("pages.rs");
 const ADMIN_STATIC_ASSETS: &str = include_str!("static_assets.rs");
+const TEST_ADMIN_HOST: &str = "akra-test.localhost:18442";
+const TEST_ADMIN_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn source_contains(source: &str, needle: &str) -> bool {
     source.contains(needle) || source.replace("\r\n", "\n").contains(needle)
@@ -113,7 +117,16 @@ impl Drop for TempAdminWorkspace {
 }
 
 fn admin_test_router(workspace: &TempAdminWorkspace) -> Router {
-    build_router(build_admin_state(workspace.path.clone()))
+    build_router(build_admin_state(
+        workspace.path.clone(),
+        AdminSecurityConfig::for_test(TEST_ADMIN_TOKEN, 18442),
+    ))
+}
+
+fn admin_request_builder() -> axum::http::request::Builder {
+    Request::builder()
+        .header(header::HOST, TEST_ADMIN_HOST)
+        .header(ADMIN_TOKEN_HEADER, TEST_ADMIN_TOKEN)
 }
 
 async fn json_body(response: axum::response::Response) -> Value {
@@ -141,7 +154,7 @@ async fn bootstrap_admin_json_session(router: &Router) -> (String, String) {
     let response = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri("/api/planning/summary")
                 .body(Body::empty())
@@ -159,6 +172,7 @@ async fn bootstrap_admin_json_session(router: &Router) -> (String, String) {
         .expect("set-cookie should be valid text")
         .to_string();
     assert!(set_cookie.contains("akra_admin_csrf="));
+    assert!(set_cookie.to_ascii_lowercase().contains("samesite=strict"));
 
     let body = json_body(response).await;
     let csrf_token = body["csrf_token"]
@@ -174,7 +188,7 @@ async fn bootstrap_admin_html_session(router: &Router) -> (String, String, Strin
     let response = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri("/admin")
                 .body(Body::empty())
@@ -214,7 +228,7 @@ fn json_request(
     cookie: Option<&str>,
     csrf_token: Option<&str>,
 ) -> Request<Body> {
-    let mut builder = Request::builder()
+    let mut builder = admin_request_builder()
         .method(method)
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/json");
@@ -244,7 +258,7 @@ fn encoded_form(fields: &[(&str, &str)]) -> String {
 }
 
 fn html_form_request(uri: &str, body: String, cookie: Option<&str>, htmx: bool) -> Request<Body> {
-    let mut builder = Request::builder()
+    let mut builder = admin_request_builder()
         .method(Method::POST)
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
@@ -396,34 +410,47 @@ fn admin_http_helpers_cover_csrf_redirect_htmx_and_render_failures() {
     htmx_headers.insert("hx-request", HeaderValue::from_static("true"));
     assert!(is_htmx_request(&htmx_headers));
 
+    let security = AdminSecurityConfig::for_test(TEST_ADMIN_TOKEN, 18442);
     let local_headers = HeaderMap::new();
-    assert!(verify_local_admin_request(&local_headers).is_ok());
+    assert_eq!(
+        verify_local_admin_request(&local_headers, &security),
+        Err(StatusCode::BAD_REQUEST)
+    );
 
     let mut remote_host_headers = HeaderMap::new();
-    remote_host_headers.insert(header::HOST, HeaderValue::from_static("evil.example"));
+    remote_host_headers.insert(header::HOST, HeaderValue::from_static("evil.example:18442"));
     assert_eq!(
-        verify_local_admin_request(&remote_host_headers),
+        verify_local_admin_request(&remote_host_headers, &security),
         Err(StatusCode::FORBIDDEN)
     );
 
     let mut local_host_headers = HeaderMap::new();
-    local_host_headers.insert(header::HOST, HeaderValue::from_static("localhost:18442"));
+    local_host_headers.insert(header::HOST, HeaderValue::from_static(TEST_ADMIN_HOST));
     local_host_headers.insert(
         header::ORIGIN,
-        HeaderValue::from_static("http://127.0.0.1:18442"),
+        HeaderValue::from_static("http://akra-test.localhost:18442"),
     );
     local_host_headers.insert(
         header::REFERER,
-        HeaderValue::from_static("http://localhost:18442/admin"),
+        HeaderValue::from_static("http://akra-test.localhost:18442/admin"),
     );
-    assert!(verify_local_admin_request(&local_host_headers).is_ok());
+    assert!(verify_local_admin_request(&local_host_headers, &security).is_ok());
 
     local_host_headers.insert(
         header::ORIGIN,
-        HeaderValue::from_static("http://evil.example"),
+        HeaderValue::from_static("http://akra-test.localhost:19000"),
     );
     assert_eq!(
-        verify_local_admin_request(&local_host_headers),
+        verify_local_admin_request(&local_host_headers, &security),
+        Err(StatusCode::FORBIDDEN)
+    );
+
+    local_host_headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("http://evil.example:18442"),
+    );
+    assert_eq!(
+        verify_local_admin_request(&local_host_headers, &security),
         Err(StatusCode::FORBIDDEN)
     );
 
@@ -450,7 +477,7 @@ async fn admin_json_summary_and_runtime_bootstrap_csrf_session() {
     let response = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri("/api/planning/runtime")
                 .header(header::COOKIE, cookie)
@@ -482,7 +509,8 @@ async fn admin_router_rejects_non_local_host_on_read_only_routes() {
             Request::builder()
                 .method(Method::GET)
                 .uri("/api/planning/summary")
-                .header(header::HOST, "evil.example")
+                .header(header::HOST, "evil.example:18442")
+                .header(ADMIN_TOKEN_HEADER, TEST_ADMIN_TOKEN)
                 .body(Body::empty())
                 .expect("summary request should build"),
         )
@@ -490,6 +518,288 @@ async fn admin_router_rejects_non_local_host_on_read_only_routes() {
         .expect("summary request should be served");
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_router_requires_capability_and_exact_loopback_authority() {
+    let workspace = TempAdminWorkspace::new("auth-guard");
+    let router = admin_test_router(&workspace);
+
+    let unauthenticated_api = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/summary")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .body(Body::empty())
+                .expect("unauthenticated API request should build"),
+        )
+        .await
+        .expect("unauthenticated API request should be served");
+    assert_eq!(unauthenticated_api.status(), StatusCode::UNAUTHORIZED);
+
+    let unauthenticated_page = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .body(Body::empty())
+                .expect("unauthenticated page request should build"),
+        )
+        .await
+        .expect("unauthenticated page request should be served");
+    assert_eq!(unauthenticated_page.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        unauthenticated_page.headers().get(header::LOCATION),
+        Some(&HeaderValue::from_static("/admin/login"))
+    );
+
+    let missing_host = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/summary")
+                .header(ADMIN_TOKEN_HEADER, TEST_ADMIN_TOKEN)
+                .body(Body::empty())
+                .expect("missing Host request should build"),
+        )
+        .await
+        .expect("missing Host request should be served");
+    assert_eq!(missing_host.status(), StatusCode::BAD_REQUEST);
+
+    let wrong_port = router
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/summary")
+                .header(header::HOST, "127.0.0.1:19000")
+                .header(ADMIN_TOKEN_HEADER, TEST_ADMIN_TOKEN)
+                .body(Body::empty())
+                .expect("wrong-port request should build"),
+        )
+        .await
+        .expect("wrong-port request should be served");
+    assert_eq!(wrong_port.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_login_exchanges_capability_for_strict_http_only_session_cookie() {
+    let workspace = TempAdminWorkspace::new("login-session");
+    let router = admin_test_router(&workspace);
+
+    let login_page = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin/login")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .body(Body::empty())
+                .expect("login page request should build"),
+        )
+        .await
+        .expect("login page request should be served");
+    assert_eq!(login_page.status(), StatusCode::OK);
+    let content_security_policy = login_page
+        .headers()
+        .get("content-security-policy")
+        .expect("admin responses should set a content security policy")
+        .to_str()
+        .expect("content security policy should be valid text");
+    for directive in [
+        "default-src 'self'",
+        "connect-src 'self'",
+        "font-src 'self'",
+        "frame-ancestors 'none'",
+        "img-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+    ] {
+        assert!(content_security_policy.contains(directive));
+    }
+    assert!(!content_security_policy.contains("script-src 'self' 'unsafe-inline'"));
+    assert!(!content_security_policy.contains("'unsafe-eval'"));
+    assert_eq!(
+        login_page.headers().get("cache-control"),
+        Some(&HeaderValue::from_static("no-store, max-age=0"))
+    );
+    assert_eq!(
+        login_page.headers().get("cross-origin-opener-policy"),
+        Some(&HeaderValue::from_static("same-origin"))
+    );
+    assert_eq!(
+        login_page.headers().get("cross-origin-resource-policy"),
+        Some(&HeaderValue::from_static("same-origin"))
+    );
+    assert!(login_page
+        .headers()
+        .get("permissions-policy")
+        .is_some_and(|value| value
+            == "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=()"));
+    assert_eq!(
+        login_page.headers().get("referrer-policy"),
+        Some(&HeaderValue::from_static("same-origin")),
+        "the login document must let real browser form submissions retain their loopback origin"
+    );
+    let login_page_body = text_body(login_page).await;
+    assert!(login_page_body.contains(r#"<meta name="referrer" content="same-origin">"#));
+    assert!(!login_page_body.contains("Authentication failed"));
+
+    let rejected_token = "super-secret-rejected-token";
+    let rejected_login = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/admin/login")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::ORIGIN, format!("http://{TEST_ADMIN_HOST}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("token={rejected_token}")))
+                .expect("rejected login request should build"),
+        )
+        .await
+        .expect("rejected login request should be served");
+    assert_eq!(rejected_login.status(), StatusCode::UNAUTHORIZED);
+    assert!(rejected_login.headers().get(header::SET_COOKIE).is_none());
+    assert_eq!(
+        rejected_login.headers().get("referrer-policy"),
+        Some(&HeaderValue::from_static("same-origin"))
+    );
+    assert_eq!(
+        rejected_login.headers().get("cache-control"),
+        Some(&HeaderValue::from_static("no-store, max-age=0"))
+    );
+    assert!(
+        rejected_login
+            .headers()
+            .get("content-security-policy")
+            .is_some()
+    );
+    let rejected_body = text_body(rejected_login).await;
+    assert!(
+        rejected_body.contains("Authentication failed. Check the capability token and try again.")
+    );
+    assert!(rejected_body.contains("role=\"alert\""));
+    assert!(!rejected_body.contains(rejected_token));
+
+    let accepted_login = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/admin/login")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::ORIGIN, format!("http://{TEST_ADMIN_HOST}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("token={TEST_ADMIN_TOKEN}")))
+                .expect("accepted login request should build"),
+        )
+        .await
+        .expect("accepted login request should be served");
+    assert_eq!(accepted_login.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        accepted_login.headers().get(header::LOCATION),
+        Some(&HeaderValue::from_static("/admin"))
+    );
+    let set_cookie = accepted_login
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("accepted login should set a session cookie")
+        .to_str()
+        .expect("session cookie should be valid text");
+    let normalized_cookie = set_cookie.to_ascii_lowercase();
+    assert!(normalized_cookie.starts_with("akra_admin_session="));
+    assert!(normalized_cookie.contains("httponly"));
+    assert!(normalized_cookie.contains("samesite=strict"));
+    assert!(normalized_cookie.contains("path=/"));
+    assert!(normalized_cookie.contains("max-age=1800"));
+    assert!(!normalized_cookie.contains("domain="));
+    let session_cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("session cookie should contain a name/value pair")
+        .to_string();
+
+    let authenticated_with_cookie = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/summary")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::COOKIE, session_cookie.as_str())
+                .body(Body::empty())
+                .expect("session-authenticated request should build"),
+        )
+        .await
+        .expect("session-authenticated request should be served");
+    assert_eq!(authenticated_with_cookie.status(), StatusCode::OK);
+    let refreshed_cookie = authenticated_with_cookie
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| {
+            value
+                .to_ascii_lowercase()
+                .starts_with("akra_admin_session=")
+        })
+        .expect("an active browser session should receive a sliding cookie")
+        .to_ascii_lowercase();
+    assert!(refreshed_cookie.starts_with(&session_cookie.to_ascii_lowercase()));
+    assert!(refreshed_cookie.contains("max-age=1800"));
+    assert!(!refreshed_cookie.contains("domain="));
+
+    let logout = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/admin/logout")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::COOKIE, session_cookie.as_str())
+                .body(Body::empty())
+                .expect("logout request should build"),
+        )
+        .await
+        .expect("logout request should be served");
+    assert_eq!(logout.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        logout.headers().get(header::LOCATION),
+        Some(&HeaderValue::from_static("/admin/login"))
+    );
+    assert!(
+        logout
+            .headers()
+            .get(header::SET_COOKIE)
+            .is_some_and(|value| value
+                .to_str()
+                .is_ok_and(|value| value.to_ascii_lowercase().contains("max-age=0")))
+    );
+    assert_eq!(
+        logout.headers().get_all(header::SET_COOKIE).iter().count(),
+        1,
+        "logout must not append a sliding refresh after revocation"
+    );
+
+    let expired_session = router
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/planning/summary")
+                .header(header::HOST, TEST_ADMIN_HOST)
+                .header(header::COOKIE, session_cookie.as_str())
+                .body(Body::empty())
+                .expect("expired session request should build"),
+        )
+        .await
+        .expect("expired session request should be served");
+    assert_eq!(expired_session.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -572,7 +882,7 @@ async fn admin_json_draft_routes_round_trip_through_router() {
     let loaded = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri(load_uri)
                 .header(header::COOKIE, &cookie)
@@ -673,7 +983,7 @@ async fn admin_json_draft_routes_reject_malformed_draft_names() {
         let response = router
             .clone()
             .oneshot(
-                Request::builder()
+                admin_request_builder()
                     .method(Method::GET)
                     .uri(uri)
                     .header(header::COOKIE, &cookie)
@@ -719,7 +1029,7 @@ async fn admin_akra_events_api_rejects_unbounded_limits() {
     let response = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri("/api/admin/akra/events?limit=201")
                 .body(Body::empty())
@@ -878,7 +1188,7 @@ async fn admin_akra_json_snapshot_routes_render_read_only_views() {
         let response = router
             .clone()
             .oneshot(
-                Request::builder()
+                admin_request_builder()
                     .method(Method::GET)
                     .uri(uri)
                     .body(Body::empty())
@@ -903,6 +1213,7 @@ async fn admin_html_page_routes_render_live_templates() {
 
     assert!(dashboard_body.contains("Planning Admin"));
     assert!(dashboard_body.contains("Open Full Planning Draft"));
+    assert!(dashboard_body.contains(r#"<a href="/admin/akra">Graphic dashboard</a>"#));
     assert!(dashboard_body.contains("name=\"csrf_token\""));
     assert_eq!(csrf_token.len(), 32);
 
@@ -921,7 +1232,7 @@ async fn admin_html_page_routes_render_live_templates() {
         let response = router
             .clone()
             .oneshot(
-                Request::builder()
+                admin_request_builder()
                     .method(Method::GET)
                     .uri(uri)
                     .header(header::COOKIE, &cookie)
@@ -948,7 +1259,19 @@ async fn admin_html_page_routes_render_live_templates() {
         );
         if uri == "/admin/tasks" {
             assert!(body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
+            assert!(body.contains(r#"<a href="/admin/akra">Graphic dashboard</a>"#));
             assert!(!body.contains(r#"<body class="akra-graphic">"#));
+        }
+        if uri == "/admin/akra" {
+            assert!(
+                body.contains(r#"<nav class="draft-nav" aria-label="AKRA dashboard navigation">"#)
+            );
+            assert!(body.contains(r#"<a href="/admin/akra" aria-current="page">"#));
+            assert!(body.contains(r#"<a href="/admin/akra/directions">"#));
+            assert!(body.contains(r#"<a href="/admin/akra/tasks">"#));
+            assert!(body.contains(r#"<a href="/admin/akra/metrics">"#));
+            assert!(body.contains(r#"<a href="/admin"><span class="nav-icon" aria-hidden="true">P</span><span>Planning</span></a>"#));
+            assert!(body.contains(r#"<a href="/admin/controls"><span class="nav-icon" aria-hidden="true">C</span><span>Controls</span></a>"#));
         }
         if uri == "/admin/app-server-prompts" {
             assert!(body.contains(
@@ -1011,7 +1334,7 @@ async fn reviews_page_renders_top_pending_inbox_thread_content_from_repository_p
     let response = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri("/admin/reviews")
                 .header(header::COOKIE, &cookie)
@@ -1039,17 +1362,9 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
     let router = admin_test_router(&workspace);
 
     for asset_name in [
-        "akra-office-background.png",
         "final-draft-map-sprite.png",
-        "akra-object-sprites.png",
         "gamebaljeonguk_atlas_64x96.png",
         "gamebaljeonguk_atlas_128x192.png",
-        "sprite_floor_tile.png",
-        "sprite_desk_workstation.png",
-        "sprite_server_rack.png",
-        "sprite_whiteboard.png",
-        "sprite_sofa.png",
-        "sprite_potted_plant.png",
         "sprite_fd_desk_1.png",
         "sprite_fd_desk_2.png",
         "sprite_fd_desk_3.png",
@@ -1064,7 +1379,7 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
         let response = router
             .clone()
             .oneshot(
-                Request::builder()
+                admin_request_builder()
                     .method(Method::GET)
                     .uri(format!("/admin/assets/graphics/{asset_name}"))
                     .body(Body::empty())
@@ -1081,25 +1396,41 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
         );
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL),
-            Some(&header::HeaderValue::from_static("public, max-age=86400")),
+            Some(&header::HeaderValue::from_static("no-store, max-age=0")),
             "{asset_name}"
         );
         let body = bytes_body(response).await;
         assert!(body.starts_with(b"\x89PNG\r\n\x1a\n"), "{asset_name}");
     }
 
-    let missing = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/admin/assets/graphics/not-found.png")
-                .body(Body::empty())
-                .expect("missing asset request should build"),
-        )
-        .await
-        .expect("missing asset request should be served");
-    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    for removed_or_unknown in [
+        "akra-object-sprites.png",
+        "akra-office-background.png",
+        "sprite_desk_workstation.png",
+        "sprite_floor_tile.png",
+        "sprite_potted_plant.png",
+        "sprite_server_rack.png",
+        "sprite_sofa.png",
+        "sprite_whiteboard.png",
+        "not-found.png",
+    ] {
+        let missing = router
+            .clone()
+            .oneshot(
+                admin_request_builder()
+                    .method(Method::GET)
+                    .uri(format!("/admin/assets/graphics/{removed_or_unknown}"))
+                    .body(Body::empty())
+                    .expect("missing asset request should build"),
+            )
+            .await
+            .expect("missing asset request should be served");
+        assert_eq!(
+            missing.status(),
+            StatusCode::NOT_FOUND,
+            "{removed_or_unknown}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1110,7 +1441,7 @@ async fn admin_game_asset_route_serves_diorama_bundle_and_rejects_unknown_names(
     let response = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri("/admin/assets/game/akra-diorama.js")
                 .body(Body::empty())
@@ -1128,16 +1459,18 @@ async fn admin_game_asset_route_serves_diorama_bundle_and_rejects_unknown_names(
     );
     assert_eq!(
         response.headers().get(header::CACHE_CONTROL),
-        Some(&header::HeaderValue::from_static("public, max-age=86400"))
+        Some(&header::HeaderValue::from_static("no-store, max-age=0"))
     );
     let body = text_body(response).await;
-    assert!(body.contains("PIXI.Application"));
     assert!(body.contains("AkraAdminGame"));
+    assert!(body.contains("sprite_fd_desk_1.png"));
+    assert!(body.contains("PixiJS - The MIT License"));
+    assert!(body.len() > 100_000, "PixiJS should be bundled locally");
 
     let missing = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri("/admin/assets/game/missing.js")
                 .body(Body::empty())
@@ -1145,6 +1478,99 @@ async fn admin_game_asset_route_serves_diorama_bundle_and_rejects_unknown_names(
         )
         .await
         .expect("missing game asset request should be served");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_script_asset_routes_serve_externalized_code_and_reject_unknown_names() {
+    let workspace = TempAdminWorkspace::new("script-asset-routes");
+    let router = admin_test_router(&workspace);
+
+    for (asset_name, expected_token) in [
+        ("admin-shell.js", "akraHashTabRoutes"),
+        ("akra-dashboard.js", "renderDashboardPanels"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                admin_request_builder()
+                    .method(Method::GET)
+                    .uri(format!("/admin/assets/scripts/{asset_name}"))
+                    .body(Body::empty())
+                    .expect("script asset request should build"),
+            )
+            .await
+            .expect("script asset request should be served");
+        assert_eq!(response.status(), StatusCode::OK, "{asset_name}");
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static(
+                "text/javascript; charset=utf-8"
+            )),
+            "{asset_name}"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("no-store, max-age=0")),
+            "{asset_name}"
+        );
+        assert!(text_body(response).await.contains(expected_token));
+    }
+
+    let missing = router
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/admin/assets/scripts/missing.js")
+                .body(Body::empty())
+                .expect("missing script asset request should build"),
+        )
+        .await
+        .expect("missing script asset request should be served");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_font_asset_routes_serve_bundled_korean_fonts_and_reject_unknown_names() {
+    let workspace = TempAdminWorkspace::new("font-asset-routes");
+    let router = admin_test_router(&workspace);
+
+    for asset_name in ["Galmuri11.woff2", "Galmuri11-Bold.woff2"] {
+        let response = router
+            .clone()
+            .oneshot(
+                admin_request_builder()
+                    .method(Method::GET)
+                    .uri(format!("/admin/assets/fonts/{asset_name}"))
+                    .body(Body::empty())
+                    .expect("font asset request should build"),
+            )
+            .await
+            .expect("font asset request should be served");
+        assert_eq!(response.status(), StatusCode::OK, "{asset_name}");
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("font/woff2")),
+            "{asset_name}"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("no-store, max-age=0")),
+            "{asset_name}"
+        );
+        assert!(bytes_body(response).await.len() > 100_000, "{asset_name}");
+    }
+
+    let missing = router
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/admin/assets/fonts/missing.woff2")
+                .body(Body::empty())
+                .expect("missing font asset request should build"),
+        )
+        .await
+        .expect("missing font asset request should be served");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
@@ -1410,7 +1836,7 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
 }
 
 #[tokio::test]
-async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
+async fn admin_html_draft_routes_render_editor_and_validation_responses() {
     let workspace = TempAdminWorkspace::new("html-drafts");
     let router = admin_test_router(&workspace);
     let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
@@ -1444,7 +1870,7 @@ async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
     let loaded = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri(editor_location.as_str())
                 .header(header::COOKIE, &cookie)
@@ -1461,7 +1887,6 @@ async fn admin_html_draft_routes_render_editor_and_htmx_fragments() {
     assert!(loaded_body.contains("file_result_output"));
     assert!(loaded_body.contains(&format!("action=\"{save_uri}\"")));
     assert!(loaded_body.contains(&format!("formaction=\"{validate_uri}\"")));
-    assert!(loaded_body.contains(&format!("hx-post=\"{validate_uri}\"")));
     assert!(loaded_body.contains(&format!("formaction=\"{promote_uri}\"")));
 
     let draft_body = "# Planning\n\n## Result\n\nHTML draft round trip\n";
@@ -1560,7 +1985,6 @@ fn editor_template_uses_shared_encoded_mutation_paths() {
     .expect("editor template should render");
     assert!(rendered.contains(&format!("action=\"{}\"", action_paths.save)));
     assert!(rendered.contains(&format!("formaction=\"{}\"", action_paths.validate)));
-    assert!(rendered.contains(&format!("hx-post=\"{}\"", action_paths.validate)));
     assert!(rendered.contains(&format!("formaction=\"{}\"", action_paths.promote)));
     assert!(rendered.contains(r#"name="surface" value="akra""#));
     assert!(rendered.contains(r#"href="/admin/akra/directions""#));
@@ -1603,7 +2027,7 @@ async fn akra_html_draft_routes_preserve_surface_continuity() {
     let loaded = router
         .clone()
         .oneshot(
-            Request::builder()
+            admin_request_builder()
                 .method(Method::GET)
                 .uri(editor_location.as_str())
                 .header(header::COOKIE, &cookie)
@@ -1618,7 +2042,6 @@ async fn akra_html_draft_routes_preserve_surface_continuity() {
     assert!(loaded_body.contains(r#"name="surface" value="akra""#));
     assert!(loaded_body.contains(r#"href="/admin/akra/directions""#));
     assert!(loaded_body.contains(&format!("formaction=\"{validate_uri}\"")));
-    assert!(loaded_body.contains(&format!("hx-post=\"{validate_uri}\"")));
 
     let validated = router
         .clone()
@@ -1655,7 +2078,7 @@ async fn admin_html_draft_routes_reject_malformed_draft_names() {
         let response = router
             .clone()
             .oneshot(
-                Request::builder()
+                admin_request_builder()
                     .method(Method::GET)
                     .uri(uri)
                     .header(header::COOKIE, &cookie)
@@ -1828,11 +2251,15 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(ADMIN_MOD.contains(
         ".route(\n            \"/admin/app-server-prompts\",\n            get(pages::app_server_prompts_page),\n        )"
     ));
-    assert!(BASE_TEMPLATE.contains("akraHashTabRoutes"));
-    assert!(BASE_TEMPLATE.contains("window.location.pathname !== \"/admin/akra\""));
-    assert!(BASE_TEMPLATE.contains("directions: \"/admin/akra/directions\""));
-    assert!(BASE_TEMPLATE.contains("tasks: \"/admin/akra/tasks\""));
-    assert!(BASE_TEMPLATE.contains("window.addEventListener(\"hashchange\", redirectAkraHashTab)"));
+    assert!(BASE_TEMPLATE.contains("/admin/assets/scripts/admin-shell.js"));
+    assert!(!BASE_TEMPLATE.contains("<script>"));
+    assert!(ADMIN_SHELL_JS.contains("akraHashTabRoutes"));
+    assert!(ADMIN_SHELL_JS.contains("window.location.pathname !== \"/admin/akra\""));
+    assert!(ADMIN_SHELL_JS.contains("directions: \"/admin/akra/directions\""));
+    assert!(ADMIN_SHELL_JS.contains("tasks: \"/admin/akra/tasks\""));
+    assert!(
+        ADMIN_SHELL_JS.contains("window.addEventListener(\"hashchange\", redirectAkraHashTab)")
+    );
     assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/directions" class="{% if current_nav == "akra_directions" %}active{% endif %}"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
     assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/tasks" class="{% if current_nav == "akra_tasks" %}active{% endif %}"><span class="nav-icon">T</span><span>작업 관리</span></a>"#));
     assert!(BASE_TEMPLATE.contains("AKRA graphic admin shell"));
@@ -1840,7 +2267,7 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(!BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
     assert!(!BASE_TEMPLATE.contains("모든 시스템 정상"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_ENABLED"));
-    assert!(ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
+    assert!(!ADMIN_MOD.contains("AKRA_ADMIN_API_BASE_URL"));
     assert!(ADMIN_MOD.contains("AKRA_ADMIN_GRAPHIC_POLL_MS"));
 
     for route in [
@@ -1971,14 +2398,17 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "게임발전국",
         "AKRA ADMIN CONTROL CENTER",
         "전체 진행률",
-        "23 / 30",
-        "대기 중 에이전트",
-        "완료된 워크트리",
-        "14:32:21",
+        "data-summary-active-agents",
+        "data-summary-idle-slots",
+        "data-summary-queue-depth",
+        "data-summary-generated-time",
+        "data-summary-readiness",
+        "data-operational-notice",
+        "미집계",
         "워크트리 풀",
         "배포 파이프라인",
         "실시간 이벤트",
-        "공지 사항",
+        "운영 알림",
         "시스템 상태 요약",
         "data-admin-graphic",
         "data-poll-interval-ms",
@@ -2024,7 +2454,9 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "stale snapshot",
         "pollEvents",
         "/admin/assets/game/akra-diorama.js",
-        "data-automation-epoch",
+        "/admin/assets/scripts/admin-shell.js",
+        "/admin/assets/scripts/akra-dashboard.js",
+        "data-planning-revision",
         "akra:dashboard-rendered",
         "renderDashboardPanels",
         "dashboardSignature",
@@ -2046,7 +2478,10 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "score-chip",
     ] {
         assert!(
-            AKRA_DASHBOARD_TEMPLATE.contains(copy),
+            AKRA_DASHBOARD_TEMPLATE.contains(copy)
+                || AKRA_DASHBOARD_JS.contains(copy)
+                || BASE_TEMPLATE.contains(copy)
+                || ADMIN_SHELL_JS.contains(copy),
             "graphic dashboard should expose {copy}"
         );
     }
@@ -2078,6 +2513,8 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "\"/api/admin/akra/events\"",
         "\"/admin/assets/graphics/{asset_name}\"",
         "\"/admin/assets/game/{asset_name}\"",
+        "\"/admin/assets/scripts/{asset_name}\"",
+        "\"/admin/assets/fonts/{asset_name}\"",
     ] {
         assert!(
             source_contains(ADMIN_MOD, route),
@@ -2090,17 +2527,66 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "rebuildAgentUnits",
         "PIXI.Application",
         "gamebaljeonguk_atlas_128x192.png",
-        "src/akra-diorama.ts",
         "chooseRoamPoint",
         "updateRoamMotion",
         "applyWalkFrame",
         "buildAgentFrameSets",
     ] {
         assert!(
-            AKRA_DIORAMA_JS.contains(token),
-            "admin game diorama asset should expose {token}"
+            AKRA_DIORAMA_TS.contains(token),
+            "admin game diorama source should expose {token}"
         );
     }
+}
+
+#[test]
+fn akra_admin_never_reports_uncollected_health_as_success() {
+    for fabricated_copy in [
+        "<strong>68%</strong>",
+        "<strong>23 / 30</strong>",
+        "<strong>128</strong>",
+        "<strong>14:32:21</strong>",
+        "<strong>62%</strong>",
+        "<strong>231 / 30</strong>",
+        "<strong>42%</strong>",
+        "<strong>58%</strong>",
+        "<strong>120 MB/s</strong>",
+        "<small>정상</small>",
+        "<span class=\"system-ready-dot\"></span>정상",
+        "봄맞이 프로젝트",
+        "content: \"66%\"",
+        "content: \"42%\"",
+        "setKpiState(\"success\")",
+        "stage 75/100",
+    ] {
+        assert!(
+            !AKRA_DASHBOARD_TEMPLATE.contains(fabricated_copy)
+                && !AKRA_DASHBOARD_JS.contains(fabricated_copy),
+            "dashboard must not preserve fabricated operator signal {fabricated_copy}"
+        );
+    }
+
+    for snapshot_copy in [
+        "{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}",
+        "{{ dashboard.kpis.pool_idle }}",
+        "{{ dashboard.kpis.queue_depth }}",
+        "{{ dashboard.generated_time_label }}",
+        "{{ dashboard.workspace.readiness }}",
+        "{{ dashboard.workspace.readiness_notice }}",
+    ] {
+        assert!(
+            AKRA_DASHBOARD_TEMPLATE.contains(snapshot_copy),
+            "dashboard should render collected snapshot signal {snapshot_copy}"
+        );
+    }
+    assert!(AKRA_DASHBOARD_TEMPLATE.matches(">미집계<").count() >= 9);
+    assert!(AKRA_DASHBOARD_JS.contains("setKpiState(\"fresh\")"));
+    assert!(AKRA_DASHBOARD_TEMPLATE.contains("진행률 미집계"));
+    assert!(AKRA_DASHBOARD_RS.contains("\"stage 미집계\""));
+    assert!(AKRA_METRICS_TEMPLATE.contains("Git 상태 미집계"));
+    assert!(AKRA_METRICS_TEMPLATE.contains("GitHub 연동 미집계"));
+    assert!(!AKRA_METRICS_TEMPLATE.contains("Git 상태 정상"));
+    assert!(!AKRA_METRICS_TEMPLATE.contains("GitHub 연동 정상"));
 }
 
 #[test]
@@ -2121,7 +2607,7 @@ fn akra_graphic_dashboard_event_status_uses_readable_counts() {
         "event feed status should use the server-formatted readable label on initial render"
     );
     assert!(
-        AKRA_DASHBOARD_TEMPLATE.contains("formatEventFeedStatus"),
+        AKRA_DASHBOARD_JS.contains("formatEventFeedStatus"),
         "event feed polling should preserve the readable count label"
     );
     assert!(
@@ -2137,6 +2623,8 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     for token in [
         "\"build\": \"vite build --config vite.config.ts && node scripts/promote-build.mjs\"",
         "\"check\": \"tsc --noEmit --project tsconfig.json\"",
+        "\"@pixi/unsafe-eval\": \"7.4.3\"",
+        "\"pixi.js\": \"7.4.3\"",
         "\"typescript\":",
         "\"vite\":",
     ] {
@@ -2160,9 +2648,10 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     }
 
     for token in [
+        "import \"@pixi/unsafe-eval\";",
         "type StatusSeverity",
         "interface DioramaHandle",
-        "declare const PIXI",
+        "const PIXI = PIXI_RUNTIME",
         "const mountDiorama = (): DioramaHandle | null",
         "window.AkraAdminGame",
         "PIXI.Assets.load",
@@ -2191,7 +2680,24 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         );
     }
 
-    for token in ["dist/akra-diorama.js", "akra-diorama.js", "copyFileSync"] {
+    let unsafe_eval_import = AKRA_DIORAMA_TS
+        .find("import \"@pixi/unsafe-eval\";")
+        .expect("admin game should install the strict-CSP Pixi adapter");
+    let pixi_import = AKRA_DIORAMA_TS
+        .find("import * as PIXI_RUNTIME from \"pixi.js\";")
+        .expect("admin game should import Pixi");
+    let renderer_initialization = AKRA_DIORAMA_TS
+        .find("new PIXI.Application")
+        .expect("admin game should initialize the Pixi renderer");
+    assert!(unsafe_eval_import < pixi_import);
+    assert!(pixi_import < renderer_initialization);
+
+    for token in [
+        "dist/akra-diorama.js",
+        "akra-diorama.js",
+        "readFileSync",
+        "writeFileSync",
+    ] {
         assert!(
             ADMIN_GAME_PROMOTE_BUILD.contains(token),
             "admin game promote script should keep {token}"
@@ -2222,14 +2728,14 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "text-overflow: ellipsis",
         "@media (max-width: 860px)",
         "generated_time_label",
-        "automation_epoch",
+        "planning_revision",
         "readiness_notice",
         "blocked_action",
         "queue_depth_basis",
         "mock_metric_note",
         "CampaignView",
         "map_campaign",
-        "stage {progress}/100",
+        "stage 미집계",
         "--office-bg-image",
         "--agent-sprite-sheet",
         "var(--office-bg-image)",
@@ -2260,7 +2766,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "detailSlot: slotDisplayLabel",
         "detailTask: slotTaskId",
         "createText(\"strong\", \"\", slotDisplayLabel)",
-        "createText(\"small\", \"slot-state\", \"진행 중\")",
+        "createText(\"small\", \"slot-state\", slotStateLabel)",
         "class=\"admin-detail-drawer\"",
         "pool reconcile, distributor tick, queue mutation은 호출하지 않습니다.",
         "MAP_WIDTH = 1671",
@@ -2279,7 +2785,10 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
             AKRA_DASHBOARD_TEMPLATE.contains(token)
                 || BASE_TEMPLATE.contains(token)
                 || AKRA_DASHBOARD_RS.contains(token)
-                || AKRA_DIORAMA_JS.contains(token),
+                || AKRA_DIORAMA_JS.contains(token)
+                || AKRA_DIORAMA_TS.contains(token)
+                || ADMIN_SHELL_JS.contains(token)
+                || AKRA_DASHBOARD_JS.contains(token),
             "graphic visual contract should keep {token}"
         );
     }
@@ -2358,11 +2867,9 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/admin/akra/directions",
         "/admin/tasks",
         "admin-tasks.html",
-        "/admin/assets/graphics/akra-office-background.png",
         "/admin/assets/graphics/final-draft-map-sprite.png",
         "/admin/assets/graphics/sprite_fd_desk_1.png",
         "/admin/assets/graphics/sprite_fd_event_log_tower.png",
-        "/admin/assets/graphics/akra-object-sprites.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png",
         "/admin/assets/game/akra-diorama.js",
@@ -2381,13 +2888,23 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "\"campaign\"",
         "\"laneCards\"",
         "\"intelCards\"",
-        "served office background asset does not match workspace asset",
         "served final draft map asset does not match workspace asset",
         "served final draft desk sprite asset does not match workspace asset",
         "served final draft event tower sprite asset does not match workspace asset",
-        "served object sprite asset does not match workspace asset",
         "served gamebaljeonguk agent atlas does not match workspace asset",
         "served large gamebaljeonguk agent atlas does not match workspace asset",
+        "served admin shell script does not match workspace asset",
+        "served admin dashboard script does not match workspace asset",
+        "served regular admin font does not match workspace asset",
+        "served bold admin font does not match workspace asset",
+        "AKRA_ADMIN_TOKEN",
+        "command curl -q \"$@\"",
+        "--curl-config-probe",
+        "randomBytes(32).toString(\"hex\")",
+        "ADMIN_GRAPHIC_TOKEN must be exactly 64 hexadecimal characters",
+        "/admin/login",
+        "authenticated_curl",
+        "cookie_jar",
         "--screenshot=",
         "admin graphic visual contract ok",
     ] {
@@ -2396,19 +2913,27 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
             "visual regression script should keep {token}"
         );
     }
+    assert!(
+        !ADMIN_GRAPHIC_VISUAL_SCRIPT
+            .to_ascii_lowercase()
+            .contains("firefox")
+    );
 
     for token in [
-        "include_bytes!(\"../../../../assets/admin/graphics/akra-office-background.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/final-draft-map-sprite.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/sprite_fd_desk_1.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/sprite_fd_event_log_tower.png\")",
-        "include_bytes!(\"../../../../assets/admin/graphics/akra-object-sprites.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png\")",
         "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png\")",
         "include_bytes!(\"../../../../assets/admin/game/akra-diorama.js\")",
+        "include_bytes!(\"../../../../assets/admin/scripts/admin-shell.js\")",
+        "include_bytes!(\"../../../../assets/admin/scripts/akra-dashboard.js\")",
+        "include_bytes!(\"../../../../assets/admin/fonts/Galmuri11.woff2\")",
+        "include_bytes!(\"../../../../assets/admin/fonts/Galmuri11-Bold.woff2\")",
         "image/png",
         "text/javascript; charset=utf-8",
-        "public, max-age=86400",
+        "font/woff2",
+        "no-store, max-age=0",
     ] {
         assert!(
             ADMIN_STATIC_ASSETS.contains(token),
@@ -2514,8 +3039,9 @@ fn akra_graphic_dashboard_gamebaljeonguk_sprite_pack_is_reviewable() {
 #[test]
 fn risky_admin_mutations_require_browser_confirmation() {
     // capture-phase registration은 nested form/button 구조가 confirmation hook을 우회하지 못하게 한다.
-    assert!(BASE_TEMPLATE.contains("document.addEventListener(\"submit\""));
-    assert!(BASE_TEMPLATE.contains("}, true);"));
+    assert!(BASE_TEMPLATE.contains("/admin/assets/scripts/admin-shell.js"));
+    assert!(ADMIN_SHELL_JS.contains("document.addEventListener(\"submit\""));
+    assert!(ADMIN_SHELL_JS.contains("}, true);"));
 
     // 첫 pass는 특정 template이 risky-action marker를 모두 잃었을 때 page 이름이 보이는 실패 메시지를 제공한다.
     for (template_name, template) in [

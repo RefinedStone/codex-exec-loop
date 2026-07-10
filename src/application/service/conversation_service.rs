@@ -2,10 +2,6 @@
 // 원자적 참조 카운터이다. TUI app runtime, shell entrypoint, 테스트 fixture는 service를 복제해도
 // 실제 app-server adapter 인스턴스는 하나의 port 객체로 유지된다.
 use std::sync::Arc;
-// `Sender`는 런타임 작업자에서 TUI 수신 루프로 이벤트를 보내는 통로이다.
-// 이 service는 채널을 해석하지 않고 port에 그대로 넘겨, 스트리밍 세부 처리를 outbound adapter에 맡긴다.
-use std::sync::mpsc::Sender;
-
 // `anyhow::Result`는 application service가 adapter 오류를 상위 TUI 흐름에 전달하는 공통 결과 타입이다.
 // 여기서는 오류 종류를 새 도메인 enum으로 재포장하지 않고, runtime port의 실패 맥락을 그대로 보존한다.
 use anyhow::{Context, Result};
@@ -19,7 +15,7 @@ use crate::application::port::outbound::review_center_repository_port::{
 };
 // conversation runtime event는 이전 계층에서 정리한 스트림 계약이다.
 // service는 이 이벤트 타입을 알고 있지만 이벤트 payload를 직접 만들거나 줄이지 않는다.
-use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+use crate::application::service::conversation_runtime_event::ConversationStreamSender;
 use crate::application::service::review_center::{
     ReviewCenterReadService, ReviewCenterWriteService,
 };
@@ -198,6 +194,15 @@ impl ConversationService {
             .request_stop_all_sessions()
     }
 
+    pub fn resolve_approval_request(
+        &self,
+        approval_id: &str,
+        decision: crate::domain::conversation::ConversationApprovalDecision,
+    ) -> Result<()> {
+        self.interactive_turn_runtime_port
+            .resolve_approval_request(approval_id, decision)
+    }
+
     // 새 thread를 만들며 첫 prompt를 실행하는 스트리밍 진입점이다.
     // TUI의 turn submission runtime은 현재 thread_id가 없을 때 이 메서드를 호출하고, 이후 ThreadPrepared/TurnStarted 같은
     // `ConversationStreamEvent`를 수신해 세션 상태를 채운다.
@@ -211,7 +216,7 @@ impl ConversationService {
         options: ConversationTurnOptions,
         // event_sender는 호출자가 만든 수신 루프와 짝을 이룬다. 소유권을 넘기는 이유는
         // runtime worker가 thread 종료까지 이 sender를 들고 스트림 이벤트를 계속 보낼 수 있어야 하기 때문이다.
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()> {
         self.interactive_turn_runtime_port
             // 새 thread 생성, app-server launch/reattach, protocol notification 해석은 모두 outbound 구현 책임이다.
@@ -230,7 +235,7 @@ impl ConversationService {
         // operator가 선택한 model/think override이다. 비어 있으면 app-server 기본값을 유지한다.
         options: ConversationTurnOptions,
         // 같은 `ConversationStreamEvent` 채널을 사용해 delta, 도구 활동, 승인 상태, 완료/실패를 돌려받는다.
-        event_sender: Sender<ConversationStreamEvent>,
+        event_sender: ConversationStreamSender,
     ) -> Result<()> {
         self.interactive_turn_runtime_port
             // 기존 thread에서의 turn 실행도 service가 직접 구현하지 않는다.
@@ -251,7 +256,6 @@ mod tests {
         ConversationRuntimeControlTruth, ConversationTurnOptions,
     };
     use anyhow::Result;
-    use std::sync::mpsc::Sender;
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -361,7 +365,7 @@ mod tests {
             _cwd: &str,
             _prompt: &str,
             _options: ConversationTurnOptions,
-            _event_sender: Sender<ConversationStreamEvent>,
+            _event_sender: ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }
@@ -371,7 +375,7 @@ mod tests {
             _thread_id: &str,
             _prompt: &str,
             _options: ConversationTurnOptions,
-            _event_sender: Sender<ConversationStreamEvent>,
+            _event_sender: ConversationStreamSender,
         ) -> Result<()> {
             Ok(())
         }

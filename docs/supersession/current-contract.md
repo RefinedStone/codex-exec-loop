@@ -35,8 +35,11 @@ implementation planning out of this file.
 - `:reset directions` and `:reset all` first render preview guidance; rerun with `confirm` to apply.
 - `:model` opens model and reasoning-effort selection.
 - `:think <none|minimal|low|medium|high|xhigh|default>` sets reasoning effort directly.
-- `:turns <number|infinite>` sets the internal auto-follow turn budget.
-- `:stop` stops active app-server sessions.
+- `:turns <number|infinite>` sets the single-session auto-follow turn budget. It is independent of
+  parallel automation.
+- `:stop` stops active app-server sessions, closes the active parallel epoch, and disarms both
+  continuation paths. A later `:parallel` re-arms only parallel continuation; a positive or infinite
+  `:turns` command is still required to re-arm single-session auto-follow.
 - `:help` lists the implemented command registry.
 
 ## Planning Contract
@@ -56,17 +59,21 @@ implementation planning out of this file.
 ## Supersession Contract
 
 - Bare `:parallel`/`:pa` is the enable/refresh entrypoint; `:parallel on` is not implemented.
+- Parallel automation is an independent explicit opt-in and does not require `:turns`. After
+  `:stop`, off-to-on `:parallel` re-arms only parallel continuation and preserves the sticky
+  single-session stop.
 - Off-to-on `:parallel`/`:pa` entry checks readiness, opens the board, attempts a pool-only reset and
   reconcile, opens an automation epoch, and dispatches any already-ready accepted queue up to
   idle-slot capacity.
-- The first off-to-on `:parallel` in a TUI process treats the pool as disposable initial setup:
-  all registered `akra` slots are forced back to the current `prerelease` baseline and stale lease,
-  session, and distributor mirrors for reset slots are cleared.
+- The first off-to-on `:parallel` in a TUI process may clear disposable runtime projections only
+  after every affected slot is proven clean and resettable. Dirty, untracked, pending-operation,
+  unleased non-baseline, and non-integrated slots are preserved and block projection-wide clearing.
 - Re-running `:parallel`/`:pa` while already enabled refreshes readiness and supervisor projection
   only; it does not reset the pool, reopen the automation epoch, or launch workers by itself.
 - `Esc` closes the board surface only. Parallel mode remains enabled.
 - `:parallel off`/`:pa off` disables local parallel mode and clears the automation epoch, pending
-  dispatch, and in-flight dispatch state, but leaves pool worktrees in place.
+  dispatch, in-flight dispatch state, and any late post-turn parallel continuation result, but leaves
+  pool worktrees in place.
 - Later off-to-on `:parallel` entries attempt a guarded reset. Reset is blocked when live Running,
   CleanupPending, or recent Leased slots are present.
 - Idle or stale reusable slots are reset into disposable baselines; protected active slots are
@@ -91,25 +98,87 @@ implementation planning out of this file.
 - The board summary includes the last automation trigger and the latest dispatch-withheld reason
   when either exists.
 - Queue work leases one of three local `akra` worktree slots.
+- Unattended parallel workers use `workspace-write` and must leave source edits uncommitted. After
+  `TurnCompleted`, Akra validates the exact Running lease, worktree root, branch, frozen base, and
+  `HEAD`, then performs a bounded local host commit before it reserves official refresh order.
+- The host commit path clears inherited Git control environment, disables fsmonitor, hooks, signing,
+  and replacement objects, rejects active clean/process filters, and updates the source ref with an
+  old-`HEAD` CAS. Assume-unchanged, skip-worktree, and unmerged index entries are preserved for
+  operator recovery rather than cleared automatically. Top-level ignored build output stays outside
+  the frozen source commit and is purged only by the post-integration, non-Running, identity-checked
+  slot cleanup. Hidden dirty, untracked, ignored, or nested tracked-submodule state fails closed with
+  submodule ignore settings overridden for inspection. Changed paths also reject symlinked or
+  reparse-point ancestors, special files, hard-linked regular files, newly introduced Git gitlinks,
+  files larger than 64 MiB, and aggregate changed content larger than 256 MiB. Path identity,
+  link count, size, and modification metadata are compared immediately before and after staging.
+  No-change/base-equivalent output, merge history, drift, ref races, or a dirty final worktree also
+  fail closed before commit-ready. A clean existing linear descendant commit is accepted for
+  compatibility. This pre/post comparison narrows deterministic staging attacks but is not an
+  atomic filesystem transaction: another same-UID process can still race file contents between
+  inspection and `git add`, so app-server process-tree termination and the final clean/status checks
+  remain part of the containment contract.
 - Agent completion becomes distributor-eligible only after hidden official planning refresh marks it
   commit-ready.
 - A successful parallel official completion refresh that leaves another actionable queue head emits
   the next `parallel_official_completion` dispatch request, capped by idle-slot capacity.
 - Distributor delivery is serial: source branch push, PR automation, integration into the configured
   integration branch (default `prerelease`), and slot cleanup.
+- Slot acquisition freezes the push remote, credential-redacted canonical GitHub HTTPS URL,
+  repository identity, visibility, integration branch, and fetched remote base OID before the
+  worker starts. Enqueue carries that target with the source branch and source SHA. Legacy targets
+  without the URL proof and any later URL/identity/visibility drift fail closed before remote
+  writes. Frozen network Git and PR wrapper calls use a private isolated Git context, so mutable
+  repository transport configuration and GitHub routing environment are not delivery inputs.
+- Pool reset, reconcile, provisioning, cleanup, and lease creation require an isolated exact-target
+  fetch proof before any slot mutation. A newly observed remote-only baseline advance blocks the
+  current mutation pass and requires an explicit retry; stale remote-tracking refs are inspection
+  data only. Invalid explicit integration-branch or push-remote configuration is unavailable and
+  never falls back to `prerelease` or `origin` in background or destructive flows.
+- PR mode defaults to `required`. Unless autonomous delivery is explicitly enabled, readiness
+  requires `APPROVED`, `CLEAN`, passing checks, and a PR `headRefOid` equal to the frozen source SHA.
+  `AKRA_GITHUB_PR_MODE=auto|disabled` or repo-local `akra.githubPrMode` never enables direct delivery
+  alone; the parent process must start Akra with exact `AKRA_PARALLEL_AUTONOMOUS_DELIVERY=1`.
+  Repository-local configuration cannot grant this high-risk permission.
+- Human review/check gates are rechecked indefinitely at a bounded interval; network and remote
+  command failures use persisted exponential backoff with an eight-attempt automatic retry limit.
+- Public GitHub delivery requires the parent process to start Akra with exact
+  `AKRA_PARALLEL_ALLOW_PUBLIC_REPOSITORY=1`. Repository-local configuration cannot grant this
+  permission. Public without opt-in and unknown visibility block.
+- `AKRA_PARALLEL_INTEGRATION_BRANCH=<branch>` or repo-local
+  `git config akra.parallelIntegrationBranch <branch>` selects that branch, with the environment
+  taking precedence. The branch must already exist on the configured remote; Akra does not seed it
+  from the current workspace `HEAD`.
 - `AKRA_GITHUB_PUSH_REMOTE=<remote>` or repo-local `git config akra.githubPushRemote <remote>`
-  changes the remote used for source-branch publish, remote baseline seeding, and integration-branch
-  push when `origin` is not the correct delivery target.
+  changes the remote used for source-branch publish, integration baseline fetch, GitHub repository
+  discovery, interactive current-branch review polling, and integration-branch push when `origin`
+  is not the correct delivery target. Invalid or missing explicit remotes fail closed rather than
+  silently falling back to `origin`.
+- Integration uses a generated detached worktree derived from the frozen target and never resets or
+  moves the canonical checkout. Source-branch cleanup occurs only after remote integration
+  verification and PR close, using a force-with-lease bound to the frozen source SHA; moved branches
+  are preserved and surfaced in the durable delivery note.
+- Queue admission freezes both the fetched integration merge-base and the reviewed source tip. The
+  source range must be linear, contain 1 through 128 commits, and contain no merge commit. Delivery
+  enumerates that exact oldest-to-newest range, requires GitHub's PR head to remain at the frozen
+  tip, and cherry-picks every commit that is not already patch-equivalent in the target. Legacy or
+  incomplete queue records are blocked before any remote side effect.
 
 ## Recovery Contract
 
 - Store-backed claims coordinate official refresh and distributor queue-head processing.
+- A distributor tick reconstructs a missing queue record for a still-running `commit_ready`
+  session before processing the queue. The completion timestamp supplies deterministic ordering and
+  identity, so a transient target fetch or process interruption cannot strand a reviewed result.
 - Stale official refresh recovery may abandon only the current head order per pass.
 - Retryable distributor recovery includes source-branch push failures, PR ensure/inspection failures,
-  cherry-pick and integration-worktree precondition failures, integration-branch push failures,
-  GitHub automation or pull-request workflow unavailability, and cleanup-failure retries when the
-  blocked record still matches the live lease/worktree.
-- Non-retryable branch drift and missing worktree evidence remain operator-owned.
+  cherry-pick and integration-worktree precondition failures, GitHub automation or pull-request
+  workflow unavailability, and cleanup-failure retries when the blocked record still matches the
+  live lease/worktree.
+- Integration delivery verifies the frozen remote source ref, complete source range, and PR head OID
+  immediately before cherry-pick, then requires the pushed integration ref to equal the dedicated
+  worktree HEAD.
+  Integration push failures, branch divergence, dirty worktrees, and missing worktree evidence
+  remain operator-owned; recovery never hard-resets local or canonical integration history.
 - Failed-start dispatch blocks survive pool reset per task, keeping the latest `blocked_at`.
 - Stale startup leases require matching session-detail evidence before automatic cleanup.
 - Fresh same-epoch `Running` dispatch commands now recover immediately after restart/reentry when durable state shows no session detail yet, including the matching-lease/no-session handoff window.
@@ -119,7 +188,8 @@ implementation planning out of this file.
 - Real-terminal validation remains required for restart, blocked distributor, and multi-worktree
   operator flows.
 - Planning detail mode remains manual; `llm-assisted` authoring is disabled.
-- Approval approve/deny UI is gated by app-server capability and is not exposed in the current TUI.
+- Main-session command, file-change, and bounded permission approvals use a one-shot TUI modal.
+  Supersession planning and parallel worker runtimes remain unattended and decline every approval.
 - Non-git workspaces do not use the full supersession worktree pool model.
 
 ## Code Entry

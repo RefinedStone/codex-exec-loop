@@ -1,3 +1,6 @@
+import "@pixi/unsafe-eval";
+import * as PIXI_RUNTIME from "pixi.js";
+
 type StatusSeverity = "normal" | "success" | "warning" | "danger" | "info" | "muted";
 type TargetKind = "distributor" | "events";
 type AssetKey =
@@ -212,7 +215,7 @@ const STRUCTURE_SPECS: StructureSpec[] = [
   { key: "fdPlant", x: 1185, y: 620, scale: 0.7 },
 ];
 
-declare const PIXI: {
+const PIXI = PIXI_RUNTIME as unknown as {
   Application: new (options: Record<string, unknown>) => PixiApplication;
   BaseTexture: { defaultOptions: { scaleMode?: unknown } };
   SCALE_MODES: { NEAREST: unknown };
@@ -249,7 +252,7 @@ declare global {
 
   const mountDiorama = (): DioramaHandle | null => {
     const container = document.getElementById("pixi-diorama");
-    if (!container || typeof PIXI === "undefined") return null;
+    if (!container) return null;
 
     const boardEl = container.closest<HTMLElement>(".office-board");
     if (!boardEl || container.dataset.akraDioramaMounted === "true") return null;
@@ -263,6 +266,7 @@ declare global {
       antialias: false,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
+      hello: false,
     });
     container.appendChild(app.view);
 
@@ -529,7 +533,7 @@ declare global {
       return {
         align: "center",
         fill: speechStyle?.color || "#102015",
-        fontFamily: speechStyle?.fontFamily || "'DungGeunMo', monospace",
+        fontFamily: speechStyle?.fontFamily || "'Galmuri11', monospace",
         fontSize,
         fontWeight: speechStyle?.fontWeight || "800",
         lineHeight,

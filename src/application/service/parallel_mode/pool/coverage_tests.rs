@@ -96,30 +96,43 @@ impl ParallelModeRuntimePort for MirrorRuntime {
         Ok(())
     }
 
-    fn read_dir_paths(&self, _path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    fn write_runtime_mirror_atomic(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+        _body: &str,
+    ) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn read_runtime_mirror_optional(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+    ) -> std::io::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn read_runtime_mirror_directory(
+        &self,
+        _pool_root: &Path,
+        _relative: &Path,
+    ) -> std::io::Result<Vec<(PathBuf, String)>> {
         Ok(Vec::new())
     }
 
-    fn read_to_string(&self, _path: &Path) -> std::io::Result<String> {
-        Ok(String::new())
-    }
-
-    fn write_string(&self, _path: &Path, _body: &str) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn rename(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn remove_file(&self, path: &Path) -> std::io::Result<()> {
-        if self.failing_paths.contains(path) {
+    fn remove_runtime_mirror_file(&self, pool_root: &Path, relative: &Path) -> std::io::Result<()> {
+        let path = pool_root.join(relative);
+        if self.failing_paths.contains(&path) {
             return Err(std::io::Error::other("remove failed"));
+        }
+        if !self.existing_paths.contains(&path) {
+            return Ok(());
         }
         self.removed_paths
             .lock()
             .expect("removed path log should not be poisoned")
-            .push(path.to_path_buf());
+            .push(path);
         Ok(())
     }
 }
@@ -183,7 +196,9 @@ fn queue_record(
         agent_id: format!("agent-{task_id}"),
         task_id: task_id.to_string(),
         task_title: format!("Task {task_id}"),
+        delivery_target: None,
         source_branch: POOL_BASELINE_BRANCH.to_string(),
+        source_base_commit_sha: "base".to_string(),
         source_commit_sha: "abcdef1234567890".to_string(),
         branch_name: format!("akra-agent/{slot_id}/{task_id}"),
         worktree_path: format!("/tmp/{slot_id}"),
@@ -191,6 +206,8 @@ fn queue_record(
         original_commit_sha: None,
         planning_refresh_state: "done".to_string(),
         integration_state: "queued".to_string(),
+        integration_base_commit_sha: None,
+        integration_commit_sha: None,
         conflict_files: Vec::new(),
         recovery_note: None,
         validation_summary: "validation".to_string(),
@@ -202,6 +219,8 @@ fn queue_record(
         integration_note: "queued".to_string(),
         enqueued_at: "2026-05-23T00:00:00Z".to_string(),
         updated_at: "2026-05-23T00:00:00Z".to_string(),
+        retry_attempts: 0,
+        retry_not_before: None,
     }
 }
 
@@ -216,6 +235,7 @@ fn context_with_runtime_rows(
         canonical_repo_root: PathBuf::from("/tmp/repo"),
         pool_root: PathBuf::from("/tmp/repo-akra-worktrees/akra-pool"),
         baseline_head: "abcdef1234567890".to_string(),
+        integration_target_proof_is_fresh: false,
         worktree_records: Vec::new(),
         slot_leases: leases
             .into_iter()
@@ -309,11 +329,11 @@ fn init_temp_git_repo(prefix: &str) -> PathBuf {
     run_git(&repo, &["add", "README.md"]);
     run_git(&repo, &["commit", "-m", "Initial commit"]);
     run_git(&repo, &["branch", "-M", POOL_BASELINE_BRANCH]);
-    let remote_ref = remote_tracking_branch_ref("origin", POOL_BASELINE_BRANCH);
-    run_git(
-        &repo,
-        &["update-ref", remote_ref.as_str(), POOL_BASELINE_BRANCH],
-    );
+    let origin = repo.with_extension("origin.git");
+    let origin_path = path_string(&origin);
+    run_git(&repo, &["init", "--bare", "-q", origin_path.as_str()]);
+    run_git(&repo, &["remote", "add", "origin", origin_path.as_str()]);
+    run_git(&repo, &["push", "-q", "-u", "origin", POOL_BASELINE_BRANCH]);
     fs::canonicalize(repo).expect("repo should canonicalize")
 }
 
@@ -368,6 +388,7 @@ fn remove_pool_artifacts(repo: &Path) {
     if let Some(pool_workspace_root) = pool_root.parent().and_then(Path::parent) {
         let _ = fs::remove_dir_all(pool_workspace_root);
     }
+    let _ = fs::remove_dir_all(repo.with_extension("origin.git"));
     let _ = fs::remove_dir_all(repo);
 }
 
@@ -384,6 +405,7 @@ fn slot_git_status_copy_covers_all_dirty_labels_and_readiness_gates() {
         has_staged: true,
         has_unstaged: true,
         has_untracked: true,
+        has_ignored: true,
         has_pending_operation: true,
     };
     let untracked_only = SlotGitStatus {
@@ -393,66 +415,18 @@ fn slot_git_status_copy_covers_all_dirty_labels_and_readiness_gates() {
 
     assert_eq!(
         dirty.detail_label(),
-        "staged changes, unstaged changes, untracked files, merge/rebase metadata"
+        "staged changes, unstaged changes, untracked files, ignored files, merge/rebase metadata"
     );
     assert!(!dirty.is_clean_baseline());
-    assert!(!dirty.is_ready_for_integration());
     assert!(!untracked_only.is_clean_baseline());
-    assert!(untracked_only.is_ready_for_integration());
+    assert!(!untracked_only.is_clean_for_frozen_delivery());
+    let ignored_only = SlotGitStatus {
+        has_ignored: true,
+        ..Default::default()
+    };
+    assert!(!ignored_only.is_clean_baseline());
+    assert!(ignored_only.is_clean_for_frozen_delivery());
     assert_eq!(SlotGitStatus::default().detail_label(), "clean");
-}
-
-#[test]
-fn leased_reset_protection_distinguishes_recent_invalid_and_stale_startup_leases() {
-    let stale_lease = lease(
-        "slot-1",
-        "task-1",
-        ParallelModeSlotLeaseState::Leased,
-        "2020-01-01T00:00:00Z",
-    );
-    let resettable_detail = session_detail(&stale_lease, None, "assigned", "in_progress");
-    let running_like_detail = session_detail(
-        &stale_lease,
-        Some("thread-1".to_string()),
-        "running",
-        "in_progress",
-    );
-    let invalid_timestamp_lease = lease(
-        "slot-1",
-        "task-1",
-        ParallelModeSlotLeaseState::Leased,
-        "not-a-timestamp",
-    );
-    let recent_lease = lease(
-        "slot-1",
-        "task-1",
-        ParallelModeSlotLeaseState::Leased,
-        &Utc::now().to_rfc3339(),
-    );
-    let cleanup_pending_lease = lease(
-        "slot-1",
-        "task-1",
-        ParallelModeSlotLeaseState::CleanupPending,
-        "2020-01-01T00:00:00Z",
-    );
-
-    assert!(!live_lease_blocks_parallel_entry_reset(
-        &stale_lease,
-        &[resettable_detail]
-    ));
-    assert!(live_lease_blocks_parallel_entry_reset(
-        &stale_lease,
-        &[running_like_detail]
-    ));
-    assert!(live_lease_blocks_parallel_entry_reset(
-        &invalid_timestamp_lease,
-        &[]
-    ));
-    assert!(live_lease_blocks_parallel_entry_reset(&recent_lease, &[]));
-    assert!(live_lease_blocks_parallel_entry_reset(
-        &cleanup_pending_lease,
-        &[]
-    ));
 }
 
 #[test]
@@ -615,6 +589,23 @@ fn low_level_context_loaders_report_missing_git_inventory_or_baseline() {
     );
 
     let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn persistent_mutation_lock_alone_does_not_claim_an_existing_pool() {
+    let pool_root = std::env::temp_dir().join(format!(
+        "akra-pool-managed-state-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    fs::create_dir_all(&pool_root).expect("pool root should create");
+    fs::write(pool_root.join(POOL_MUTATION_LOCK_FILE), "owner\n")
+        .expect("persistent mutation lock fixture should write");
+
+    assert!(!pool_root_has_managed_state(&pool_root));
+    fs::create_dir(pool_root.join(".leases")).expect("managed pool metadata should create");
+    assert!(pool_root_has_managed_state(&pool_root));
+
+    let _ = fs::remove_dir_all(pool_root);
 }
 
 #[test]
@@ -862,8 +853,6 @@ fn traced_parallel_enable_reset_covers_live_blocker_and_reset_event_payloads() {
     adapter
         .upsert_runtime_slot_lease(&workspace, &running_lease)
         .expect("running lease should be stored");
-    fs::write(reset_slot_path.join("scratch.tmp"), "reset me\n")
-        .expect("reset slot scratch file should be written");
 
     let report = with_akra_event_trace(|| {
         reset_pool_for_parallel_enable(
@@ -878,7 +867,7 @@ fn traced_parallel_enable_reset_covers_live_blocker_and_reset_event_payloads() {
     assert_eq!(report.live_blocker_count(), 1);
     assert_eq!(report.succeeded_reset_slot_count(), 1);
     assert!(live_slot_path.join(".git").exists());
-    assert!(!reset_slot_path.join("scratch.tmp").exists());
+    assert!(reset_slot_path.join(".git").exists());
 
     remove_pool_artifacts(&repo);
 }

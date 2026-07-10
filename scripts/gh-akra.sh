@@ -2,6 +2,24 @@
 set -euo pipefail
 
 script_name="gh-akra"
+github_response_max_bytes=8388608
+temporary_files=()
+
+cleanup_temporary_files() {
+  local path
+  for path in "${temporary_files[@]}"; do
+    rm -f -- "${path}"
+  done
+}
+
+trap cleanup_temporary_files EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+register_temporary_file() {
+  temporary_files+=("$1")
+}
 
 usage_error() {
   echo "${script_name}: $*" >&2
@@ -15,6 +33,58 @@ require_value() {
     usage_error "missing value for ${option}"
   fi
 }
+
+sanitize_inherited_git_environment() {
+  local git_env_name
+  for git_env_name in "${!GIT_@}"; do
+    unset "${git_env_name}"
+  done
+  unset SSH_ASKPASS SSH_ASKPASS_REQUIRE
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_NO_REPLACE_OBJECTS=1
+  export GIT_NO_LAZY_FETCH=1
+  export GIT_OPTIONAL_LOCKS=0
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_ATTR_NOSYSTEM=1
+  export GIT_EDITOR=:
+  export GIT_SEQUENCE_EDITOR=:
+  export GCM_INTERACTIVE=Never
+  export GCM_GUI_PROMPT=0
+  if [[ -n "${AKRA_TRUSTED_GIT_SSL_CAINFO:-}" ]]; then
+    export GIT_SSL_CAINFO="${AKRA_TRUSTED_GIT_SSL_CAINFO}"
+  fi
+  if [[ -n "${AKRA_TRUSTED_GIT_SSL_CAPATH:-}" ]]; then
+    export GIT_SSL_CAPATH="${AKRA_TRUSTED_GIT_SSL_CAPATH}"
+  fi
+}
+
+safe_git_impl() (
+  local -a hardening_args=(
+    --no-pager
+    --no-replace-objects
+    -c "core.hooksPath=/dev/null"
+    -c "core.fsmonitor=false"
+    -c "core.attributesFile=/dev/null"
+    -c "commit.gpgSign=false"
+    -c "tag.gpgSign=false"
+    -c "merge.gpgSign=false"
+    -c "push.gpgSign=false"
+    -c "maintenance.auto=false"
+    -c "gc.auto=0"
+    -c "gc.autoDetach=false"
+    -c "fetch.writeCommitGraph=false"
+  )
+
+  sanitize_inherited_git_environment
+
+  command git "${hardening_args[@]}" "$@" </dev/null
+)
+
+safe_git() {
+  safe_git_impl "$@"
+}
+
+sanitize_inherited_git_environment
 
 read_option_file() {
   local option="$1"
@@ -66,51 +136,80 @@ if [[ "${1-}:${2-}" == "auth:status" ]]; then
   auth_status_only=true
 fi
 
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+repo_root="$(safe_git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "${repo_root}" ]]; then
   if [[ "${auth_status_only}" == "true" ]]; then
     repo_root="${PWD}"
     git_dir=""
-    git_common_dir=""
   else
     usage_error "not inside a git repository"
   fi
 else
-  git_dir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  git_dir="$(safe_git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
   if [[ -z "${git_dir}" ]]; then
     usage_error "failed to resolve git dir"
   fi
-  git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 fi
 
 if [[ -z "${desired_login}" && -n "${git_dir:-}" ]]; then
-  desired_login="$(git -C "${repo_root}" config --get akra.githubLogin 2>/dev/null || true)"
+  desired_login="$(safe_git -C "${repo_root}" config --get akra.githubLogin 2>/dev/null || true)"
+fi
+
+if [[ -n "${AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN+x}" ]]; then
+  usage_error "AKRA_GITHUB_LEGACY_CREDENTIAL_SCAN is no longer supported; use an explicit token environment variable or gh auth token"
+fi
+
+push_remote="${AKRA_GITHUB_PUSH_REMOTE:-}"
+if [[ -z "${push_remote}" && -n "${git_dir:-}" ]]; then
+  push_remote="$(safe_git -C "${repo_root}" config --get akra.githubPushRemote 2>/dev/null || true)"
+fi
+push_remote="${push_remote:-origin}"
+if [[ ! "${push_remote}" =~ ^[A-Za-z0-9._-]+$ ]] ||
+  [[ "${push_remote}" == -* || "${push_remote}" == *. || "${push_remote}" == *.lock ||
+    "${push_remote}" == *..* || "${push_remote}" == *@\{* ]]; then
+  usage_error "invalid GitHub push remote name"
+fi
+if [[ -n "${git_dir:-}" ]] &&
+  ! safe_git -C "${repo_root}" remote get-url --push "${push_remote}" >/dev/null 2>&1; then
+  usage_error "configured GitHub push remote ${push_remote} is not available"
 fi
 
 
 parse_repo_full_name() {
-  local origin_url
-  origin_url="$(git -C "${repo_root}" remote get-url origin)"
+  local owner
+  local repository
+  local remote_url
+  remote_url="$(safe_git -C "${repo_root}" remote get-url --push "${push_remote}")"
 
-  case "${origin_url}" in
+  case "${remote_url}" in
     git@github.com:*)
-      origin_url="${origin_url#git@github.com:}"
+      remote_url="${remote_url#git@github.com:}"
       ;;
     ssh://git@github.com/*)
-      origin_url="${origin_url#ssh://git@github.com/}"
+      remote_url="${remote_url#ssh://git@github.com/}"
       ;;
-    https://*github.com/*)
-      origin_url="${origin_url#https://}"
-      origin_url="${origin_url#*@github.com/}"
-      origin_url="${origin_url#github.com/}"
+    https://github.com/*)
+      remote_url="${remote_url#https://github.com/}"
+      ;;
+    https://*@github.com/*)
+      usage_error "configured GitHub HTTPS push remote must not embed a username or credential"
       ;;
     *)
-      usage_error "unsupported origin URL ${origin_url}"
+      usage_error "configured GitHub push remote ${push_remote} does not use a supported GitHub URL"
       ;;
   esac
 
-  origin_url="${origin_url%.git}"
-  printf '%s\n' "${origin_url}"
+  remote_url="${remote_url%.git}"
+  if [[ ! "${remote_url}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    usage_error "failed to parse a safe GitHub repository identity from push remote ${push_remote}"
+  fi
+  owner="${remote_url%%/*}"
+  repository="${remote_url#*/}"
+  if [[ "${owner}" == "." || "${owner}" == ".." ||
+    "${repository}" == "." || "${repository}" == ".." ]]; then
+    usage_error "configured GitHub repository identity contains a path traversal segment"
+  fi
+  printf '%s\n' "${remote_url}"
 }
 
 repo_full_name=""
@@ -150,8 +249,9 @@ run_github_curl() {
   response_file="$4"
 
   config=$(
-    printf 'silent\nshow-error\nlocation\noutput = "%s"\nwrite-out = "%%{http_code}"\nconnect-timeout = 10\nmax-time = 30\nrequest = "%s"\nheader = "Accept: application/vnd.github+json"\nheader = "Authorization: Bearer %s"\nheader = "User-Agent: gh-akra.sh"\nheader = "X-GitHub-Api-Version: 2022-11-28"\nurl = "https://api.github.com%s"\n' \
+    printf 'silent\nshow-error\nproto = "=https"\noutput = "%s"\nwrite-out = "%%{http_code}"\nconnect-timeout = 10\nmax-time = 30\nmax-filesize = "%s"\nrequest = "%s"\nheader = "Accept: application/vnd.github+json"\nheader = "Authorization: Bearer %s"\nheader = "User-Agent: gh-akra.sh"\nheader = "X-GitHub-Api-Version: 2022-11-28"\nurl = "https://api.github.com%s"\n' \
       "$(curl_config_escape "${response_file}")" \
+      "${github_response_max_bytes}" \
       "$(curl_config_escape "${method}")" \
       "$(curl_config_escape "${token}")" \
       "$(curl_config_escape "${endpoint}")"
@@ -159,7 +259,58 @@ run_github_curl() {
       printf 'data = "%s"\n' "$(curl_config_escape "${payload}")"
     fi
   )
-  printf '%s' "${config}" | curl --config -
+  printf '%s' "${config}" | curl -q --config -
+}
+
+read_bounded_response_file() {
+  local response_file
+  response_file="$1"
+
+  python3 - "${response_file}" "${github_response_max_bytes}" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+limit = int(sys.argv[2])
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+try:
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        raise SystemExit("gh-akra: GitHub response file is not a regular file")
+    if before.st_nlink != 1 or before.st_size > limit:
+        raise SystemExit("gh-akra: GitHub response file failed its metadata bounds")
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+except OSError:
+    raise SystemExit("gh-akra: GitHub response file could not be opened safely")
+
+try:
+    opened = os.fstat(descriptor)
+    if not stat.S_ISREG(opened.st_mode):
+        raise SystemExit("gh-akra: GitHub response file is not a regular file")
+    if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+        raise SystemExit("gh-akra: GitHub response file changed before validation")
+    if before.st_nlink != 1 or opened.st_nlink != 1:
+        raise SystemExit("gh-akra: GitHub response file has an unsafe link count")
+    if before.st_size > limit or opened.st_size > limit:
+        raise SystemExit("gh-akra: GitHub response exceeded the configured byte limit")
+    with os.fdopen(descriptor, "rb", closefd=False) as stream:
+        body = stream.read(limit + 1)
+        extra = stream.read(1)
+    if len(body) > limit or extra:
+        raise SystemExit("gh-akra: GitHub response exceeded the configured byte limit")
+    after = os.fstat(descriptor)
+    if (opened.st_dev, opened.st_ino, opened.st_size) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+    ):
+        raise SystemExit("gh-akra: GitHub response file changed during validation")
+    sys.stdout.buffer.write(body)
+finally:
+    os.close(descriptor)
+PY
 }
 
 
@@ -169,13 +320,12 @@ json_string_field() {
   body="$1"
   field_name="$2"
 
-  JSON_BODY="${body}" python3 -c '
+  printf '%s' "${body}" | python3 -c '
 import json
-import os
 import sys
 
 field_name = sys.argv[1]
-data = json.loads(os.environ["JSON_BODY"])
+data = json.load(sys.stdin)
 if isinstance(data, list):
     data = data[0] if data else None
 if isinstance(data, dict):
@@ -191,12 +341,11 @@ json_path_string_field() {
   body="$1"
   field_path="$2"
 
-  JSON_BODY="${body}" python3 -c '
+  printf '%s' "${body}" | python3 -c '
 import json
-import os
 import sys
 
-value = json.loads(os.environ["JSON_BODY"])
+value = json.load(sys.stdin)
 for part in sys.argv[1].split("."):
     if not isinstance(value, dict):
         value = None
@@ -219,55 +368,6 @@ print(urllib.parse.quote(sys.stdin.read(), safe=""))
 '
 }
 
-parse_token_from_credential_url() {
-  local credential_line
-  local credentials
-  local password
-  credential_line="$1"
-
-  [[ "${credential_line}" == https://*@github.com* ]] || return 1
-  credentials="${credential_line#https://}"
-  credentials="${credentials%@github.com*}"
-  [[ "${credentials}" == *:* ]] || return 1
-  password="${credentials#*:}"
-  [[ -n "${password}" ]] || return 1
-  printf '%s\n' "${password}"
-}
-
-credential_url_matches_desired_login() {
-  local credential_line
-  local credentials
-  local username
-  credential_line="$1"
-
-  [[ -n "${desired_login}" ]] || return 0
-  [[ "${credential_line}" == https://*@github.com* ]] || return 0
-  credentials="${credential_line#https://}"
-  credentials="${credentials%@github.com*}"
-  username="${credentials%%:*}"
-  [[ "${username}" == "${desired_login}" ]]
-}
-
-parse_git_credential_password() {
-  local credential_output
-  local token
-  credential_output="$1"
-
-  token="$(printf '%s\n' "${credential_output}" | awk -F= '$1 == "password" && $2 != "" {print substr($0, 10); exit}')"
-  [[ -n "${token}" ]] || return 1
-  printf '%s\n' "${token}"
-}
-
-parse_git_credential_username() {
-  local credential_output
-  local username
-  credential_output="$1"
-
-  username="$(printf '%s\n' "${credential_output}" | awk -F= '$1 == "username" && $2 != "" {print substr($0, 10); exit}')"
-  [[ -n "${username}" ]] || return 1
-  printf '%s\n' "${username}"
-}
-
 github_login_for_token() {
   local candidate_token
   local previous_token
@@ -284,167 +384,6 @@ github_login_for_token() {
   json_string_field "${response_body}" "login"
 }
 
-
-token_matches_desired_login() {
-  local candidate_token
-  local actual_login
-  candidate_token="$1"
-
-  [[ -n "${desired_login}" ]] || return 0
-  actual_login="$(github_login_for_token "${candidate_token}")"
-  [[ "${actual_login}" == "${desired_login}" ]]
-}
-
-verify_git_credential_token_login() {
-  local candidate_token
-  local credential_output
-  local username
-  candidate_token="$1"
-  credential_output="$2"
-
-  [[ -n "${desired_login}" ]] || return 0
-  username="$(parse_git_credential_username "${credential_output}" 2>/dev/null || true)"
-  if [[ "${username}" != "${desired_login}" ]] &&
-    ! token_matches_desired_login "${candidate_token}"; then
-    return 1
-  fi
-  return 0
-}
-
-token_from_git_credential_fill() {
-  local credential_output
-  local token
-  local username_line
-  local repo_path
-  repo_path="${repo_full_name}"
-  username_line=""
-  if [[ -n "${desired_login}" ]]; then
-    username_line="$(printf 'username=%s\n' "${desired_login}")"
-  fi
-
-  credential_output="$(
-    printf 'protocol=https\nhost=github.com\n%spath=%s\n\n' "${username_line}" "${repo_path}" |
-      GIT_TERMINAL_PROMPT=0 git -C "${repo_root}" credential fill 2>/dev/null || true
-  )"
-  token="$(parse_git_credential_password "${credential_output}")"
-  if [[ -n "${token}" ]]; then
-    verify_git_credential_token_login "${token}" "${credential_output}" || return 1
-    printf '%s\n' "${token}"
-    return 0
-  fi
-
-  credential_output="$(
-    printf 'protocol=https\nhost=github.com\n%s\n' "${username_line}" |
-      GIT_TERMINAL_PROMPT=0 git -C "${repo_root}" credential fill 2>/dev/null || true
-  )"
-  token="$(parse_git_credential_password "${credential_output}")" || return 1
-  verify_git_credential_token_login "${token}" "${credential_output}" || return 1
-  printf '%s\n' "${token}"
-}
-
-read_first_non_empty_line() {
-  local path
-  path="$1"
-  awk 'NF { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print; exit }' "${path}"
-}
-
-token_from_named_credential_files() {
-  local candidate
-  local line
-  local token
-
-for candidate in \
-  "${git_dir}/akra-github-credentials" \
-  "${git_dir}/github-credentials" \
-  "${git_dir}/refinedstone-credentials" \
-  "${git_common_dir}/akra-github-credentials" \
-  "${git_common_dir}/github-credentials" \
-  "${git_common_dir}/refinedstone-credentials"; do
-  [[ -n "${git_dir}" && -n "${git_common_dir}" ]] || break
-  [[ -f "${candidate}" ]] || continue
-  line="$(read_first_non_empty_line "${candidate}")"
-  [[ -n "${line}" ]] || continue
-  if token="$(parse_token_from_credential_url "${line}" 2>/dev/null)" &&
-    credential_url_matches_desired_login "${line}"; then
-    printf '%s\n' "${token}"
-    return 0
-  fi
-  if [[ "${line}" != https://* ]] && token_matches_desired_login "${line}"; then
-    printf '%s\n' "${line}"
-    return 0
-  fi
-done
-return 1
-}
-
-windows_current_user_credential_file() {
-  local user_name
-  local dir
-  local direct_path
-  local duplicate_name
-  local -a user_names
-  user_names=()
-  [[ -n "${USERNAME:-}" ]] && user_names+=("${USERNAME}")
-  if [[ -n "${USER:-}" ]]; then
-    duplicate_name='false'
-    for user_name in "${user_names[@]}"; do
-      if [[ "${user_name,,}" == "${USER,,}" ]]; then
-        duplicate_name='true'
-        break
-      fi
-    done
-    [[ "${duplicate_name}" == 'false' ]] && user_names+=("${USER}")
-  fi
-  ((${#user_names[@]} > 0)) || return 1
-  for user_name in "${user_names[@]}"; do
-    direct_path="/mnt/c/Users/${user_name}/.git-credentials"
-    if [[ -f "${direct_path}" ]]; then
-      printf '%s\n' "${direct_path}"
-      return 0
-    fi
-  done
-  for user_name in "${user_names[@]}"; do
-    while IFS= read -r dir; do
-      [[ "${dir##*/}" != "" ]] || continue
-      if [[ "${dir##*/}" == "${user_name}" || "${dir##*/}" == "${user_name^}" || "${dir##*/,,}" == "${user_name,,}" ]]; then
-        printf '%s\n' "${dir}/.git-credentials"
-        return 0
-      fi
-    done < <(find /mnt/c/Users -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
-  done
-  return 1
-}
-
-credential_files_to_scan() {
-  windows_current_user_credential_file || true
-  if [[ -n "${HOME:-}" ]]; then
-    printf '%s\n' "${HOME}/.git-credentials"
-  fi
-  if [[ -n "${USERPROFILE:-}" ]]; then
-    printf '%s\n' "${USERPROFILE}/.git-credentials"
-  fi
-}
-
-token_from_git_credential_files() {
-  local file
-  local line
-  local token
-
-  while IFS= read -r file; do
-    [[ -f "${file}" ]] || continue
-    while IFS= read -r line; do
-      line="${line#"${line%%[![:space:]]*}"}"
-      line="${line%"${line##*[![:space:]]}"}"
-      [[ "${line}" == https://*@github.com* ]] || continue
-      credential_url_matches_desired_login "${line}" || continue
-      if token="$(parse_token_from_credential_url "${line}" 2>/dev/null)"; then
-        printf '%s\n' "${token}"
-        return 0
-      fi
-    done < "${file}"
-  done < <(credential_files_to_scan)
-  return 1
-}
 
 resolve_token() {
   if [[ -n "${AKRA_GITHUB_TOKEN:-}" ]]; then
@@ -467,16 +406,15 @@ resolve_token() {
       return 0
     fi
   fi
-  if token_from_git_credential_fill ||
-    token_from_named_credential_files ||
-    token_from_git_credential_files; then
-    return 0
-  fi
   true
 }
 
 resolve_gh_exec_token() {
   resolve_token
+}
+
+credential_source_help() {
+  printf '%s' "AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, or gh auth token; repository credential helpers and direct credential-file scanning are not used"
 }
 
 gh_api_login() {
@@ -503,23 +441,31 @@ api_request() {
   local endpoint
   local payload
   local response_file
+  local response_body
   local status_code
 
   method="$1"
   endpoint="$2"
   payload="${3-}"
   response_file="$(mktemp)"
+  register_temporary_file "${response_file}"
 
-  status_code="$(run_github_curl "${method}" "${endpoint}" "${payload}" "${response_file}")"
-
-  if [[ "${status_code}" != 2* ]]; then
-    cat "${response_file}" >&2
+  if ! status_code="$(run_github_curl "${method}" "${endpoint}" "${payload}" "${response_file}")"; then
     rm -f "${response_file}"
     return 1
   fi
-
-  cat "${response_file}"
+  if ! response_body="$(read_bounded_response_file "${response_file}")"; then
+    rm -f "${response_file}"
+    return 1
+  fi
   rm -f "${response_file}"
+
+  if [[ ! "${status_code}" =~ ^2[0-9][0-9]$ ]]; then
+    printf '%s' "${response_body}" >&2
+    return 1
+  fi
+
+  printf '%s' "${response_body}"
 }
 
 verify_api_login_if_requested() {
@@ -533,6 +479,42 @@ verify_api_login_if_requested() {
   fi
 }
 
+github_command_is_read_only() {
+  case "${1-}:${2-}" in
+    pr:list|pr:view|repo:visibility)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+verify_write_identity() {
+  local actual_login
+  local remote_url
+
+  if [[ -z "${desired_login}" ]]; then
+    usage_error "GitHub writes require AKRA_GITHUB_LOGIN or repo-local git config akra.githubLogin"
+  fi
+  actual_login="$(github_login_for_token "${token}" 2>/dev/null || true)"
+  if [[ "${actual_login}" != "${desired_login}" ]]; then
+    usage_error "expected GitHub login ${desired_login}, but API token returned ${actual_login:-unknown}"
+  fi
+
+  remote_url="$(safe_git -C "${repo_root}" remote get-url --push "${push_remote}")"
+  case "${remote_url}" in
+    https://github.com/*)
+      ;;
+    https://*@github.com/*)
+      usage_error "GitHub writes reject HTTPS push remotes with embedded identity"
+      ;;
+    *)
+      usage_error "GitHub writes require an HTTPS push remote so credential identity can be verified"
+      ;;
+  esac
+}
+
 auth_status_with_api() {
   local response_body
   local login
@@ -544,6 +526,301 @@ auth_status_with_api() {
   fi
 
   printf 'Logged in to github.com as %s\n' "${login:-unknown}"
+}
+
+pr_json_requires_gate_enrichment() {
+  local fields
+  fields=",${1},"
+  case "${fields}" in
+    *,headRefOid,*|*,reviewDecision,*|*,mergeStateStatus,*|*,statusCheckRollup,*|*,approvedReviewCommitOids,*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+pr_gate_query_payload() {
+  local shape
+  shape="$1"
+
+  PR_JSON_SHAPE="${shape}" python3 -c '
+import json
+import os
+import sys
+
+shape = os.environ["PR_JSON_SHAPE"]
+payload = json.load(sys.stdin)
+if shape == "list":
+    if not isinstance(payload, list):
+        raise SystemExit("gh-akra: GitHub pull request list response must be an array")
+    items = payload
+elif shape == "view":
+    if not isinstance(payload, dict):
+        raise SystemExit("gh-akra: GitHub pull request response must be an object")
+    items = [payload]
+else:
+    raise SystemExit("gh-akra: unsupported pull request JSON shape")
+
+node_ids = []
+for item in items:
+    if not isinstance(item, dict):
+        raise SystemExit("gh-akra: GitHub pull request response contains a non-object item")
+    node_id = item.get("node_id")
+    if not isinstance(node_id, str) or not node_id:
+        raise SystemExit("gh-akra: GitHub pull request response omitted its node id")
+    node_ids.append(node_id)
+
+if not node_ids:
+    raise SystemExit(0)
+
+query = """query($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on PullRequest {
+      number
+      headRefOid
+      reviewDecision
+      mergeStateStatus
+      commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun { conclusion }
+                  ... on StatusContext { state }
+                }
+                pageInfo { hasNextPage }
+              }
+            }
+          }
+        }
+      }
+      reviews(first: 100, states: [APPROVED]) {
+        nodes {
+          state
+          commit { oid }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}"""
+print(json.dumps({"query": query, "variables": {"ids": node_ids}}, separators=(",", ":")))
+'
+}
+
+render_pr_json_with_api() {
+  local shape
+  local json_fields
+  local response_body
+  local gate_file
+  local gate_requested
+  local query_payload
+  local rendered
+
+  shape="$1"
+  json_fields="$2"
+  response_body="$3"
+  gate_file=""
+  gate_requested="false"
+
+  if pr_json_requires_gate_enrichment "${json_fields}"; then
+    gate_requested="true"
+    query_payload="$(printf '%s' "${response_body}" | pr_gate_query_payload "${shape}")"
+    if [[ -z "${query_payload}" ]]; then
+      gate_requested="false"
+    else
+      gate_file="$(mktemp)"
+      register_temporary_file "${gate_file}"
+      if ! api_request POST "/graphql" "${query_payload}" > "${gate_file}"; then
+        rm -f "${gate_file}"
+        return 1
+      fi
+    fi
+  fi
+
+  if ! rendered="$({ printf '%s' "${response_body}"; } | \
+    PR_JSON_SHAPE="${shape}" \
+      JSON_FIELDS="${json_fields}" \
+      PR_GATE_REQUESTED="${gate_requested}" \
+      PR_GATE_FILE="${gate_file}" \
+      python3 -c '
+import json
+import os
+import sys
+
+shape = os.environ["PR_JSON_SHAPE"]
+fields = [field for field in os.environ.get("JSON_FIELDS", "").split(",") if field]
+gate_requested = os.environ["PR_GATE_REQUESTED"] == "true"
+payload = json.load(sys.stdin)
+if shape == "list":
+    if not isinstance(payload, list):
+        raise SystemExit("gh-akra: GitHub pull request list response must be an array")
+    items = payload
+elif shape == "view":
+    if not isinstance(payload, dict):
+        raise SystemExit("gh-akra: GitHub pull request response must be an object")
+    items = [payload]
+else:
+    raise SystemExit("gh-akra: unsupported pull request JSON shape")
+
+gate_by_number = {}
+if gate_requested:
+    with open(os.environ["PR_GATE_FILE"], encoding="utf-8") as gate_stream:
+        gate_payload = json.load(gate_stream)
+    if gate_payload.get("errors"):
+        raise SystemExit("gh-akra: GitHub PR inspection query failed")
+    data = gate_payload.get("data")
+    nodes = data.get("nodes") if isinstance(data, dict) else None
+    if not isinstance(nodes, list):
+        raise SystemExit("gh-akra: GitHub PR inspection query omitted nodes")
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("number"), int):
+            raise SystemExit("gh-akra: GitHub PR inspection query returned an invalid node")
+        number = node["number"]
+        if number in gate_by_number:
+            raise SystemExit("gh-akra: GitHub PR inspection query returned duplicate nodes")
+        gate_by_number[number] = node
+
+def state_label(item):
+    state = item.get("state", "").upper()
+    if state == "CLOSED" and item.get("merged_at"):
+        return "MERGED"
+    return state
+
+def gate_node(item):
+    if not gate_requested:
+        return None
+    number = item.get("number")
+    node = gate_by_number.get(number)
+    if node is None:
+        raise SystemExit("gh-akra: GitHub PR inspection query did not return every requested pull request")
+    head_oid = node.get("headRefOid")
+    merge_state = node.get("mergeStateStatus")
+    if not isinstance(head_oid, str) or not head_oid or not isinstance(merge_state, str):
+        raise SystemExit("gh-akra: GitHub PR inspection query omitted required gate fields")
+    return node
+
+def status_check_rollup(node):
+    commits = node.get("commits")
+    commit_nodes = commits.get("nodes") if isinstance(commits, dict) else None
+    if not isinstance(commit_nodes, list) or len(commit_nodes) != 1:
+        raise SystemExit("gh-akra: GitHub PR inspection query omitted the head commit")
+    commit = commit_nodes[0].get("commit") if isinstance(commit_nodes[0], dict) else None
+    rollup = commit.get("statusCheckRollup") if isinstance(commit, dict) else None
+    if rollup is None:
+        return []
+    contexts = rollup.get("contexts") if isinstance(rollup, dict) else None
+    context_nodes = contexts.get("nodes") if isinstance(contexts, dict) else None
+    page_info = contexts.get("pageInfo") if isinstance(contexts, dict) else None
+    if not isinstance(context_nodes, list) or not isinstance(page_info, dict):
+        raise SystemExit("gh-akra: GitHub PR inspection query returned an invalid check rollup")
+    if page_info.get("hasNextPage") is not False:
+        raise SystemExit("gh-akra: GitHub PR has more than 100 checks; fallback inspection cannot prove the gate")
+
+    checks = []
+    for context in context_nodes:
+        if not isinstance(context, dict):
+            raise SystemExit("gh-akra: GitHub PR inspection query returned an invalid check")
+        context_type = context.get("__typename")
+        if context_type == "CheckRun":
+            checks.append({"conclusion": context.get("conclusion")})
+        elif context_type == "StatusContext":
+            checks.append({"state": context.get("state")})
+        else:
+            checks.append({})
+    return checks
+
+def approved_review_commit_oids(node):
+    reviews = node.get("reviews")
+    review_nodes = reviews.get("nodes") if isinstance(reviews, dict) else None
+    page_info = reviews.get("pageInfo") if isinstance(reviews, dict) else None
+    if not isinstance(review_nodes, list) or not isinstance(page_info, dict):
+        raise SystemExit("gh-akra: GitHub PR inspection query omitted approved reviews")
+    if page_info.get("hasNextPage") is not False:
+        raise SystemExit("gh-akra: GitHub PR has more than 100 approved reviews; fallback inspection cannot prove the gate")
+
+    commit_oids = set()
+    for review in review_nodes:
+        if not isinstance(review, dict) or review.get("state") != "APPROVED":
+            raise SystemExit("gh-akra: GitHub PR inspection query returned an invalid approved review")
+        commit = review.get("commit")
+        oid = commit.get("oid") if isinstance(commit, dict) else None
+        if not isinstance(oid, str) or not oid:
+            raise SystemExit("gh-akra: GitHub approved review omitted its commit OID")
+        commit_oids.add(oid)
+    return sorted(commit_oids)
+
+default_fields = [
+    "number",
+    "url",
+    "title",
+    "state",
+    "baseRefName",
+    "headRefName",
+    "isDraft",
+]
+selected_fields = fields or default_fields
+result = []
+for item in items:
+    if not isinstance(item, dict):
+        raise SystemExit("gh-akra: GitHub pull request response contains a non-object item")
+    node = gate_node(item)
+    base = item.get("base") or {}
+    head = item.get("head") or {}
+    field_map = {
+        "number": item.get("number"),
+        "url": item.get("html_url"),
+        "title": item.get("title"),
+        "state": state_label(item),
+        "baseRefName": base.get("ref") if isinstance(base, dict) else None,
+        "headRefName": head.get("ref") if isinstance(head, dict) else None,
+        "isDraft": bool(item.get("draft")),
+    }
+    if node is not None:
+        field_map.update({
+            "headRefOid": node.get("headRefOid"),
+            "reviewDecision": node.get("reviewDecision"),
+            "mergeStateStatus": node.get("mergeStateStatus"),
+            "statusCheckRollup": status_check_rollup(node),
+            "approvedReviewCommitOids": approved_review_commit_oids(node),
+        })
+    result.append({field: field_map[field] for field in selected_fields if field in field_map})
+
+output = result if shape == "list" else result[0]
+print(json.dumps(output))
+' )"; then
+    [[ -z "${gate_file}" ]] || rm -f "${gate_file}"
+    return 1
+  fi
+
+  [[ -z "${gate_file}" ]] || rm -f "${gate_file}"
+  printf '%s\n' "${rendered}"
+}
+
+pr_command_requests_gate_enrichment() {
+  local fields
+  [[ "${1-}" == "pr" && ("${2-}" == "list" || "${2-}" == "view") ]] || return 1
+  shift 2
+  while (($# > 0)); do
+    case "$1" in
+      --json)
+        fields="${2-}"
+        [[ -n "${fields}" ]] && pr_json_requires_gate_enrichment "${fields}"
+        return
+        ;;
+      --json=*)
+        fields="${1#--json=}"
+        [[ -n "${fields}" ]] && pr_json_requires_gate_enrichment "${fields}"
+        return
+        ;;
+    esac
+    shift
+  done
+  return 1
 }
 
 list_prs_with_api() {
@@ -602,41 +879,7 @@ list_prs_with_api() {
 
   local response_body
   response_body="$(api_request GET "${endpoint}")"
-  printf '%s' "${response_body}" | JSON_FIELDS="${json_fields}" python3 -c '
-import json
-import os
-import sys
-
-items = json.load(sys.stdin)
-fields = {field for field in os.environ.get("JSON_FIELDS", "").split(",") if field}
-
-def state_label(item):
-    state = item.get("state", "").upper()
-    if state == "CLOSED" and item.get("merged_at"):
-        return "MERGED"
-    return state
-
-field_map = {
-    "number": lambda item: item.get("number"),
-    "url": lambda item: item.get("html_url"),
-    "title": lambda item: item.get("title"),
-    "state": state_label,
-    "baseRefName": lambda item: (item.get("base") or {}).get("ref"),
-    "headRefName": lambda item: (item.get("head") or {}).get("ref"),
-    "isDraft": lambda item: bool(item.get("draft")),
-}
-
-result = []
-for item in items:
-    row = {
-        field_name: field_map[field_name](item)
-        for field_name in (fields or field_map.keys())
-        if field_name in field_map
-    }
-    result.append(row)
-
-print(json.dumps(result))
-'
+  render_pr_json_with_api "list" "${json_fields}" "${response_body}"
 }
 
 create_pr_with_api() {
@@ -718,6 +961,7 @@ create_pr_with_api() {
 
   local response_body
   error_log="$(mktemp)"
+  register_temporary_file "${error_log}"
   if response_body="$(api_request POST "/repos/${repo_full_name}/pulls" "${payload}" 2>"${error_log}")"; then
     :
   else
@@ -781,38 +1025,7 @@ view_pr_with_api() {
     return 0
   fi
 
-  printf '%s' "${response_body}" | JSON_FIELDS="${json_fields}" python3 -c '
-import json
-import os
-import sys
-
-item = json.load(sys.stdin)
-fields = {field for field in os.environ.get("JSON_FIELDS", "").split(",") if field}
-
-def state_label(item):
-    state = item.get("state", "").upper()
-    if state == "CLOSED" and item.get("merged_at"):
-        return "MERGED"
-    return state
-
-field_map = {
-    "number": lambda item: item.get("number"),
-    "url": lambda item: item.get("html_url"),
-    "title": lambda item: item.get("title"),
-    "state": state_label,
-    "baseRefName": lambda item: (item.get("base") or {}).get("ref"),
-    "headRefName": lambda item: (item.get("head") or {}).get("ref"),
-    "isDraft": lambda item: bool(item.get("draft")),
-}
-
-row = {
-    field_name: field_map[field_name](item)
-    for field_name in (fields or field_map.keys())
-    if field_name in field_map
-}
-
-print(json.dumps(row))
-'
+  render_pr_json_with_api "view" "${json_fields}" "${response_body}"
 }
 
 close_pr_with_api() {
@@ -956,6 +1169,21 @@ reply_review_comment_with_api() {
   api_request POST "/repos/${repo_full_name}/pulls/comments/${comment_id}/replies" "${payload}" >/dev/null
 }
 
+repo_visibility_with_api() {
+  local response_body
+  local visibility
+  response_body="$(api_request GET "/repos/${repo_full_name}")"
+  visibility="$(json_string_field "${response_body}" "visibility")"
+  case "${visibility}" in
+    private|internal|public)
+      printf '%s\n' "${visibility}"
+      ;;
+    *)
+      usage_error "GitHub repository visibility response was unavailable"
+      ;;
+  esac
+}
+
 if [[ "${1-}:${2-}" == "auth:status" ]]; then
   if [[ -n "${git_dir:-}" ]]; then
     repo_full_name="$(parse_repo_full_name)"
@@ -965,7 +1193,7 @@ if [[ "${1-}:${2-}" == "auth:status" ]]; then
     token="$(resolve_token)"
   fi
   if [[ -z "${token}" ]]; then
-    usage_error "gh auth status requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
+    usage_error "gh auth status requires a GitHub token from $(credential_source_help)"
   fi
   shift 2
   auth_status_with_api "$@"
@@ -974,16 +1202,80 @@ fi
 
 repo_full_name="$(parse_repo_full_name)"
 
+if [[ "${1-}:${2-}" == "auth:write-status" ]]; then
+  token="$(resolve_gh_exec_token)"
+  if [[ -z "${token}" ]]; then
+    token="$(resolve_token)"
+  fi
+  if [[ -z "${token}" ]]; then
+    usage_error "GitHub write identity requires a token from $(credential_source_help)"
+  fi
+  verify_write_identity
+  printf 'GitHub write identity verified as %s\n' "${desired_login}"
+  exit 0
+fi
+
+if ! github_command_is_read_only "$@"; then
+  token="$(resolve_gh_exec_token)"
+  if [[ -z "${token}" ]]; then
+    token="$(resolve_token)"
+  fi
+  if [[ -z "${token}" ]]; then
+    usage_error "GitHub write identity requires a token from $(credential_source_help)"
+  fi
+  verify_write_identity
+fi
+
+# `approvedReviewCommitOids` is an Akra-owned security field rather than a gh CLI
+# JSON field. Resolve every gate snapshot through one GraphQL request so head,
+# aggregate decision, checks, and review commit OIDs describe the same PR state.
+if pr_command_requests_gate_enrichment "$@"; then
+  token="$(resolve_gh_exec_token)"
+  if [[ -z "${token}" ]]; then
+    token="$(resolve_token)"
+  fi
+  if [[ -z "${token}" ]]; then
+    usage_error "PR gate inspection requires a GitHub token from $(credential_source_help)"
+  fi
+  verify_api_login_if_requested
+  case "${1-}:${2-}" in
+    pr:list)
+      shift 2
+      list_prs_with_api "$@"
+      ;;
+    pr:view)
+      shift 2
+      view_pr_with_api "$@"
+      ;;
+    *)
+      usage_error "unsupported PR gate inspection command"
+      ;;
+  esac
+  exit 0
+fi
+
 if command -v gh >/dev/null 2>&1; then
   gh_exec_token="$(resolve_gh_exec_token)"
   verify_gh_login_if_requested
+  if [[ "${1-}:${2-}" == "repo:visibility" ]]; then
+    token="${gh_exec_token}"
+    if [[ -z "${token}" ]]; then
+      token="$(resolve_token)"
+    fi
+    if [[ -z "${token}" ]]; then
+      usage_error "repo visibility requires a GitHub token from $(credential_source_help)"
+    fi
+    shift 2
+    repo_visibility_with_api "$@"
+    exit 0
+  fi
   if [[ "${1-}" == "review-reply" ]]; then
     token="${gh_exec_token}"
     if [[ -z "${token}" ]]; then
       token="$(resolve_token)"
     fi
     if [[ -z "${token}" ]]; then
-      usage_error "review-reply requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
+      usage_error "review-reply requires a GitHub token from $(credential_source_help)"
     fi
     shift
     reply_review_comment_with_api "$@"
@@ -995,7 +1287,7 @@ if command -v gh >/dev/null 2>&1; then
       token="$(resolve_token)"
     fi
     if [[ -z "${token}" ]]; then
-      usage_error "pr create requires a GitHub token in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, gh auth token, git credential fill, or local git credential files"
+      usage_error "pr create requires a GitHub token from $(credential_source_help)"
     fi
     shift 2
     create_pr_with_api "$@"
@@ -1013,7 +1305,7 @@ fi
 
 token="$(resolve_token)"
 if [[ -z "${token}" ]]; then
-  usage_error "gh is not installed and no GitHub token was found in AKRA_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, git credential fill, or local git credential files"
+  usage_error "gh is not installed and no GitHub token was found from $(credential_source_help)"
 fi
 
 case "${1-}:${2-}" in
@@ -1046,12 +1338,17 @@ case "${1-}:${2-}" in
     shift 2
     merge_pr_with_api "$@"
     ;;
+  repo:visibility)
+    verify_api_login_if_requested
+    shift 2
+    repo_visibility_with_api "$@"
+    ;;
   review-reply:*)
     verify_api_login_if_requested
     shift
     reply_review_comment_with_api "$@"
     ;;
   *)
-    usage_error "gh is not installed and direct fallback supports 'auth status', 'pr create', 'pr list', 'pr view', 'pr close', 'pr merge', and 'review-reply'"
+    usage_error "gh is not installed and direct fallback supports 'auth status', 'repo visibility', 'pr create', 'pr list', 'pr view', 'pr close', 'pr merge', and 'review-reply'"
     ;;
 esac

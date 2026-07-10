@@ -92,12 +92,16 @@ pub(super) fn remove_active_documents(
     // 제거할 파일 또는 디렉터리의 active workspace 상대 경로다.
     relative_path: &str,
 ) -> Result<bool> {
+    let escaped_prefix = relative_path
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     // SQLite가 보고한 삭제 row 수를 사용해 실제 변경 여부를 상위 계층에 전달한다.
     let deleted_rows = transaction
         .execute(
             "DELETE FROM active_documents
-             WHERE relative_path = ?1 OR relative_path LIKE ?2",
-            params![relative_path, format!("{relative_path}/%")],
+             WHERE relative_path = ?1 OR relative_path LIKE ?2 ESCAPE '\\'",
+            params![relative_path, format!("{escaped_prefix}/%")],
         )
         .with_context(|| format!("failed to remove active authority entry `{relative_path}`"))?;
     // 삭제 대상이 없으면 성공이지만 변경은 없으므로 `false`를 반환한다.

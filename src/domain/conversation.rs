@@ -235,6 +235,43 @@ pub struct ConversationApprovalReview {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationApprovalRequestKind {
+    CommandExecution,
+    FileChange,
+    Permissions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationApprovalRequest {
+    // Internal one-shot correlation id. Raw command, patch, permission paths, and
+    // server params must never be projected into this UI boundary.
+    pub approval_id: String,
+    pub server_request_id: String,
+    pub method: String,
+    pub kind: ConversationApprovalRequestKind,
+    pub summary: String,
+    // Bounded, control-character-normalized facts that let the operator make an
+    // informed decision without retaining the raw JSON-RPC params or patch body.
+    pub details: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationApprovalDecision {
+    Accept,
+    Decline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationApprovalResolution {
+    Accepted,
+    Declined,
+    TimedOut,
+    Interrupted,
+    Disconnected,
+    InvalidRequest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // ConversationControlSupport는 approval/interrupt 같은 runtime control을 현재 backend가
 // 어떻게 지원하는지 표현한다. UI는 이 truth를 보고 버튼 copy를 native/manual/unsupported로 나눈다.
 pub enum ConversationControlSupport {
@@ -274,15 +311,14 @@ impl ConversationRuntimeControlTruth {
 
     pub const fn codex_app_server() -> Self {
         /*
-         * The current codex app-server integration exposes conversation streaming and
-         * manual approval handoff copy, but it does not yet surface a native approval
-         * action in this domain truth. Interrupt is also marked unsupported here so UI
-         * controls do not promise a stop capability unless the adapter changes the
-         * contract explicitly.
+         * The current codex app-server integration exposes conversation streaming but
+         * exposes command, file-change, and bounded permission approvals through a
+         * native one-shot TUI prompt. Interrupt is runtime-native because the adapter
+         * sends `turn/interrupt` when stop is requested for an active stream.
          */
         Self::new(
-            ConversationControlSupport::ManualHandoff,
-            ConversationControlSupport::Unsupported,
+            ConversationControlSupport::RuntimeNative,
+            ConversationControlSupport::RuntimeNative,
         )
     }
 }
@@ -446,8 +482,8 @@ mod tests {
         let truth = ConversationRuntimeControlTruth::default();
 
         assert_eq!(truth, ConversationRuntimeControlTruth::codex_app_server());
-        assert_eq!(truth.approval, ConversationControlSupport::ManualHandoff);
-        assert_eq!(truth.interrupt, ConversationControlSupport::Unsupported);
+        assert_eq!(truth.approval, ConversationControlSupport::RuntimeNative);
+        assert_eq!(truth.interrupt, ConversationControlSupport::RuntimeNative);
     }
 
     #[test]

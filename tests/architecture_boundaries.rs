@@ -1,6 +1,10 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use proc_macro2::{TokenStream, TokenTree};
+use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
+
 #[derive(Clone, Copy)]
 struct BoundaryRule {
     name: &'static str,
@@ -18,6 +22,12 @@ struct AllowedCrateReferenceRule {
 struct SourceLine {
     number: usize,
     text: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CrateReference {
+    line: usize,
+    path: String,
 }
 
 struct BoundaryViolation {
@@ -221,6 +231,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/model_selection_overlay_ui.rs",
             "src/adapter/inbound/tui/app/planning",
             "src/adapter/inbound/tui/app/planning_",
+            "src/adapter/inbound/tui/app/reviews_overlay_ui.rs",
             "src/adapter/inbound/tui/app/session_overlay_ui.rs",
             "src/adapter/inbound/tui/app/shell_presentation/overlays",
             "src/adapter/inbound/tui/app/view_selection_overlay_ui.rs",
@@ -386,6 +397,22 @@ fn application_layer_has_no_concrete_adapter_dependencies() {
         root: "src/application",
         forbidden_patterns: &["crate::adapter::"],
     });
+}
+
+#[test]
+fn parallel_agent_profile_service_has_no_direct_filesystem_dependency() {
+    assert_no_forbidden_references_in_paths(
+        "parallel agent profile application service must use its repository port",
+        &["src/application/service/parallel_agent_profile.rs"],
+        &[
+            "std::fs",
+            "std::path",
+            "Path::",
+            "PathBuf",
+            "File::",
+            "OpenOptions",
+        ],
+    );
 }
 
 #[test]
@@ -711,8 +738,11 @@ fn tui_conversation_loads_enter_through_core_runtime() {
     // state and reducers, but snapshot loading must enter CoreRuntime/CoreEffectRunner.
     assert_no_forbidden_references_in_paths(
         "TUI conversation loads must be dispatched through core runtime, not ConversationService directly",
-        &["src/adapter/inbound/tui/app/app_runtime.rs"],
-        &[".load_snapshot("],
+        &[
+            "src/adapter/inbound/tui/app/app_runtime.rs",
+            "src/adapter/inbound/tui/app/parallel_peek.rs",
+        ],
+        &[".load_snapshot(", ".load_conversation_snapshot("],
     );
 }
 
@@ -792,7 +822,9 @@ fn inbound_adapters_do_not_mutate_parallel_durable_state_directly() {
             "upsert_runtime_distributor_queue_record",
             "upsert_runtime_session_detail",
             "upsert_runtime_slot_lease",
+            "replace_runtime_slot_lease_if_matches",
             "upsert_runtime_task_dispatch_block",
+            "transition_slot_lease",
             "write_slot_lease",
             "remove_slot_lease",
             "cleanup_slot(",
@@ -1497,6 +1529,121 @@ fn tui_shared_test_devices_stay_in_tui_testkit() {
     );
 }
 
+#[test]
+fn rust_aware_crate_reference_scan_handles_groups_aliases_and_test_modules() {
+    let source = r###"
+use crate::{
+    application::service::Runner,
+    domain::Model as DomainModel,
+};
+
+const DISPLAY_ONLY: &str = "crate::adapter::outbound::NotADependency";
+
+fn production_path() {
+    let _ = crate::
+        core::Runtime;
+    // crate::diagnostics::CommentOnly
+}
+
+macro_rules! emit_runtime {
+    () => { crate::adapter::outbound::MacroAdapter::new() };
+}
+
+wire!(crate::{adapter::outbound::GroupedAdapter, domain::GroupedModel});
+invoke!(crate::composition::Builder);
+
+struct Fixture;
+
+impl Fixture {
+    #[cfg(test)]
+    fn test_only_macro() {
+        invoke!(crate::adapter::outbound::TestOnlyMacro);
+    }
+
+    #[cfg_attr(test, allow(dead_code))]
+    fn production_macro() {
+        invoke!(crate::core::CfgAttrRuntime);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::adapter::outbound::TestOnlyAdapter;
+}
+"###;
+
+    let references = rust_crate_references(source)
+        .into_iter()
+        .map(|reference| reference.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        references,
+        vec![
+            "crate::application::service::Runner",
+            "crate::domain::Model",
+            "crate::core::Runtime",
+            "crate::adapter::outbound::MacroAdapter::new",
+            "crate::adapter::outbound::GroupedAdapter",
+            "crate::domain::GroupedModel",
+            "crate::composition::Builder",
+            "crate::core::CfgAttrRuntime",
+        ]
+    );
+}
+
+#[test]
+fn production_pattern_scan_ignores_comments_and_rust_literals() {
+    let source = r####"
+const NORMAL: &str = "Command::new and crate::adapter::outbound::Fake";
+const RAW: &str = r#"std::process and crate::core::Fake"#;
+// StartupService and crate::application::Fake
+/* nested /* PlanningServices */ crossterm */
+
+fn production() {
+    Command::new("akra");
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn cfg_attr_item_stays_in_production_scan() {
+    std::process::id();
+}
+
+struct Fixture;
+
+impl Fixture {
+    #[cfg_attr(test, allow(dead_code))]
+    fn cfg_attr_associated_item_stays_in_production_scan() {
+        AssociatedProductionMarker::run();
+    }
+
+    #[cfg(test)]
+    fn test_only_associated_item() {
+        AssociatedTestMarker::run();
+    }
+}
+
+#[cfg(test)]
+fn test_only() {
+    std::process::Command::new("ignored");
+}
+"####;
+    let production = production_lines(source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(production.contains("Command::new"));
+    assert!(production.contains("std::process::id"));
+    assert!(production.contains("AssociatedProductionMarker::run"));
+    assert!(!production.contains("crate::adapter"));
+    assert!(!production.contains("std::process::Command"));
+    assert!(!production.contains("AssociatedTestMarker"));
+    assert!(!production.contains("StartupService"));
+    assert!(!production.contains("PlanningServices"));
+}
+
 fn assert_tui_test_entrypoint_has_coverage(repo_root: &Path, surface_name: &str, entrypoint: &str) {
     let path = repo_root.join(entrypoint);
     assert!(
@@ -1675,12 +1822,30 @@ fn assert_no_forbidden_references(rule: BoundaryRule) {
         });
         let relative_path = relative_path(&repo_root, &path);
 
-        for source_line in production_lines(&source) {
-            if is_comment_only_line(&source_line.text) {
-                continue;
+        for crate_reference in rust_crate_references(&source) {
+            for pattern in rule
+                .forbidden_patterns
+                .iter()
+                .filter(|pattern| pattern.starts_with("crate::"))
+            {
+                if crate_reference_matches_prefix(&crate_reference.path, pattern) {
+                    violations.push(BoundaryViolation {
+                        rule: rule.name,
+                        path: relative_path.clone(),
+                        line: crate_reference.line,
+                        pattern,
+                        text: source_line(&source, crate_reference.line),
+                    });
+                }
             }
+        }
 
-            for pattern in rule.forbidden_patterns {
+        for source_line in production_lines(&source) {
+            for pattern in rule
+                .forbidden_patterns
+                .iter()
+                .filter(|pattern| !pattern.starts_with("crate::"))
+            {
                 if source_line.text.contains(pattern) {
                     violations.push(BoundaryViolation {
                         rule: rule.name,
@@ -1716,25 +1881,17 @@ fn assert_only_allowed_crate_references(rule: AllowedCrateReferenceRule) {
         });
         let relative_path = relative_path(&repo_root, &path);
 
-        for source_line in production_lines(&source) {
-            if is_comment_only_line(&source_line.text) {
-                continue;
-            }
-
-            for crate_reference in crate_references(&source_line.text) {
-                if !rule
-                    .allowed_prefixes
-                    .iter()
-                    .any(|allowed_prefix| crate_reference.starts_with(allowed_prefix))
-                {
-                    violations.push(BoundaryViolation {
-                        rule: rule.name,
-                        path: relative_path.clone(),
-                        line: source_line.number,
-                        pattern: "crate::",
-                        text: source_line.text.trim().to_string(),
-                    });
-                }
+        for crate_reference in rust_crate_references(&source) {
+            if !rule.allowed_prefixes.iter().any(|allowed_prefix| {
+                crate_reference_matches_prefix(&crate_reference.path, allowed_prefix)
+            }) {
+                violations.push(BoundaryViolation {
+                    rule: rule.name,
+                    path: relative_path.clone(),
+                    line: crate_reference.line,
+                    pattern: "crate::",
+                    text: source_line(&source, crate_reference.line),
+                });
             }
         }
     }
@@ -1766,12 +1923,28 @@ fn assert_no_forbidden_references_in_paths(
             });
             let relative_path = relative_path(&repo_root, &path);
 
-            for source_line in production_lines(&source) {
-                if is_comment_only_line(&source_line.text) {
-                    continue;
+            for crate_reference in rust_crate_references(&source) {
+                for pattern in forbidden_patterns
+                    .iter()
+                    .filter(|pattern| pattern.starts_with("crate::"))
+                {
+                    if crate_reference_matches_prefix(&crate_reference.path, pattern) {
+                        violations.push(BoundaryViolation {
+                            rule: rule_name,
+                            path: relative_path.clone(),
+                            line: crate_reference.line,
+                            pattern,
+                            text: source_line(&source, crate_reference.line),
+                        });
+                    }
                 }
+            }
 
-                for pattern in forbidden_patterns {
+            for source_line in production_lines(&source) {
+                for pattern in forbidden_patterns
+                    .iter()
+                    .filter(|pattern| !pattern.starts_with("crate::"))
+                {
                     if source_line.text.contains(pattern) {
                         violations.push(BoundaryViolation {
                             rule: rule_name,
@@ -1793,17 +1966,304 @@ fn assert_no_forbidden_references_in_paths(
     );
 }
 
-fn crate_references(line: &str) -> Vec<&str> {
-    let mut references = Vec::new();
-    let mut start = 0;
+fn rust_crate_references(source: &str) -> Vec<CrateReference> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut visitor = CrateReferenceVisitor::default();
+    visitor.visit_file(&syntax);
+    visitor.references.sort_by(|left, right| {
+        left.line
+            .cmp(&right.line)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    visitor.references.dedup();
+    visitor.references
+}
 
-    while let Some(offset) = line[start..].find("crate::") {
-        let reference_start = start + offset;
-        references.push(&line[reference_start..]);
-        start = reference_start + "crate::".len();
+#[derive(Default)]
+struct CrateReferenceVisitor {
+    references: Vec<CrateReference>,
+}
+
+impl<'ast> Visit<'ast> for CrateReferenceVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
     }
 
-    references
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_impl_item(self, item);
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if trait_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_trait_item(self, item);
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        if foreign_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_foreign_item(self, item);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        collect_use_tree_references(&item.tree, &mut Vec::new(), &mut self.references);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let segments = path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        if path.leading_colon.is_none()
+            && segments.len() > 1
+            && segments.first().is_some_and(|root| root == "crate")
+        {
+            self.references.push(CrateReference {
+                line: path.span().start().line,
+                path: segments.join("::"),
+            });
+        }
+        visit::visit_path(self, path);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        collect_macro_token_references(&mac.tokens, &mut self.references);
+        visit::visit_macro(self, mac);
+    }
+}
+
+fn collect_macro_token_references(tokens: &TokenStream, references: &mut Vec<CrateReference>) {
+    let tokens = tokens.clone().into_iter().collect::<Vec<_>>();
+
+    for token in &tokens {
+        if let TokenTree::Group(group) = token {
+            collect_macro_token_references(&group.stream(), references);
+        }
+    }
+
+    for (index, token) in tokens.iter().enumerate() {
+        let TokenTree::Ident(root) = token else {
+            continue;
+        };
+        if root != "crate" {
+            continue;
+        }
+
+        collect_rooted_token_path(
+            &tokens,
+            index + 1,
+            vec![root.to_string()],
+            root.span().start().line,
+            references,
+        );
+    }
+}
+
+fn collect_rooted_token_path(
+    tokens: &[TokenTree],
+    mut cursor: usize,
+    mut segments: Vec<String>,
+    line: usize,
+    references: &mut Vec<CrateReference>,
+) {
+    while token_pair_is_path_separator(tokens, cursor) {
+        match tokens.get(cursor + 2) {
+            Some(TokenTree::Ident(segment)) => {
+                segments.push(segment.to_string());
+                cursor += 3;
+            }
+            Some(TokenTree::Punct(punct)) if punct.as_char() == '*' => {
+                segments.push("*".to_string());
+                cursor += 3;
+            }
+            Some(TokenTree::Group(group)) => {
+                collect_grouped_token_paths(&group.stream(), &segments, line, references);
+                return;
+            }
+            _ => break,
+        }
+    }
+
+    if segments.len() > 1 {
+        references.push(CrateReference {
+            line,
+            path: segments.join("::"),
+        });
+    }
+}
+
+fn collect_grouped_token_paths(
+    tokens: &TokenStream,
+    prefix: &[String],
+    line: usize,
+    references: &mut Vec<CrateReference>,
+) {
+    let tokens = tokens.clone().into_iter().collect::<Vec<_>>();
+    let mut branch_start = 0usize;
+
+    for branch_end in (0..=tokens.len()).filter(|index| {
+        *index == tokens.len()
+            || matches!(tokens.get(*index), Some(TokenTree::Punct(punct)) if punct.as_char() == ',')
+    }) {
+        let branch = &tokens[branch_start..branch_end];
+        if let Some(TokenTree::Ident(segment)) = branch.first() {
+            let mut segments = prefix.to_vec();
+            if segment != "self" {
+                segments.push(segment.to_string());
+            }
+            collect_rooted_token_path(branch, 1, segments, line, references);
+        } else if matches!(branch.first(), Some(TokenTree::Punct(punct)) if punct.as_char() == '*')
+        {
+            let mut segments = prefix.to_vec();
+            segments.push("*".to_string());
+            references.push(CrateReference {
+                line,
+                path: segments.join("::"),
+            });
+        }
+        branch_start = branch_end + 1;
+    }
+}
+
+fn token_pair_is_path_separator(tokens: &[TokenTree], start: usize) -> bool {
+    matches!(tokens.get(start), Some(TokenTree::Punct(punct)) if punct.as_char() == ':')
+        && matches!(tokens.get(start + 1), Some(TokenTree::Punct(punct)) if punct.as_char() == ':')
+}
+
+fn collect_use_tree_references(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    references: &mut Vec<CrateReference>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_tree_references(&path.tree, prefix, references);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) => {
+            prefix.push(name.ident.to_string());
+            push_use_reference(prefix, name.ident.span().start().line, references);
+            prefix.pop();
+        }
+        syn::UseTree::Rename(rename) => {
+            prefix.push(rename.ident.to_string());
+            push_use_reference(prefix, rename.ident.span().start().line, references);
+            prefix.pop();
+        }
+        syn::UseTree::Glob(glob) => {
+            prefix.push("*".to_string());
+            push_use_reference(prefix, glob.star_token.span.start().line, references);
+            prefix.pop();
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_tree_references(item, prefix, references);
+            }
+        }
+    }
+}
+
+fn push_use_reference(segments: &[String], line: usize, references: &mut Vec<CrateReference>) {
+    if segments.first().is_some_and(|root| root == "crate") {
+        references.push(CrateReference {
+            line,
+            path: segments.join("::"),
+        });
+    }
+}
+
+fn item_is_test_only(item: &syn::Item) -> bool {
+    item_attributes(item).is_some_and(attributes_are_test_only)
+}
+
+fn attributes_are_test_only(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("cfg")
+            && attribute
+                .meta
+                .require_list()
+                .is_ok_and(|list| list.tokens.to_string() == "test")
+    })
+}
+
+fn item_attributes(item: &syn::Item) -> Option<&[syn::Attribute]> {
+    Some(match item {
+        syn::Item::Const(item) => &item.attrs,
+        syn::Item::Enum(item) => &item.attrs,
+        syn::Item::ExternCrate(item) => &item.attrs,
+        syn::Item::Fn(item) => &item.attrs,
+        syn::Item::ForeignMod(item) => &item.attrs,
+        syn::Item::Impl(item) => &item.attrs,
+        syn::Item::Macro(item) => &item.attrs,
+        syn::Item::Mod(item) => &item.attrs,
+        syn::Item::Static(item) => &item.attrs,
+        syn::Item::Struct(item) => &item.attrs,
+        syn::Item::Trait(item) => &item.attrs,
+        syn::Item::TraitAlias(item) => &item.attrs,
+        syn::Item::Type(item) => &item.attrs,
+        syn::Item::Union(item) => &item.attrs,
+        syn::Item::Use(item) => &item.attrs,
+        syn::Item::Verbatim(_) => return None,
+        _ => return None,
+    })
+}
+
+fn impl_item_attributes(item: &syn::ImplItem) -> Option<&[syn::Attribute]> {
+    Some(match item {
+        syn::ImplItem::Const(item) => &item.attrs,
+        syn::ImplItem::Fn(item) => &item.attrs,
+        syn::ImplItem::Type(item) => &item.attrs,
+        syn::ImplItem::Macro(item) => &item.attrs,
+        syn::ImplItem::Verbatim(_) => return None,
+        _ => return None,
+    })
+}
+
+fn trait_item_attributes(item: &syn::TraitItem) -> Option<&[syn::Attribute]> {
+    Some(match item {
+        syn::TraitItem::Const(item) => &item.attrs,
+        syn::TraitItem::Fn(item) => &item.attrs,
+        syn::TraitItem::Type(item) => &item.attrs,
+        syn::TraitItem::Macro(item) => &item.attrs,
+        syn::TraitItem::Verbatim(_) => return None,
+        _ => return None,
+    })
+}
+
+fn foreign_item_attributes(item: &syn::ForeignItem) -> Option<&[syn::Attribute]> {
+    Some(match item {
+        syn::ForeignItem::Fn(item) => &item.attrs,
+        syn::ForeignItem::Static(item) => &item.attrs,
+        syn::ForeignItem::Type(item) => &item.attrs,
+        syn::ForeignItem::Macro(item) => &item.attrs,
+        syn::ForeignItem::Verbatim(_) => return None,
+        _ => return None,
+    })
+}
+
+fn crate_reference_matches_prefix(reference: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches(':');
+    reference == prefix || reference.starts_with(&format!("{prefix}::"))
+}
+
+fn source_line(source: &str, line: usize) -> String {
+    source
+        .lines()
+        .nth(line.saturating_sub(1))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 fn inbound_outbound_boundary_rule() -> BoundaryRule {
@@ -1920,74 +2380,219 @@ fn format_temporary_debts(debts: &[TemporaryDebt]) -> String {
 }
 
 fn production_lines(source: &str) -> Vec<SourceLine> {
-    let mut lines = Vec::new();
-    let mut skip_cfg_test_item = false;
-    let mut skipping_cfg_test_block = false;
-    let mut skipping_block_comment = false;
-    let mut cfg_test_block_depth = 0isize;
+    let code_only_source = rust_code_without_comments_and_literals(source);
+    let test_only_ranges = test_only_item_line_ranges(source);
 
-    for (index, line) in source.lines().enumerate() {
-        let trimmed = line.trim();
-
-        if skipping_block_comment {
-            if trimmed.contains("*/") {
-                skipping_block_comment = false;
-            }
-            continue;
-        }
-
-        if trimmed.starts_with("/*") {
-            if !trimmed.contains("*/") {
-                skipping_block_comment = true;
-            }
-            continue;
-        }
-
-        if skipping_cfg_test_block {
-            cfg_test_block_depth += brace_delta(line);
-            if cfg_test_block_depth <= 0 {
-                skipping_cfg_test_block = false;
-                cfg_test_block_depth = 0;
-            }
-            continue;
-        }
-
-        if skip_cfg_test_item {
-            if trimmed.is_empty() || trimmed.starts_with("#[") {
-                continue;
-            }
-
-            if line.contains('{') {
-                skipping_cfg_test_block = true;
-                cfg_test_block_depth = brace_delta(line);
-                if cfg_test_block_depth <= 0 {
-                    skipping_cfg_test_block = false;
-                    cfg_test_block_depth = 0;
-                }
-            } else if trimmed.ends_with(';') {
-                skip_cfg_test_item = false;
-            }
-            continue;
-        }
-
-        if is_cfg_test_attribute(trimmed) {
-            skip_cfg_test_item = true;
-            continue;
-        }
-
-        lines.push(SourceLine {
-            number: index + 1,
-            text: line.to_string(),
-        });
-    }
-
-    lines
+    code_only_source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let number = index + 1;
+            (!test_only_ranges
+                .iter()
+                .any(|(start, end)| (*start..=*end).contains(&number)))
+            .then(|| SourceLine {
+                number,
+                text: line.to_string(),
+            })
+        })
+        .collect()
 }
 
-fn is_cfg_test_attribute(line: &str) -> bool {
-    line.starts_with("#[cfg(test")
-        || line.starts_with("#[cfg_attr(test")
-        || line.contains("cfg(test)")
+fn test_only_item_line_ranges(source: &str) -> Vec<(usize, usize)> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut visitor = TestOnlyItemRangeVisitor::default();
+    visitor.visit_file(&syntax);
+    visitor.ranges
+}
+
+#[derive(Default)]
+struct TestOnlyItemRangeVisitor {
+    ranges: Vec<(usize, usize)>,
+}
+
+impl<'ast> Visit<'ast> for TestOnlyItemRangeVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if let Some(range) = test_only_line_range(item_attributes(item), item) {
+            self.ranges.push(range);
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if let Some(range) = test_only_line_range(impl_item_attributes(item), item) {
+            self.ranges.push(range);
+            return;
+        }
+        visit::visit_impl_item(self, item);
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if let Some(range) = test_only_line_range(trait_item_attributes(item), item) {
+            self.ranges.push(range);
+            return;
+        }
+        visit::visit_trait_item(self, item);
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        if let Some(range) = test_only_line_range(foreign_item_attributes(item), item) {
+            self.ranges.push(range);
+            return;
+        }
+        visit::visit_foreign_item(self, item);
+    }
+}
+
+fn test_only_line_range<T: Spanned>(
+    attributes: Option<&[syn::Attribute]>,
+    item: &T,
+) -> Option<(usize, usize)> {
+    let attributes = attributes.filter(|attributes| attributes_are_test_only(attributes))?;
+    let item_span = item.span();
+    let start = attributes.first().map_or_else(
+        || item_span.start().line,
+        |attribute| attribute.span().start().line,
+    );
+    Some((start, item_span.end().line))
+}
+
+fn rust_code_without_comments_and_literals(source: &str) -> String {
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(source.len());
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        if chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
+            while index < chars.len() && chars[index] != '\n' {
+                output.push(' ');
+                index += 1;
+            }
+            continue;
+        }
+
+        if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+            let mut depth = 1usize;
+            output.push(' ');
+            output.push(' ');
+            index += 2;
+            while index < chars.len() && depth > 0 {
+                if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+                    output.push(' ');
+                    output.push(' ');
+                    index += 2;
+                    depth += 1;
+                } else if chars[index] == '*' && chars.get(index + 1) == Some(&'/') {
+                    output.push(' ');
+                    output.push(' ');
+                    index += 2;
+                    depth -= 1;
+                } else {
+                    push_masked_character(&mut output, chars[index]);
+                    index += 1;
+                }
+            }
+            continue;
+        }
+
+        if let Some((quote_index, hash_count)) = raw_string_opening(&chars, index) {
+            while index <= quote_index {
+                output.push(' ');
+                index += 1;
+            }
+            while index < chars.len() {
+                if chars[index] == '"'
+                    && (0..hash_count).all(|offset| chars.get(index + 1 + offset) == Some(&'#'))
+                {
+                    output.push(' ');
+                    index += 1;
+                    for _ in 0..hash_count {
+                        output.push(' ');
+                        index += 1;
+                    }
+                    break;
+                }
+                push_masked_character(&mut output, chars[index]);
+                index += 1;
+            }
+            continue;
+        }
+
+        if chars[index] == '"' {
+            output.push(' ');
+            index += 1;
+            let mut escaped = false;
+            while index < chars.len() {
+                let character = chars[index];
+                push_masked_character(&mut output, character);
+                index += 1;
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == '"' {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if let Some(end) = char_literal_end(&chars, index) {
+            while index <= end {
+                push_masked_character(&mut output, chars[index]);
+                index += 1;
+            }
+            continue;
+        }
+
+        output.push(chars[index]);
+        index += 1;
+    }
+
+    output
+}
+
+fn raw_string_opening(chars: &[char], start: usize) -> Option<(usize, usize)> {
+    let mut index = start;
+    if chars.get(index) == Some(&'b') {
+        index += 1;
+    }
+    if chars.get(index) != Some(&'r') {
+        return None;
+    }
+    index += 1;
+    let hash_start = index;
+    while chars.get(index) == Some(&'#') {
+        index += 1;
+    }
+    (chars.get(index) == Some(&'"')).then_some((index, index - hash_start))
+}
+
+fn char_literal_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'\'') {
+        return None;
+    }
+    let first = *chars.get(start + 1)?;
+    if first == '\\' {
+        let mut index = start + 2;
+        while let Some(character) = chars.get(index) {
+            if *character == '\'' {
+                return Some(index);
+            }
+            if *character == '\n' {
+                return None;
+            }
+            index += 1;
+        }
+        return None;
+    }
+    (chars.get(start + 2) == Some(&'\'')).then_some(start + 2)
+}
+
+fn push_masked_character(output: &mut String, character: char) {
+    output.push(if character == '\n' { '\n' } else { ' ' });
 }
 
 fn brace_delta(line: &str) -> isize {

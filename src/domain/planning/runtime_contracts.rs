@@ -353,8 +353,15 @@ pub struct RuntimeQueuedAutoFollowPrompt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManualPromptRequest {
+pub struct ManualPromptCorrelation {
+    pub request_id: u64,
+    pub generation: u64,
     pub workspace_directory: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualPromptRequest {
+    pub correlation: ManualPromptCorrelation,
     pub raw_prompt: String,
     pub parent_thread_id: Option<String>,
     pub parent_turn_id: Option<String>,
@@ -376,22 +383,26 @@ pub enum ManualPlanningBootstrapFailureKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManualPromptOutcome {
     PromptReady {
+        correlation: ManualPromptCorrelation,
         transcript_text: String,
         runtime_projection: Box<RuntimeProjection>,
         intake: Box<ManualPromptIntakeOutcome>,
     },
     BootstrapReviewRequired {
+        correlation: ManualPromptCorrelation,
         transcript_text: String,
         runtime_projection: Box<RuntimeProjection>,
         review: ManualPlanningBootstrapReview,
     },
     BootstrapFailed {
+        correlation: ManualPromptCorrelation,
         transcript_text: String,
         runtime_projection: Box<RuntimeProjection>,
         kind: ManualPlanningBootstrapFailureKind,
         reason: String,
     },
     Rejected {
+        correlation: ManualPromptCorrelation,
         transcript_text: String,
         runtime_projection: Box<RuntimeProjection>,
         reason: String,
@@ -399,6 +410,15 @@ pub enum ManualPromptOutcome {
 }
 
 impl ManualPromptOutcome {
+    pub fn correlation(&self) -> &ManualPromptCorrelation {
+        match self {
+            ManualPromptOutcome::PromptReady { correlation, .. }
+            | ManualPromptOutcome::BootstrapReviewRequired { correlation, .. }
+            | ManualPromptOutcome::BootstrapFailed { correlation, .. }
+            | ManualPromptOutcome::Rejected { correlation, .. } => correlation,
+        }
+    }
+
     pub fn runtime_projection(&self) -> &RuntimeProjection {
         match self {
             ManualPromptOutcome::PromptReady {
@@ -413,6 +433,23 @@ impl ManualPromptOutcome {
             | ManualPromptOutcome::Rejected {
                 runtime_projection, ..
             } => runtime_projection,
+        }
+    }
+
+    pub fn transcript_text(&self) -> &str {
+        match self {
+            ManualPromptOutcome::PromptReady {
+                transcript_text, ..
+            }
+            | ManualPromptOutcome::BootstrapReviewRequired {
+                transcript_text, ..
+            }
+            | ManualPromptOutcome::BootstrapFailed {
+                transcript_text, ..
+            }
+            | ManualPromptOutcome::Rejected {
+                transcript_text, ..
+            } => transcript_text,
         }
     }
 }
@@ -461,7 +498,105 @@ pub struct PostTurnRequest {
     pub changed_planning_file_paths: Vec<String>,
     pub execution_snapshot_capture: Option<TurnSnapshotCapture>,
     pub planning_worker_panel_state: PlanningWorkerPanelState,
+    pub continuation_permit: PostTurnContinuationPermit,
 }
+
+/*
+ * A post-turn request captures one automation generation. Operator policy changes and
+ * conversation/workspace supersession advance the shared gate, so an older request can
+ * still reconcile local planning state but cannot launch a new hidden Codex worker.
+ */
+#[derive(Clone, Default)]
+pub struct PostTurnContinuationGate {
+    generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    commit_serialization: std::sync::Arc<std::sync::Mutex<()>>,
+}
+
+impl PostTurnContinuationGate {
+    pub fn capture(&self) -> PostTurnContinuationPermit {
+        use std::sync::atomic::Ordering;
+
+        PostTurnContinuationPermit {
+            generation: self.generation.clone(),
+            commit_serialization: self.commit_serialization.clone(),
+            observed_generation: self.generation.load(Ordering::SeqCst),
+        }
+    }
+
+    pub fn advance(&self) -> u64 {
+        use std::sync::atomic::Ordering;
+
+        let _guard = self
+            .commit_serialization
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+}
+
+#[derive(Clone)]
+pub struct PostTurnContinuationPermit {
+    generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    commit_serialization: std::sync::Arc<std::sync::Mutex<()>>,
+    observed_generation: u64,
+}
+
+impl PostTurnContinuationPermit {
+    pub fn is_current(&self) -> bool {
+        use std::sync::atomic::Ordering;
+
+        self.generation.load(Ordering::SeqCst) == self.observed_generation
+    }
+
+    pub fn invalidate_if_current(&self) -> bool {
+        use std::sync::atomic::Ordering;
+
+        let _guard = self
+            .commit_serialization
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.generation
+            .compare_exchange(
+                self.observed_generation,
+                self.observed_generation.saturating_add(1),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    pub fn with_current<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
+        use std::sync::atomic::Ordering;
+
+        // Keep this critical section limited to bounded host-side commits. An invalidation that
+        // linearizes first prevents the operation; one that arrives later waits until the commit
+        // finishes, so operator transitions never overlap an accepted authority mutation.
+        let _guard = self
+            .commit_serialization
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (self.generation.load(Ordering::SeqCst) == self.observed_generation).then(operation)
+    }
+}
+
+impl std::fmt::Debug for PostTurnContinuationPermit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PostTurnContinuationPermit")
+            .field("observed_generation", &self.observed_generation)
+            .field("is_current", &self.is_current())
+            .finish()
+    }
+}
+
+impl PartialEq for PostTurnContinuationPermit {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.generation, &other.generation)
+            && self.observed_generation == other.observed_generation
+    }
+}
+
+impl Eq for PostTurnContinuationPermit {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostTurnContext {
@@ -471,6 +606,8 @@ pub struct PostTurnContext {
     pub latest_main_reply: Option<String>,
     pub previous_handoff_task: Option<TaskHandoff>,
     pub current_runtime_projection: RuntimeProjection,
+    pub parallel_mode_enabled: bool,
+    pub parallel_automation_epoch_id: Option<u64>,
     pub continuation_paused: bool,
     pub can_queue_next: bool,
     pub stop_keyword: String,
@@ -634,5 +771,81 @@ mod tests {
 
         let invalid_projection = RuntimeProjection::invalid("planning workspace is invalid");
         assert_eq!(invalid_projection.prompt_fragment(), None);
+    }
+
+    #[test]
+    fn continuation_gate_invalidates_only_previously_captured_permits() {
+        let gate = PostTurnContinuationGate::default();
+        let old_permit = gate.capture();
+        assert!(old_permit.is_current());
+
+        gate.advance();
+        assert!(!old_permit.is_current());
+        assert!(gate.capture().is_current());
+    }
+
+    #[test]
+    fn continuation_permit_timeout_invalidation_is_atomic_and_idempotent() {
+        let gate = PostTurnContinuationGate::default();
+        let permit = gate.capture();
+        let sibling = permit.clone();
+
+        assert!(permit.invalidate_if_current());
+        assert!(!sibling.invalidate_if_current());
+        assert!(!permit.is_current());
+        assert!(gate.capture().is_current());
+    }
+
+    #[test]
+    fn continuation_invalidation_and_guarded_commit_are_linearly_ordered() {
+        let gate = PostTurnContinuationGate::default();
+        let permit = gate.capture();
+        let worker_permit = permit.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_permit.with_current(|| {
+                entered_tx
+                    .send(())
+                    .expect("test should observe commit entry");
+                release_rx
+                    .recv()
+                    .expect("test should release guarded commit");
+            })
+        });
+        entered_rx
+            .recv()
+            .expect("guarded commit should acquire serialization first");
+
+        let (advanced_tx, advanced_rx) = std::sync::mpsc::channel();
+        let invalidator = std::thread::spawn(move || {
+            let generation = gate.advance();
+            advanced_tx
+                .send(generation)
+                .expect("test should observe invalidation");
+        });
+        assert!(
+            advanced_rx
+                .recv_timeout(std::time::Duration::from_millis(25))
+                .is_err(),
+            "invalidation must wait for a commit that linearized first"
+        );
+
+        release_tx
+            .send(())
+            .expect("test should release guarded commit");
+        assert_eq!(
+            worker.join().expect("guarded commit should finish"),
+            Some(())
+        );
+        assert_eq!(
+            advanced_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("invalidation should finish after the commit"),
+            1
+        );
+        invalidator.join().expect("invalidator should finish");
+        assert!(!permit.is_current());
+        assert_eq!(permit.with_current(|| "must not run"), None);
     }
 }
