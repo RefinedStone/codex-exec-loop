@@ -1261,7 +1261,10 @@ fn reconcile_provisions_missing_slots_into_idle_baselines() {
         &repo.workspace_dir(),
     );
 
-    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE);
+    assert_eq!(
+        pool.idle_slots, DEFAULT_POOL_SIZE,
+        "provisioned pool should be immediately reusable: {pool:#?}"
+    );
     assert_eq!(pool.missing_slots, 0);
     assert!(pool.reconcile_status.contains("provisioned 3"));
     for slot_number in 1..=DEFAULT_POOL_SIZE {

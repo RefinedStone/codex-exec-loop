@@ -491,10 +491,7 @@ mod tests {
         fs::create_dir_all(&target).expect("target worktree directory should be created");
         symlink(&target_parent, &alias_parent).expect("symlink ancestor should be created");
 
-        assert!(!worktree_paths_match(
-            &alias_parent.join("slot-1"),
-            &target,
-        ));
+        assert!(!worktree_paths_match(&alias_parent.join("slot-1"), &target,));
 
         fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
     }

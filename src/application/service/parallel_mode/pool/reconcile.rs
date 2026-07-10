@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
@@ -77,11 +77,18 @@ pub(super) fn provision_missing_slots(
             )
         })?;
 
-        // git command boundary는 Path를 문자열로 넘겨야 하므로 여기서만 display string으로 변환한다.
+        // Git for Windows는 `\\?\` destination을 worktree path parser에서 거부할 수 있다.
+        // 검증된 sibling-relative path를 쓰면 verbatim prefix 없이도 긴 absolute prefix를 피할 수 있다.
         mutation_lock.verify_pool_root(pool_root)?;
         crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(repo_root))
             .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
-        let slot_path_string = slot_path.display().to_string();
+        let canonical_repo_root = std::fs::canonicalize(repo_root).map_err(|error| {
+            format!("repository root could not be canonicalized before slot provisioning: {error}")
+        })?;
+        let git_slot_path = git_worktree_destination(&canonical_repo_root, &slot_path)?;
+        let git_slot_path = git_slot_path.to_str().ok_or_else(|| {
+            format!("slot `{slot_id}` worktree destination is not valid Unicode for Git")
+        })?;
         let report = run_git_sequence(
             format!("provision parallel pool slot `{slot_id}`"),
             vec![GitCommandStep::new(
@@ -92,7 +99,7 @@ pub(super) fn provision_missing_slots(
                     "worktree",
                     "add",
                     "--detach",
-                    slot_path_string.as_str(),
+                    git_slot_path,
                     baseline_ref,
                 ],
             )],
@@ -109,6 +116,38 @@ pub(super) fn provision_missing_slots(
     }
 
     Ok(provisioned_slots)
+}
+
+fn git_worktree_destination(
+    canonical_repo_root: &Path,
+    slot_path: &Path,
+) -> Result<PathBuf, String> {
+    if !canonical_repo_root.is_absolute() || !slot_path.is_absolute() {
+        return Err("slot worktree destination requires absolute repository paths".to_string());
+    }
+    if slot_path.starts_with(canonical_repo_root) {
+        return Err("slot worktree destination cannot be inside the source repository".to_string());
+    }
+    let repo_parent = canonical_repo_root
+        .parent()
+        .ok_or_else(|| "canonical repository root has no parent directory".to_string())?;
+    let sibling_relative = slot_path.strip_prefix(repo_parent).map_err(|_| {
+        "slot worktree destination is outside the canonical repository sibling root".to_string()
+    })?;
+    if sibling_relative.as_os_str().is_empty()
+        || sibling_relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("slot worktree destination is not a normalized sibling path".to_string());
+    }
+    #[cfg(not(windows))]
+    return Ok(slot_path.to_path_buf());
+
+    #[cfg(windows)]
+    {
+        Ok(Path::new("..").join(sibling_relative))
+    }
 }
 
 /*
@@ -189,4 +228,41 @@ pub(super) fn reset_reusable_detached_baseline_slots(
     }
 
     reset_slots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::git_worktree_destination;
+    use std::path::Path;
+    #[cfg(windows)]
+    use std::path::PathBuf;
+
+    #[test]
+    fn git_worktree_destination_stays_with_the_verified_repo_sibling() {
+        #[cfg(not(windows))]
+        let repo = Path::new("/workspace/project");
+        #[cfg(not(windows))]
+        let slot = Path::new("/workspace/project-akra-worktrees/hash/akra-pool/slot-1");
+        #[cfg(not(windows))]
+        let expected = slot.to_path_buf();
+        #[cfg(not(windows))]
+        let outside = Path::new("/outside/slot-1");
+
+        #[cfg(windows)]
+        let repo = Path::new(r"C:\workspace\project");
+        #[cfg(windows)]
+        let slot = Path::new(r"C:\workspace\project-akra-worktrees\hash\akra-pool\slot-1");
+        #[cfg(windows)]
+        let expected = PathBuf::from(r"..\project-akra-worktrees\hash\akra-pool\slot-1");
+        #[cfg(windows)]
+        let outside = Path::new(r"C:\outside\slot-1");
+
+        assert_eq!(
+            git_worktree_destination(repo, slot)
+                .expect("managed sibling slot should become relative"),
+            expected
+        );
+        assert!(git_worktree_destination(repo, &repo.join("slot-1")).is_err());
+        assert!(git_worktree_destination(repo, outside).is_err());
+    }
 }
