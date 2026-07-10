@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -384,6 +386,8 @@ pub(super) struct ThreadStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) sandbox: Option<SandboxModeValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) config: Option<BTreeMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) developer_instructions: Option<String>,
@@ -399,11 +403,15 @@ pub(super) struct ThreadStartParams {
 pub(super) struct ThreadResumeParams {
     pub(super) thread_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) approval_policy: Option<ApprovalPolicyValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) approvals_reviewer: Option<ApprovalsReviewerValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) sandbox: Option<SandboxModeValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) config: Option<BTreeMap<String, Value>>,
 }
 
 // TurnStartParams starts a turn inside a prepared thread; input ordering matters for skill items before text prompts.

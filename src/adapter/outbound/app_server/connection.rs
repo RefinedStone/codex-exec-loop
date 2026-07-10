@@ -3322,9 +3322,11 @@ mod tests {
         );
         assert_not_initialized(harness.connection.resume_thread(ThreadResumeParams {
             thread_id: "thread-1".to_string(),
+            cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
+            config: None,
         }));
         assert_not_initialized(harness.connection.archive_thread("thread-1"));
         assert_not_initialized(harness.connection.start_turn(TurnStartParams {
@@ -3434,9 +3436,11 @@ mod tests {
             .connection
             .resume_thread(ThreadResumeParams {
                 thread_id: "thread-resumed".to_string(),
+                cwd: None,
                 approval_policy: None,
                 approvals_reviewer: None,
                 sandbox: None,
+                config: None,
             })
             .expect("thread/resume should deserialize");
         harness

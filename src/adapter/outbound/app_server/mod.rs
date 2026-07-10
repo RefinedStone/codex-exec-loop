@@ -18,6 +18,9 @@ mod planning_worker_skill;
 pub(crate) mod protocol;
 pub(crate) mod runtime;
 
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, TryLockError};
@@ -74,7 +77,7 @@ use crate::domain::recent_sessions::{
     RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
 };
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 const PLANNING_WORKER_MODEL: &str = "gpt-5.4";
 const PLANNING_WORKER_SERVICE_NAME: &str = "akra-planning-worker";
@@ -93,6 +96,91 @@ const PLANNING_WORKER_DEVELOPER_INSTRUCTIONS: &str = r#"You are an Akra planning
 Evaluate accepted DB direction authority, accepted DB task authority, and DB queue projection only.
 Do not edit planning files, source files, SQL, or JSON authority directly.
 Use the attached queue-mutation skill and `akra planning-tool run .` before falling back to final planning_task_commands."#;
+
+#[derive(Debug)]
+struct ProtectedThreadWorkspace {
+    cwd: String,
+    config: BTreeMap<String, Value>,
+}
+
+fn protected_thread_workspace(cwd: &str) -> Result<ProtectedThreadWorkspace> {
+    let path = Path::new(cwd);
+    if !path.is_absolute() {
+        return Err(anyhow!(
+            "app-server thread workspace must be absolute before project trust can be constrained"
+        ));
+    }
+
+    let normalized = normalize_absolute_workspace_path(path);
+    let normalized_cwd = normalized
+        .to_str()
+        .ok_or_else(|| anyhow!("app-server thread workspace contains non-UTF-8 path data"))?
+        .to_string();
+    let mut projects = Map::new();
+    // Codex evaluates project config at each directory between its selected
+    // project root and cwd, checking a canonical key before the request-path key.
+    // Pin both aliases for every ancestor so an existing trusted parent, symlink
+    // target, or linked-worktree root cannot enable project MCP servers or hooks.
+    for ancestor in normalized.ancestors() {
+        insert_untrusted_project_key(&mut projects, codex_raw_trust_key(ancestor)?);
+        if let Ok(canonical) = fs::canonicalize(ancestor) {
+            let canonical_key = codex_raw_trust_key(&canonical)?;
+            insert_untrusted_project_key(&mut projects, canonical_key);
+            #[cfg(windows)]
+            insert_untrusted_project_key(&mut projects, simplify_windows_verbatim_key(&canonical)?);
+        }
+    }
+
+    Ok(ProtectedThreadWorkspace {
+        cwd: normalized_cwd,
+        config: BTreeMap::from([("projects".to_string(), Value::Object(projects))]),
+    })
+}
+
+fn insert_untrusted_project_key(projects: &mut Map<String, Value>, key: String) {
+    projects.insert(key, json!({ "trust_level": "untrusted" }));
+}
+
+fn codex_raw_trust_key(path: &Path) -> Result<String> {
+    let key = path
+        .to_str()
+        .ok_or_else(|| anyhow!("app-server thread workspace contains non-UTF-8 path data"))?;
+    #[cfg(windows)]
+    return Ok(key.to_ascii_lowercase());
+    #[cfg(not(windows))]
+    return Ok(key.to_string());
+}
+
+#[cfg(windows)]
+fn simplify_windows_verbatim_key(path: &Path) -> Result<String> {
+    let key = path
+        .to_str()
+        .ok_or_else(|| anyhow!("app-server thread workspace contains non-UTF-8 path data"))?;
+    let simplified = if let Some(rest) = key.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = key.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        key.to_string()
+    };
+    Ok(simplified.to_ascii_lowercase())
+}
+
+fn normalize_absolute_workspace_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
 static NEXT_PROMPT_LOG_INTERACTION_ID: AtomicU64 = AtomicU64::new(1);
 const PLANNING_WORKER_CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -420,11 +508,13 @@ impl CodexAppServerAdapter {
         let result = self.with_streaming_runtime(|connection| {
             let model = options.model.as_deref();
             let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
+            let workspace = protected_thread_workspace(cwd)?;
             let thread_response = connection.start_thread(ThreadStartParams {
-                cwd: Some(cwd.to_string()),
+                cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(self.execution_policy.sandbox_mode),
+                sandbox: Some(SandboxModeValue::ReadOnly),
+                config: Some(workspace.config),
                 ..ThreadStartParams::default()
             })?;
             let thread_id = thread_response.thread.id.clone();
@@ -498,11 +588,13 @@ impl CodexAppServerAdapter {
                     "post-turn continuation was superseded before hidden planning thread launch"
                 );
             }
+            let workspace = protected_thread_workspace(workspace_directory)?;
             let thread_response = connection.start_thread(ThreadStartParams {
-                cwd: Some(workspace_directory.to_string()),
+                cwd: Some(workspace.cwd),
                 approval_policy: Some(ApprovalPolicyValue::Never),
                 approvals_reviewer: None,
                 sandbox: Some(SandboxModeValue::ReadOnly),
+                config: Some(workspace.config),
                 model: Some(PLANNING_WORKER_MODEL.to_string()),
                 developer_instructions: Some(PLANNING_WORKER_DEVELOPER_INSTRUCTIONS.to_string()),
                 service_name: Some(PLANNING_WORKER_SERVICE_NAME.to_string()),
@@ -1150,11 +1242,17 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         let result = self.with_streaming_runtime(|connection| {
             let model = options.model.as_deref();
             let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
+            // Resume does not carry a caller-owned cwd, so read the persisted thread
+            // record before applying the project-trust override.
+            let thread = connection.read_thread(thread_id, false)?.thread;
+            let workspace = protected_thread_workspace(&thread.cwd)?;
             let resume_response = connection.resume_thread(ThreadResumeParams {
                 thread_id: thread_id.to_string(),
+                cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(self.execution_policy.sandbox_mode),
+                sandbox: Some(SandboxModeValue::ReadOnly),
+                config: Some(workspace.config),
             })?;
             emit_codex_app_server_reattach_attachment(&event_sender);
             self.start_turn_and_wait_for_stream(
@@ -1209,11 +1307,13 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
     ) -> Result<()> {
         // Parallel worker sessions use isolated processes but persist app-server threads so `:peek` can read them later.
         let result = self.with_isolated_streaming_runtime(|connection| {
+            let workspace = protected_thread_workspace(request.cwd)?;
             let thread_response = connection.start_thread(ThreadStartParams {
-                cwd: Some(request.cwd.to_string()),
+                cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
                 approvals_reviewer: self.execution_policy.approvals_reviewer,
-                sandbox: Some(self.execution_policy.sandbox_mode),
+                sandbox: Some(SandboxModeValue::ReadOnly),
+                config: Some(workspace.config),
                 model: None,
                 developer_instructions: Some(request.developer_instructions.to_string()),
                 service_name: Some(request.service_name.to_string()),
@@ -1465,9 +1565,9 @@ mod tests {
         MAX_STREAM_CHANGED_PATHS, MAX_STREAM_COMPLETED_MESSAGE_BYTES, MAX_STREAM_DELTA_BYTES,
         PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
         PlanningWorkerContinuationWatcher, STREAM_TRUNCATION_MARKER,
-        bounded_app_server_stream_event, finish_stream_result, persisted_error_summary,
-        prompt_log_input_records, prompt_log_output_record, prompt_log_stream_forwarder,
-        reasoning_effort_label,
+        bounded_app_server_stream_event, codex_raw_trust_key, finish_stream_result,
+        persisted_error_summary, prompt_log_input_records, prompt_log_output_record,
+        prompt_log_stream_forwarder, protected_thread_workspace, reasoning_effort_label,
     };
     #[cfg(unix)]
     use crate::application::port::outbound::app_server_prompt_log_port::{
@@ -1679,6 +1779,7 @@ mod tests {
                 "initialized",
                 "thread/start",
                 "turn/start",
+                "thread/read",
                 "thread/resume",
                 "turn/start"
             ]
@@ -1728,16 +1829,39 @@ mod tests {
             .iter()
             .filter(|request| request["method"] == "thread/start")
             .collect::<Vec<_>>();
+        let thread_resumes = requests
+            .iter()
+            .filter(|request| request["method"] == "thread/resume")
+            .collect::<Vec<_>>();
         let turn_starts = requests
             .iter()
             .filter(|request| request["method"] == "turn/start")
             .collect::<Vec<_>>();
 
         assert!(thread_starts[0]["params"]["model"].is_null());
+        assert_eq!(thread_starts[0]["params"]["sandbox"], "read-only");
+        assert_eq!(
+            thread_starts[0]["params"]["config"]["projects"]["/repo"]["trust_level"],
+            "untrusted"
+        );
+        assert_eq!(thread_resumes[0]["params"]["cwd"], "/repo");
+        assert_eq!(thread_resumes[0]["params"]["sandbox"], "read-only");
+        assert_eq!(
+            thread_resumes[0]["params"]["config"]["projects"]["/repo"]["trust_level"],
+            "untrusted"
+        );
         assert_eq!(turn_starts[0]["params"]["model"], "gpt-5.4");
         assert_eq!(turn_starts[0]["params"]["effort"], "high");
+        assert_eq!(
+            turn_starts[0]["params"]["sandboxPolicy"]["type"],
+            "workspaceWrite"
+        );
         assert_eq!(turn_starts[1]["params"]["model"], "gpt-5.4");
         assert_eq!(turn_starts[1]["params"]["effort"], "high");
+        assert_eq!(
+            turn_starts[1]["params"]["sandboxPolicy"]["type"],
+            "workspaceWrite"
+        );
     }
 
     #[cfg(unix)]
@@ -1785,6 +1909,10 @@ mod tests {
         assert_eq!(thread_starts[0]["params"]["ephemeral"], true);
         assert_eq!(thread_starts[0]["params"]["approvalPolicy"], "never");
         assert_eq!(thread_starts[0]["params"]["sandbox"], "read-only");
+        assert_eq!(
+            thread_starts[0]["params"]["config"]["projects"]["/repo"]["trust_level"],
+            "untrusted"
+        );
         assert!(
             thread_starts[0]["params"]["developerInstructions"]
                 .as_str()
@@ -1799,6 +1927,11 @@ mod tests {
         assert_eq!(
             thread_starts[1]["params"]["developerInstructions"],
             "You are an isolated worker."
+        );
+        assert_eq!(thread_starts[1]["params"]["sandbox"], "read-only");
+        assert_eq!(
+            thread_starts[1]["params"]["config"]["projects"]["/repo/slot-1"]["trust_level"],
+            "untrusted"
         );
         let turn_starts = requests
             .iter()
@@ -2209,6 +2342,74 @@ mod tests {
             serialized["developerInstructions"]
                 .as_str()
                 .is_some_and(|value| value.contains("leased worktree"))
+        );
+    }
+
+    #[test]
+    fn protected_thread_workspace_normalizes_and_marks_the_exact_cwd_untrusted() {
+        let base = std::env::current_dir().expect("test cwd should resolve");
+        let requested = base.join("nested").join("..").join("workspace");
+        let expected = base.join("workspace").to_string_lossy().into_owned();
+
+        let workspace = protected_thread_workspace(&requested.to_string_lossy())
+            .expect("absolute workspace should be protected");
+
+        assert_eq!(workspace.cwd, expected);
+        assert_eq!(
+            workspace.config["projects"][&workspace.cwd]["trust_level"],
+            "untrusted"
+        );
+        assert_eq!(
+            workspace.config["projects"]
+                [codex_raw_trust_key(&base).expect("base trust key should encode")]["trust_level"],
+            "untrusted"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_thread_workspace_overrides_canonical_trust_before_symlink_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = unique_temp_dir("thread-project-trust-alias");
+        let canonical_root = fixture.join("canonical-repo");
+        let nested = canonical_root.join("nested");
+        let alias = fixture.join("repo-alias");
+        fs::create_dir_all(&nested).expect("canonical workspace should exist");
+        symlink(&canonical_root, &alias).expect("workspace alias should be created");
+
+        let workspace = protected_thread_workspace(&alias.join("nested").to_string_lossy())
+            .expect("aliased workspace should be protected");
+        let canonical_key = fs::canonicalize(&canonical_root)
+            .expect("canonical root should resolve")
+            .to_string_lossy()
+            .into_owned();
+
+        assert_eq!(
+            workspace.config["projects"][canonical_key.as_str()]["trust_level"],
+            "untrusted"
+        );
+        fs::remove_dir_all(fixture).expect("trust alias fixture should clean up");
+    }
+
+    #[test]
+    fn protected_thread_workspace_rejects_relative_paths() {
+        let error = protected_thread_workspace("relative/workspace")
+            .expect_err("relative workspaces cannot be trust-pinned");
+
+        assert!(error.to_string().contains("must be absolute"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn protected_thread_workspace_preserves_case_while_lowercasing_windows_trust_keys() {
+        let workspace = protected_thread_workspace(r"C:\Repo\CaseSensitive\Src")
+            .expect("absolute Windows workspace should be protected");
+
+        assert_eq!(workspace.cwd, r"C:\Repo\CaseSensitive\Src");
+        assert_eq!(
+            workspace.config["projects"][r"c:\repo\casesensitive\src"]["trust_level"],
+            "untrusted"
         );
     }
 
