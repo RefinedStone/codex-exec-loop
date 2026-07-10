@@ -46,7 +46,12 @@ pub(crate) fn validate_windows_path_identity_only(
         )
         .open(path)
         .with_context(|| format!("failed to reopen Windows path {}", path.display()))?;
-    validate_windows_handle_identity(opened, &path_handle, directory)?;
+    validate_windows_handle_identity(opened, &path_handle, directory).with_context(|| {
+        format!(
+            "private Windows path must be a stable non-reparse, single-link object: {}",
+            path.display()
+        )
+    })?;
     validate_windows_identity_snapshot(opened_identity, &path_handle, directory).with_context(
         || {
             format!(

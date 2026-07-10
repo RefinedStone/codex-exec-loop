@@ -485,7 +485,8 @@ mod trusted_executable_tests {
     }
 
     fn write_native_executable(path: &Path) {
-        write_executable(path, "\x7fELF");
+        crate::trusted_executable::copy_native_executable_fixture(path)
+            .expect("native executable fixture should copy");
     }
 
     fn unique_suffix() -> u128 {

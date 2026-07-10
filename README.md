@@ -821,6 +821,12 @@ repository script. Frozen remote operations additionally use an owner-private is
 configuration/object context and accept only credential-free HTTPS routing plus validated proxy/CA
 inputs; repository/global credential helpers and transport rewrites are not imported.
 
+Native pinning parses the supported host format from one identity-checked file handle: ELF64 on
+Linux, thin or fat Mach-O 64 on macOS, and PE32+ on Windows. The architecture must match the running
+Akra target, format tables stay inside the file and a 16 MiB metadata budget, and the declared entry
+point must resolve into an executable load segment or section. Path identity is checked again after
+inspection; the same-user process limitation below still applies after that handle is released.
+
 ## Current Limits
 
 - The counted `terminal-baseline` release gate remains `0/4` required passes. Documentation and

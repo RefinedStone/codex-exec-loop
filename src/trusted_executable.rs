@@ -1,8 +1,8 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 const MAX_CODEX_SHEBANG_BYTES: usize = 4 * 1024;
 #[cfg(any(windows, test))]
 const MAX_WINDOWS_CODEX_SHIM_BYTES: usize = 16 * 1024;
+const MAX_NATIVE_EXECUTABLE_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TrustedCommand {
@@ -308,12 +309,39 @@ fn finish_validated_file_read(
     Ok(())
 }
 
-fn read_validated_prefix(path: &Path, length: usize, label: &str) -> Result<Vec<u8>> {
+fn inspect_validated_file<T>(
+    path: &Path,
+    inspect: impl FnOnce(&mut fs::File, u64) -> Result<T>,
+) -> Result<T> {
     let (mut file, identity) = open_validated_file(path)?;
+    let length = file
+        .metadata()
+        .context("failed to inspect trusted file length")?
+        .len();
+    let result = inspect(&mut file, length);
+    finish_validated_file_read(path, &file, identity)?;
+    result
+}
+
+fn read_file_range(
+    file: &mut fs::File,
+    offset: u64,
+    length: u64,
+    file_length: u64,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let end = offset
+        .checked_add(length)
+        .with_context(|| format!("{label} range overflowed"))?;
+    if end > file_length || length > MAX_NATIVE_EXECUTABLE_METADATA_BYTES {
+        bail!("{label} exceeds the trusted executable inspection boundary")
+    }
+    let length = usize::try_from(length).context("trusted executable range is too large")?;
+    file.seek(SeekFrom::Start(offset))
+        .with_context(|| format!("failed to seek to {label}"))?;
     let mut bytes = vec![0_u8; length];
     file.read_exact(&mut bytes)
-        .with_context(|| format!("failed to read {label} from `{}`", path.display()))?;
-    finish_validated_file_read(path, &file, identity)?;
+        .with_context(|| format!("failed to read {label}"))?;
     Ok(bytes)
 }
 
@@ -465,26 +493,637 @@ fn has_codex_package_script_suffix(target: &Path) -> bool {
 }
 
 pub(crate) fn validate_native_executable(path: &Path) -> Result<()> {
-    let bytes = read_validated_prefix(path, 4, "native executable header")?;
-    #[cfg(windows)]
-    if bytes.starts_with(b"MZ") {
-        return Ok(());
-    }
-    #[cfg(unix)]
-    if bytes.starts_with(b"\x7fELF")
-        || matches!(
-            bytes.as_slice(),
-            [0xfe, 0xed, 0xfa, 0xce]
-                | [0xce, 0xfa, 0xed, 0xfe]
-                | [0xfe, 0xed, 0xfa, 0xcf]
-                | [0xcf, 0xfa, 0xed, 0xfe]
-                | [0xca, 0xfe, 0xba, 0xbe]
-                | [0xbe, 0xba, 0xfe, 0xca]
+    inspect_validated_file(path, |file, file_length| {
+        let prefix_length = file_length.min(64);
+        let bytes = read_file_range(
+            file,
+            0,
+            prefix_length,
+            file_length,
+            "native executable header",
+        )?;
+        #[cfg(windows)]
+        validate_pe_executable(file, &bytes, file_length)?;
+        #[cfg(target_os = "macos")]
+        validate_macho_executable(file, &bytes, file_length)?;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        validate_elf_executable(file, &bytes, file_length)?;
+        #[cfg(not(any(unix, windows)))]
+        bail!("native executable validation is unsupported on this platform");
+        Ok(())
+    })
+    .with_context(|| {
+        format!(
+            "security-sensitive executable failed native format validation: {}",
+            path.display()
         )
-    {
-        return Ok(());
+    })
+}
+
+fn checked_bytes<'a>(
+    bytes: &'a [u8],
+    offset: usize,
+    length: usize,
+    label: &str,
+) -> Result<&'a [u8]> {
+    let end = offset
+        .checked_add(length)
+        .with_context(|| format!("{label} offset overflowed"))?;
+    bytes
+        .get(offset..end)
+        .with_context(|| format!("{label} is truncated"))
+}
+
+#[cfg(windows)]
+fn read_le_u16(bytes: &[u8], offset: usize, label: &str) -> Result<u16> {
+    let value: [u8; 2] = checked_bytes(bytes, offset, 2, label)?
+        .try_into()
+        .expect("checked two-byte slice");
+    Ok(u16::from_le_bytes(value))
+}
+
+#[cfg(windows)]
+fn read_le_u32(bytes: &[u8], offset: usize, label: &str) -> Result<u32> {
+    let value: [u8; 4] = checked_bytes(bytes, offset, 4, label)?
+        .try_into()
+        .expect("checked four-byte slice");
+    Ok(u32::from_le_bytes(value))
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum ByteOrder {
+    Little,
+    Big,
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn read_u16(bytes: &[u8], offset: usize, order: ByteOrder, label: &str) -> Result<u16> {
+    let value: [u8; 2] = checked_bytes(bytes, offset, 2, label)?
+        .try_into()
+        .expect("checked two-byte slice");
+    Ok(match order {
+        ByteOrder::Little => u16::from_le_bytes(value),
+        ByteOrder::Big => u16::from_be_bytes(value),
+    })
+}
+
+#[cfg(unix)]
+fn read_u32(bytes: &[u8], offset: usize, order: ByteOrder, label: &str) -> Result<u32> {
+    let value: [u8; 4] = checked_bytes(bytes, offset, 4, label)?
+        .try_into()
+        .expect("checked four-byte slice");
+    Ok(match order {
+        ByteOrder::Little => u32::from_le_bytes(value),
+        ByteOrder::Big => u32::from_be_bytes(value),
+    })
+}
+
+#[cfg(unix)]
+fn read_u64(bytes: &[u8], offset: usize, order: ByteOrder, label: &str) -> Result<u64> {
+    let value: [u8; 8] = checked_bytes(bytes, offset, 8, label)?
+        .try_into()
+        .expect("checked eight-byte slice");
+    Ok(match order {
+        ByteOrder::Little => u64::from_le_bytes(value),
+        ByteOrder::Big => u64::from_be_bytes(value),
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn validate_elf_executable(file: &mut fs::File, bytes: &[u8], file_length: u64) -> Result<()> {
+    const ELF64_HEADER_SIZE: usize = 64;
+    const ELF64_PROGRAM_HEADER_SIZE: u16 = 56;
+    const PT_LOAD: u32 = 1;
+    let header = checked_bytes(bytes, 0, ELF64_HEADER_SIZE, "ELF64 header")?;
+    if &header[..4] != b"\x7fELF" {
+        bail!("native executable is not an ELF binary")
     }
-    bail!("security-sensitive executable must be a native binary")
+    if usize::BITS != 64 || header[4] != 2 {
+        bail!("ELF executable class does not match the 64-bit host")
+    }
+    let order = match header[5] {
+        1 if cfg!(target_endian = "little") => ByteOrder::Little,
+        2 if cfg!(target_endian = "big") => ByteOrder::Big,
+        _ => bail!("ELF executable byte order does not match the host"),
+    };
+    if header[6] != 1 {
+        bail!("ELF executable identification version is invalid")
+    }
+    let executable_type = read_u16(header, 16, order, "ELF type")?;
+    if !matches!(executable_type, 2 | 3) {
+        bail!("ELF binary is not an executable or position-independent executable")
+    }
+    let machine = read_u16(header, 18, order, "ELF machine")?;
+    if machine != native_elf_machine()? {
+        bail!("ELF executable architecture does not match the host")
+    }
+    if read_u32(header, 20, order, "ELF version")? != 1 {
+        bail!("ELF executable version is invalid")
+    }
+    if read_u16(header, 52, order, "ELF header size")? != ELF64_HEADER_SIZE as u16 {
+        bail!("ELF executable header size is invalid")
+    }
+    let program_offset = read_u64(header, 32, order, "ELF program table offset")?;
+    let entry_point = read_u64(header, 24, order, "ELF entry point")?;
+    let program_entry_size = read_u16(header, 54, order, "ELF program entry size")?;
+    let program_count = read_u16(header, 56, order, "ELF program entry count")?;
+    if program_entry_size != ELF64_PROGRAM_HEADER_SIZE || program_count == 0 {
+        bail!("ELF executable program table shape is invalid")
+    }
+    if program_count == u16::MAX {
+        bail!("ELF extended program table counts are not accepted")
+    }
+    let table_length = u64::from(program_entry_size)
+        .checked_mul(u64::from(program_count))
+        .context("ELF program table length overflowed")?;
+    let table_end = program_offset
+        .checked_add(table_length)
+        .context("ELF program table boundary overflowed")?;
+    if program_offset < ELF64_HEADER_SIZE as u64 || table_end > file_length {
+        bail!("ELF program table is outside the executable")
+    }
+    let table = read_file_range(
+        file,
+        program_offset,
+        table_length,
+        file_length,
+        "ELF program table",
+    )?;
+    let mut executable_entry_segment = false;
+    for index in 0..usize::from(program_count) {
+        let entry = index
+            .checked_mul(usize::from(program_entry_size))
+            .context("ELF program entry offset overflowed")?;
+        let segment_type = read_u32(&table, entry, order, "ELF program type")?;
+        let segment_flags = read_u32(&table, entry + 4, order, "ELF segment flags")?;
+        let file_offset = read_u64(&table, entry + 8, order, "ELF segment offset")?;
+        let virtual_address = read_u64(&table, entry + 16, order, "ELF segment address")?;
+        let file_size = read_u64(&table, entry + 32, order, "ELF segment file size")?;
+        let memory_size = read_u64(&table, entry + 40, order, "ELF segment memory size")?;
+        if segment_type == PT_LOAD {
+            if file_size > memory_size
+                || file_offset
+                    .checked_add(file_size)
+                    .is_none_or(|end| end > file_length)
+            {
+                bail!("ELF load segment exceeds the executable boundary")
+            }
+            let memory_end = virtual_address
+                .checked_add(memory_size)
+                .context("ELF load segment memory boundary overflowed")?;
+            if segment_flags & 1 != 0
+                && file_size > 0
+                && entry_point >= virtual_address
+                && entry_point < memory_end
+            {
+                executable_entry_segment = true;
+            }
+        }
+    }
+    if entry_point == 0 || !executable_entry_segment {
+        bail!("ELF entry point is not contained in an executable load segment")
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn native_elf_machine() -> Result<u16> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok(62),
+        "aarch64" => Ok(183),
+        architecture => bail!("ELF executable validation does not support {architecture}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn validate_macho_executable(file: &mut fs::File, bytes: &[u8], file_length: u64) -> Result<()> {
+    let magic = checked_bytes(bytes, 0, 4, "Mach-O magic")?;
+    if matches!(magic, [0xcf, 0xfa, 0xed, 0xfe] | [0xfe, 0xed, 0xfa, 0xcf]) {
+        return validate_thin_macho(file, bytes, 0, file_length, file_length, None);
+    }
+    let (order, fat64) = match magic {
+        [0xca, 0xfe, 0xba, 0xbe] => (ByteOrder::Big, false),
+        [0xbe, 0xba, 0xfe, 0xca] => (ByteOrder::Little, false),
+        [0xca, 0xfe, 0xba, 0xbf] => (ByteOrder::Big, true),
+        [0xbf, 0xba, 0xfe, 0xca] => (ByteOrder::Little, true),
+        _ => bail!("native executable is not a Mach-O binary"),
+    };
+    let architecture_count = read_u32(bytes, 4, order, "fat Mach-O architecture count")?;
+    if architecture_count == 0 || architecture_count > 64 {
+        bail!("fat Mach-O architecture count is outside the security limit")
+    }
+    let entry_size = if fat64 { 32_usize } else { 20_usize };
+    let table_end = 8_usize
+        .checked_add(
+            usize::try_from(architecture_count)
+                .context("fat Mach-O architecture count is too large")?
+                .checked_mul(entry_size)
+                .context("fat Mach-O table length overflowed")?,
+        )
+        .context("fat Mach-O table boundary overflowed")?;
+    let table = read_file_range(
+        file,
+        0,
+        table_end as u64,
+        file_length,
+        "fat Mach-O architecture table",
+    )?;
+    let expected_cpu = native_macho_cpu()?;
+    let preferred_subtype = native_macho_preferred_subtype()?;
+    let mut native_slices = Vec::new();
+    let mut slice_ranges = Vec::with_capacity(
+        usize::try_from(architecture_count).expect("bounded architecture count"),
+    );
+    for index in 0..usize::try_from(architecture_count).expect("bounded architecture count") {
+        let entry = 8 + index * entry_size;
+        let cpu = read_u32(&table, entry, order, "fat Mach-O CPU type")?;
+        let subtype = read_u32(&table, entry + 4, order, "fat Mach-O CPU subtype")?;
+        let (offset, size, alignment) = if fat64 {
+            (
+                read_u64(&table, entry + 8, order, "fat Mach-O slice offset")?,
+                read_u64(&table, entry + 16, order, "fat Mach-O slice size")?,
+                read_u32(&table, entry + 24, order, "fat Mach-O slice alignment")?,
+            )
+        } else {
+            (
+                u64::from(read_u32(
+                    &table,
+                    entry + 8,
+                    order,
+                    "fat Mach-O slice offset",
+                )?),
+                u64::from(read_u32(
+                    &table,
+                    entry + 12,
+                    order,
+                    "fat Mach-O slice size",
+                )?),
+                read_u32(&table, entry + 16, order, "fat Mach-O slice alignment")?,
+            )
+        };
+        let end = offset
+            .checked_add(size)
+            .context("fat Mach-O slice boundary overflowed")?;
+        if offset < table_end as u64 || size < 32 || end > file_length || alignment > 63 {
+            bail!("fat Mach-O slice is outside the executable boundary")
+        }
+        let alignment_bytes = 1_u64
+            .checked_shl(alignment)
+            .context("fat Mach-O slice alignment overflowed")?;
+        if offset % alignment_bytes != 0 {
+            bail!("fat Mach-O slice offset violates its declared alignment")
+        }
+        slice_ranges.push((offset, end));
+        if cpu == expected_cpu {
+            let masked_subtype = subtype & 0x00ff_ffff;
+            if native_slices
+                .iter()
+                .any(|(_, existing, _, _)| *existing == subtype)
+            {
+                bail!("fat Mach-O contains duplicate native CPU subtype slices")
+            }
+            let compatibility = if subtype == preferred_subtype {
+                0_u8
+            } else if masked_subtype == preferred_subtype {
+                1
+            } else {
+                2
+            };
+            native_slices.push((compatibility, subtype, offset, size));
+        }
+    }
+    slice_ranges.sort_unstable_by_key(|(offset, _)| *offset);
+    if slice_ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+        bail!("fat Mach-O architecture slices overlap")
+    }
+    let best_compatibility = native_slices
+        .iter()
+        .map(|(compatibility, _, _, _)| *compatibility)
+        .min()
+        .context("fat Mach-O contains no native architecture slice")?;
+    let mut compatible = native_slices
+        .iter()
+        .filter(|(compatibility, _, _, _)| *compatibility == best_compatibility);
+    let (_, subtype, offset, size) = *compatible
+        .next()
+        .context("fat Mach-O contains no compatible native architecture slice")?;
+    if compatible.next().is_some() {
+        bail!("fat Mach-O has no unambiguous compatible CPU subtype slice")
+    }
+    let header = read_file_range(
+        file,
+        offset,
+        32,
+        file_length,
+        "native fat Mach-O slice header",
+    )?;
+    validate_thin_macho(file, &header, offset, size, file_length, Some(subtype))
+}
+
+#[cfg(target_os = "macos")]
+fn validate_thin_macho(
+    file: &mut fs::File,
+    header: &[u8],
+    slice_offset: u64,
+    slice_length: u64,
+    file_length: u64,
+    expected_subtype: Option<u32>,
+) -> Result<()> {
+    const MACHO64_HEADER_SIZE: usize = 32;
+    const LC_UNIXTHREAD: u32 = 0x5;
+    const LC_SEGMENT_64: u32 = 0x19;
+    const LC_MAIN: u32 = 0x8000_0028;
+    let magic = checked_bytes(header, 0, 4, "Mach-O header")?;
+    let order = match magic {
+        [0xcf, 0xfa, 0xed, 0xfe] if cfg!(target_endian = "little") => ByteOrder::Little,
+        [0xfe, 0xed, 0xfa, 0xcf] if cfg!(target_endian = "big") => ByteOrder::Big,
+        _ => bail!("Mach-O executable byte order or class does not match the host"),
+    };
+    let header = checked_bytes(header, 0, MACHO64_HEADER_SIZE, "Mach-O 64-bit header")?;
+    if usize::BITS != 64 || read_u32(header, 4, order, "Mach-O CPU type")? != native_macho_cpu()? {
+        bail!("Mach-O executable architecture does not match the host")
+    }
+    let subtype = read_u32(header, 8, order, "Mach-O CPU subtype")?;
+    if expected_subtype.is_some_and(|expected| subtype != expected) {
+        bail!("fat Mach-O CPU subtype does not match its native slice header")
+    }
+    if read_u32(header, 12, order, "Mach-O file type")? != 2 {
+        bail!("Mach-O binary is not an executable image")
+    }
+    let command_count = read_u32(header, 16, order, "Mach-O load command count")?;
+    let command_bytes = read_u32(header, 20, order, "Mach-O load command bytes")?;
+    if command_count == 0 || command_count > 4_096 || command_bytes == 0 {
+        bail!("Mach-O load command table shape is invalid")
+    }
+    let table_length = u64::from(command_bytes);
+    if (MACHO64_HEADER_SIZE as u64)
+        .checked_add(table_length)
+        .is_none_or(|end| end > slice_length)
+    {
+        bail!("Mach-O load command table exceeds its executable slice")
+    }
+    let command_offset = slice_offset
+        .checked_add(MACHO64_HEADER_SIZE as u64)
+        .context("Mach-O load command offset overflowed")?;
+    let commands = read_file_range(
+        file,
+        command_offset,
+        table_length,
+        file_length,
+        "Mach-O load command table",
+    )?;
+    let table_end = commands.len();
+    let mut cursor = 0_usize;
+    let mut executable_ranges = Vec::new();
+    let mut main_entry = None;
+    for _ in 0..command_count {
+        if cursor.checked_add(8).is_none_or(|end| end > table_end) {
+            bail!("Mach-O load command header exceeds the declared table")
+        }
+        let command = read_u32(&commands, cursor, order, "Mach-O load command")?;
+        let command_size = usize::try_from(read_u32(
+            &commands,
+            cursor + 4,
+            order,
+            "Mach-O load command size",
+        )?)
+        .context("Mach-O load command is too large")?;
+        if command_size < 8 || command_size % 8 != 0 {
+            bail!("Mach-O load command size is invalid")
+        }
+        let command_end = cursor
+            .checked_add(command_size)
+            .context("Mach-O load command boundary overflowed")?;
+        if command_end > table_end {
+            bail!("Mach-O load command exceeds the declared table")
+        }
+        if command == LC_SEGMENT_64 {
+            if command_size < 72 {
+                bail!("Mach-O segment command is truncated")
+            }
+            let section_count = usize::try_from(read_u32(
+                &commands,
+                cursor + 64,
+                order,
+                "Mach-O section count",
+            )?)
+            .context("Mach-O section count is too large")?;
+            let expected_size = 72_usize
+                .checked_add(
+                    section_count
+                        .checked_mul(80)
+                        .context("Mach-O section table length overflowed")?,
+                )
+                .context("Mach-O segment command length overflowed")?;
+            if expected_size != command_size {
+                bail!("Mach-O segment command does not match its section table")
+            }
+            let file_offset = read_u64(&commands, cursor + 40, order, "Mach-O segment offset")?;
+            let file_size = read_u64(&commands, cursor + 48, order, "Mach-O segment file size")?;
+            let initial_protection =
+                read_u32(&commands, cursor + 60, order, "Mach-O segment protection")?;
+            if file_offset
+                .checked_add(file_size)
+                .is_none_or(|end| end > slice_length)
+            {
+                bail!("Mach-O segment exceeds its executable slice")
+            }
+            if file_size > 0 && initial_protection & 4 != 0 {
+                executable_ranges.push((file_offset, file_offset + file_size));
+            }
+        } else if command == LC_MAIN {
+            if command_size != 24 || main_entry.is_some() {
+                bail!("Mach-O main entry command is invalid or duplicated")
+            }
+            main_entry = Some(read_u64(
+                &commands,
+                cursor + 8,
+                order,
+                "Mach-O main entry offset",
+            )?);
+        } else if command == LC_UNIXTHREAD {
+            bail!("legacy Mach-O Unix thread entry commands are not supported")
+        }
+        cursor = command_end;
+    }
+    let main_entry_is_executable = main_entry.is_some_and(|entry| {
+        executable_ranges
+            .iter()
+            .any(|(start, end)| entry >= *start && entry < *end)
+    });
+    if cursor != table_end || executable_ranges.is_empty() {
+        bail!("Mach-O executable load command table is incomplete")
+    }
+    if !main_entry_is_executable {
+        bail!("Mach-O entry point is not contained in an executable segment")
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn native_macho_cpu() -> Result<u32> {
+    match std::env::consts::ARCH {
+        "aarch64" => Ok(0x0100_000c),
+        "x86_64" => Ok(0x0100_0007),
+        architecture => bail!("Mach-O executable validation does not support {architecture}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_macho_preferred_subtype() -> Result<u32> {
+    match std::env::consts::ARCH {
+        "aarch64" => Ok(0),
+        "x86_64" => Ok(3),
+        architecture => bail!("Mach-O executable validation does not support {architecture}"),
+    }
+}
+
+#[cfg(windows)]
+fn validate_pe_executable(file: &mut fs::File, bytes: &[u8], file_length: u64) -> Result<()> {
+    const DOS_HEADER_SIZE: usize = 64;
+    const COFF_HEADER_SIZE: usize = 20;
+    const SECTION_HEADER_SIZE: usize = 40;
+    const IMAGE_FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
+    const IMAGE_FILE_DLL: u16 = 0x2000;
+    const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+    let dos = checked_bytes(bytes, 0, DOS_HEADER_SIZE, "PE DOS header")?;
+    if &dos[..2] != b"MZ" {
+        bail!("native executable is not a PE binary")
+    }
+    let pe_offset = u64::from(read_le_u32(dos, 0x3c, "PE header offset")?);
+    if pe_offset < DOS_HEADER_SIZE as u64 {
+        bail!("PE header overlaps the DOS header")
+    }
+    let coff_prefix = read_file_range(
+        file,
+        pe_offset,
+        4 + COFF_HEADER_SIZE as u64,
+        file_length,
+        "PE signature and COFF header",
+    )?;
+    if checked_bytes(&coff_prefix, 0, 4, "PE signature")? != b"PE\0\0" {
+        bail!("PE executable signature is invalid")
+    }
+    let coff = 4_usize;
+    if read_le_u16(&coff_prefix, coff, "PE machine")? != native_pe_machine()? {
+        bail!("PE executable architecture does not match the host")
+    }
+    let section_count = usize::from(read_le_u16(&coff_prefix, coff + 2, "PE section count")?);
+    if section_count == 0 || section_count > 96 {
+        bail!("PE section count is outside the security limit")
+    }
+    let optional_size = usize::from(read_le_u16(
+        &coff_prefix,
+        coff + 16,
+        "PE optional header size",
+    )?);
+    let characteristics = read_le_u16(&coff_prefix, coff + 18, "PE characteristics")?;
+    if characteristics & IMAGE_FILE_EXECUTABLE_IMAGE == 0 || characteristics & IMAGE_FILE_DLL != 0 {
+        bail!("PE binary is not a standalone executable image")
+    }
+    let optional = 4_usize + COFF_HEADER_SIZE;
+    let section_table = optional
+        .checked_add(optional_size)
+        .context("PE section table offset overflowed")?;
+    let section_table_length = section_count
+        .checked_mul(SECTION_HEADER_SIZE)
+        .context("PE section table length overflowed")?;
+    let header_length = section_table
+        .checked_add(section_table_length)
+        .context("PE section table boundary overflowed")?;
+    let headers = read_file_range(
+        file,
+        pe_offset,
+        u64::try_from(header_length).context("PE headers are too large")?,
+        file_length,
+        "PE headers",
+    )?;
+    if optional_size < 112 || read_le_u16(&headers, optional, "PE optional magic")? != 0x020b {
+        bail!("PE executable is not a complete PE32+ image")
+    }
+    checked_bytes(&headers, optional, optional_size, "PE optional header")?;
+    let entry_point = read_le_u32(&headers, optional + 16, "PE entry point")?;
+    if entry_point == 0 || read_le_u32(&headers, optional + 56, "PE image size")? == 0 {
+        bail!("PE executable image has no entry point or image size")
+    }
+    let size_of_headers = u64::from(read_le_u32(&headers, optional + 60, "PE header size")?);
+    let absolute_header_end = pe_offset
+        .checked_add(u64::try_from(header_length).context("PE headers are too large")?)
+        .context("PE absolute header boundary overflowed")?;
+    if absolute_header_end > size_of_headers || size_of_headers > file_length {
+        bail!("PE headers exceed the executable boundary")
+    }
+    let mut executable_entry_section = false;
+    for index in 0..section_count {
+        let section = section_table + index * SECTION_HEADER_SIZE;
+        let virtual_size = read_le_u32(&headers, section + 8, "PE section virtual size")?;
+        let virtual_address = read_le_u32(&headers, section + 12, "PE section virtual address")?;
+        let raw_size = u64::from(read_le_u32(&headers, section + 16, "PE section raw size")?);
+        let raw_offset = u64::from(read_le_u32(
+            &headers,
+            section + 20,
+            "PE section raw offset",
+        )?);
+        let section_characteristics =
+            read_le_u32(&headers, section + 36, "PE section characteristics")?;
+        if raw_size > 0
+            && (raw_offset < size_of_headers
+                || raw_offset
+                    .checked_add(raw_size)
+                    .is_none_or(|end| end > file_length))
+        {
+            bail!("PE section exceeds the executable boundary")
+        }
+        if raw_size > 0 && section_characteristics & IMAGE_SCN_MEM_EXECUTE != 0 {
+            let raw_size = u32::try_from(raw_size)
+                .context("PE section raw size exceeds the virtual address space")?;
+            let virtual_end = virtual_address.checked_add(virtual_size.max(raw_size));
+            if virtual_end.is_some_and(|end| entry_point >= virtual_address && entry_point < end) {
+                executable_entry_section = true;
+            }
+        }
+    }
+    if !executable_entry_section {
+        bail!("PE entry point is not contained in an executable file section")
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn native_pe_machine() -> Result<u16> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok(0x8664),
+        "aarch64" => Ok(0xaa64),
+        architecture => bail!("PE executable validation does not support {architecture}"),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn copy_native_executable_fixture(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    let source = [Path::new("/usr/bin/true"), Path::new("/bin/true")]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .map(Path::to_path_buf)
+        .unwrap_or(std::env::current_exe().context("failed to resolve test executable")?);
+    #[cfg(windows)]
+    let source = std::env::current_exe().context("failed to resolve test executable")?;
+    fs::copy(&source, path).with_context(|| {
+        format!(
+            "failed to copy native executable fixture from {} to {}",
+            source.display(),
+            path.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .context("failed to secure native executable fixture mode")?;
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_from_path(program: &str, path: &OsStr, cwd: &Path) -> Result<PathBuf> {
@@ -853,21 +1492,186 @@ fn executable_names(program: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WindowsAceMutationAction, classify_windows_ace_mutation, parse_windows_npm_codex_cmd_shim,
+        WindowsAceMutationAction, classify_windows_ace_mutation, copy_native_executable_fixture,
+        parse_windows_npm_codex_cmd_shim, validate_native_executable,
     };
     #[cfg(unix)]
     use super::{
         resolve_codex_command_from_path, resolve_from_path, sanitized_path, validate_absolute,
     };
-    #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
-    #[cfg(unix)]
-    use std::path::Path;
-    use std::path::PathBuf;
-    #[cfg(unix)]
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn native_executable_validation_accepts_platform_binary_and_rejects_invalid_formats() {
+        let root = fixture_root("native-format-validation");
+        #[cfg(unix)]
+        make_safe_directory_chain(&root);
+        let native = root.join(if cfg!(windows) {
+            "native.exe"
+        } else {
+            "native"
+        });
+        copy_native_executable_fixture(&native).expect("native executable fixture should copy");
+        validate_native_executable(&native).expect("current-platform executable should validate");
+
+        let malformed = root.join(if cfg!(windows) {
+            "malformed.exe"
+        } else {
+            "malformed"
+        });
+        fs::copy(&native, &malformed).expect("malformed native fixture should copy");
+        corrupt_native_structure(&malformed);
+        let malformed_error = validate_native_executable(&malformed)
+            .expect_err("malformed native structure must fail closed");
+        assert!(
+            malformed_error
+                .chain()
+                .map(ToString::to_string)
+                .any(|detail| detail.contains("table")
+                    || detail.contains("boundary")
+                    || detail.contains("security limit"))
+        );
+
+        let invalid_entry = root.join(if cfg!(windows) {
+            "invalid-entry.exe"
+        } else {
+            "invalid-entry"
+        });
+        fs::copy(&native, &invalid_entry).expect("invalid entry fixture should copy");
+        corrupt_native_entry_relationship(&invalid_entry);
+        let entry_error = validate_native_executable(&invalid_entry)
+            .expect_err("native entry outside executable code must fail closed");
+        assert!(
+            entry_error
+                .chain()
+                .map(ToString::to_string)
+                .any(|detail| detail.contains("entry") || detail.contains("subtype"))
+        );
+
+        let truncated = root.join(if cfg!(windows) {
+            "truncated.exe"
+        } else {
+            "truncated"
+        });
+        #[cfg(windows)]
+        write_executable_bytes(&truncated, b"MZ");
+        #[cfg(target_os = "macos")]
+        write_executable_bytes(&truncated, b"\xcf\xfa\xed\xfe");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        write_executable_bytes(&truncated, b"\x7fELF");
+        let truncated_error = validate_native_executable(&truncated)
+            .expect_err("magic-only executable must fail closed");
+        assert!(
+            truncated_error
+                .chain()
+                .map(ToString::to_string)
+                .any(|detail| detail.contains("truncated"))
+        );
+
+        let foreign = root.join(if cfg!(windows) {
+            "foreign.exe"
+        } else {
+            "foreign"
+        });
+        let mut foreign_header = vec![0_u8; 64];
+        #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+        foreign_header[..4].copy_from_slice(b"\xcf\xfa\xed\xfe");
+        #[cfg(target_os = "macos")]
+        foreign_header[..4].copy_from_slice(b"\x7fELF");
+        write_executable_bytes(&foreign, &foreign_header);
+        let foreign_error = validate_native_executable(&foreign)
+            .expect_err("foreign executable format must fail closed");
+        assert!(
+            foreign_error
+                .chain()
+                .map(ToString::to_string)
+                .any(|detail| detail.contains("not a"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_host_git_and_node_formats_are_accepted() {
+        let root = fixture_root("native-host-tools");
+        #[cfg(unix)]
+        make_safe_directory_chain(&root);
+        for (index, program) in ["git", "node"].into_iter().enumerate() {
+            let source = find_host_tool(program)
+                .unwrap_or_else(|| panic!("test host should provide native {program}"));
+            let destination = root.join(if cfg!(windows) {
+                format!("tool-{index}.exe")
+            } else {
+                format!("tool-{index}")
+            });
+            fs::copy(&source, &destination).unwrap_or_else(|error| {
+                panic!(
+                    "host tool {} should copy to fixture: {error}",
+                    source.display()
+                )
+            });
+            #[cfg(unix)]
+            fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))
+                .expect("host tool fixture should become executable");
+            validate_native_executable(&destination)
+                .unwrap_or_else(|error| panic!("native {program} should validate: {error:#}"));
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_windows_codex_shim_pins_node_and_package_script() {
+        let root = fixture_root("native-windows-codex-shim");
+        let workspace = root.join("workspace");
+        let install = root.join("install");
+        let target = install
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        fs::create_dir_all(&workspace).expect("Windows workspace fixture should create");
+        fs::create_dir_all(
+            target
+                .parent()
+                .expect("package target should have a parent"),
+        )
+        .expect("Windows Codex package fixture should create");
+        fs::write(&target, "process.exit(0);\n").expect("Codex package script should write");
+        let node = install.join("node.exe");
+        copy_native_executable_fixture(&node).expect("native Windows Node fixture should copy");
+        let shim = install.join("codex.cmd");
+        fs::write(
+            &shim,
+            standard_windows_codex_shim(r"node_modules\@openai\codex\bin\codex.js"),
+        )
+        .expect("Windows Codex shim should write");
+
+        let plan = super::resolve_codex_command_from_path(install.as_os_str(), &workspace)
+            .expect("standard Windows npm Codex launcher should resolve");
+
+        assert_eq!(
+            plan.program,
+            fs::canonicalize(node).expect("Node fixture should canonicalize")
+        );
+        assert_eq!(
+            plan.source_executable,
+            fs::canonicalize(shim).expect("Codex shim should canonicalize")
+        );
+        assert_eq!(
+            plan.prefix_args,
+            vec![
+                fs::canonicalize(target)
+                    .expect("Codex package target should canonicalize")
+                    .into_os_string()
+            ]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[cfg(unix)]
     #[test]
@@ -1111,7 +1915,186 @@ mod tests {
 
     #[cfg(unix)]
     fn write_native_executable(path: &Path) {
-        write_executable(path, "\x7fELF");
+        copy_native_executable_fixture(path).expect("native executable fixture should copy");
+    }
+
+    fn write_executable_bytes(path: &Path, body: &[u8]) {
+        fs::write(path, body).expect("executable byte fixture should write");
+        #[cfg(unix)]
+        {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+                .expect("executable byte fixture should become executable");
+        }
+    }
+
+    fn find_host_tool(program: &str) -> Option<PathBuf> {
+        let path = std::env::var_os("PATH")?;
+        std::env::split_paths(&path).find_map(|directory| {
+            super::executable_names(program)
+                .into_iter()
+                .map(|name| directory.join(name))
+                .find(|candidate| candidate.is_file())
+                .and_then(|candidate| fs::canonicalize(candidate).ok())
+        })
+    }
+
+    fn corrupt_native_structure(path: &Path) {
+        let mut bytes = fs::read(path).expect("native fixture should remain readable");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let invalid_offset = u64::try_from(bytes.len()).expect("fixture length should fit u64");
+            let encoded = if cfg!(target_endian = "little") {
+                invalid_offset.to_le_bytes()
+            } else {
+                invalid_offset.to_be_bytes()
+            };
+            bytes[32..40].copy_from_slice(&encoded);
+        }
+        #[cfg(target_os = "macos")]
+        match &bytes[..4] {
+            [0xcf, 0xfa, 0xed, 0xfe] => bytes[20..24].copy_from_slice(&u32::MAX.to_le_bytes()),
+            [0xfe, 0xed, 0xfa, 0xcf] => bytes[20..24].copy_from_slice(&u32::MAX.to_be_bytes()),
+            [0xca, 0xfe, 0xba, 0xbe] | [0xca, 0xfe, 0xba, 0xbf] => {
+                bytes[4..8].copy_from_slice(&65_u32.to_be_bytes());
+            }
+            [0xbe, 0xba, 0xfe, 0xca] | [0xbf, 0xba, 0xfe, 0xca] => {
+                bytes[4..8].copy_from_slice(&65_u32.to_le_bytes());
+            }
+            magic => panic!("unexpected native Mach-O magic: {magic:?}"),
+        }
+        #[cfg(windows)]
+        bytes[0x3c..0x40].copy_from_slice(&u32::MAX.to_le_bytes());
+        write_executable_bytes(path, &bytes);
+    }
+
+    fn corrupt_native_entry_relationship(path: &Path) {
+        let mut bytes = fs::read(path).expect("native fixture should remain readable");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let encoded = if cfg!(target_endian = "little") {
+                u64::MAX.to_le_bytes()
+            } else {
+                u64::MAX.to_be_bytes()
+            };
+            bytes[24..32].copy_from_slice(&encoded);
+        }
+        #[cfg(target_os = "macos")]
+        corrupt_macho_entry_or_subtype(&mut bytes);
+        #[cfg(windows)]
+        {
+            let pe_offset = usize::try_from(u32::from_le_bytes(
+                bytes[0x3c..0x40]
+                    .try_into()
+                    .expect("PE header offset bytes should exist"),
+            ))
+            .expect("PE header offset should fit usize");
+            let entry_offset = pe_offset + 4 + 20 + 16;
+            bytes[entry_offset..entry_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        }
+        write_executable_bytes(path, &bytes);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn corrupt_macho_entry_or_subtype(bytes: &mut [u8]) {
+        let magic: [u8; 4] = bytes[..4].try_into().expect("Mach-O magic should exist");
+        match magic {
+            [0xcf, 0xfa, 0xed, 0xfe] => corrupt_thin_macho_main_entry(bytes, 0, true),
+            [0xfe, 0xed, 0xfa, 0xcf] => corrupt_thin_macho_main_entry(bytes, 0, false),
+            [0xca, 0xfe, 0xba, 0xbe]
+            | [0xca, 0xfe, 0xba, 0xbf]
+            | [0xbe, 0xba, 0xfe, 0xca]
+            | [0xbf, 0xba, 0xfe, 0xca] => {
+                let little = matches!(magic, [0xbe, 0xba, 0xfe, 0xca] | [0xbf, 0xba, 0xfe, 0xca]);
+                let fat64 = matches!(magic, [0xca, 0xfe, 0xba, 0xbf] | [0xbf, 0xba, 0xfe, 0xca]);
+                let count = read_test_u32(bytes, 4, little);
+                let entry_size = if fat64 { 32 } else { 20 };
+                let expected_cpu = if cfg!(target_arch = "aarch64") {
+                    0x0100_000c
+                } else {
+                    0x0100_0007
+                };
+                let mut changed = false;
+                for index in 0..usize::try_from(count).expect("fat count should fit usize") {
+                    let entry = 8 + index * entry_size;
+                    if read_test_u32(bytes, entry, little) != expected_cpu {
+                        continue;
+                    }
+                    let subtype = read_test_u32(bytes, entry + 4, little);
+                    let offset = if fat64 {
+                        read_test_u64(bytes, entry + 8, little)
+                    } else {
+                        u64::from(read_test_u32(bytes, entry + 8, little))
+                    };
+                    let offset =
+                        usize::try_from(offset).expect("fat slice offset should fit usize");
+                    let inner_little = match &bytes[offset..offset + 4] {
+                        [0xcf, 0xfa, 0xed, 0xfe] => true,
+                        [0xfe, 0xed, 0xfa, 0xcf] => false,
+                        value => panic!("unexpected thin Mach-O magic: {value:?}"),
+                    };
+                    write_test_u32(bytes, offset + 8, subtype ^ 1, inner_little);
+                    changed = true;
+                }
+                assert!(changed, "fat Mach-O fixture should contain a native slice");
+            }
+            value => panic!("unexpected native Mach-O magic: {value:?}"),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn corrupt_thin_macho_main_entry(bytes: &mut [u8], base: usize, little: bool) {
+        let command_count = read_test_u32(bytes, base + 16, little);
+        let mut cursor = base + 32;
+        for _ in 0..command_count {
+            let command = read_test_u32(bytes, cursor, little);
+            let command_size = usize::try_from(read_test_u32(bytes, cursor + 4, little))
+                .expect("Mach-O command size should fit usize");
+            if command == 0x8000_0028 {
+                let encoded = if little {
+                    u64::MAX.to_le_bytes()
+                } else {
+                    u64::MAX.to_be_bytes()
+                };
+                bytes[cursor + 8..cursor + 16].copy_from_slice(&encoded);
+                return;
+            }
+            cursor += command_size;
+        }
+        panic!("thin Mach-O fixture should contain LC_MAIN");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn read_test_u32(bytes: &[u8], offset: usize, little: bool) -> u32 {
+        let value = bytes[offset..offset + 4]
+            .try_into()
+            .expect("test u32 bytes should exist");
+        if little {
+            u32::from_le_bytes(value)
+        } else {
+            u32::from_be_bytes(value)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn read_test_u64(bytes: &[u8], offset: usize, little: bool) -> u64 {
+        let value = bytes[offset..offset + 8]
+            .try_into()
+            .expect("test u64 bytes should exist");
+        if little {
+            u64::from_le_bytes(value)
+        } else {
+            u64::from_be_bytes(value)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn write_test_u32(bytes: &mut [u8], offset: usize, value: u32, little: bool) {
+        let encoded = if little {
+            value.to_le_bytes()
+        } else {
+            value.to_be_bytes()
+        };
+        bytes[offset..offset + 4].copy_from_slice(&encoded);
     }
 
     fn standard_windows_codex_shim(target: &str) -> String {
@@ -1151,6 +2134,21 @@ mod tests {
         let root = PathBuf::from(std::env::var_os("HOME").expect("HOME should be available"))
             .join(".cache")
             .join(format!("akra-{label}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&root).expect("fixture root should be created");
+        root
+    }
+
+    #[cfg(windows)]
+    fn fixture_root(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should follow Unix epoch")
+            .as_nanos();
+        let root = crate::private_fs::windows_local_app_data_path()
+            .expect("Windows LocalAppData should resolve")
+            .join("Akra")
+            .join("tests")
+            .join(format!("{label}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&root).expect("fixture root should be created");
         root
     }

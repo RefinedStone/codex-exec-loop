@@ -59,6 +59,12 @@ jobs:
           cargo test --locked --all-features --lib --target "${{ matrix.target }}"
           process_liveness::tests:: -- --nocapture
 
+      - name: Test native executable format validation
+        shell: bash
+        run: >-
+          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
+          trusted_executable::tests::native_ -- --nocapture
+
       - name: Test Windows authority-store path security
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash

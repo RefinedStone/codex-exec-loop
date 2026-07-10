@@ -1308,12 +1308,6 @@ fn create_and_validate_private_directory_components(path: &Path) -> Result<(), S
                         ));
                     }
                 };
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                    return Err(format!(
-                        "refusing symbolic-link or non-directory trace component `{}`",
-                        current.display()
-                    ));
-                }
                 #[cfg(windows)]
                 {
                     use std::os::windows::fs::MetadataExt;
@@ -1324,6 +1318,12 @@ fn create_and_validate_private_directory_components(path: &Path) -> Result<(), S
                             current.display()
                         ));
                     }
+                }
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(format!(
+                        "refusing symbolic-link or non-directory trace component `{}`",
+                        current.display()
+                    ));
                 }
                 validate_trace_directory_component_ownership(&current, &metadata)?;
             }

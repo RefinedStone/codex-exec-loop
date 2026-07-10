@@ -43,6 +43,8 @@
   허용합니다. Unix npm script/Windows standard npm `.cmd`의 Codex target과 native Node를
   따로 pin하며, `git`/`gh`/`curl`/`bash`도 native executable을 pin합니다. hostile/relative
   `PATH`, repository/pool-controlled path, unsafe owner/ACL/interpreter는 fail-closed입니다.
+  Native 형식은 동일한 identity-checked handle에서 Linux ELF64, macOS thin/fat Mach-O 64,
+  Windows PE32+ 구조와 현재 architecture, bounded table, executable entry 관계까지 검사합니다.
 - `SECURITY-011`: prompt capture가 비활성인 모든 production composition 기동은 이전 opt-in
   실행에서 남은 아직 만료되지 않은 본문까지 대상으로 all-row/metadata clear를 호출합니다.
   authority SQLite는 `secure_delete=ON`이며 cleanup 실패는 본문 없는 경고를 남기고 capture를

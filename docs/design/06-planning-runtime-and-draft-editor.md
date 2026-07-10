@@ -135,6 +135,12 @@ executables, unsafe owner/mode/ACL chains, arbitrary shell or batch launchers, a
 interpreters fail closed. Hidden planning workers inherit the same pinned command plan in addition
 to their fixed read-only sandbox and unattended-decline policy.
 
+Native plans are not admitted by a magic prefix alone. Akra inspects the supported ELF64, Mach-O 64
+(including bounded fat slices), or PE32+ tables through the already validated file handle, requires
+the current release architecture, bounds metadata inspection to 16 MiB, and verifies that the image
+entry belongs to an executable segment or section. The handle and path identity are rechecked after
+parsing before the validated command plan is returned.
+
 Prompt/response body persistence is a diagnostic opt-in, not a planning authority prerequisite.
 When `AKRA_APP_SERVER_PROMPT_LOG=1` is absent or invalid, every production composition startup
 invokes an all-row and metadata clear through the private authority SQLite connection with
