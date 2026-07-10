@@ -146,6 +146,14 @@ impl AdminSecurityConfig {
         &self,
         headers: &HeaderMap,
     ) -> Option<AdminRequestAuthentication> {
+        self.authenticate_request_at(headers, Instant::now())
+    }
+
+    fn authenticate_request_at(
+        &self,
+        headers: &HeaderMap,
+        now: Instant,
+    ) -> Option<AdminRequestAuthentication> {
         if header_capability_tokens(headers)
             .into_iter()
             .any(|candidate| self.matches_capability_token(candidate))
@@ -156,7 +164,7 @@ impl AdminSecurityConfig {
             .get(ADMIN_SESSION_COOKIE)?
             .value()
             .to_string();
-        self.refresh_session_cookie(&session_token)
+        self.refresh_session_cookie_at(&session_token, now)
             .map(AdminRequestAuthentication::Session)
     }
 
@@ -169,9 +177,8 @@ impl AdminSecurityConfig {
         constant_time_digest_eq(&self.capability_digest, &token_digest(candidate))
     }
 
-    fn refresh_session_cookie(&self, candidate: &str) -> Option<Cookie<'static>> {
+    fn refresh_session_cookie_at(&self, candidate: &str, now: Instant) -> Option<Cookie<'static>> {
         let candidate_digest = token_digest(candidate);
-        let now = Instant::now();
         let mut session = self.session.lock().ok()?;
         let active = session.as_mut()?;
         let absolute_age = now.saturating_duration_since(active.issued_at);
@@ -539,16 +546,20 @@ mod tests {
         );
         assert!(security.request_is_authenticated(&headers));
 
-        let mut session = security
+        let idle_expired_at = security
             .session
             .lock()
-            .expect("test session lock should remain healthy");
-        session
-            .as_mut()
+            .expect("test session lock should remain healthy")
+            .as_ref()
             .expect("active session should exist")
-            .last_seen_at = Instant::now() - ADMIN_SESSION_IDLE_TIMEOUT - Duration::from_secs(1);
-        drop(session);
-        assert!(!security.request_is_authenticated(&headers));
+            .last_seen_at
+            .checked_add(ADMIN_SESSION_IDLE_TIMEOUT + Duration::from_secs(1))
+            .expect("idle timeout should fit the monotonic clock");
+        assert!(
+            security
+                .authenticate_request_at(&headers, idle_expired_at)
+                .is_none()
+        );
 
         let absolute_security = AdminSecurityConfig::for_test(TEST_TOKEN, 18442);
         let absolute_cookie = absolute_security
@@ -562,18 +573,25 @@ mod tests {
             ))
             .expect("absolute-timeout cookie header should be valid"),
         );
-        {
-            let mut session = absolute_security
-                .session
-                .lock()
-                .expect("absolute-timeout session lock should remain healthy");
-            let active = session.as_mut().expect("active session should exist");
-            active.issued_at =
-                Instant::now() - ADMIN_SESSION_ABSOLUTE_TIMEOUT + Duration::from_secs(10);
-            active.last_seen_at = Instant::now();
-        }
+        let absolute_issued_at = absolute_security
+            .session
+            .lock()
+            .expect("absolute-timeout session lock should remain healthy")
+            .as_ref()
+            .expect("active session should exist")
+            .issued_at;
+        let near_absolute_expiry = absolute_issued_at
+            .checked_add(ADMIN_SESSION_ABSOLUTE_TIMEOUT - Duration::from_secs(10))
+            .expect("absolute timeout should fit the monotonic clock");
+        absolute_security
+            .session
+            .lock()
+            .expect("absolute-timeout session lock should remain healthy")
+            .as_mut()
+            .expect("active session should exist")
+            .last_seen_at = near_absolute_expiry;
         let refreshed = absolute_security
-            .authenticate_request(&headers)
+            .authenticate_request_at(&headers, near_absolute_expiry)
             .and_then(AdminRequestAuthentication::refreshed_session_cookie)
             .expect("session should refresh inside the absolute lifetime");
         let max_age = refreshed
@@ -582,14 +600,14 @@ mod tests {
             .whole_seconds();
         assert!((1..=10).contains(&max_age));
 
-        absolute_security
-            .session
-            .lock()
-            .expect("absolute-timeout session lock should remain healthy")
-            .as_mut()
-            .expect("active session should still exist")
-            .issued_at = Instant::now() - ADMIN_SESSION_ABSOLUTE_TIMEOUT - Duration::from_secs(1);
-        assert!(absolute_security.authenticate_request(&headers).is_none());
+        let absolute_expired_at = absolute_issued_at
+            .checked_add(ADMIN_SESSION_ABSOLUTE_TIMEOUT + Duration::from_secs(1))
+            .expect("absolute timeout should fit the monotonic clock");
+        assert!(
+            absolute_security
+                .authenticate_request_at(&headers, absolute_expired_at)
+                .is_none()
+        );
     }
 
     #[test]
