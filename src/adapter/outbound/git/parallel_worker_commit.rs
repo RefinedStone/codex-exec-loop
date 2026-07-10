@@ -1148,7 +1148,13 @@ fn safe_git_command(workspace: &Path) -> Result<Command, String> {
         // Pin the worktree as a global option so a submodule-local core.worktree cannot redirect
         // any status, index, or commit operation after its raw value has been audited.
         .arg("--work-tree")
-        .arg(&canonical_workspace)
+        .arg(&canonical_workspace);
+    #[cfg(windows)]
+    command.args([
+        "-c",
+        &format!("core.autocrlf={}", windows_host_autocrlf_policy(workspace)?),
+    ]);
+    command
         .args(["-c", "i18n.commitEncoding=UTF-8"])
         .args(["-c", "user.name=Akra Parallel Worker"])
         .args(["-c", "user.email=akra@localhost.invalid"])
@@ -1158,6 +1164,48 @@ fn safe_git_command(workspace: &Path) -> Result<Command, String> {
         .stderr(Stdio::piped())
         .env("GIT_CONFIG_GLOBAL", null_device());
     Ok(command)
+}
+
+#[cfg(windows)]
+fn windows_host_autocrlf_policy(workspace: &Path) -> Result<&'static str, String> {
+    let mut command = git_subprocess::command(std::iter::empty::<&str>());
+    command
+        .arg("-C")
+        .arg(workspace)
+        .args(["config", "--includes", "--get", "core.autocrlf"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = subprocess::wait_with_output_timeout_and_limits(
+        subprocess::spawn(&mut command)
+            .map_err(|error| format!("failed to inspect repository core.autocrlf: {error}"))?,
+        "host Git core.autocrlf inspection",
+        subprocess::configured_subprocess_timeout(),
+        MAX_GIT_STDOUT_BYTES,
+        MAX_GIT_STDERR_BYTES,
+    )
+    .map_err(|error| format!("host Git core.autocrlf inspection failed: {error}"))?;
+    if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+        // Git for Windows commonly checks out through a user-level `true` policy.
+        // `input` keeps that index/worktree clean while avoiding checkout conversion.
+        return Ok("input");
+    }
+    if !output.status.success() {
+        return Err(git_failure("inspect repository core.autocrlf", &output));
+    }
+    let value = std::str::from_utf8(&output.stdout)
+        .map_err(|_| "repository core.autocrlf is not valid UTF-8".to_string())?
+        .trim();
+    normalize_host_autocrlf_value(value)
+}
+
+#[cfg(any(windows, test))]
+fn normalize_host_autocrlf_value(value: &str) -> Result<&'static str, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Ok("true"),
+        "false" | "no" | "off" | "0" => Ok("false"),
+        "input" => Ok("input"),
+        _ => Err("repository core.autocrlf has an unsupported value".to_string()),
+    }
 }
 
 #[cfg(windows)]
@@ -1206,8 +1254,9 @@ fn git_failure(operation: &str, output: &Output) -> String {
 mod tests {
     use super::{
         CHANGED_PATH_DIFF_FILTER, MAX_CHANGED_PATHS, count_hidden_index_entries,
-        enforce_changed_path_limits, ensure_changed_path_set_unchanged, parse_head_gitlink_entries,
-        parse_index_gitlink_entries, parse_tracked_gitlink_paths,
+        enforce_changed_path_limits, ensure_changed_path_set_unchanged,
+        normalize_host_autocrlf_value, parse_head_gitlink_entries, parse_index_gitlink_entries,
+        parse_tracked_gitlink_paths,
     };
     use std::collections::BTreeSet;
 
@@ -1283,5 +1332,22 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn host_autocrlf_policy_accepts_only_non_executable_git_values() {
+        for (value, expected) in [
+            ("true", "true"),
+            ("YES", "true"),
+            ("0", "false"),
+            ("off", "false"),
+            ("input", "input"),
+        ] {
+            assert_eq!(
+                normalize_host_autocrlf_value(value).expect("known Git value should normalize"),
+                expected
+            );
+        }
+        assert!(normalize_host_autocrlf_value("checkout-command").is_err());
     }
 }

@@ -2829,19 +2829,20 @@ fn host_owned_worker_commit_overrides_submodule_ignore_and_rejects_hidden_state(
     let service = test_parallel_mode_service();
     let lease = acquire_running_worker_lease(&service, &repo, "task-host-hidden-submodule");
     let slot_path = Path::new(&lease.worktree_path);
-    run_git(
-        slot_path,
-        &[
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "update",
-            "--init",
-            "--",
-            "vendor/child",
-        ],
-    );
+    let mut submodule_update_args = vec!["-c", "protocol.file.allow=always"];
+    #[cfg(windows)]
+    submodule_update_args.extend(["-c", "core.autocrlf=true"]);
+    submodule_update_args.extend(["submodule", "update", "--init", "--", "vendor/child"]);
+    run_git(slot_path, &submodule_update_args);
     let child = slot_path.join("vendor/child");
+    #[cfg(windows)]
+    assert!(
+        fs::read(child.join("tracked.txt"))
+            .expect("Windows submodule file should be readable")
+            .windows(2)
+            .any(|bytes| bytes == b"\r\n"),
+        "Windows fixture must exercise the inherited CRLF checkout boundary"
+    );
     let child_text = child
         .to_str()
         .expect("submodule worktree path should be UTF-8");
