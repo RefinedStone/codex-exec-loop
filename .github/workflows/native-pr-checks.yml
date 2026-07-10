@@ -136,7 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
-            worktree_path_matching_accepts_canonical_platform_aliases -- --nocapture
+            application::service::parallel_mode::pool::paths::tests:: -- --nocapture
           cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
             reconcile_provisions_missing_slots_into_idle_baselines -- --nocapture
           cargo test --locked --all-features --lib --target "${{ matrix.target }}" \

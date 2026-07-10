@@ -322,20 +322,16 @@ cleanup 대상으로 승인해서는 안 된다.
 pub(super) fn worktree_paths_match(left: &Path, right: &Path) -> bool {
     /*
     Windows Git porcelain may spell a registered worktree as `C:/...` while
-    `fs::canonicalize` produced a `\\?\C:\...` managed path. Only that prefix
-    representation difference is accepted. Requiring the remaining lexical
-    components to match prevents a junction ancestor from becoming an alias for
-    a different managed path that happens to resolve to the same target.
+    `fs::canonicalize` produced a `\\?\C:\...` path and expanded an 8.3 ancestor
+    name. Both spellings are accepted only when every live path component is a
+    plain filesystem object. This keeps legitimate Windows aliases working while
+    preventing a symlink or junction ancestor from redirecting slot ownership.
     */
-    if !worktree_path_spellings_match(left, right) {
-        return false;
-    }
-    let (Ok(left_metadata), Ok(right_metadata)) =
-        (fs::symlink_metadata(left), fs::symlink_metadata(right))
-    else {
-        return false;
-    };
-    if metadata_is_link_or_reparse(&left_metadata) || metadata_is_link_or_reparse(&right_metadata) {
+    if !left.is_absolute()
+        || !right.is_absolute()
+        || !path_chain_is_link_free(left)
+        || !path_chain_is_link_free(right)
+    {
         return false;
     }
     match (fs::canonicalize(left), fs::canonicalize(right)) {
@@ -344,56 +340,13 @@ pub(super) fn worktree_paths_match(left: &Path, right: &Path) -> bool {
     }
 }
 
-#[cfg(not(windows))]
-fn worktree_path_spellings_match(left: &Path, right: &Path) -> bool {
-    left == right
-}
-
-#[cfg(windows)]
-fn worktree_path_spellings_match(left: &Path, right: &Path) -> bool {
-    matches!(
-        (windows_absolute_path_key(left), windows_absolute_path_key(right)),
-        (Some(left), Some(right)) if left == right
-    )
-}
-
-#[cfg(windows)]
-#[derive(Debug, PartialEq, Eq)]
-enum WindowsAbsoluteRoot {
-    Disk(u8),
-    Unc(std::ffi::OsString, std::ffi::OsString),
-}
-
-#[cfg(windows)]
-fn windows_absolute_path_key(
-    path: &Path,
-) -> Option<(WindowsAbsoluteRoot, Vec<std::ffi::OsString>)> {
-    use std::path::{Component, Prefix};
-
-    let mut components = path.components();
-    let Component::Prefix(prefix) = components.next()? else {
-        return None;
-    };
-    let root = match prefix.kind() {
-        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
-            WindowsAbsoluteRoot::Disk(letter.to_ascii_uppercase())
-        }
-        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
-            WindowsAbsoluteRoot::Unc(server.to_owned(), share.to_owned())
-        }
-        Prefix::Verbatim(_) | Prefix::DeviceNS(_) => return None,
-    };
-    if !matches!(components.next(), Some(Component::RootDir)) {
-        return None;
-    }
-    let mut tail = Vec::new();
-    for component in components {
-        let Component::Normal(component) = component else {
-            return None;
-        };
-        tail.push(component.to_owned());
-    }
-    Some((root, tail))
+fn path_chain_is_link_free(path: &Path) -> bool {
+    path.ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty())
+        .all(|ancestor| {
+            fs::symlink_metadata(ancestor)
+                .is_ok_and(|metadata| !metadata_is_link_or_reparse(&metadata))
+        })
 }
 
 #[cfg(windows)]
@@ -412,8 +365,6 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use super::worktree_path_spellings_match;
     use super::{resolve_git_dir, worktree_paths_match};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -489,15 +440,27 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_worktree_spelling_matching_rejects_different_ancestor_aliases() {
-        assert!(worktree_path_spellings_match(
-            Path::new(r"\\?\C:\managed\pool\slot-1"),
-            Path::new(r"C:/managed/pool/slot-1"),
+    fn worktree_path_matching_rejects_windows_junction_ancestor_aliases() {
+        let workspace = unique_repo("junction-ancestor");
+        let target_parent = workspace.join("target-parent");
+        let junction_parent = workspace.join("junction-parent");
+        let target = target_parent.join("slot-1");
+        fs::create_dir_all(&target).expect("target worktree directory should be created");
+        let status = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction_parent)
+            .arg(&target_parent)
+            .status()
+            .expect("junction command should run");
+        assert!(status.success(), "junction should be created");
+
+        assert!(!worktree_paths_match(
+            &junction_parent.join("slot-1"),
+            &target,
         ));
-        assert!(!worktree_path_spellings_match(
-            Path::new(r"\\?\C:\junction-alias\slot-1"),
-            Path::new(r"C:/managed/pool/slot-1"),
-        ));
+
+        fs::remove_dir(&junction_parent).expect("junction should be removed without traversal");
+        fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
     }
 
     #[cfg(unix)]
@@ -512,6 +475,26 @@ mod tests {
         symlink(&target, &alias).expect("symlink alias should be created");
 
         assert!(!worktree_paths_match(&target, &alias));
+
+        fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_path_matching_rejects_symlink_ancestor_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = unique_repo("symlink-ancestor");
+        let target_parent = workspace.join("target-parent");
+        let alias_parent = workspace.join("alias-parent");
+        let target = target_parent.join("slot-1");
+        fs::create_dir_all(&target).expect("target worktree directory should be created");
+        symlink(&target_parent, &alias_parent).expect("symlink ancestor should be created");
+
+        assert!(!worktree_paths_match(
+            &alias_parent.join("slot-1"),
+            &target,
+        ));
 
         fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
     }
