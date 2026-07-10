@@ -674,6 +674,7 @@ fn lifecycle_transition_primary_cas_preserves_preexisting_replacement_generation
     assert_persisted_slot_lease(&repo, &replacement);
 }
 
+#[cfg(unix)]
 fn assert_persisted_slot_lease(repo: &TempGitRepo, expected: &ParallelModeSlotLeaseSnapshot) {
     let projection =
         SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())

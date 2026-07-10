@@ -1,4 +1,6 @@
 use super::distributor::load_distributor_queue_records;
+#[cfg(unix)]
+use super::transition_slot_lease;
 use super::{
     DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME,
     MAX_AGENT_BRANCH_SLUG_LEN, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
@@ -16,7 +18,7 @@ use super::{
     remote_tracking_branch_ref, reset_slot_worktree_to_ref,
     resolve_parallel_mode_integration_branch, resolve_parallel_mode_integration_branch_strict,
     resolve_parent_high_risk_opt_in, resolve_workspace_slot_lease, run_command, sanitize_task_slug,
-    short_branch_slug_hash, slot_id, slot_lease_file_path, transition_slot_lease, write_slot_lease,
+    short_branch_slug_hash, slot_id, slot_lease_file_path, write_slot_lease,
 };
 
 #[test]

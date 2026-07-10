@@ -21,9 +21,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::ffi::OsStr;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -138,7 +138,7 @@ impl GithubReviewPollerAdapter {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn new_for_workspace_with_path(
         token: impl Into<String>,
         workspace: &Path,
@@ -225,15 +225,15 @@ impl GithubReviewPollerAdapter {
             .next()
             .map(|pull_request| GithubPullRequestTarget::new(repository, pull_request.number)))
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn resolve_git_dir(repo_root: &Path) -> Result<PathBuf> {
         Self::resolve_git_path(repo_root, "--git-dir", "git dir")
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn resolve_git_common_dir(repo_root: &Path) -> Result<PathBuf> {
         Self::resolve_git_path(repo_root, "--git-common-dir", "git common dir")
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn resolve_git_path(repo_root: &Path, flag: &str, label: &str) -> Result<PathBuf> {
         /*
         linked worktree에서는 `.git`이 directory가 아니라 pointer file일 수 있다.
@@ -437,7 +437,7 @@ impl GithubReviewPollerAdapter {
         Ok((!token.is_empty()).then_some(token))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn read_named_github_credential_token(repo_root: &Path) -> Result<Option<String>> {
         /*
         linked worktree에는 개별 git dir과 common git dir이 나뉠 수 있으므로 먼저 worktree-local credential을
@@ -469,14 +469,14 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn read_git_credential_file_token_for_root(users_root: &Path) -> Result<Option<String>> {
         Self::read_git_credential_file_token_from_candidates(
             Self::git_credential_file_candidates_for_root(users_root)?,
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn read_git_credential_file_token_from_candidates(
         candidates: Vec<PathBuf>,
     ) -> Result<Option<String>> {
@@ -498,7 +498,7 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn git_credential_file_candidates_for_root(users_root: &Path) -> Result<Vec<PathBuf>> {
         let mut candidates = Vec::new();
         if let Some(path) =
@@ -521,14 +521,14 @@ impl GithubReviewPollerAdapter {
         Ok(candidates)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
         if !candidates.contains(&path) {
             candidates.push(path);
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn read_first_non_empty_line(path: &Path) -> Result<String> {
         /*
         credential file은 이 adapter 밖의 git/helper script가 관리하므로 trailing newline이나 빈 줄이 있을 수 있다.
@@ -543,7 +543,7 @@ impl GithubReviewPollerAdapter {
             .ok_or_else(|| anyhow!("legacy GitHub credential file has no usable token line"))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn find_windows_github_credential_line_in_root(users_root: &Path) -> Result<Option<String>> {
         let Some(credential_path) =
             Self::resolve_windows_credential_path_for_current_user_in_root(users_root)?
@@ -570,7 +570,7 @@ impl GithubReviewPollerAdapter {
         }))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn resolve_windows_credential_path_for_current_user_in_root(
         users_root: &Path,
     ) -> Result<Option<PathBuf>> {
@@ -587,7 +587,7 @@ impl GithubReviewPollerAdapter {
         Ok(None)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn current_user_names() -> Vec<String> {
         let mut names = Vec::new();
         for key in ["USERNAME", "USER"] {
@@ -604,7 +604,7 @@ impl GithubReviewPollerAdapter {
         }
         names
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn resolve_current_user_windows_home(
         users_root: &Path,
         current_user: &str,
@@ -644,7 +644,7 @@ impl GithubReviewPollerAdapter {
         }
         Ok(None)
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn parse_github_credential_token(line: &str) -> Result<String> {
         // credential line은 `https://<username>:<token>@github.com` 형태다. bearer token으로 쓰는 값은 password slot뿐이다.
         let credential = line
@@ -744,7 +744,7 @@ impl GithubReviewPollerAdapter {
         let body = self.fetch_json_with_budget(endpoint, budget)?;
         Self::parse_json(&body, endpoint)
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn fetch_paginated_array<T>(&self, endpoint: &str) -> Result<Vec<T>>
     where
         T: DeserializeOwned,
@@ -807,7 +807,7 @@ impl GithubReviewPollerAdapter {
             "GitHub pagination remained full after {MAX_PAGINATED_PAGES} pages for {endpoint}; refusing an incomplete activity snapshot"
         )
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn fetch_json(&self, endpoint: &str) -> Result<String> {
         self.fetch_json_with_budget(endpoint, None)
     }

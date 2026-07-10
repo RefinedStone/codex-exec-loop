@@ -2537,24 +2537,26 @@ mod tests {
     use anyhow::Result;
     use serde_json::{Value, json};
 
+    #[cfg(unix)]
+    use super::AppServerWriteRequest;
     #[cfg(windows)]
     use super::app_server_process_environment_variable_allowed;
     use super::diagnostics::{ConnectionDiagnostics, PendingNotifications};
     use super::{
         API_KEY_AUTH_ENV_VAR, APP_SERVER_LINE_CHANNEL_CAPACITY, AppServerApprovalMode,
         AppServerConnection, AppServerConnectionConfig, AppServerLine, AppServerStdinWriter,
-        AppServerTurnInterruptSignal, AppServerWriteRequest, ApprovalInterruptContext,
-        BoundApprovalContext, BoundedLineRead, CANCELLED_SERVER_REQUEST_METHODS,
-        DISABLE_LOGIN_SHELL_OVERRIDE, LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS,
-        MAX_PENDING_NOTIFICATIONS, MAX_RESPONSE_TIMEOUT_SECS, MAX_STDERR_LINE_BYTES,
-        MAX_STDOUT_LINE_BYTES, METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS,
-        PROCESS_ENVIRONMENT_ENV_VAR, ProcessEnvironmentPolicy, RESPONSE_TIMEOUT_ENV_VAR,
-        SHELL_ENVIRONMENT_INHERIT_ENV_VAR, SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE,
-        ShellEnvironmentInherit, TransportFailure, UNINSPECTABLE_SERVER_REQUEST_METHODS,
-        app_server_api_key_environment_variable_allowed, app_server_command_with_environment,
-        app_server_process_environment_key_allowed, canonical_proxy_environment_key,
-        filtered_app_server_process_environment, install_after_approval_decision_received_hook,
-        openai_base_url_is_unsafe, proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
+        AppServerTurnInterruptSignal, ApprovalInterruptContext, BoundApprovalContext,
+        BoundedLineRead, CANCELLED_SERVER_REQUEST_METHODS, DISABLE_LOGIN_SHELL_OVERRIDE,
+        LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS, MAX_PENDING_NOTIFICATIONS,
+        MAX_RESPONSE_TIMEOUT_SECS, MAX_STDERR_LINE_BYTES, MAX_STDOUT_LINE_BYTES,
+        METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS, PROCESS_ENVIRONMENT_ENV_VAR,
+        ProcessEnvironmentPolicy, RESPONSE_TIMEOUT_ENV_VAR, SHELL_ENVIRONMENT_INHERIT_ENV_VAR,
+        SHELL_ENVIRONMENT_SECRET_EXCLUDES_OVERRIDE, ShellEnvironmentInherit, TransportFailure,
+        UNINSPECTABLE_SERVER_REQUEST_METHODS, app_server_api_key_environment_variable_allowed,
+        app_server_command_with_environment, app_server_process_environment_key_allowed,
+        canonical_proxy_environment_key, filtered_app_server_process_environment,
+        install_after_approval_decision_received_hook, openai_base_url_is_unsafe,
+        proxy_url_has_userinfo, read_bounded_line, resolve_api_key_auth,
         resolve_process_environment, resolve_shell_environment_inherit, spawn_pipe_reader,
     };
     use crate::adapter::outbound::app_server::approval::{

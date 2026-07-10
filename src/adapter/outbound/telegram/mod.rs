@@ -14,7 +14,7 @@ use crate::subprocess;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde::Serialize;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Command;
@@ -46,7 +46,7 @@ impl CurlTelegramBotAdapter {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn new_for_workspace_with_path(
         token: impl Into<String>,
         workspace: &std::path::Path,

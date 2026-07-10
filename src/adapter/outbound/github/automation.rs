@@ -2254,12 +2254,15 @@ mod tests {
 
     use super::{
         EMBEDDED_GITHUB_HELPER, FROZEN_GITHUB_REMOTE_NAME, GithubAutomationAdapter,
-        GithubPullRequestJson, IsolatedGithubNetworkContext, TEST_GITHUB_HELPER_SOURCE,
-        TemporaryTextFile, TrustedGithubNetworkEnvironment, fetch_branch_to_tracking_ref_isolated,
-        github_helper_source, parse_pull_request_number_from_url, run_command, run_git,
-        run_git_command_in_network_context, run_git_stdout,
-        run_github_script_command_for_delivery_target, sanitize_command_output,
-        trusted_executable_directories,
+        GithubPullRequestJson, TEST_GITHUB_HELPER_SOURCE, TemporaryTextFile,
+        TrustedGithubNetworkEnvironment, fetch_branch_to_tracking_ref_isolated,
+        parse_pull_request_number_from_url, run_command, run_git, run_git_stdout,
+        sanitize_command_output,
+    };
+    #[cfg(unix)]
+    use super::{
+        IsolatedGithubNetworkContext, github_helper_source, run_git_command_in_network_context,
+        run_github_script_command_for_delivery_target, trusted_executable_directories,
     };
 
     use crate::application::port::outbound::github_automation_port::{

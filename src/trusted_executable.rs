@@ -854,13 +854,20 @@ fn executable_names(program: &str) -> Vec<String> {
 mod tests {
     use super::{
         WindowsAceMutationAction, classify_windows_ace_mutation, parse_windows_npm_codex_cmd_shim,
+    };
+    #[cfg(unix)]
+    use super::{
         resolve_codex_command_from_path, resolve_from_path, resolve_native_from_path,
         sanitized_path, validate_absolute,
     };
+    #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
+    #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[cfg(unix)]
@@ -1137,6 +1144,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn fixture_root(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
