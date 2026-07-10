@@ -1683,7 +1683,7 @@ fn secure_opened_private_authority_sidecar_file(
     if !authority_windows_sidecar_path_matches_opened_identity(path, &sidecar)? {
         return Ok(None);
     }
-    if let Err(error) = set_windows_private_acl(&sidecar, false) {
+    if let Err(error) = set_windows_private_acl(&sidecar) {
         if windows_sidecar_anyhow_error_is_transient(&error) {
             return Ok(None);
         }
@@ -1856,7 +1856,12 @@ fn prepare_private_authority_directory_tree(parent: &Path) -> Result<Vec<File>> 
         }
     }
 
-    let mut paths = vec![managed_root.to_path_buf()];
+    // Secure and pin each parent before creating its child. Besides minimizing the initial
+    // permission window, this prevents a concurrent first opener from propagating a newly secured
+    // parent ACL over a child while another opener is validating that child.
+    let mut anchors = Vec::new();
+    anchors.push(storage_root_anchor);
+    anchors.push(open_and_secure_private_directory(managed_root)?);
     let mut current = managed_root.to_path_buf();
     for component in parent
         .strip_prefix(managed_root)
@@ -1885,17 +1890,9 @@ fn prepare_private_authority_directory_tree(parent: &Path) -> Result<Vec<File>> 
                     .with_context(|| format!("failed to inspect {}", current.display()));
             }
         }
-        paths.push(current.clone());
+        anchors.push(open_and_secure_private_directory(&current)?);
     }
 
-    let mut anchors = Vec::with_capacity(paths.len() + 1);
-    anchors.push(storage_root_anchor);
-    anchors.extend(
-        paths
-            .iter()
-            .map(|path| open_and_secure_private_directory(path))
-            .collect::<Result<Vec<_>>>()?,
-    );
     Ok(anchors)
 }
 
@@ -2159,7 +2156,7 @@ fn open_and_secure_private_directory(path: &Path) -> Result<File> {
             .open(path)
             .with_context(|| format!("failed to securely open {}", path.display()))?;
         validate_windows_path_identity(path, &directory, true)?;
-        set_windows_private_acl(&directory, true)?;
+        set_windows_private_acl(&directory)?;
         validate_windows_private_owner_and_acl(path, &directory)?;
         validate_windows_path_identity(path, &directory, true)?;
         Ok(directory)
@@ -2226,7 +2223,7 @@ fn prepare_private_authority_store_file(path: &Path) -> Result<File> {
             .open(path)
             .with_context(|| format!("failed to securely open {}", path.display()))?;
         validate_windows_path_identity(path, &store, false)?;
-        set_windows_private_acl(&store, false)?;
+        set_windows_private_acl(&store)?;
         validate_windows_private_owner_and_acl(path, &store)?;
         validate_windows_path_identity(path, &store, false)?;
         Ok(store)
@@ -2496,7 +2493,7 @@ fn validate_windows_owner(path: &Path, file: &File) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn set_windows_private_acl(file: &File, directory: bool) -> Result<()> {
+fn set_windows_private_acl(file: &File) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
     use windows_sys::Win32::Security::Authorization::{
@@ -2505,7 +2502,6 @@ fn set_windows_private_acl(file: &File, directory: bool) -> Result<()> {
     };
     use windows_sys::Win32::Security::{
         DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 
@@ -2520,11 +2516,10 @@ fn set_windows_private_acl(file: &File, directory: bool) -> Result<()> {
     let access = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_ALL_ACCESS,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: if directory {
-            SUB_CONTAINERS_AND_OBJECTS_INHERIT
-        } else {
-            NO_INHERITANCE
-        },
+        // Every managed directory, store, and sidecar is opened and secured independently.
+        // Non-inheriting ACEs prevent concurrent parent ACL updates from propagating over a child
+        // while another opener validates that child's protected DACL.
+        grfInheritance: NO_INHERITANCE,
         Trustee: trustee,
     };
     let mut acl = std::ptr::null_mut();
@@ -2624,6 +2619,7 @@ fn validate_windows_private_owner_and_acl(path: &Path, file: &File) -> Result<()
     let ace_sid = (&ace.SidStart as *const u32).cast_mut().cast();
     // ACCESS_ALLOWED_ACE_TYPE is zero. Reject any inherited/deny/extra principal entry.
     if ace.Header.AceType != 0
+        || ace.Header.AceFlags != 0
         || ace.Mask & FILE_ALL_ACCESS != FILE_ALL_ACCESS
         // SAFETY: SidStart is the documented inline SID start for ACCESS_ALLOWED_ACE.
         || unsafe { EqualSid(ace_sid, current_user.sid) } == 0
