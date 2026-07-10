@@ -130,12 +130,17 @@ jobs:
               "$test_name" -- --nocapture
           done
 
-      - name: Test Windows host-owned worker commit
+      - name: Test Windows parallel worktree and host-owned worker commit
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
-        run: >-
-          cargo test --locked --all-features --lib --target "${{ matrix.target }}"
-          host_owned_worker_commit_ -- --nocapture
+        run: |
+          set -euo pipefail
+          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
+            worktree_path_matching_accepts_canonical_platform_aliases -- --nocapture
+          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
+            reconcile_provisions_missing_slots_into_idle_baselines -- --nocapture
+          cargo test --locked --all-features --lib --target "${{ matrix.target }}" \
+            host_owned_worker_commit_ -- --nocapture
 
   native-pr-checks:
     name: Native PR Checks

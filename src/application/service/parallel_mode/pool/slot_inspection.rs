@@ -41,7 +41,7 @@ pub(super) fn inspect_pool_slot(
     let Some(worktree_record) = context
         .worktree_records
         .iter()
-        .find(|record| record.path == slot_path)
+        .find(|record| worktree_paths_match(&record.path, &slot_path))
     else {
         /*
         worktree inventory에 slot path가 없다는 것은 세 가지로 나뉜다. lease가 있으면 runtime은
@@ -239,7 +239,7 @@ pub(super) fn inspect_pool_slot(
                     slot_lease.owner_label(),
                 );
             }
-            if slot_lease.worktree_path != slot_path.display().to_string() {
+            if !worktree_paths_match(Path::new(&slot_lease.worktree_path), &slot_path) {
                 /*
                 lease worktree path mismatch는 같은 slot id라도 실제 디렉터리 연결이 어긋났다는
                 뜻이다. nested workspace resolve나 cleanup 경로가 path를 기준으로 동작하므로,

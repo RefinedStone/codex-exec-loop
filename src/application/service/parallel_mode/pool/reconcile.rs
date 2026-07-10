@@ -3,10 +3,11 @@ use std::path::Path;
 
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
+use super::super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::super::{DEFAULT_POOL_SIZE, branch_is_integrated_into};
 use super::{
-    GitWorktreeRecord, PoolMutationLock, command_succeeds, ensure_directory_exists,
-    inspect_slot_git_status, reset_slot_worktree_to_ref, slot_id,
+    GitWorktreeRecord, PoolMutationLock, ensure_directory_exists, inspect_slot_git_status,
+    reset_slot_worktree_to_ref, slot_id, worktree_paths_match,
 };
 
 /*
@@ -53,7 +54,7 @@ pub(super) fn provision_missing_slots(
         let slot_path = pool_root.join(&slot_id);
         if worktree_records
             .iter()
-            .any(|record| record.path == slot_path)
+            .any(|record| worktree_paths_match(&record.path, &slot_path))
         {
             /*
             worktree inventory에 있으면 이미 git이 관리하는 slot이다. stale/dirty detached 상태는
@@ -69,39 +70,42 @@ pub(super) fn provision_missing_slots(
         let Some(slot_parent) = slot_path.parent() else {
             continue;
         };
-        if ensure_directory_exists(slot_parent).is_err() {
-            /*
-            parent directory 생성 실패는 전체 reconcile을 중단하지 않고 해당 slot만 건너뛴다. pool
-            board는 남은 slot 상태를 계속 계산할 수 있어야 하고, 실패한 path는 다음 reconcile에서
-            다시 시도될 수 있다.
-            */
-            continue;
-        }
+        ensure_directory_exists(slot_parent).map_err(|error| {
+            format!(
+                "slot `{slot_id}` parent directory could not be created at `{}`: {error}",
+                slot_parent.display()
+            )
+        })?;
 
         // git command boundary는 Path를 문자열로 넘겨야 하므로 여기서만 display string으로 변환한다.
         mutation_lock.verify_pool_root(pool_root)?;
         crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(repo_root))
             .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
         let slot_path_string = slot_path.display().to_string();
-        if command_succeeds(
-            "git",
-            [
-                "-C",
-                repo_root,
-                "worktree",
-                "add",
-                "--detach",
-                slot_path_string.as_str(),
-                baseline_ref,
-            ],
-        ) {
-            /*
-            성공 count만 올리는 이유는 reconcile summary가 "이번 tick에서 실제로 provision된 slot
-            수"를 보여 주기 때문이다. 실패한 worktree add는 slot inspection의 blocked/missing
-            상태로 남아 다음 refresh에서 다시 관찰된다.
-            */
-            provisioned_slots += 1;
+        let report = run_git_sequence(
+            format!("provision parallel pool slot `{slot_id}`"),
+            vec![GitCommandStep::new(
+                "create detached slot worktree",
+                [
+                    "-C",
+                    repo_root,
+                    "worktree",
+                    "add",
+                    "--detach",
+                    slot_path_string.as_str(),
+                    baseline_ref,
+                ],
+            )],
+        );
+        if !report.succeeded() {
+            return Err(format!(
+                "slot `{slot_id}` worktree provisioning failed: {}",
+                report.failure_summary().unwrap_or_else(|| {
+                    "Git worktree creation failed without diagnostics".to_string()
+                })
+            ));
         }
+        provisioned_slots += 1;
     }
 
     Ok(provisioned_slots)
@@ -148,7 +152,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         let slot_path = pool_root.join(&slot_id);
         let Some(worktree_record) = worktree_records
             .iter()
-            .find(|record| record.path == slot_path)
+            .find(|record| worktree_paths_match(&record.path, &slot_path))
         else {
             // inventory에 없는 slot은 provisioning/inspection 단계가 다루며, reset 대상이 아니다.
             continue;

@@ -320,12 +320,47 @@ canonicalize가 성공하면 실제 경로를 비교하고, 실패하면 원래 
 불필요한 mismatch를 줄인다.
 */
 pub(super) fn worktree_paths_match(left: &Path, right: &Path) -> bool {
-    canonicalize_best_effort(left) == canonicalize_best_effort(right)
+    let left_metadata = fs::symlink_metadata(left);
+    let right_metadata = fs::symlink_metadata(right);
+    match (left_metadata, right_metadata) {
+        (Ok(left_metadata), Ok(right_metadata)) => {
+            /*
+            Windows Git porcelain may spell a registered worktree as `C:/...` while
+            `fs::canonicalize` produced a `\\?\C:\...` managed path. Compare their
+            canonical targets, but never let a symlink or reparse point become a
+            managed-slot alias while doing so.
+            */
+            if metadata_is_link_or_reparse(&left_metadata)
+                || metadata_is_link_or_reparse(&right_metadata)
+            {
+                return false;
+            }
+            match (fs::canonicalize(left), fs::canonicalize(right)) {
+                (Ok(left), Ok(right)) => left == right,
+                _ => false,
+            }
+        }
+        _ => left == right,
+    }
+}
+
+#[cfg(windows)]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    use std::os::windows::fs::MetadataExt;
+
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_git_dir;
+    use super::{resolve_git_dir, worktree_paths_match};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -375,6 +410,33 @@ mod tests {
         fs::create_dir_all(&workspace).expect("workspace directory should be created");
 
         assert_eq!(resolve_git_dir(&workspace), None);
+
+        fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
+    }
+
+    #[test]
+    fn worktree_path_matching_accepts_canonical_platform_aliases() {
+        let workspace = unique_repo("canonical-alias");
+        fs::create_dir_all(&workspace).expect("workspace directory should be created");
+        let canonical = fs::canonicalize(&workspace).expect("workspace should canonicalize");
+
+        assert!(worktree_paths_match(&workspace, &canonical));
+
+        fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_path_matching_rejects_symlink_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = unique_repo("symlink-alias");
+        let target = workspace.join("target");
+        let alias = workspace.join("alias");
+        fs::create_dir_all(&target).expect("target directory should be created");
+        symlink(&target, &alias).expect("symlink alias should be created");
+
+        assert!(!worktree_paths_match(&target, &alias));
 
         fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
     }

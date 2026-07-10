@@ -22,7 +22,7 @@ use crate::domain::parallel_mode::{
 };
 
 use super::current_branch_name;
-use super::readiness::{command_succeeds, detect_git_repo_root, run_command};
+use super::readiness::{detect_git_repo_root, run_command};
 #[cfg(test)]
 use super::remote_tracking_branch_ref;
 use super::{
@@ -482,7 +482,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
         let Some(_worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| record.path == slot_path)
+            .find(|record| worktree_paths_match(&record.path, &slot_path))
         else {
             if policy == ParallelModePoolResetPolicy::ForceDisposable {
                 collect_reset_projection_keys(&mut report, &context, &slot_id);
@@ -527,7 +527,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| record.path == slot_path)
+            .find(|record| worktree_paths_match(&record.path, &slot_path))
         else {
             continue;
         };
@@ -1085,13 +1085,13 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
         mutation_lock,
     )
     .map_err(|detail| {
+        let reconcile_status = if detail.starts_with("pool provisioning blocked:") {
+            "reconcile blocked / repository Git execution configuration is unsafe"
+        } else {
+            "reconcile failed / slot worktree provisioning failed"
+        };
         Box::new((
-            build_blocked_pool_board(
-                planning_authority,
-                workspace_dir,
-                "reconcile blocked / repository Git execution configuration is unsafe",
-                &detail,
-            ),
+            build_blocked_pool_board(planning_authority, workspace_dir, reconcile_status, &detail),
             detail,
         ))
     })?;
@@ -1323,7 +1323,7 @@ pub(super) fn resolve_workspace_slot_lease(
         ));
     }
     let expected_slot_path = context.pool_root.join(&lease.slot_id);
-    if workspace_path != expected_slot_path {
+    if !worktree_paths_match(&workspace_path, &expected_slot_path) {
         return Err(format!(
             "workspace `{}` is not the generated path for pool slot `{}`",
             workspace_path.display(),

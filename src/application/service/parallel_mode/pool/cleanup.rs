@@ -22,7 +22,7 @@ use super::{
     SlotGitStatus, current_branch_name, derive_default_pool_root, inspect_slot_git_status,
     load_worktree_records, orphaned_slot_lease_mirror_matches_identity_or_missing,
     remove_orphaned_slot_lease_mirror_if_matches, remove_slot_lease, slot_id,
-    slot_lease_mirror_matches_or_missing,
+    slot_lease_mirror_matches_or_missing, worktree_paths_match,
 };
 
 const STALE_LEASED_SLOT_RELEASE_AFTER_SECS: i64 = 120;
@@ -274,7 +274,7 @@ pub(super) fn cleanup_reusable_slots(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| record.path == slot_path)
+            .find(|record| worktree_paths_match(&record.path, &slot_path))
         else {
             // git worktree inventory에 없으면 cleanup보다 provisioning/inspection 경로가 먼저 다룬다.
             continue;
@@ -359,7 +359,7 @@ pub(super) fn cleanup_stale_leased_startup_slots(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| record.path == slot_path)
+            .find(|record| worktree_paths_match(&record.path, &slot_path))
         else {
             continue;
         };
@@ -442,7 +442,7 @@ pub(super) fn cleanup_clean_baseline_split_brain_leases(
         let Some(worktree_record) = context
             .worktree_records
             .iter()
-            .find(|record| record.path == slot_path)
+            .find(|record| worktree_paths_match(&record.path, &slot_path))
         else {
             continue;
         };
