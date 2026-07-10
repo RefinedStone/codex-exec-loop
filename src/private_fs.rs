@@ -209,14 +209,6 @@ pub(crate) fn windows_local_app_data_path() -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-pub(crate) fn validate_windows_handle_identity(
-    expected: &File,
-    current: &File,
-    directory: bool,
-) -> Result<()> {
-    validate_windows_handle_identity_with_link_policy(expected, current, directory, true)
-}
-
 fn validate_windows_handle_identity_with_link_policy(
     expected: &File,
     current: &File,
