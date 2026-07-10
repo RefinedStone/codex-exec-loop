@@ -142,10 +142,22 @@ impl TempGitRepo {
             .join(".distributor-queue")
             .join(format!("{queue_item_id}.json"))
     }
+    #[cfg(unix)]
     fn read_slot_lease(&self, slot_number: usize) -> ParallelModeSlotLeaseSnapshot {
         let lease_body = fs::read_to_string(self.slot_lease_path(slot_number))
             .expect("slot lease should be readable");
         serde_json::from_str(&lease_body).expect("slot lease should deserialize")
+    }
+    #[cfg(windows)]
+    fn read_slot_lease(&self, slot_number: usize) -> ParallelModeSlotLeaseSnapshot {
+        // Windows deliberately has no ordinary-path runtime mirror; SQLite is the
+        // single pinned-handle authority for persisted lease assertions.
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&self.workspace_dir())
+            .expect("runtime authority projection should be readable")
+            .slot_leases
+            .get(&slot_id(slot_number))
+            .cloned()
+            .expect("slot lease should exist in runtime authority")
     }
     fn create_detached_slot(&self, slot_number: usize) -> PathBuf {
         let slot_path = self.pool_root().join(slot_id(slot_number));
