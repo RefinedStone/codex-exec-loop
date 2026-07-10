@@ -46,16 +46,7 @@ pub(crate) fn classify_windows_ace_mutation(
     const GENERIC_WRITE: u32 = 0x4000_0000;
     const GENERIC_ALL: u32 = 0x1000_0000;
     let dangerous = if directory {
-        DELETE
-            | FILE_DELETE_CHILD
-            | FILE_WRITE_DATA
-            | FILE_APPEND_DATA
-            | FILE_WRITE_EA
-            | FILE_WRITE_ATTRIBUTES
-            | WRITE_DAC
-            | WRITE_OWNER
-            | GENERIC_WRITE
-            | GENERIC_ALL
+        DELETE | FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER | GENERIC_ALL
     } else {
         DELETE
             | FILE_WRITE_DATA
@@ -1871,21 +1862,29 @@ mod tests {
         );
         assert_eq!(
             classify_windows_ace_mutation(0, 0x0000_0002, true),
-            WindowsAceMutationAction::InspectStandardAllowSid,
-            "untrusted create-child rights can plant a PATH candidate"
+            WindowsAceMutationAction::Ignore,
+            "creating a sibling cannot replace an existing executable path"
         );
         assert_eq!(
             classify_windows_ace_mutation(0, 0x0000_0004, true),
-            WindowsAceMutationAction::InspectStandardAllowSid,
-            "untrusted create-subdirectory rights can plant a PATH subtree"
+            WindowsAceMutationAction::Ignore,
+            "creating a sibling directory cannot replace an existing path component"
         );
         assert_eq!(
             classify_windows_ace_mutation(0, 0x4000_0000, true),
-            WindowsAceMutationAction::InspectStandardAllowSid,
-            "generic directory write rights include mutation primitives"
+            WindowsAceMutationAction::Ignore,
+            "generic directory write does not grant delete-child or ACL replacement"
         );
         assert_eq!(
             classify_windows_ace_mutation(0, 0x0000_0040, true),
+            WindowsAceMutationAction::InspectStandardAllowSid
+        );
+        assert_eq!(
+            classify_windows_ace_mutation(0, 0x0004_0000, true),
+            WindowsAceMutationAction::InspectStandardAllowSid
+        );
+        assert_eq!(
+            classify_windows_ace_mutation(0, 0x1000_0000, true),
             WindowsAceMutationAction::InspectStandardAllowSid
         );
         assert_eq!(
