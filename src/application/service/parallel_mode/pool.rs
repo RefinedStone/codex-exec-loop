@@ -1078,6 +1078,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     }
     let provisioned_slots = provision_missing_slots(
         &repo_root,
+        &canonical_repo_root,
         &pool_root,
         &worktree_records,
         &runtime_projection.slot_leases,

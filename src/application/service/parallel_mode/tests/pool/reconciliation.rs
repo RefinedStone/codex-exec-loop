@@ -1272,6 +1272,44 @@ fn reconcile_provisions_missing_slots_into_idle_baselines() {
     }
 }
 
+// Existing linked worktree 안에서 실행해도 worktree/add의 상대 destination 기준은
+// canonical main checkout이어야 한다. 특히 Git for Windows는 verbatim absolute path를
+// 피하기 위해 상대 경로를 쓰므로 command cwd와 계산 기준이 어긋나면 다른 위치가 생긴다.
+#[test]
+fn reconcile_provisions_missing_slots_from_an_existing_slot_workspace() {
+    let repo = TempGitRepo::new("provision-slots-from-slot");
+    let initial_pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
+    let existing_slot = repo.pool_root().join(slot_id(1));
+    for slot_number in 2..=DEFAULT_POOL_SIZE {
+        fs::remove_dir_all(repo.pool_root().join(slot_id(slot_number)))
+            .expect("test should remove the missing slot worktree");
+    }
+    run_git(&repo.repo_root, &["worktree", "prune", "--expire", "now"]);
+
+    let pool = reconcile_pool_board(
+        &SqlitePlanningAuthorityAdapter::new(),
+        &test_parallel_runtime(),
+        existing_slot
+            .to_str()
+            .expect("existing slot path should be valid utf-8"),
+    );
+
+    assert_eq!(
+        pool.idle_slots, DEFAULT_POOL_SIZE,
+        "slot workspace reconcile should provision the canonical pool: {pool:#?}"
+    );
+    assert_eq!(pool.missing_slots, 0);
+    assert!(pool.reconcile_status.contains("provisioned 2"));
+    for slot_number in 1..=DEFAULT_POOL_SIZE {
+        assert!(repo.pool_root().join(slot_id(slot_number)).exists());
+    }
+}
+
 // git worktree inventory에 없는 slot path는 lease가 없어도 Akra 소유라고 증명할 수 없다.
 // reconcile은 남은 파일을 보존하고 해당 slot을 operator recovery 대상으로 막아야 한다.
 #[test]

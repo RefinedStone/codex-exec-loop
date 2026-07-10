@@ -30,6 +30,7 @@ inspection에서 Blocked로 보여 준다.
 */
 pub(super) fn provision_missing_slots(
     repo_root: &str,
+    canonical_repo_root: &Path,
     pool_root: &Path,
     worktree_records: &[GitWorktreeRecord],
     slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
@@ -38,6 +39,12 @@ pub(super) fn provision_missing_slots(
 ) -> Result<usize, String> {
     mutation_lock.verify_pool_root(pool_root)?;
     crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(repo_root))
+        .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
+    let canonical_repo_root = std::fs::canonicalize(canonical_repo_root).map_err(|error| {
+        format!("canonical repository root could not be pinned before slot provisioning: {error}")
+    })?;
+    let git_source_root = git_command_directory(&canonical_repo_root)?;
+    crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(&git_source_root))
         .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
     /*
     git worktree inventory에는 없지만 slot path가 남아 있으면 그 경로의 소유권을 증명할 수 없다.
@@ -80,11 +87,10 @@ pub(super) fn provision_missing_slots(
         // Git for Windows는 `\\?\` destination을 worktree path parser에서 거부할 수 있다.
         // 검증된 sibling-relative path를 쓰면 verbatim prefix 없이도 긴 absolute prefix를 피할 수 있다.
         mutation_lock.verify_pool_root(pool_root)?;
-        crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(repo_root))
-            .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
-        let canonical_repo_root = std::fs::canonicalize(repo_root).map_err(|error| {
-            format!("repository root could not be canonicalized before slot provisioning: {error}")
-        })?;
+        crate::git_execution_guard::ensure_host_git_execution_config_safe(Path::new(
+            &git_source_root,
+        ))
+        .map_err(|error| format!("pool provisioning blocked: {error:#}"))?;
         let git_slot_path = git_worktree_destination(&canonical_repo_root, &slot_path)?;
         let git_slot_path = git_slot_path.to_str().ok_or_else(|| {
             format!("slot `{slot_id}` worktree destination is not valid Unicode for Git")
@@ -95,7 +101,7 @@ pub(super) fn provision_missing_slots(
                 "create detached slot worktree",
                 [
                     "-C",
-                    repo_root,
+                    git_source_root.as_str(),
                     "worktree",
                     "add",
                     "--detach",
@@ -116,6 +122,22 @@ pub(super) fn provision_missing_slots(
     }
 
     Ok(provisioned_slots)
+}
+
+fn git_command_directory(canonical_repo_root: &Path) -> Result<String, String> {
+    let path = canonical_repo_root.to_str().ok_or_else(|| {
+        "canonical repository root is not valid Unicode for Git provisioning".to_string()
+    })?;
+    #[cfg(not(windows))]
+    return Ok(path.to_string());
+
+    #[cfg(windows)]
+    {
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            return Ok(format!(r"\\{rest}"));
+        }
+        Ok(path.strip_prefix(r"\\?\").unwrap_or(path).to_string())
+    }
 }
 
 fn git_worktree_destination(
@@ -232,7 +254,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
 
 #[cfg(test)]
 mod tests {
-    use super::git_worktree_destination;
+    use super::{git_command_directory, git_worktree_destination};
     use std::path::Path;
     #[cfg(windows)]
     use std::path::PathBuf;
@@ -264,5 +286,29 @@ mod tests {
         );
         assert!(git_worktree_destination(repo, &repo.join("slot-1")).is_err());
         assert!(git_worktree_destination(repo, outside).is_err());
+    }
+
+    #[test]
+    fn git_command_directory_uses_a_git_compatible_canonical_path() {
+        #[cfg(not(windows))]
+        assert_eq!(
+            git_command_directory(Path::new("/workspace/project"))
+                .expect("Unix canonical path should be accepted"),
+            "/workspace/project"
+        );
+
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                git_command_directory(Path::new(r"\\?\C:\workspace\project"))
+                    .expect("Windows drive path should be simplified"),
+                r"C:\workspace\project"
+            );
+            assert_eq!(
+                git_command_directory(Path::new(r"\\?\UNC\server\share\project"))
+                    .expect("Windows UNC path should be simplified"),
+                r"\\server\share\project"
+            );
+        }
     }
 }
