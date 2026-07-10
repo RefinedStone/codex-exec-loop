@@ -2150,7 +2150,10 @@ fn open_and_secure_private_directory(path: &Path) -> Result<File> {
 
         let directory = OpenOptions::new()
             .read(true)
-            .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL | WINDOWS_WRITE_DAC)
+            // SetSecurityInfo skips child DACL propagation for a MAXIMUM_ALLOWED handle. This
+            // keeps hostile hardlinks and concurrent first-open children untouched while the
+            // directory itself is secured.
+            .access_mode(WINDOWS_MAXIMUM_ALLOWED)
             .share_mode(WINDOWS_FILE_SHARE_ALL)
             .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)
@@ -2292,6 +2295,8 @@ const WINDOWS_GENERIC_WRITE: u32 = 0x4000_0000;
 const WINDOWS_READ_CONTROL: u32 = 0x0002_0000;
 #[cfg(windows)]
 const WINDOWS_WRITE_DAC: u32 = 0x0004_0000;
+#[cfg(windows)]
+const WINDOWS_MAXIMUM_ALLOWED: u32 = 0x0200_0000;
 
 #[cfg(windows)]
 fn validate_windows_path_identity(path: &Path, opened: &File, directory: bool) -> Result<()> {
