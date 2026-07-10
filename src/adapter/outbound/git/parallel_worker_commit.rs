@@ -716,6 +716,7 @@ fn ensure_branch_tree_differs_from_base(
 enum ChangedPathKind {
     Missing,
     Regular,
+    #[cfg(not(windows))]
     Symlink,
 }
 

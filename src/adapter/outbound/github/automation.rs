@@ -1645,12 +1645,24 @@ fn validate_private_file_identity(path: &Path, file: &File) -> Result<()> {
 
 #[cfg(windows)]
 fn secure_private_directory(path: &Path) -> Result<()> {
-    secure_private_windows_path(path, true)
+    secure_private_windows_path(path, true)?;
+    validate_private_directory(path)
 }
 
 #[cfg(windows)]
 fn secure_private_file(path: &Path) -> Result<()> {
-    secure_private_windows_path(path, false)
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use crate::private_fs::{WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL};
+
+    secure_private_windows_path(path, false)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .open(path)
+        .with_context(|| format!("failed to validate private file `{}`", path.display()))?;
+    validate_private_file_identity(path, &file)
 }
 
 #[cfg(windows)]

@@ -95,6 +95,7 @@ pub(crate) fn remove_entry(root: &Path, relative: &Path) -> Result<()> {
     platform::remove_entry(root, relative)
 }
 
+#[cfg(unix)]
 pub(crate) fn remove_optional_file(root: &Path, relative: &Path) -> Result<()> {
     platform::remove_optional_file(root, relative)
 }
@@ -1604,9 +1605,5 @@ mod platform {
 
     pub(super) fn remove_entry(_root: &Path, _relative: &Path) -> Result<()> {
         unsupported("entry removal")
-    }
-
-    pub(super) fn remove_optional_file(_root: &Path, _relative: &Path) -> Result<()> {
-        unsupported("file removal")
     }
 }
