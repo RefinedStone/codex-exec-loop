@@ -314,34 +314,86 @@ pub(super) fn canonicalize_best_effort(path: &Path) -> PathBuf {
 }
 
 /*
-worktree path 비교는 symlink나 상대 경로 때문에 문자열 비교만으로는 부족하다.
-canonicalize가 성공하면 실제 경로를 비교하고, 실패하면 원래 path를 fallback으로 사용한다.
-이 best-effort 비교는 nested directory에서 lease를 찾거나 slot path와 lease path를 맞출 때
-불필요한 mismatch를 줄인다.
+worktree path 비교는 Git inventory와 Akra가 생성한 live slot identity를 결합하는 보안 경계다.
+두 경로의 허용된 lexical spelling, metadata, canonical target을 모두 확인하고 어느 검사라도
+실패하면 일치하지 않는 것으로 닫는다. 존재하지 않거나 link alias인 경로를 lease, reset,
+cleanup 대상으로 승인해서는 안 된다.
 */
 pub(super) fn worktree_paths_match(left: &Path, right: &Path) -> bool {
-    let left_metadata = fs::symlink_metadata(left);
-    let right_metadata = fs::symlink_metadata(right);
-    match (left_metadata, right_metadata) {
-        (Ok(left_metadata), Ok(right_metadata)) => {
-            /*
-            Windows Git porcelain may spell a registered worktree as `C:/...` while
-            `fs::canonicalize` produced a `\\?\C:\...` managed path. Compare their
-            canonical targets, but never let a symlink or reparse point become a
-            managed-slot alias while doing so.
-            */
-            if metadata_is_link_or_reparse(&left_metadata)
-                || metadata_is_link_or_reparse(&right_metadata)
-            {
-                return false;
-            }
-            match (fs::canonicalize(left), fs::canonicalize(right)) {
-                (Ok(left), Ok(right)) => left == right,
-                _ => false,
-            }
-        }
-        _ => left == right,
+    /*
+    Windows Git porcelain may spell a registered worktree as `C:/...` while
+    `fs::canonicalize` produced a `\\?\C:\...` managed path. Only that prefix
+    representation difference is accepted. Requiring the remaining lexical
+    components to match prevents a junction ancestor from becoming an alias for
+    a different managed path that happens to resolve to the same target.
+    */
+    if !worktree_path_spellings_match(left, right) {
+        return false;
     }
+    let (Ok(left_metadata), Ok(right_metadata)) =
+        (fs::symlink_metadata(left), fs::symlink_metadata(right))
+    else {
+        return false;
+    };
+    if metadata_is_link_or_reparse(&left_metadata) || metadata_is_link_or_reparse(&right_metadata) {
+        return false;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+#[cfg(not(windows))]
+fn worktree_path_spellings_match(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(windows)]
+fn worktree_path_spellings_match(left: &Path, right: &Path) -> bool {
+    matches!(
+        (windows_absolute_path_key(left), windows_absolute_path_key(right)),
+        (Some(left), Some(right)) if left == right
+    )
+}
+
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+enum WindowsAbsoluteRoot {
+    Disk(u8),
+    Unc(std::ffi::OsString, std::ffi::OsString),
+}
+
+#[cfg(windows)]
+fn windows_absolute_path_key(
+    path: &Path,
+) -> Option<(WindowsAbsoluteRoot, Vec<std::ffi::OsString>)> {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+    let root = match prefix.kind() {
+        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+            WindowsAbsoluteRoot::Disk(letter.to_ascii_uppercase())
+        }
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+            WindowsAbsoluteRoot::Unc(server.to_owned(), share.to_owned())
+        }
+        Prefix::Verbatim(_) | Prefix::DeviceNS(_) => return None,
+    };
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return None;
+    }
+    let mut tail = Vec::new();
+    for component in components {
+        let Component::Normal(component) = component else {
+            return None;
+        };
+        tail.push(component.to_owned());
+    }
+    Some((root, tail))
 }
 
 #[cfg(windows)]
@@ -360,6 +412,8 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::worktree_path_spellings_match;
     use super::{resolve_git_dir, worktree_paths_match};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -414,6 +468,7 @@ mod tests {
         fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
     }
 
+    #[cfg(windows)]
     #[test]
     fn worktree_path_matching_accepts_canonical_platform_aliases() {
         let workspace = unique_repo("canonical-alias");
@@ -423,6 +478,26 @@ mod tests {
         assert!(worktree_paths_match(&workspace, &canonical));
 
         fs::remove_dir_all(&workspace).expect("workspace directory should be removed");
+    }
+
+    #[test]
+    fn worktree_path_matching_rejects_missing_identity_even_when_spelling_matches() {
+        let workspace = unique_repo("missing-identity");
+
+        assert!(!worktree_paths_match(&workspace, &workspace));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_worktree_spelling_matching_rejects_different_ancestor_aliases() {
+        assert!(worktree_path_spellings_match(
+            Path::new(r"\\?\C:\managed\pool\slot-1"),
+            Path::new(r"C:/managed/pool/slot-1"),
+        ));
+        assert!(!worktree_path_spellings_match(
+            Path::new(r"\\?\C:\junction-alias\slot-1"),
+            Path::new(r"C:/managed/pool/slot-1"),
+        ));
     }
 
     #[cfg(unix)]
