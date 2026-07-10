@@ -1956,6 +1956,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     fn find_host_tool(program: &str) -> Option<PathBuf> {
         let path = std::env::var_os("PATH")?;
         std::env::split_paths(&path).find_map(|directory| {
