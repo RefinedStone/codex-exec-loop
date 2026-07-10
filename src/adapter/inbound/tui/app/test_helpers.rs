@@ -303,6 +303,43 @@ impl GithubAutomationPort for TestGithubAutomationPort {
         Ok(head)
     }
 
+    fn remote_branch_names_for_prefix_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_prefix: &str,
+    ) -> Result<Vec<String>> {
+        require_test_delivery_target(repo_root, push_remote, credential_redacted_push_url)?;
+        let remote_pattern = format!("refs/heads/{branch_prefix}*");
+        let output = Command::new("git")
+            .args(["-C", repo_root, "ls-remote", "--heads"])
+            .arg(credential_redacted_push_url)
+            .arg(&remote_pattern)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "test remote branch listing failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let stdout = String::from_utf8(output.stdout)?;
+        stdout
+            .lines()
+            .map(|line| {
+                let (_, remote_ref) = line
+                    .split_once(char::is_whitespace)
+                    .ok_or_else(|| anyhow::anyhow!("test remote branch row is malformed"))?;
+                remote_ref
+                    .trim()
+                    .strip_prefix("refs/heads/")
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("test remote branch ref is malformed"))
+            })
+            .collect()
+    }
+
     fn fetch_branch_to_tracking_ref_for_delivery_target(
         &self,
         repo_root: &str,

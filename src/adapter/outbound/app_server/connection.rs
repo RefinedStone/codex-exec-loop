@@ -535,13 +535,45 @@ fn proxy_environment_value_is_unsafe(value: &OsString) -> bool {
 
 fn openai_base_url_is_unsafe(value: &OsString) -> bool {
     value.to_str().is_none_or(|value| {
-        let Some((scheme, _)) = value.split_once("://") else {
+        if value.is_empty()
+            || value.trim() != value
+            || value.contains(['\\', '#'])
+            || value.bytes().any(|byte| byte.is_ascii_whitespace())
+        {
+            return true;
+        }
+        let Ok(uri) = value.parse::<http::Uri>() else {
             return true;
         };
-        !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
-            || value.contains(['?', '#'])
-            || proxy_url_has_userinfo(value).unwrap_or(true)
+        if uri.query().is_some() {
+            return true;
+        }
+        let Some(scheme) = uri.scheme_str() else {
+            return true;
+        };
+        let Some(authority) = uri.authority() else {
+            return true;
+        };
+        if authority.as_str().contains('@') {
+            return true;
+        }
+        if scheme.eq_ignore_ascii_case("https") {
+            return false;
+        }
+        !scheme.eq_ignore_ascii_case("http")
+            || !openai_base_url_http_host_is_loopback(authority.host())
     })
+}
+
+fn openai_base_url_http_host_is_loopback(host: &str) -> bool {
+    let ip_host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || ip_host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn proxy_url_has_userinfo(value: &str) -> std::result::Result<bool, ()> {
@@ -3093,6 +3125,13 @@ mod tests {
             "https://user:secret@api.example.test/v1",
             "https://api.example.test/v1?token=secret",
             "https://api.example.test/v1#secret",
+            "https://@api.example.test/v1",
+            "https:\\api.example.test\\v1",
+            "http://api.example.test/v1",
+            "http://10.0.0.1/v1",
+            "http://localhost.example.test/v1",
+            "http://2130706433/v1",
+            "http://[::ffff:127.0.0.1]/v1",
             "api.example.test/v1",
         ] {
             assert!(openai_base_url_is_unsafe(&OsString::from(unsafe_url)));
@@ -3112,9 +3151,39 @@ mod tests {
             );
         }
 
-        for safe_url in ["https://api.openai.com/v1", "http://127.0.0.1:11434/v1"] {
+        for safe_url in [
+            "https://api.openai.com/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://127.9.8.7/v1",
+            "http://[::1]:11434/v1",
+            "http://LOCALHOST:11434/v1",
+        ] {
             assert!(!openai_base_url_is_unsafe(&OsString::from(safe_url)));
         }
+
+        let filtered = filtered_app_server_process_environment(
+            [
+                (
+                    "OPENAI_BASE_URL".into(),
+                    "http://api.example.test/v1".into(),
+                ),
+                ("OPENAI_API_KEY".into(), "explicit-api-key".into()),
+            ],
+            true,
+        );
+        assert_eq!(filtered.dropped_credential_variables, ["OPENAI_BASE_URL"]);
+        assert!(
+            filtered
+                .variables
+                .iter()
+                .any(|(key, value)| key == "OPENAI_API_KEY" && value == "explicit-api-key")
+        );
+        assert!(
+            filtered
+                .variables
+                .iter()
+                .all(|(key, _)| key != "OPENAI_BASE_URL")
+        );
     }
 
     #[test]

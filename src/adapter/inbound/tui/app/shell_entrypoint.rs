@@ -13,9 +13,10 @@ use crate::composition::production;
 // shell_entrypoint owns terminal bootstrap only. Production service wiring lives
 // in crate::composition::production so TUI remains an inbound adapter.
 pub fn run() -> Result<()> {
+    let shutdown = crate::shutdown::GracefulShutdown::install()?;
     let frontend = ShellFrontend::new();
     let runtime = prepare_runtime(build_default_app());
-    frontend.run(runtime)
+    frontend.run(runtime, &shutdown)
 }
 
 fn build_default_app() -> NativeTuiApp {

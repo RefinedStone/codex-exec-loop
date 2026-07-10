@@ -63,6 +63,10 @@ where
 {
     // Args parsing is deliberately outside the runner so tests can inject a fake gateway and service.
     let args = parse_args(args)?;
+    let shutdown = crate::shutdown::GracefulShutdown::install()?;
+    if shutdown.is_requested() {
+        return Ok(());
+    }
     /*
     Telegram bot은 현재 작업 디렉터리의 planning workspace를 원격 채팅에서 조작한다.
     canonical path를 facade에 넘겨 CLI/TUI와 같은 repo-scoped authority와 draft store를 보게 한다.
@@ -105,7 +109,7 @@ where
         },
     )
     .with_review_center_read_service(application.review_center_read_service);
-    runner.run()
+    runner.run(&shutdown)
 }
 
 struct TelegramApplication {
@@ -276,14 +280,17 @@ impl TelegramBotRunner {
         self
     }
 
-    fn run(&self) -> Result<()> {
+    fn run(&self, shutdown: &crate::shutdown::GracefulShutdown) -> Result<()> {
+        if shutdown.is_requested() {
+            return Ok(());
+        }
         self.authenticate_bot_identity()?;
         self.acquire_runner_lease()?;
         println!(
             "telegram bot control listening for workspace {} (stream binding {})",
             self.workspace_dir, self.binding_workspace_dir
         );
-        let result = self.run_while_lease_owned();
+        let result = self.run_while_lease_owned(shutdown);
         if let Err(error) = self.global_runner_lease.release_global_runner_lease(
             &self.binding_workspace_dir,
             &self.stream_key,
@@ -346,16 +353,17 @@ impl TelegramBotRunner {
         Ok(())
     }
 
-    fn run_while_lease_owned(&self) -> Result<()> {
+    fn run_while_lease_owned(&self, shutdown: &crate::shutdown::GracefulShutdown) -> Result<()> {
         /*
         Telegram update offset is the only loop state. Keeping it outside the gateway makes retry
         behavior explicit: poll failures keep the old cursor, successful batches advance past the
         last update whether individual messages inside the batch succeed or fail.
         */
         let mut next_offset = self.bootstrap_offset()?;
-        loop {
-            next_offset = self.run_poll_cycle(next_offset)?;
+        while !shutdown.is_requested() {
+            next_offset = self.run_poll_cycle_with_shutdown(next_offset, Some(shutdown))?;
         }
+        Ok(())
     }
 
     fn bootstrap_offset(&self) -> Result<Option<i64>> {
@@ -379,7 +387,16 @@ impl TelegramBotRunner {
             .context("telegram bot could not safely discard pending updates")
     }
 
+    #[cfg(test)]
     fn run_poll_cycle(&self, next_offset: Option<i64>) -> Result<Option<i64>> {
+        self.run_poll_cycle_with_shutdown(next_offset, None)
+    }
+
+    fn run_poll_cycle_with_shutdown(
+        &self,
+        next_offset: Option<i64>,
+        shutdown: Option<&crate::shutdown::GracefulShutdown>,
+    ) -> Result<Option<i64>> {
         self.renew_runner_lease("before polling")?;
         let durable_offset = self
             .update_ledger
@@ -401,10 +418,15 @@ impl TelegramBotRunner {
             Ok(updates) => updates,
             Err(error) => {
                 eprintln!("telegram bot failed to poll updates: {error:#}");
-                self.sleep_backoff();
+                if shutdown.is_none_or(|shutdown| !shutdown.is_requested()) {
+                    self.sleep_backoff();
+                }
                 return Ok(durable_offset);
             }
         };
+        if shutdown.is_some_and(crate::shutdown::GracefulShutdown::is_requested) {
+            return Ok(durable_offset);
+        }
 
         /*
         Offset advances by Telegram update_id, not message_id. Advancing after the batch prevents

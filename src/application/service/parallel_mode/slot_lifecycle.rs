@@ -11,10 +11,10 @@ use crate::domain::parallel_mode::{
 };
 
 use super::{
-    ParallelModeService, PoolSlotCleanupIdentity, PoolSlotCleanupLeaseAuthority,
-    acquire_pool_mutation_lock, allocate_agent_branch_name, branch_is_integrated_into,
-    build_pool_slots, cleanup_slot_to_ref_locked, command_succeeds, current_branch_name,
-    current_timestamp, discard_unstarted_slot_branch, inspect_slot_git_status,
+    AKRA_AGENT_BRANCH_PREFIX, ParallelModeService, PoolSlotCleanupIdentity,
+    PoolSlotCleanupLeaseAuthority, acquire_pool_mutation_lock, allocate_agent_branch_name,
+    branch_is_integrated_into, build_pool_slots, cleanup_slot_to_ref_locked, command_succeeds,
+    current_branch_name, current_timestamp, discard_unstarted_slot_branch, inspect_slot_git_status,
     load_pool_runtime_context, pool_baseline_branch_for_repo, record_assigned_session_detail,
     record_cleanup_pending_session_detail, record_failed_start_dispatch_block,
     record_failed_start_session_detail, record_running_session_detail,
@@ -45,7 +45,7 @@ impl ParallelModeService {
         workspace_dir: &str,
         request: ParallelModeSlotLeaseRequest,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
-        self.acquire_slot_lease_with_hook(workspace_dir, request, || {})
+        self.acquire_slot_lease_with_hook(workspace_dir, request, None, || {})
     }
 
     #[cfg(test)]
@@ -58,13 +58,24 @@ impl ParallelModeService {
     where
         F: FnOnce(),
     {
-        self.acquire_slot_lease_with_hook(workspace_dir, request, after_checkout_before_lease)
+        self.acquire_slot_lease_with_hook(workspace_dir, request, None, after_checkout_before_lease)
+    }
+
+    #[cfg(test)]
+    pub(super) fn acquire_slot_lease_with_test_branch_instance_id(
+        &self,
+        workspace_dir: &str,
+        request: ParallelModeSlotLeaseRequest,
+        branch_instance_id: &str,
+    ) -> Result<ParallelModeSlotLeaseSnapshot, String> {
+        self.acquire_slot_lease_with_hook(workspace_dir, request, Some(branch_instance_id), || {})
     }
 
     fn acquire_slot_lease_with_hook<F>(
         &self,
         workspace_dir: &str,
         request: ParallelModeSlotLeaseRequest,
+        test_branch_instance_id: Option<&str>,
         after_checkout_before_lease: F,
     ) -> Result<ParallelModeSlotLeaseSnapshot, String>
     where
@@ -158,17 +169,17 @@ impl ParallelModeService {
             ));
         }
         let delivery_target = ParallelModeDeliveryTargetSnapshot::new(
-            push_remote,
+            push_remote.clone(),
             github_repository,
             match repository_visibility {
                 GithubRepositoryVisibility::Private => ParallelModeRepositoryVisibility::Private,
                 GithubRepositoryVisibility::Internal => ParallelModeRepositoryVisibility::Internal,
                 GithubRepositoryVisibility::Public => ParallelModeRepositoryVisibility::Public,
             },
-            integration_branch,
+            integration_branch.clone(),
             integration_base_commit_sha,
         )
-        .with_credential_redacted_push_url(credential_redacted_push_url);
+        .with_credential_redacted_push_url(credential_redacted_push_url.clone());
 
         // task 중복은 같은 backlog item이 두 agent branch에서 별도로 커밋되는 상황을 막는다.
         if context
@@ -212,12 +223,30 @@ impl ParallelModeService {
         let slot_path_string = slot_path.display().to_string();
         // branch 이름에는 slot/task 정보가 들어가므로 나중에 GitHub PR, supervisor board,
         // cleanup 로그가 같은 작업을 같은 이름으로 추적할 수 있다.
+        let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{}/", idle_slot.slot_id);
+        let live_remote_branch_names = self
+            .github_automation
+            .remote_branch_names_for_prefix_for_delivery_target(
+                &context.repo_root,
+                &push_remote,
+                &credential_redacted_push_url,
+                &branch_prefix,
+            )
+            .map_err(|error| {
+                format!(
+                    "live agent branches could not be inspected for the frozen delivery target: {error}"
+                )
+            })?;
+        let lease_generation = new_slot_lease_generation()?;
+        let branch_instance_id = test_branch_instance_id.unwrap_or(&lease_generation[..16]);
         let branch_name = allocate_agent_branch_name(
             &context.repo_root,
             &idle_slot.slot_id,
             &request.task_slug,
             &request.task_id,
             &request.task_title,
+            branch_instance_id,
+            &live_remote_branch_names,
         )?;
         mutation_lock.verify_pool_root(&context.pool_root)?;
         crate::git_execution_guard::ensure_host_git_execution_config_safe(&slot_path)
@@ -259,7 +288,6 @@ impl ParallelModeService {
 
         // lease는 branch checkout이 성공한 뒤에만 기록한다. lease 파일이 존재하는 순간부터
         // supervisor와 workspace 역해결 경로가 이 slot을 active로 취급하기 때문이다.
-        let lease_generation = new_slot_lease_generation()?;
         let lease = ParallelModeSlotLeaseSnapshot::new(
             idle_slot.slot_id.clone(),
             request.task_id,

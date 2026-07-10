@@ -407,7 +407,26 @@ where
     Ok(parsed)
 }
 
+#[cfg(unix)]
 async fn shutdown_signal() {
-    // local-only admin server는 Ctrl-C를 유일한 shutdown signal로 삼고, in-flight drain은 axum serve layer에 맡긴다.
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let Ok(mut terminate) = signal(SignalKind::terminate()) else {
+        let _ = tokio::signal::ctrl_c().await;
+        return;
+    };
+    let Ok(mut hangup) = signal(SignalKind::hangup()) else {
+        let _ = tokio::signal::ctrl_c().await;
+        return;
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+        _ = hangup.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }

@@ -446,7 +446,9 @@ Useful admin environment variables:
   Akra's complete environment. Without this opt-in, Akra clears the child environment and restores
   only allowlisted OS runtime/terminal variables, CA and transport proxy settings, the
   `HOME`/`CODEX_HOME` paths needed to reuse an existing `codex login`, and non-secret OpenAI endpoint,
-  organization, and project routing metadata. Credentialed or ambiguous proxy/base URLs are dropped;
+  organization, and project routing metadata. Base URLs require HTTPS, except that exact localhost
+  and loopback IP HTTP endpoints remain available for local providers. Credentialed or ambiguous
+  proxy URLs, and credentialed, ambiguous, or remote plaintext base URLs, are dropped;
   `OPENAI_API_KEY` and `CODEX_API_KEY` are not copied by default. Run `codex login` before Akra when
   practical. Exact `AKRA_APP_SERVER_API_KEY_AUTH=1` is the narrower API-key authentication opt-in:
   it forwards only those two API-key variables while keeping the rest of the scrubbed child policy;
@@ -861,7 +863,10 @@ inspection; the same-user process limitation below still applies after that hand
   descendant that deliberately clears the marker and fully daemonizes after every observable parent
   exits still requires a delegated cgroup, PID namespace, or VM for a kernel-enforced guarantee.
   macOS and other non-Linux Unix targets provide process-group containment only, so a descendant
-  that calls `setsid` can escape that group.
+  that calls `setsid` can escape that group. Unix TUI, admin, and Telegram processes convert
+  SIGINT/SIGTERM/SIGHUP into graceful shutdown, and the npm wrapper performs a bounded descendant
+  ancestry/process-group sweep before forced termination. SIGKILL against the wrapper itself still
+  bypasses user-space cleanup.
 - `AKRA_APP_SERVER_PROCESS_ENVIRONMENT=all` is an explicit compatibility escape hatch, not a secure
   mode: it exposes every parent credential to app-server and same-user process inspection.
 - Release archive file names use the package version declared in `Cargo.toml`; the release tag must

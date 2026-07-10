@@ -6,6 +6,7 @@ parallel-mode orchestration은 branch push, PR 생성/조회, capability inspect
 변환한다. GitHub CLI가 신뢰된 시스템 위치에 있으면 로컬 인증을 가져오고, 없으면 같은 임베드 helper가
 token 기반 REST fallback을 제공한다. 저장소나 설치 디렉터리의 script bytes와 PATH는 실행하지 않는다.
 */
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -32,6 +33,7 @@ use crate::subprocess;
 pub struct GithubAutomationAdapter;
 
 const FROZEN_GITHUB_REMOTE_NAME: &str = "akra-frozen-delivery-target";
+const MAX_FROZEN_REMOTE_BRANCHES_PER_PREFIX: usize = 4096;
 const FROZEN_GITHUB_TOKEN_ENV_VAR: &str = "AKRA_FROZEN_GITHUB_TOKEN";
 const FROZEN_GITHUB_LOGIN_ENV_VAR: &str = "AKRA_FROZEN_GITHUB_LOGIN";
 const EMBEDDED_GITHUB_HELPER: &[u8] =
@@ -804,6 +806,43 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         }
     }
 
+    fn remote_branch_names_for_prefix_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_prefix: &str,
+    ) -> Result<Vec<String>> {
+        if !branch_prefix.ends_with('/') {
+            bail!("frozen remote branch prefix must end with `/`");
+        }
+        let probe_branch = format!("{branch_prefix}akra-prefix-probe");
+        run_git(
+            repo_root,
+            &["check-ref-format", "--branch", probe_branch.as_str()],
+        )?;
+        let remote_pattern = format!("refs/heads/{branch_prefix}*");
+        let output = run_git_network_command(
+            repo_root,
+            credential_redacted_push_url,
+            &[
+                "ls-remote",
+                "--heads",
+                FROZEN_GITHUB_REMOTE_NAME,
+                remote_pattern.as_str(),
+            ],
+        )?;
+        if !output.status.success() {
+            bail!(
+                "git ls-remote failed for frozen GitHub target: {}",
+                command_error_detail(&output)
+            );
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .context("frozen remote branch listing was not valid UTF-8")?;
+        parse_frozen_remote_branch_names(&stdout, branch_prefix)
+    }
+
     fn fetch_branch_to_tracking_ref_for_delivery_target(
         &self,
         repo_root: &str,
@@ -871,6 +910,35 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         )?;
         Ok(true)
     }
+}
+
+fn parse_frozen_remote_branch_names(output: &str, branch_prefix: &str) -> Result<Vec<String>> {
+    let expected_ref_prefix = format!("refs/heads/{branch_prefix}");
+    let mut branch_names = BTreeSet::new();
+    for line in output.lines() {
+        let (object_id, reference) = line
+            .split_once('\t')
+            .ok_or_else(|| anyhow!("frozen remote branch listing contained a malformed row"))?;
+        if !matches!(object_id.len(), 40 | 64)
+            || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("frozen remote branch listing contained an invalid object ID");
+        }
+        let branch_name = reference.strip_prefix("refs/heads/").ok_or_else(|| {
+            anyhow!("frozen remote branch listing contained a non-branch reference")
+        })?;
+        if !reference.starts_with(&expected_ref_prefix) {
+            bail!("frozen remote branch listing escaped the requested prefix");
+        }
+        branch_names.insert(branch_name.to_string());
+        if branch_names.len() > MAX_FROZEN_REMOTE_BRANCHES_PER_PREFIX {
+            bail!(
+                "frozen remote branch listing exceeded the {}-branch limit",
+                MAX_FROZEN_REMOTE_BRANCHES_PER_PREFIX
+            );
+        }
+    }
+    Ok(branch_names.into_iter().collect())
 }
 
 struct TrustedGithubExecutables {
@@ -2256,8 +2324,8 @@ mod tests {
         EMBEDDED_GITHUB_HELPER, FROZEN_GITHUB_REMOTE_NAME, GithubAutomationAdapter,
         GithubPullRequestJson, TEST_GITHUB_HELPER_SOURCE, TemporaryTextFile,
         TrustedGithubNetworkEnvironment, fetch_branch_to_tracking_ref_isolated,
-        parse_pull_request_number_from_url, run_command, run_git, run_git_stdout,
-        sanitize_command_output,
+        parse_frozen_remote_branch_names, parse_pull_request_number_from_url, run_command, run_git,
+        run_git_stdout, sanitize_command_output,
     };
     #[cfg(unix)]
     use super::{
@@ -2273,6 +2341,30 @@ mod tests {
     use crate::domain::parallel_mode::ParallelModeCapabilitySnapshot;
     use crate::domain::parallel_mode::{ParallelModeCapabilityKey, ParallelModeCapabilityState};
     use crate::subprocess::SUBPROCESS_TIMEOUT_ENV;
+
+    #[test]
+    fn frozen_remote_branch_listing_is_bounded_to_the_requested_prefix() {
+        let object_id = "a".repeat(40);
+        let output = format!(
+            "{object_id}\trefs/heads/akra-agent/slot-1/task-two\n{object_id}\trefs/heads/akra-agent/slot-1/task-one\n"
+        );
+        assert_eq!(
+            parse_frozen_remote_branch_names(&output, "akra-agent/slot-1/")
+                .expect("matching remote branches should parse"),
+            vec![
+                "akra-agent/slot-1/task-one".to_string(),
+                "akra-agent/slot-1/task-two".to_string(),
+            ]
+        );
+        assert!(
+            parse_frozen_remote_branch_names(
+                &format!("{object_id}\trefs/heads/akra-agent/slot-2/task-one\n"),
+                "akra-agent/slot-1/",
+            )
+            .is_err()
+        );
+        assert!(parse_frozen_remote_branch_names("malformed", "akra-agent/slot-1/").is_err());
+    }
 
     #[test]
     fn pull_request_json_maps_only_the_application_port_contract() {

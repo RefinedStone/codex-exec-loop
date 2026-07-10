@@ -512,6 +512,16 @@ pub trait GithubAutomationPort: Send + Sync {
         anyhow::bail!("exact frozen-target remote head inspection is unavailable")
     }
 
+    fn remote_branch_names_for_prefix_for_delivery_target(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        _branch_prefix: &str,
+    ) -> Result<Vec<String>> {
+        anyhow::bail!("exact frozen-target remote branch listing is unavailable")
+    }
+
     fn fetch_branch_to_tracking_ref_for_delivery_target(
         &self,
         _repo_root: &str,

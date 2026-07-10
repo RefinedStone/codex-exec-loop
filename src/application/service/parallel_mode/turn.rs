@@ -1098,6 +1098,44 @@ mod tests {
             );
             Ok(String::from_utf8(output.stdout)?.trim().to_string())
         }
+        fn remote_branch_names_for_prefix_for_delivery_target(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            credential_redacted_push_url: &str,
+            branch_prefix: &str,
+        ) -> anyhow::Result<Vec<String>> {
+            let remote_pattern = format!("refs/heads/{branch_prefix}*");
+            let output = Command::new("git")
+                .current_dir(repo_root)
+                .args([
+                    "ls-remote",
+                    "--heads",
+                    credential_redacted_push_url,
+                    remote_pattern.as_str(),
+                ])
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "test remote branch listing failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            let stdout = String::from_utf8(output.stdout)?;
+            stdout
+                .lines()
+                .map(|line| {
+                    let (_, remote_ref) = line
+                        .split_once(char::is_whitespace)
+                        .ok_or_else(|| anyhow::anyhow!("test remote branch row is malformed"))?;
+                    remote_ref
+                        .trim()
+                        .strip_prefix("refs/heads/")
+                        .map(str::to_string)
+                        .ok_or_else(|| anyhow::anyhow!("test remote branch ref is malformed"))
+                })
+                .collect()
+        }
         fn fetch_branch_to_tracking_ref_for_delivery_target(
             &self,
             repo_root: &str,

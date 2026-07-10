@@ -31,6 +31,7 @@ pub(crate) mod domain;
 pub(crate) mod private_fs;
 // process liveness is shared by durable local leases that must not reclaim a live owner.
 pub(crate) mod process_liveness;
+pub(crate) mod shutdown;
 // git_subprocess는 host-owned Git 명령의 repository/config/environment 격리를 강제한다.
 pub(crate) mod git_execution_guard;
 pub(crate) mod git_subprocess;

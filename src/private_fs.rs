@@ -29,6 +29,23 @@ pub(crate) fn validate_windows_path_identity_only(
     opened: &File,
     directory: bool,
 ) -> Result<()> {
+    validate_windows_path_identity_with_link_policy(path, opened, directory, true)
+}
+
+pub(crate) fn validate_windows_trusted_executable_path_identity(
+    path: &Path,
+    opened: &File,
+    directory: bool,
+) -> Result<()> {
+    validate_windows_path_identity_with_link_policy(path, opened, directory, false)
+}
+
+fn validate_windows_path_identity_with_link_policy(
+    path: &Path,
+    opened: &File,
+    directory: bool,
+    require_single_link: bool,
+) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
 
     let opened_identity = windows_file_identity_snapshot(opened)?;
@@ -46,20 +63,44 @@ pub(crate) fn validate_windows_path_identity_only(
         )
         .open(path)
         .with_context(|| format!("failed to reopen Windows path {}", path.display()))?;
-    validate_windows_handle_identity(opened, &path_handle, directory).with_context(|| {
-        format!(
-            "private Windows path must be a stable non-reparse, single-link object: {}",
-            path.display()
-        )
-    })?;
-    validate_windows_identity_snapshot(opened_identity, &path_handle, directory).with_context(
-        || {
+    validate_windows_handle_identity_with_link_policy(
+        opened,
+        &path_handle,
+        directory,
+        require_single_link,
+    )
+    .with_context(|| {
+        if require_single_link {
             format!(
                 "private Windows path must be a stable non-reparse, single-link object: {}",
                 path.display()
             )
-        },
+        } else {
+            format!(
+                "trusted Windows executable path must be a stable non-reparse object: {}",
+                path.display()
+            )
+        }
+    })?;
+    validate_windows_identity_snapshot_with_link_policy(
+        opened_identity,
+        &path_handle,
+        directory,
+        require_single_link,
     )
+    .with_context(|| {
+        if require_single_link {
+            format!(
+                "private Windows path must be a stable non-reparse, single-link object: {}",
+                path.display()
+            )
+        } else {
+            format!(
+                "trusted Windows executable path must be a stable non-reparse object: {}",
+                path.display()
+            )
+        }
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,14 +214,37 @@ pub(crate) fn validate_windows_handle_identity(
     current: &File,
     directory: bool,
 ) -> Result<()> {
+    validate_windows_handle_identity_with_link_policy(expected, current, directory, true)
+}
+
+fn validate_windows_handle_identity_with_link_policy(
+    expected: &File,
+    current: &File,
+    directory: bool,
+    require_single_link: bool,
+) -> Result<()> {
     let expected = windows_file_identity_snapshot(expected)?;
-    validate_windows_identity_snapshot(expected, current, directory)
+    validate_windows_identity_snapshot_with_link_policy(
+        expected,
+        current,
+        directory,
+        require_single_link,
+    )
 }
 
 pub(crate) fn validate_windows_identity_snapshot(
     expected: WindowsFileIdentitySnapshot,
     current: &File,
     directory: bool,
+) -> Result<()> {
+    validate_windows_identity_snapshot_with_link_policy(expected, current, directory, true)
+}
+
+fn validate_windows_identity_snapshot_with_link_policy(
+    expected: WindowsFileIdentitySnapshot,
+    current: &File,
+    directory: bool,
+    require_single_link: bool,
 ) -> Result<()> {
     let current = windows_file_identity_snapshot(current)?;
     let expected_type = if directory {
@@ -189,8 +253,8 @@ pub(crate) fn validate_windows_identity_snapshot(
     } else {
         expected.attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY == 0
             && current.attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY == 0
-            && expected.number_of_links == 1
-            && current.number_of_links == 1
+            && (!require_single_link
+                || expected.number_of_links == 1 && current.number_of_links == 1)
     };
     if expected.attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0
         || current.attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0

@@ -21,7 +21,13 @@ const READY_EVENT_DRAIN_LIMIT: usize = 64;
  * message reduction, draw scheduling, key/focus/resize semantics를 소유하고, 이 파일은
  * stdout/crossterm/raw-mode/ratatui Terminal을 연결하는 IO pump만 맡는다.
  */
-pub(super) fn run(mut runtime: ShellRuntime) -> Result<()> {
+pub(super) fn run(
+    mut runtime: ShellRuntime,
+    shutdown: &crate::shutdown::GracefulShutdown,
+) -> Result<()> {
+    if shutdown.is_requested() {
+        return Ok(());
+    }
     /*
      * raw mode와 focus subscription은 host terminal에 남는 side effect라 terminal 생성보다
      * 먼저 guard로 감싼다. 이후 backend 생성, draw, event read 중 어디서 실패해도 Drop이
@@ -41,7 +47,7 @@ pub(super) fn run(mut runtime: ShellRuntime) -> Result<()> {
      * 결정하고, frame 준비와 host scrollback 보정은 adapter/runtime 조합에 맡긴다.
      */
     let mut adapter = InlineTerminalAdapter::new(terminal);
-    run_event_loop(&mut adapter, &mut runtime)
+    run_event_loop(&mut adapter, &mut runtime, shutdown)
 }
 
 /*
@@ -67,8 +73,9 @@ fn build_terminal(
 fn run_event_loop(
     adapter: &mut InlineTerminalAdapter<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>,
     runtime: &mut ShellRuntime,
+    shutdown: &crate::shutdown::GracefulShutdown,
 ) -> Result<()> {
-    while !runtime.should_quit() {
+    while !runtime.should_quit() && !shutdown.is_requested() {
         /*
          * app-server stream, startup/session load, post-turn evaluation은 terminal input과 별개로
          * 들어온다. 이벤트 poll 전에 먼저 반영해야 사용자가 입력하지 않아도 화면이 stale하지 않다.

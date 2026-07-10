@@ -46,6 +46,16 @@ impl GithubAutomationPort for ReadyGithubAutomationPort {
         )
     }
 
+    fn remote_branch_names_for_prefix_for_delivery_target(
+        &self,
+        _repo_root: &str,
+        _push_remote: &str,
+        _credential_redacted_push_url: &str,
+        _branch_prefix: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     fn push_branch(
         &self,
         _repo_root: &str,

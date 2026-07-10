@@ -34,8 +34,12 @@ impl ShellFrontend {
 
     // run은 initialized ShellRuntime의 소유권을 terminal event loop로 넘기는 마지막 adapter handoff다.
     // 이후 app state mutation과 rendering cadence는 ratatui frontend가 주도한다.
-    pub(super) fn run(self, runtime: ShellRuntime) -> Result<()> {
-        run_ratatui_frontend(runtime)
+    pub(super) fn run(
+        self,
+        runtime: ShellRuntime,
+        shutdown: &crate::shutdown::GracefulShutdown,
+    ) -> Result<()> {
+        run_ratatui_frontend(runtime, shutdown)
     }
 }
 

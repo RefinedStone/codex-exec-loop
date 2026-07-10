@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,6 +88,21 @@ test(
 );
 
 test(
+  "akra bin cleans signal-resistant descendants after a graceful native exit",
+  { skip: skipSignalTest },
+  async () => {
+    const result = await runIgnoredSignalFixture({
+      graceMs: 60000,
+      nativeExitsOnSignal: true,
+      repeatSignal: false,
+    });
+    assert.equal(result.signal, null);
+    assert.equal(result.code, 0);
+    assert(result.elapsedMs < 2500, `graceful shutdown took ${result.elapsedMs}ms`);
+  },
+);
+
+test(
   "akra bin reports a missing native binary without a Node stack trace",
   { skip: signalTestConfig === null ? "test host must map to a published target" : false },
   async () => {
@@ -167,9 +182,14 @@ function runNode(args, options) {
   });
 }
 
-async function runIgnoredSignalFixture({ graceMs, repeatSignal }) {
+async function runIgnoredSignalFixture({
+  graceMs,
+  nativeExitsOnSignal = false,
+  repeatSignal,
+}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "akra-bin-ignore-signal-"));
   let nativePid = null;
+  let descendantPid = null;
   let wrapper = null;
 
   try {
@@ -184,12 +204,35 @@ async function runIgnoredSignalFixture({ graceMs, repeatSignal }) {
       config.binaryName,
     );
     const readyPath = path.join(tmp, "ready");
+    const descendantPath = path.join(tmp, "descendant");
+    const descendantReadyPath = path.join(tmp, "descendant-ready");
+    const descendantSignalPath = path.join(tmp, "descendant-signal");
     const signalPath = path.join(tmp, "signal");
+    const nativeSignalAction = nativeExitsOnSignal ? "process.exit(0);" : "";
     writeFile(
       fixtureBinaryPath,
       `#!/usr/bin/env node
+import { spawn } from "node:child_process";
 import fs from "node:fs";
-process.on("SIGTERM", () => fs.appendFileSync(process.env.AKRA_TEST_SIGNAL, "SIGTERM\\n"));
+process.on("SIGTERM", () => {
+  fs.appendFileSync(process.env.AKRA_TEST_SIGNAL, "SIGTERM\\n");
+  ${nativeSignalAction}
+});
+const descendant = spawn(
+  process.execPath,
+  ["-e", "const fs = require('node:fs'); process.on('SIGTERM', () => fs.appendFileSync(process.env.AKRA_TEST_DESCENDANT_SIGNAL, 'SIGTERM\\\\n')); fs.writeFileSync(process.env.AKRA_TEST_DESCENDANT_READY, 'ready'); setInterval(() => {}, 1000);"],
+  {
+    detached: true,
+    env: {
+      ...process.env,
+      AKRA_TEST_DESCENDANT_READY: process.env.AKRA_TEST_DESCENDANT_READY,
+      AKRA_TEST_DESCENDANT_SIGNAL: process.env.AKRA_TEST_DESCENDANT_SIGNAL,
+    },
+    stdio: "ignore",
+  },
+);
+descendant.unref();
+fs.writeFileSync(process.env.AKRA_TEST_DESCENDANT, String(descendant.pid));
 fs.writeFileSync(process.env.AKRA_TEST_READY, String(process.pid));
 setInterval(() => {}, 1000);
 `,
@@ -206,6 +249,9 @@ setInterval(() => {}, 1000);
         env: {
           ...process.env,
           AKRA_NPM_SHUTDOWN_GRACE_MS: String(graceMs),
+          AKRA_TEST_DESCENDANT: descendantPath,
+          AKRA_TEST_DESCENDANT_READY: descendantReadyPath,
+          AKRA_TEST_DESCENDANT_SIGNAL: descendantSignalPath,
           AKRA_TEST_READY: readyPath,
           AKRA_TEST_SIGNAL: signalPath,
         },
@@ -222,16 +268,24 @@ setInterval(() => {}, 1000);
     });
 
     await waitForPath(readyPath, wrapper);
+    await waitForPath(descendantPath, wrapper);
+    await waitForPath(descendantReadyPath, wrapper);
     nativePid = Number(fs.readFileSync(readyPath, "utf8"));
+    descendantPid = Number(fs.readFileSync(descendantPath, "utf8"));
     const startedAt = Date.now();
     wrapper.kill("SIGTERM");
     await waitForPath(signalPath, wrapper);
+    if (!nativeExitsOnSignal) {
+      await waitForPath(descendantSignalPath, wrapper);
+    }
     if (repeatSignal) {
       wrapper.kill("SIGTERM");
     }
 
     const closed = await waitForClose(wrapper, 2500, stdout, stderr);
+    await waitForProcessExit(descendantPid, 2000);
     nativePid = null;
+    descendantPid = null;
     return { ...closed, elapsedMs: Date.now() - startedAt };
   } finally {
     if (wrapper?.exitCode === null && wrapper?.signalCode === null) {
@@ -244,8 +298,51 @@ setInterval(() => {}, 1000);
         // The expected path already reaped the native child.
       }
     }
+    if (Number.isInteger(descendantPid)) {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch {
+        // The expected path already terminated the detached descendant.
+      }
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+async function waitForProcessExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    if (processIsZombie(pid)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`descendant process ${pid} survived wrapper shutdown`);
+}
+
+function processIsZombie(pid) {
+  if (process.platform === "linux") {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const closeParen = stat.lastIndexOf(")");
+      return closeParen >= 0 && stat.slice(closeParen + 1).trim().split(/\s+/)[0] === "Z";
+    } catch {
+      return false;
+    }
+  }
+  if (process.platform === "darwin") {
+    const result = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 500,
+    });
+    return result.status === 0 && /^Z/.test(result.stdout.trim());
+  }
+  return false;
 }
 
 async function waitForPath(filePath, child) {
@@ -263,6 +360,14 @@ async function waitForPath(filePath, child) {
 }
 
 function waitForClose(child, timeoutMs, stdout, stderr) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({
+      code: child.exitCode,
+      signal: child.signalCode,
+      stdout,
+      stderr,
+    });
+  }
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(

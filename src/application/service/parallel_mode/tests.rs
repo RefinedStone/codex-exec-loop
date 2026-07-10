@@ -73,6 +73,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const POOL_BASELINE_BRANCH: &str = "prerelease";
+const TEST_BRANCH_INSTANCE_ID: &str = "0000000000000001";
 
 // parallel_mode 서비스 테스트는 실제 git worktree, branch ref, pool 파일을 함께
 // 다룬다. 이 fixture는 각 테스트가 독립 repo를 만들고 authority store와
@@ -272,6 +273,13 @@ impl TempGitRepo {
             );
         }
         remote_path
+    }
+    fn set_remote_only_branch(&self, branch_name: &str, target: &str) {
+        let remote_path = self.create_bare_origin_remote();
+        run_git(
+            &remote_path,
+            &["update-ref", &format!("refs/heads/{branch_name}"), target],
+        );
     }
     fn commit_file_in_slot(
         &self,
@@ -823,6 +831,7 @@ struct FakeGithubAutomationPort {
     inspect_required_checks_passed: Arc<Mutex<Option<bool>>>,
     pre_push_inspect_overrides: Arc<Mutex<Option<FakePullRequestReadinessOverrides>>>,
     close_error: Arc<Mutex<Option<String>>>,
+    remote_branch_listing_error: Arc<Mutex<Option<String>>>,
     source_branch_cleanup_calls: Arc<Mutex<usize>>,
 }
 impl FakeGithubAutomationPort {
@@ -882,6 +891,7 @@ impl FakeGithubAutomationPort {
             inspect_required_checks_passed: Arc::new(Mutex::new(None)),
             pre_push_inspect_overrides: Arc::new(Mutex::new(None)),
             close_error: Arc::new(Mutex::new(None)),
+            remote_branch_listing_error: Arc::new(Mutex::new(None)),
             source_branch_cleanup_calls: Arc::new(Mutex::new(0)),
         }
     }
@@ -1116,6 +1126,15 @@ impl FakeGithubAutomationPort {
             .expect("fake github close error mutex poisoned") = Some(error.to_string());
         github
     }
+
+    fn with_remote_branch_listing_error(error: &str) -> Self {
+        let github = Self::ready();
+        *github
+            .remote_branch_listing_error
+            .lock()
+            .expect("fake GitHub remote branch listing mutex poisoned") = Some(error.to_string());
+        github
+    }
 }
 impl GithubAutomationPort for FakeGithubAutomationPort {
     fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
@@ -1177,6 +1196,52 @@ impl GithubAutomationPort for FakeGithubAutomationPort {
             None,
         )
         .ok_or_else(|| anyhow::anyhow!("test push remote URL is unavailable"))
+    }
+    fn remote_branch_names_for_prefix_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_prefix: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        if let Some(error) = self
+            .remote_branch_listing_error
+            .lock()
+            .expect("fake GitHub remote branch listing mutex poisoned")
+            .clone()
+        {
+            anyhow::bail!(error);
+        }
+        let remote_pattern = format!("refs/heads/{branch_prefix}*");
+        let output = Command::new("git")
+            .args([
+                "-C",
+                repo_root,
+                "ls-remote",
+                "--heads",
+                credential_redacted_push_url,
+                remote_pattern.as_str(),
+            ])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|error| anyhow::anyhow!("test remote branch listing failed: {error}"))?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "test remote branch listing failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| anyhow::anyhow!("test remote branch listing was not UTF-8"))?;
+        stdout
+            .lines()
+            .map(|line| {
+                line.split_once('\t')
+                    .and_then(|(_, reference)| reference.strip_prefix("refs/heads/"))
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("test remote branch row was malformed"))
+            })
+            .collect()
     }
     fn fetch_branch_to_tracking_ref_for_delivery_target(
         &self,
@@ -1746,6 +1811,45 @@ impl GithubAutomationPort for GitBackedGithubAutomationPort {
             None,
         )
         .ok_or_else(|| anyhow::anyhow!("test push remote URL is unavailable"))
+    }
+    fn remote_branch_names_for_prefix_for_delivery_target(
+        &self,
+        repo_root: &str,
+        _push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_prefix: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        let remote_pattern = format!("refs/heads/{branch_prefix}*");
+        let output = Command::new("git")
+            .args([
+                "-C",
+                repo_root,
+                "ls-remote",
+                "--heads",
+                credential_redacted_push_url,
+                remote_pattern.as_str(),
+            ])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "test remote branch listing failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        let stdout = String::from_utf8(output.stdout)?;
+        stdout
+            .lines()
+            .map(|line| {
+                let (_, remote_ref) = line
+                    .split_once(char::is_whitespace)
+                    .ok_or_else(|| anyhow::anyhow!("test remote branch row is malformed"))?;
+                remote_ref
+                    .trim()
+                    .strip_prefix("refs/heads/")
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("test remote branch ref is malformed"))
+            })
+            .collect()
     }
     fn fetch_branch_to_tracking_ref_for_delivery_target(
         &self,

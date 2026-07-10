@@ -861,9 +861,10 @@ fn acquire_slot_lease_truncates_long_branch_slug_with_stable_hash() {
 
     assert!(sanitized_slug.len() > MAX_AGENT_BRANCH_SLUG_LEN);
     let lease = service
-        .acquire_slot_lease(
+        .acquire_slot_lease_with_test_branch_instance_id(
             &repo.workspace_dir(),
             sample_lease_request("task-1", "Task One", "agent-1", &long_slug),
+            TEST_BRANCH_INSTANCE_ID,
         )
         .expect("slot lease should be acquired");
     let slug = lease
@@ -872,7 +873,10 @@ fn acquire_slot_lease_truncates_long_branch_slug_with_stable_hash() {
         .expect("slot branch prefix should be present");
 
     assert!(slug.len() <= MAX_AGENT_BRANCH_SLUG_LEN);
-    assert!(slug.ends_with(short_branch_slug_hash(&sanitized_slug).as_str()));
+    let bounded_slug = slug
+        .strip_suffix(&format!("-{TEST_BRANCH_INSTANCE_ID}"))
+        .expect("slot branch should end with its lease instance id");
+    assert!(bounded_slug.ends_with(short_branch_slug_hash(&sanitized_slug).as_str()));
     assert!(repo.branch_exists(&lease.branch_name));
 }
 
@@ -892,6 +896,8 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
         &long_slug,
         "task-1",
         "Task One",
+        TEST_BRANCH_INSTANCE_ID,
+        &[],
     )
     .expect("configured remote should be valid");
     run_git(&repo.repo_root, &["branch", first.as_str(), "prerelease"]);
@@ -901,6 +907,8 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
         &long_slug,
         "task-1",
         "Task One",
+        TEST_BRANCH_INSTANCE_ID,
+        &[],
     )
     .expect("configured remote should be valid");
     let slug = second
@@ -912,7 +920,39 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
 
     assert_ne!(first, second);
     assert!(slug.len() <= MAX_AGENT_BRANCH_SLUG_LEN);
-    assert!(base_slug.ends_with(short_branch_slug_hash(&sanitized_slug).as_str()));
+    let bounded_slug = base_slug
+        .strip_suffix(&format!("-{TEST_BRANCH_INSTANCE_ID}"))
+        .expect("collision branch should retain its lease instance id");
+    assert!(bounded_slug.ends_with(short_branch_slug_hash(&sanitized_slug).as_str()));
+}
+
+#[test]
+fn allocate_agent_branch_name_is_unique_across_concurrent_lease_instances() {
+    let repo = TempGitRepo::new("lease-slot-cross-process-branch-identity");
+    let first = allocate_agent_branch_name(
+        &repo.workspace_dir(),
+        "slot-1",
+        "task-one",
+        "task-1",
+        "Task One",
+        "0000000000000001",
+        &[],
+    )
+    .expect("first lease branch should allocate");
+    let second = allocate_agent_branch_name(
+        &repo.workspace_dir(),
+        "slot-1",
+        "task-one",
+        "task-1",
+        "Task One",
+        "0000000000000002",
+        &[],
+    )
+    .expect("second lease branch should allocate independently");
+
+    assert_eq!(first, "akra-agent/slot-1/task-one-0000000000000001");
+    assert_eq!(second, "akra-agent/slot-1/task-one-0000000000000002");
+    assert_ne!(first, second);
 }
 
 // remote-tracking branch만 있어도 이후 push에서 충돌할 수 있다. allocator는 로컬
@@ -921,17 +961,25 @@ fn allocate_agent_branch_name_numbers_collisions_without_exceeding_slug_limit() 
 #[test]
 fn allocate_agent_branch_name_numbers_remote_tracking_collisions() {
     let repo = TempGitRepo::new("lease-slot-remote-branch-collision");
-    repo.set_remote_tracking_branch("origin/akra-agent/slot-1/task-one", "prerelease");
+    repo.set_remote_tracking_branch(
+        &format!("origin/akra-agent/slot-1/task-one-{TEST_BRANCH_INSTANCE_ID}"),
+        "prerelease",
+    );
     let branch_name = allocate_agent_branch_name(
         &repo.workspace_dir(),
         "slot-1",
         "task-one",
         "task-1",
         "Task One",
+        TEST_BRANCH_INSTANCE_ID,
+        &[],
     )
     .expect("configured remote should be valid");
 
-    assert_eq!(branch_name, "akra-agent/slot-1/task-one-2");
+    assert_eq!(
+        branch_name,
+        format!("akra-agent/slot-1/task-one-{TEST_BRANCH_INSTANCE_ID}-2")
+    );
 }
 
 // 실제 remote에만 존재하는 branch도 fetch/tracking 상태에 따라 뒤늦게 충돌할 수
@@ -940,24 +988,51 @@ fn allocate_agent_branch_name_numbers_remote_tracking_collisions() {
 #[test]
 fn allocate_agent_branch_name_numbers_live_remote_collisions() {
     let repo = TempGitRepo::new("lease-slot-live-remote-branch-collision");
-    run_git(
-        &repo.repo_root,
-        &[
-            "push",
-            "origin",
-            "prerelease:refs/heads/akra-agent/slot-1/task-one",
+    let branch_name = format!("akra-agent/slot-1/task-one-{TEST_BRANCH_INSTANCE_ID}");
+    repo.set_remote_only_branch(&branch_name, "refs/heads/prerelease");
+    let tracking_ref = format!("refs/remotes/origin/{branch_name}");
+    assert!(!command_succeeds(
+        "git",
+        [
+            "-C",
+            repo.workspace_dir().as_str(),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            tracking_ref.as_str(),
         ],
-    );
-    let branch_name = allocate_agent_branch_name(
-        &repo.workspace_dir(),
-        "slot-1",
-        "task-one",
-        "task-1",
-        "Task One",
-    )
-    .expect("configured remote should be valid");
+    ));
+    let lease = test_parallel_mode_service()
+        .acquire_slot_lease_with_test_branch_instance_id(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            TEST_BRANCH_INSTANCE_ID,
+        )
+        .expect("slot lease should inspect the live frozen remote");
 
-    assert_eq!(branch_name, "akra-agent/slot-1/task-one-2");
+    assert_eq!(lease.branch_name, format!("{branch_name}-2"));
+}
+
+#[test]
+fn acquire_slot_lease_fails_closed_when_live_remote_branches_cannot_be_listed() {
+    let repo = TempGitRepo::new("lease-slot-live-remote-listing-failure");
+    let service = test_parallel_mode_service_with_github(Arc::new(
+        FakeGithubAutomationPort::with_remote_branch_listing_error("remote listing unavailable"),
+    ));
+
+    let error = service
+        .acquire_slot_lease_with_test_branch_instance_id(
+            &repo.workspace_dir(),
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            TEST_BRANCH_INSTANCE_ID,
+        )
+        .expect_err("remote listing failure must block branch allocation");
+
+    assert!(error.contains("live agent branches could not be inspected"));
+    assert!(!repo.branch_exists(&format!(
+        "akra-agent/slot-1/task-one-{TEST_BRANCH_INSTANCE_ID}"
+    )));
+    assert!(!repo.slot_lease_path(1).exists());
 }
 
 // slot이 running으로 전환되면 lease state와 started timestamp가 authority store에

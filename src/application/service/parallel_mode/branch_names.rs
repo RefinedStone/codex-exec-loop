@@ -12,8 +12,9 @@ agent branch 이름은 slot lease의 git identity이다. 같은 task가 같은 s
 tracking/live remote branch를 모두 확인한다. slug 후보는 task_slug, task_id, task_title
 순서로 고르며, 모두 비면 `task` fallback을 쓴다.
 
-반환 형식은 `akra-agent/<slot_id>/<slug>`이다. slot id를 branch path에 넣으면 어떤 pool
-slot이 만든 branch인지 GitHub와 local git log에서 바로 추적할 수 있다.
+반환 형식은 `akra-agent/<slot_id>/<slug>-<lease-instance>`이다. slot id와 lease generation의
+64-bit prefix를 함께 넣으면 GitHub/local git log에서 소유 slot을 읽을 수 있고, 서로 다른 clone이
+동시에 같은 task slug를 배정해도 같은 source branch를 장시간 공유하지 않는다.
 */
 pub(super) fn allocate_agent_branch_name(
     repo_root: &str,
@@ -21,7 +22,19 @@ pub(super) fn allocate_agent_branch_name(
     task_slug: &str,
     task_id: &str,
     task_title: &str,
+    branch_instance_id: &str,
+    live_remote_branch_names: &[String],
 ) -> Result<String, String> {
+    if branch_instance_id.len() != 16
+        || !branch_instance_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(
+            "agent branch instance id must be exactly 16 lowercase hexadecimal characters"
+                .to_string(),
+        );
+    }
     // task_slug는 계획 시스템이 준 짧은 이름이라 가장 읽기 좋고, 없으면 id와
     // title을 차례로 축약한다. 이 순서가 lease 파일, PR branch, pool board의 표시명을 맞춘다.
     let sanitized_slug = sanitize_task_slug(task_slug)
@@ -30,14 +43,22 @@ pub(super) fn allocate_agent_branch_name(
         .unwrap_or_else(|| "task".to_string());
     // remote branch 목록은 루프 밖에서 한 번만 읽는다. allocation 중 같은 프로세스가
     // 만든 local branch 충돌은 `branch_exists`가 잡고, 이미 원격에 있던 이름은 이 set이 잡는다.
-    let remote_branch_names = remote_agent_branch_names(repo_root, slot_id)?;
+    let remote_branch_names =
+        remote_agent_branch_names(repo_root, slot_id, live_remote_branch_names)?;
     let mut collision_index = 1usize;
     loop {
-        let candidate = build_agent_branch_name(slot_id, &sanitized_slug, collision_index);
+        let candidate = build_agent_branch_name(
+            slot_id,
+            &sanitized_slug,
+            branch_instance_id,
+            collision_index,
+        );
         if agent_branch_name_is_available(repo_root, &candidate, &remote_branch_names) {
             return Ok(candidate);
         }
-        collision_index += 1;
+        collision_index = collision_index
+            .checked_add(1)
+            .ok_or_else(|| "agent branch collision counter overflowed".to_string())?;
     }
 }
 
@@ -59,7 +80,12 @@ branch slug가 너무 길면 GitHub UI와 git ref 조작이 불편해진다. 이
 slug 길이를 제한하되, 충돌 번호 suffix가 들어갈 공간을 먼저 빼고 남은 길이만 slug에 할당한다.
 그래야 `-2`, `-3` 같은 collision suffix가 붙어도 최대 길이를 넘지 않는다.
 */
-fn build_agent_branch_name(slot_id: &str, sanitized_slug: &str, collision_index: usize) -> String {
+fn build_agent_branch_name(
+    slot_id: &str,
+    sanitized_slug: &str,
+    branch_instance_id: &str,
+    collision_index: usize,
+) -> String {
     // 첫 번째 후보는 suffix 없이 사람이 읽기 좋은 이름을 유지하고, 충돌이
     // 확인된 뒤에만 번호를 붙여 기존 branch와 구분한다.
     let collision_suffix = if collision_index > 1 {
@@ -67,11 +93,16 @@ fn build_agent_branch_name(slot_id: &str, sanitized_slug: &str, collision_index:
     } else {
         String::new()
     };
+    let instance_suffix = format!("-{branch_instance_id}");
     let bounded_slug = bounded_agent_branch_slug(
         sanitized_slug,
-        MAX_AGENT_BRANCH_SLUG_LEN.saturating_sub(collision_suffix.len()),
+        MAX_AGENT_BRANCH_SLUG_LEN
+            .saturating_sub(instance_suffix.len())
+            .saturating_sub(collision_suffix.len()),
     );
-    format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/{bounded_slug}{collision_suffix}")
+    format!(
+        "{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/{bounded_slug}{instance_suffix}{collision_suffix}"
+    )
 }
 
 /*
@@ -188,8 +219,22 @@ remote branch lookup은 두 경로를 합친다. remote tracking refs는 이미 
 origin 상태이고, live ls-remote는 아직 fetch되지 않은 원격 branch까지 확인한다. 둘을 합쳐야
 오래된 local tracking 정보와 최신 remote reality 사이의 틈에서 branch 이름 충돌이 생기지 않는다.
 */
-fn remote_agent_branch_names(repo_root: &str, slot_id: &str) -> Result<BTreeSet<String>, String> {
-    remote_tracking_agent_branch_names(repo_root, slot_id)
+fn remote_agent_branch_names(
+    repo_root: &str,
+    slot_id: &str,
+    live_remote_branch_names: &[String],
+) -> Result<BTreeSet<String>, String> {
+    let branch_prefix = format!("{AKRA_AGENT_BRANCH_PREFIX}/{slot_id}/");
+    let mut branch_names = remote_tracking_agent_branch_names(repo_root, slot_id)?;
+    for branch_name in live_remote_branch_names {
+        if !branch_name.starts_with(&branch_prefix) {
+            return Err(format!(
+                "frozen remote branch listing returned an out-of-scope branch `{branch_name}`"
+            ));
+        }
+        branch_names.insert(branch_name.clone());
+    }
+    Ok(branch_names)
 }
 
 fn remote_tracking_agent_branch_names(

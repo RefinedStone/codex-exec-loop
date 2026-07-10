@@ -86,7 +86,8 @@ if [[ ! -f "${manifest_path}" ]]; then
   echo "validate_native_release_version: manifest not found: ${manifest_path}" >&2
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
+if ! command -v python3 >/dev/null 2>&1 ||
+  ! python3 -c 'import tomllib' >/dev/null 2>&1; then
   echo "validate_native_release_version: python3 with tomllib support is required" >&2
   exit 1
 fi

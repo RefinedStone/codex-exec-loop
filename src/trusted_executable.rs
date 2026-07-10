@@ -249,8 +249,8 @@ fn open_validated_file(path: &Path) -> Result<(fs::File, InspectedFileIdentity)>
 
         use crate::private_fs::{
             WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT, WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ,
-            WINDOWS_READ_CONTROL, validate_windows_path_identity_only,
-            validate_windows_trusted_executable_acl, windows_file_identity_snapshot,
+            WINDOWS_READ_CONTROL, validate_windows_trusted_executable_acl,
+            validate_windows_trusted_executable_path_identity, windows_file_identity_snapshot,
         };
         let file = fs::OpenOptions::new()
             .read(true)
@@ -259,7 +259,7 @@ fn open_validated_file(path: &Path) -> Result<(fs::File, InspectedFileIdentity)>
             .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)
             .with_context(|| format!("failed to open trusted Windows file `{}`", path.display()))?;
-        validate_windows_path_identity_only(path, &file, false)?;
+        validate_windows_trusted_executable_path_identity(path, &file, false)?;
         validate_windows_trusted_executable_acl(path, &file, false)?;
         let identity = windows_file_identity_snapshot(&file)?;
         Ok((file, identity))
@@ -288,13 +288,13 @@ fn finish_validated_file_read(
     #[cfg(windows)]
     {
         use crate::private_fs::{
-            validate_windows_path_identity_only, validate_windows_trusted_executable_acl,
-            windows_file_identity_snapshot,
+            validate_windows_trusted_executable_acl,
+            validate_windows_trusted_executable_path_identity, windows_file_identity_snapshot,
         };
         if initial != windows_file_identity_snapshot(file)? {
             bail!("trusted Windows file changed while being inspected")
         }
-        validate_windows_path_identity_only(path, file, false)?;
+        validate_windows_trusted_executable_path_identity(path, file, false)?;
         validate_windows_trusted_executable_acl(path, file, false)?;
     }
     Ok(())
@@ -1447,7 +1447,7 @@ fn validate_windows_path(path: &Path, directory: bool) -> Result<()> {
     use crate::private_fs::{
         WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
         WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
-        validate_windows_path_identity_only, validate_windows_trusted_executable_acl,
+        validate_windows_trusted_executable_acl, validate_windows_trusted_executable_path_identity,
     };
     let file = fs::OpenOptions::new()
         .read(true)
@@ -1463,7 +1463,7 @@ fn validate_windows_path(path: &Path, directory: bool) -> Result<()> {
         )
         .open(path)
         .with_context(|| format!("failed to open trusted Windows path `{}`", path.display()))?;
-    validate_windows_path_identity_only(path, &file, directory)?;
+    validate_windows_trusted_executable_path_identity(path, &file, directory)?;
     validate_windows_trusted_executable_acl(path, &file, directory)
 }
 
@@ -1482,6 +1482,8 @@ fn executable_names(program: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::resolve_native_from_current_path;
     use super::{
         WindowsAceMutationAction, classify_windows_ace_mutation, copy_native_executable_fixture,
         parse_windows_npm_codex_cmd_shim, validate_native_executable,
@@ -1494,6 +1496,8 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
+    #[cfg(windows)]
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1591,8 +1595,25 @@ mod tests {
         #[cfg(unix)]
         make_safe_directory_chain(&root);
         for (index, program) in ["git", "node"].into_iter().enumerate() {
+            #[cfg(windows)]
+            let source = resolve_native_from_current_path(
+                program,
+                &std::env::current_dir().expect("test current directory should resolve"),
+            )
+            .unwrap_or_else(|error| {
+                panic!("installed native {program} should resolve safely: {error:#}")
+            });
+            #[cfg(not(windows))]
             let source = find_host_tool(program)
                 .unwrap_or_else(|| panic!("test host should provide native {program}"));
+            #[cfg(windows)]
+            assert!(
+                Command::new(&source)
+                    .arg("--version")
+                    .output()
+                    .is_ok_and(|output| output.status.success()),
+                "resolved native {program} should execute"
+            );
             let destination = root.join(if cfg!(windows) {
                 format!("tool-{index}.exe")
             } else {
@@ -1609,6 +1630,15 @@ mod tests {
                 .expect("host tool fixture should become executable");
             validate_native_executable(&destination)
                 .unwrap_or_else(|error| panic!("native {program} should validate: {error:#}"));
+            #[cfg(windows)]
+            {
+                let hardlink = root.join(format!("tool-{index}-hardlink.exe"));
+                fs::hard_link(&destination, &hardlink)
+                    .expect("trusted executable hardlink fixture should create");
+                validate_native_executable(&hardlink).unwrap_or_else(|error| {
+                    panic!("hard-linked native {program} should validate: {error:#}")
+                });
+            }
         }
         let _ = fs::remove_dir_all(root);
     }

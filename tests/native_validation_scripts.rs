@@ -182,6 +182,47 @@ fn run_release_version_check(tag: &str, manifest_body: &str) -> std::process::Ou
     output
 }
 
+#[test]
+fn release_version_check_reports_missing_tomllib_as_a_prerequisite() {
+    let root = make_records_dir();
+    let bin = root.join("bin");
+    fs::create_dir(&bin).expect("fake binary directory should create");
+    let python = bin.join("python3");
+    write_executable_file(
+        &python,
+        "#!/bin/sh\nprintf 'ModuleNotFoundError: tomllib\\n' >&2\nexit 1\n",
+    );
+    let manifest = root.join("Cargo.toml");
+    fs::write(
+        &manifest,
+        "[package]\nname = \"codex-exec-loop-native\"\nversion = \"1.2.3\"\n",
+    )
+    .expect("release manifest fixture should write");
+
+    let inherited_path = std::env::var_os("PATH").expect("test PATH should be available");
+    let fixture_path = std::env::join_paths(
+        std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited_path)),
+    )
+    .expect("fixture PATH should join");
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/validate_native_release_version.sh"))
+        .args(["--tag", "v1.2.3", "--manifest"])
+        .arg(&manifest)
+        .env("PATH", fixture_path)
+        .current_dir(repo_root())
+        .output()
+        .expect("release prerequisite validation should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.trim(),
+        "validate_native_release_version: python3 with tomllib support is required"
+    );
+    assert!(!stderr.contains("ModuleNotFoundError"));
+    fs::remove_dir_all(root).expect("release prerequisite fixture should remove");
+}
+
 fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {
     Command::new("git")
         .arg("-C")
