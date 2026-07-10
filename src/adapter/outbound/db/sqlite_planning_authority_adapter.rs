@@ -1974,7 +1974,8 @@ fn validate_authority_storage_ancestor_chain(path: &Path) -> Result<()> {
             })?;
             let target_mode = target.permissions().mode();
             let target_owner_is_trusted = target.uid() == current_user || target.uid() == 0;
-            let target_is_protected = target_mode & 0o022 == 0 || target_mode & libc::S_ISVTX != 0;
+            let target_is_protected =
+                target_mode & 0o022 == 0 || target_mode & unix_sticky_mode_bit() != 0;
             if !owner_is_trusted
                 || !target.is_dir()
                 || !target_owner_is_trusted
@@ -1988,7 +1989,7 @@ fn validate_authority_storage_ancestor_chain(path: &Path) -> Result<()> {
             continue;
         }
         let mode = metadata.permissions().mode();
-        let protected_from_replacement = mode & 0o022 == 0 || mode & libc::S_ISVTX != 0;
+        let protected_from_replacement = mode & 0o022 == 0 || mode & unix_sticky_mode_bit() != 0;
         if !metadata.is_dir() || !owner_is_trusted || !protected_from_replacement {
             return Err(anyhow!(
                 "authority-store ancestor is writable or owned by another user: {}",
@@ -2017,7 +2018,7 @@ fn validate_canonical_authority_storage_ancestors(
         })?;
         let mode = metadata.permissions().mode();
         let owner_is_trusted = metadata.uid() == current_user || metadata.uid() == 0;
-        let protected_from_replacement = mode & 0o022 == 0 || mode & libc::S_ISVTX != 0;
+        let protected_from_replacement = mode & 0o022 == 0 || mode & unix_sticky_mode_bit() != 0;
         if metadata.file_type().is_symlink()
             || !metadata.is_dir()
             || !owner_is_trusted
@@ -2068,7 +2069,7 @@ fn open_and_validate_authority_storage_root(path: &Path) -> Result<File> {
             .with_context(|| format!("failed to inspect storage root {}", path.display()))?;
         let mode = metadata.mode();
         let writable_by_other_users = mode & 0o022 != 0;
-        let sticky = mode & libc::S_ISVTX != 0;
+        let sticky = mode & unix_sticky_mode_bit() != 0;
         if !metadata.is_dir()
             || metadata.uid() != unsafe { libc::geteuid() }
             || (writable_by_other_users && !sticky)
@@ -2102,6 +2103,13 @@ fn open_and_validate_authority_storage_root(path: &Path) -> Result<File> {
             path.display()
         ))
     }
+}
+
+#[cfg(unix)]
+fn unix_sticky_mode_bit() -> u32 {
+    // libc exposes S_ISVTX as u16 on macOS and u32 on Linux.
+    #[allow(clippy::useless_conversion)]
+    u32::from(libc::S_ISVTX)
 }
 
 fn open_and_secure_private_directory(path: &Path) -> Result<File> {
