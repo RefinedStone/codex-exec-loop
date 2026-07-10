@@ -1527,7 +1527,7 @@ fn lease_deadline(lease_ttl_seconds: u64) -> Result<(i64, i64)> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::{Arc, Barrier};
 
     use super::*;
@@ -2397,11 +2397,12 @@ mod tests {
     #[test]
     fn global_telegram_runner_rejects_noncanonical_workspace_bindings() {
         let fixture = Fixture::new("canonical-workspace");
-        let noncanonical = Path::new(&fixture.first_workspace).join(".");
+        let noncanonical = format!("{}{}", fixture.first_workspace, std::path::MAIN_SEPARATOR);
+        assert_ne!(noncanonical, fixture.first_workspace);
         let error = fixture
             .adapter()
             .try_acquire_global_runner_lease(
-                &noncanonical.display().to_string(),
+                &noncanonical,
                 "bot-id:880001",
                 "owner-first",
                 std::process::id(),

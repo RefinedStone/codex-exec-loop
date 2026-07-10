@@ -422,21 +422,14 @@ mod trusted_executable_tests {
     #[test]
     fn codex_readiness_accepts_trusted_npm_launcher_and_rejects_repository_path_entries() {
         let cwd = std::env::current_dir().expect("test cwd should resolve");
-        let original_path = std::env::var_os("PATH").expect("PATH should be available");
-        let node =
-            crate::trusted_executable::resolve_native_from_path("node", &original_path, &cwd)
-                .expect("test host should provide trusted native Node.js");
         let install = safe_fixture_root("parallel-codex-npm");
+        let node_install = safe_fixture_root("parallel-node");
         let launcher = install.join("codex.js");
         write_executable(&launcher, "#!/usr/bin/env node\nprocess.exit(0);\n");
         symlink(&launcher, install.join("codex")).expect("npm launcher symlink should create");
-        let trusted_path = std::env::join_paths([
-            install.clone(),
-            node.parent()
-                .expect("Node.js should have a parent directory")
-                .to_path_buf(),
-        ])
-        .expect("trusted fixture PATH should join");
+        write_native_executable(&node_install.join("node"));
+        let trusted_path = std::env::join_paths([install.clone(), node_install.clone()])
+            .expect("trusted fixture PATH should join");
         let runtime = GitParallelModeRuntimeAdapter::new();
 
         assert_eq!(
@@ -455,11 +448,7 @@ mod trusted_executable_tests {
         let hostile_path = std::env::join_paths(
             std::iter::once(hostile_bin.clone())
                 .chain(std::iter::once(install.clone()))
-                .chain(std::iter::once(
-                    node.parent()
-                        .expect("Node.js should have a parent directory")
-                        .to_path_buf(),
-                )),
+                .chain(std::iter::once(node_install.clone())),
         )
         .expect("hostile fixture PATH should join");
         assert_eq!(
@@ -470,6 +459,7 @@ mod trusted_executable_tests {
 
         let _ = fs::remove_dir_all(&hostile_bin);
         let _ = fs::remove_dir_all(&install);
+        let _ = fs::remove_dir_all(&node_install);
     }
 
     fn safe_fixture_root(label: &str) -> PathBuf {
@@ -492,6 +482,10 @@ mod trusted_executable_tests {
             .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).expect("fixture should be executable");
+    }
+
+    fn write_native_executable(path: &Path) {
+        write_executable(path, "\x7fELF");
     }
 
     fn unique_suffix() -> u128 {

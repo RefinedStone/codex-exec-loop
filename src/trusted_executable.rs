@@ -857,8 +857,7 @@ mod tests {
     };
     #[cfg(unix)]
     use super::{
-        resolve_codex_command_from_path, resolve_from_path, resolve_native_from_path,
-        sanitized_path, validate_absolute,
+        resolve_codex_command_from_path, resolve_from_path, sanitized_path, validate_absolute,
     };
     #[cfg(unix)]
     use std::fs;
@@ -955,26 +954,27 @@ mod tests {
         let install_root = fixture_root("trusted-codex-install");
         let workspace = workspace_root.join("workspace");
         let install = install_root.join("user-local");
+        let node_directory = install_root.join("safe-bin");
         fs::create_dir_all(&workspace).expect("workspace should be created");
         fs::create_dir_all(&install).expect("Codex install should be created");
+        fs::create_dir_all(&node_directory).expect("Node.js fixture directory should be created");
         make_safe_directory_chain(&workspace_root);
         make_safe_directory_chain(&install_root);
         let launcher = install.join("codex.js");
         write_executable(&launcher, "#!/usr/bin/env node\nprocess.exit(0);\n");
         symlink(&launcher, install.join("codex")).expect("Codex shim should be linked");
-        let inherited_path = std::env::var_os("PATH").expect("PATH should be available");
-        let node = resolve_native_from_path("node", &inherited_path, &workspace)
-            .expect("test host should provide trusted native Node.js");
-        let node_directory = node
-            .parent()
-            .expect("Node.js should have a parent directory");
-        let path = std::env::join_paths([install.clone(), node_directory.to_path_buf()])
+        let node = node_directory.join("node");
+        write_native_executable(&node);
+        let path = std::env::join_paths([install.clone(), node_directory])
             .expect("Codex PATH should join");
 
         let plan = resolve_codex_command_from_path(&path, &workspace)
             .expect("standard npm Codex launcher should resolve");
 
-        assert_eq!(plan.program, node);
+        assert_eq!(
+            plan.program,
+            fs::canonicalize(node).expect("Node.js fixture should canonicalize")
+        );
         assert_eq!(
             plan.source_executable,
             fs::canonicalize(&launcher).expect("launcher should canonicalize")
@@ -993,26 +993,19 @@ mod tests {
         let workspace = workspace_root.join("workspace");
         let repo_bin = workspace.join("bin");
         let install = install_root.join("user-local");
+        let node_directory = install_root.join("safe-bin");
         fs::create_dir_all(&repo_bin).expect("repository bin should be created");
         fs::create_dir_all(&install).expect("Codex install should be created");
+        fs::create_dir_all(&node_directory).expect("Node.js fixture directory should be created");
         make_safe_directory_chain(&workspace_root);
         make_safe_directory_chain(&install_root);
         let launcher = install.join("codex.js");
         write_executable(&launcher, "#!/usr/bin/env node\nprocess.exit(0);\n");
         symlink(&launcher, install.join("codex")).expect("Codex shim should be linked");
         write_executable(&repo_bin.join("node"), "#!/bin/sh\nexit 91\n");
-        let inherited_path = std::env::var_os("PATH").expect("PATH should be available");
-        let trusted_node = resolve_native_from_path("node", &inherited_path, &workspace)
-            .expect("test host should provide trusted native Node.js");
-        let path = std::env::join_paths([
-            install.clone(),
-            repo_bin,
-            trusted_node
-                .parent()
-                .expect("Node.js should have a parent directory")
-                .to_path_buf(),
-        ])
-        .expect("hostile PATH should join");
+        write_native_executable(&node_directory.join("node"));
+        let path = std::env::join_paths([install.clone(), repo_bin, node_directory])
+            .expect("hostile PATH should join");
 
         let error = resolve_codex_command_from_path(&path, &workspace)
             .expect_err("repository Node.js must fail closed");
@@ -1114,6 +1107,11 @@ mod tests {
             .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).expect("fixture should become executable");
+    }
+
+    #[cfg(unix)]
+    fn write_native_executable(path: &Path) {
+        write_executable(path, "\x7fELF");
     }
 
     fn standard_windows_codex_shim(target: &str) -> String {
