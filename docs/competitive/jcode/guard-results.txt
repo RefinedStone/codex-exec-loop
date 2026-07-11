@@ -1,0 +1,143 @@
+jcode guard results
+
+Snapshot: v0.43.0 / 649276753ae11948759192c067dfc4c90fafd47f
+Audit date: 2026-07-12
+Environment: Python 3.12.3
+Working directory: clean detached release checkout
+
+$ python3 scripts/check_code_size_budget.py
+exit=1
+Code-size budget exceeded. Existing oversized Rust files must shrink or stay flat, and new oversized production files are not allowed:
+  - oversized file grew: crates/jcode-app-core/src/agent/turn_streaming_mpsc.rs (1641 -> 1658 LOC)
+  - oversized file grew: crates/jcode-app-core/src/server.rs (2034 -> 2157 LOC)
+  - oversized file grew: crates/jcode-app-core/src/server/client_lifecycle.rs (3075 -> 3098 LOC)
+  - oversized file grew: crates/jcode-app-core/src/server/client_session.rs (1448 -> 1497 LOC)
+  - oversized file grew: crates/jcode-app-core/src/server/comm_session.rs (1341 -> 1342 LOC)
+  - oversized file grew: crates/jcode-app-core/src/server/swarm.rs (2824 -> 2879 LOC)
+  - oversized file grew: crates/jcode-app-core/src/tool/communicate.rs (3156 -> 3209 LOC)
+  - oversized file grew: crates/jcode-base/src/auth/lifecycle.rs (2034 -> 2235 LOC)
+  - oversized file grew: crates/jcode-base/src/auth/mod.rs (1455 -> 1466 LOC)
+  - oversized file grew: crates/jcode-base/src/memory_agent.rs (1892 -> 1901 LOC)
+  - oversized file grew: crates/jcode-base/src/provider/catalog_routes.rs (1227 -> 1367 LOC)
+  - oversized file grew: crates/jcode-base/src/provider/mod.rs (2602 -> 2771 LOC)
+  - oversized file grew: crates/jcode-base/src/sidecar.rs (1299 -> 1319 LOC)
+  - oversized file grew: crates/jcode-base/src/skill.rs (1257 -> 1407 LOC)
+  - oversized file grew: crates/jcode-config-types/src/lib.rs (1500 -> 1556 LOC)
+  - oversized file grew: crates/jcode-provider-core/src/lib.rs (1609 -> 1620 LOC)
+  - oversized file grew: crates/jcode-provider-openai-runtime/src/openai_stream_runtime.rs (1603 -> 1632 LOC)
+  - oversized file grew: crates/jcode-provider-openrouter-runtime/src/lib.rs (2641 -> 2678 LOC)
+  - oversized file grew: crates/jcode-setup-hints/src/lib.rs (1811 -> 2417 LOC)
+  - oversized file grew: crates/jcode-telemetry-core/src/lib.rs (1846 -> 1938 LOC)
+  - oversized file grew: crates/jcode-tui-mermaid/src/mermaid_cache_render.rs (1288 -> 1337 LOC)
+  - oversized file grew: crates/jcode-tui-mermaid/src/mermaid_viewport.rs (1317 -> 1351 LOC)
+  - oversized file grew: crates/jcode-tui-render/src/swarm_gallery.rs (2556 -> 2928 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/auth.rs (2955 -> 2961 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/commands.rs (3277 -> 3397 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/inline_interactive.rs (3348 -> 3617 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/input.rs (3336 -> 3382 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/onboarding_flow_control.rs (1546 -> 1609 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/remote.rs (1853 -> 1891 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/remote/key_handling.rs (2542 -> 2563 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/remote/server_events.rs (2698 -> 2746 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/state_ui.rs (2186 -> 2199 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs (1880 -> 1883 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/tui_lifecycle.rs (1242 -> 1249 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/tui_state.rs (2253 -> 2269 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/app/turn.rs (1470 -> 1474 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/backend.rs (1697 -> 1698 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/info_widget.rs (2209 -> 2238 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/mod.rs (2001 -> 2116 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/session_picker.rs (2174 -> 2320 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/session_picker/loading.rs (2998 -> 3017 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui.rs (3373 -> 3382 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui_inline_image.rs (1251 -> 1278 LOC)
+  - new oversized file exceeds 1200 LOC: crates/jcode-tui/src/tui/ui_inline_interactive.rs (1207 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui_input.rs (2643 -> 2659 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui_messages.rs (2399 -> 2530 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui_pinned.rs (2011 -> 2046 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui_prepare.rs (2360 -> 2417 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui_tools.rs (1481 -> 1607 LOC)
+  - oversized file grew: crates/jcode-tui/src/tui/ui_viewport.rs (1336 -> 1361 LOC)
+  - oversized file grew: src/cli/dispatch.rs (1209 -> 1211 LOC)
+  - oversized file grew: src/cli/provider_init.rs (1801 -> 1823 LOC)
+Run scripts/check_code_size_budget.py --update only after intentional cleanup.
+
+$ python3 scripts/check_test_size_budget.py
+exit=1
+Test-size budget exceeded:
+  - oversized test file grew: crates/jcode-app-core/src/agent_tests.rs (1215 -> 1236 LOC)
+  - oversized test file grew: crates/jcode-app-core/src/tool/communicate_tests.rs (1604 -> 1694 LOC)
+  - oversized test file grew: crates/jcode-base/src/provider/tests/model_resolution.rs (2082 -> 2249 LOC)
+  - oversized test file grew: crates/jcode-base/src/session_tests/cases.rs (2331 -> 2332 LOC)
+  - oversized test file grew: crates/jcode-desktop/src/main_tests.rs (10371 -> 10428 LOC)
+  - oversized test file grew: crates/jcode-provider-anthropic-runtime/src/anthropic_tests.rs (1701 -> 1783 LOC)
+  - oversized test file grew: crates/jcode-provider-openrouter-runtime/src/openrouter_tests.rs (2658 -> 2728 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests.rs (1328 -> 1446 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests/commands_accounts_01/part_01.rs (1487 -> 1520 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests/remote_events_reload_01/part_01.rs (1513 -> 1808 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs (2226 -> 2257 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests/remote_startup_input_02/part_01.rs (1345 -> 1358 LOC)
+  - new oversized test file exceeds 1200 LOC: crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs (1203 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests/state_model_poke_02/part_01.rs (1307 -> 1337 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs (2456 -> 2546 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/app/tests/swarm_plan_graph_inline.rs (1835 -> 1972 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/info_widget_tests.rs (1591 -> 1764 LOC)
+  - new oversized test file exceeds 1200 LOC: crates/jcode-tui/src/tui/session_picker/loading_tests.rs (1268 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/session_picker_tests.rs (2179 -> 2319 LOC)
+  - oversized test file grew: crates/jcode-tui/src/tui/ui_messages/tests.rs (1384 -> 1448 LOC)
+  - new oversized test file exceeds 1200 LOC: crates/jcode-tui/src/tui/ui_tests/tools.rs (1205 LOC)
+Run scripts/check_test_size_budget.py --update only after intentional cleanup.
+
+$ python3 scripts/check_panic_budget.py
+exit=1
+Panic-prone usage budget exceeded:
+  - total panic-prone count grew: 33 -> 39
+  - new production panic-prone usage: crates/jcode-render-core/src/math.rs (4)
+  - new production panic-prone usage: crates/jcode-render-core/src/preprocess.rs (1)
+  - new production panic-prone usage: crates/jcode-telemetry-core/src/lib.rs (1)
+Run scripts/check_panic_budget.py --update only after intentional cleanup.
+
+$ python3 scripts/check_swallowed_error_budget.py
+exit=1
+Swallowed-error budget exceeded:
+  - total swallowed-error-like count grew: 2926 -> 2987
+  - dot_ok count grew: 1063 -> 1084
+  - let_underscore count grew: 1101 -> 1113
+  - unwrap_or_default count grew: 762 -> 790
+  - swallowed-error-like usage grew: crates/jcode-app-core/src/server.rs (22 -> 26)
+  - new swallowed-error-like usage: crates/jcode-app-core/src/server/reload_recovery.rs (4)
+  - swallowed-error-like usage grew: crates/jcode-app-core/src/server/swarm.rs (18 -> 19)
+  - new swallowed-error-like usage: crates/jcode-app-core/src/tool/discover.rs (1)
+  - new swallowed-error-like usage: crates/jcode-app-core/src/tool/todo.rs (4)
+  - swallowed-error-like usage grew: crates/jcode-base/src/auth/lifecycle.rs (3 -> 5)
+  - new swallowed-error-like usage: crates/jcode-base/src/sponsors/provenance.rs (1)
+  - new swallowed-error-like usage: crates/jcode-base/src/todo.rs (2)
+  - new swallowed-error-like usage: crates/jcode-fuzzy/src/lib.rs (2)
+  - new swallowed-error-like usage: crates/jcode-message-types/src/lib.rs (1)
+  - new swallowed-error-like usage: crates/jcode-provider-anthropic/src/lib.rs (1)
+  - new swallowed-error-like usage: crates/jcode-provider-core/src/retry_after.rs (2)
+  - new swallowed-error-like usage: crates/jcode-provider-cursor-runtime/src/agent_transport.rs (13)
+  - new swallowed-error-like usage: crates/jcode-render-core/src/math.rs (3)
+  - new swallowed-error-like usage: crates/jcode-render-core/src/preprocess.rs (1)
+  - swallowed-error-like usage grew: crates/jcode-setup-hints/src/lib.rs (27 -> 36)
+  - swallowed-error-like usage grew: crates/jcode-setup-hints/src/windows_setup.rs (12 -> 18)
+  - swallowed-error-like usage grew: crates/jcode-storage/src/active_pids.rs (18 -> 20)
+  - swallowed-error-like usage grew: crates/jcode-telemetry-core/src/lib.rs (17 -> 18)
+  - swallowed-error-like usage grew: crates/jcode-tui-render/src/swarm_gallery.rs (3 -> 4)
+  - swallowed-error-like usage grew: crates/jcode-tui/src/tui/app/inline_interactive.rs (20 -> 21)
+  - swallowed-error-like usage grew: crates/jcode-tui/src/tui/app/remote.rs (10 -> 11)
+  - swallowed-error-like usage grew: crates/jcode-tui/src/tui/mod.rs (2 -> 3)
+  - swallowed-error-like usage grew: crates/jcode-tui/src/tui/session_picker.rs (11 -> 12)
+  - new swallowed-error-like usage: crates/jcode-tui/src/tui/session_picker/render.rs (1)
+  - new swallowed-error-like usage: crates/jcode-tui/src/tui/theme_detect.rs (1)
+  - new swallowed-error-like usage: crates/jcode-tui/src/tui/ui_prepare.rs (1)
+  - swallowed-error-like usage grew: src/cli/commands.rs (24 -> 26)
+Run scripts/check_swallowed_error_budget.py --update only after intentional cleanup.
+
+$ python3 scripts/check_dependency_boundaries.py
+exit=0
+dependency boundary check passed
+
+$ python3 scripts/check_wildcard_reexport_budget.py
+exit=0
+wildcard re-export budget check passed (total=16)

@@ -2,7 +2,9 @@
 
 Use this map to find the current implementation truth quickly. The docs are intentionally compact:
 implemented behavior belongs in current contract and design notes; long roadmaps, future backlog,
-and one-off research notes are not kept in this tree.
+and one-off research notes are not kept in this tree. Reproducible competitor research is the
+exception and lives under `competitive/`, with a pinned source snapshot and an explicit Akra
+adoption decision.
 
 ## Read First
 
@@ -45,6 +47,15 @@ and one-off research notes are not kept in this tree.
 - [validation/README.md](validation/README.md): real validation artifact index
 - [validation/terminal-ui-testing-methodology.md](validation/terminal-ui-testing-methodology.md):
   terminal UI test design for rendering, scrollback, resize, and snapshots
+
+## Competitive Research
+
+- [competitive/README.md](competitive/README.md): evidence rules, coverage index, comparison
+  dimensions, and refresh order
+- [competitive/jcode/analysis.md](competitive/jcode/analysis.md): jcode v0.43.0 product and
+  architecture deep dive
+- [competitive/jcode/gap-matrix.md](competitive/jcode/gap-matrix.md): Akra-relative gaps,
+  selective adoption decisions, and implementation slices
 
 ## Implemented Surfaces
 
