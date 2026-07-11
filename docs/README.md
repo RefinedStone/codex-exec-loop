@@ -58,6 +58,12 @@ adoption decision.
   reproduction commands, and audit limits
 - [competitive/jcode/gap-matrix.md](competitive/jcode/gap-matrix.md): Akra-relative gaps,
   selective adoption decisions, and implementation slices
+- [competitive/agent-canvas/analysis.md](competitive/agent-canvas/analysis.md): Agent Canvas v1.2.1
+  browser control-center, released Codex ACP, remote-backend, and Automation deep dive
+- [competitive/agent-canvas/evidence.md](competitive/agent-canvas/evidence.md): pinned Canvas, Agent
+  Server, ACP, and Automation source ledger, release-gate output, and audit limits
+- [competitive/agent-canvas/gap-matrix.md](competitive/agent-canvas/gap-matrix.md): Codex-first
+  adoption boundaries, truthful fleet-operation gaps, and reviewable Akra slices
 
 ## Implemented Surfaces
 

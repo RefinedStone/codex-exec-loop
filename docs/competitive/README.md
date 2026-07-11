@@ -35,14 +35,14 @@ breadth, tool count, or UI surface count into the product goal.
 | Product | Snapshot | Status | Primary threat |
 | --- | --- | --- | --- |
 | [jcode](jcode/analysis.md) | v0.43.0, `649276753ae11948759192c067dfc4c90fafd47f` | current as of 2026-07-12 (Asia/Seoul) | native TUI performance, multi-session runtime, memory, swarm |
+| [Agent Canvas](agent-canvas/analysis.md) | v1.2.1, `56d51c0767fb6fedc51c466f5138fdfc116a2707` | current as of 2026-07-12 (Asia/Seoul) | browser session inspection, remote backends, durable automation |
 
 Next research order:
 
-1. OpenHands Agent Canvas: visual parallel supervision and Codex/ACP harnessing.
-2. OpenCode: TUI, desktop, IDE, client/server API, extensibility, and child-session navigation.
-3. Upstream Codex: mandatory baseline for capabilities Akra should project rather than rebuild.
-4. Claude Code, Amp, Pi, Aider, Cline/Roo, Cursor, and Windsurf: closed and open harness patterns
-   after the three direct architectural comparisons above.
+1. OpenCode: TUI, desktop, IDE, client/server API, extensibility, and child-session navigation.
+2. Upstream Codex: mandatory baseline for capabilities Akra should project rather than rebuild.
+3. Claude Code, Amp, Pi, Aider, Cline/Roo, Cursor, and Windsurf: closed and open harness patterns
+   after OpenCode and upstream Codex complete the initial architecture set.
 
 Do not create an empty product directory. Add it only when its snapshot and first evidence ledger
 are ready to review.
