@@ -34,7 +34,7 @@ breadth, tool count, or UI surface count into the product goal.
 
 | Product | Snapshot | Status | Primary threat |
 | --- | --- | --- | --- |
-| [jcode](jcode/analysis.md) | v0.43.0, `649276753ae11948759192c067dfc4c90fafd47f` | current as of 2026-07-12 | native TUI performance, multi-session runtime, memory, swarm |
+| [jcode](jcode/analysis.md) | v0.43.0, `649276753ae11948759192c067dfc4c90fafd47f` | current as of 2026-07-12 (Asia/Seoul) | native TUI performance, multi-session runtime, memory, swarm |
 
 Next research order:
 

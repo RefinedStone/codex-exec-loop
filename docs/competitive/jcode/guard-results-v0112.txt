@@ -1,7 +1,7 @@
 jcode guard results
 
 Snapshot: v0.11.2 / 7e419c81a69936336c8ee9df6287f4919708d5c1
-Audit date: 2026-07-12
+Audit date: 2026-07-12 (Asia/Seoul)
 Environment: Python 3.12.3
 Working directory: clean detached release checkout
 

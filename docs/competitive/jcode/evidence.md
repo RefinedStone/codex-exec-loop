@@ -13,7 +13,7 @@ product conclusions live in [analysis.md](analysis.md), and Akra decisions live 
 | Release | [v0.43.0](https://github.com/1jehuang/jcode/releases/tag/v0.43.0) |
 | Peeled release commit | `649276753ae11948759192c067dfc4c90fafd47f` |
 | Release published | 2026-07-11 06:00:50 UTC |
-| Audit date | 2026-07-12 |
+| Audit date | 2026-07-12 (Asia/Seoul) |
 | Akra baseline | `66333152170124a42aca6f49ed2f72fa6a8293d7` on `prerelease` |
 | Akra version | 1.3.5 |
 | Auditor environment | Linux x86_64, source inspection and static commands |
@@ -55,11 +55,19 @@ Inventory commands:
 JCODE=/tmp/akra-jcode-v043-audit
 AKRA=/path/to/codex-exec-loop-worktree
 
+count_root_and_workspace_crates() {
+  local workspace_crates=0
+  if [ -d crates ]; then
+    workspace_crates="$(find crates -mindepth 2 -maxdepth 2 -name Cargo.toml | wc -l)"
+  fi
+  printf '%s\n' "$((1 + workspace_crates))"
+}
+
 cd "$JCODE"
 git ls-files | wc -l
 git ls-files '*.rs' | wc -l
 git ls-files '*.rs' | xargs wc -l | tail -1
-printf '%s\n' "$((1 + $(find crates -mindepth 2 -maxdepth 2 -name Cargo.toml 2>/dev/null | wc -l)))"
+count_root_and_workspace_crates
 find src crates -type f -name '*.rs' \
   ! -path '*/tests/*' ! -name '*_test.rs' ! -name '*_tests.rs' \
   -print0 | xargs -0 wc -l | tail -1
@@ -78,7 +86,7 @@ cd "$AKRA"
 git ls-files | wc -l
 git ls-files '*.rs' | wc -l
 git ls-files '*.rs' | xargs wc -l | tail -1
-printf '%s\n' "$((1 + $(find crates -mindepth 2 -maxdepth 2 -name Cargo.toml 2>/dev/null | wc -l)))"
+count_root_and_workspace_crates
 find src -type f -name '*.rs' \
   ! -path '*/tests/*' ! -name '*_test.rs' ! -name '*_tests.rs' \
   -print0 | xargs -0 wc -l | tail -1

@@ -54,6 +54,8 @@ adoption decision.
   dimensions, and refresh order
 - [competitive/jcode/analysis.md](competitive/jcode/analysis.md): jcode v0.43.0 product and
   architecture deep dive
+- [competitive/jcode/evidence.md](competitive/jcode/evidence.md): immutable source ledger,
+  reproduction commands, and audit limits
 - [competitive/jcode/gap-matrix.md](competitive/jcode/gap-matrix.md): Akra-relative gaps,
   selective adoption decisions, and implementation slices
 
