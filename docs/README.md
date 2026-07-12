@@ -4,7 +4,8 @@ Use this map to find the current implementation truth quickly. The docs are inte
 implemented behavior belongs in current contract and design notes; long roadmaps, future backlog,
 and one-off research notes are not kept in this tree. Reproducible competitor research is the
 exception and lives under `competitive/`, with a pinned source snapshot and an explicit Akra
-adoption decision.
+adoption decision. A user-requested proposed design may stay temporarily when it defines a cross-slice
+product and safety contract; it must declare its status and be compressed into current truth after delivery.
 
 ## Read First
 
@@ -29,6 +30,11 @@ adoption decision.
   TUI layer ownership, theme rules, and visual editing guardrails
 - [design/08-parallel-mode-supersession-board.md](design/08-parallel-mode-supersession-board.md):
   shipped parallel-mode board and selected-detail timeline shape
+
+## Proposed Design
+
+- [design/09-admin-game-control-center.md](design/09-admin-game-control-center.md): proposed truthful
+  Admin game scene, CLI/Admin capability parity, guarded actions, and quality rollout contract
 
 ## Operations
 
