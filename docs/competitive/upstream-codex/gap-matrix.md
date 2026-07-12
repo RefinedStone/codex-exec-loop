@@ -19,9 +19,10 @@ Upstream Codex is both a dependency and a reference client. The matrix therefore
 P0-A terminal truth is present on `prerelease` at `5a9d342f`: current live paths preserve typed
 completed, failed, interrupted, and unknown outcomes instead of collapsing matching
 `turn/completed` notifications to generic success. P0-B applied-envelope projection is present at
-`7960ecca`. This atomic slice implements P0-C1 closed item identity; P0-C2 progressive activity is
-next. Durable recovery, validation/delivery projection, and broader surface rendering remain
-separate owners rather than implied consequences of P0-A, P0-B, or P0-C1.
+`7960ecca`, and P0-C1 closed item identity is present at `7514eb05`. This atomic slice implements
+P0-C2 bounded progressive activity; P0-D Core/TUI presentation is next. Durable recovery,
+validation/delivery projection, and broader surface rendering remain separate owners rather than
+implied consequences of P0-A through P0-C2.
 
 ## Authority Boundary
 
@@ -511,10 +512,67 @@ capture. Those owners consume this typed contract later rather than parsing app-
 **Required proof**
 
 - fixed high-rate text, command-output, patch, diff, plan, token, and multi-agent streams with
-  measured reducer memory/backlog bounds;
+  exact code-tracked retained-payload and backlog bounds; allocator/RSS measurement belongs to the
+  later native performance artifact;
 - coalescing order and disconnect/overload tests proving terminal and approval survival;
-- context-pressure and diff-summary/full-drilldown fixtures;
+- context-pressure plus diff-summary/bounded-detail fixtures; interactive full drilldown belongs to
+  P0-D;
 - unknown delta and oversized/non-UTF-8 payload tests.
+
+**Implemented in this slice**
+
+- one strict adapter manifest classifies 14 progressive notifications as handled, deprecated
+  `item/fileChange/outputDelta` and `thread/compacted` as explicitly ignored, and model safety
+  buffering/verification as schema-validated diagnostic-only input;
+- exact thread/turn/item correlation and the P0-C1 item-kind/completion ledger gate item activity.
+  A missing boundary, kind drift, or activity after completion is retained before the stream fails
+  closed; stale scope is dropped without consuming an application sequence;
+- unknown progressive-looking item, turn, and turn-correlated thread methods retain only a bounded
+  redacted method label and payload byte count, then fail closed. Closed plan-status, patch-kind,
+  and verification enums also require an explicit schema decision rather than silently becoming a
+  known state;
+- typed payloads cover agent draft, command tail and terminal interaction counts, patch detail, turn
+  diff summary/detail, plan, token/context pressure, MCP progress, reasoning/plan counts,
+  moderation size, and guardian warning. Detail bounds range from 4 KiB guardian copy to 2 MiB
+  agent/diff detail, with 64 records and 8 MiB retained dynamic state overall. Cumulative token
+  totals must contain the latest active-context breakdown, and only that latest total drives context
+  pressure after compaction;
+- opaque validated batches preserve monotonic sequence and correlation. Payload truncation and
+  fully dropped observations have separate counters, UTF-8 prefix/tail bounds are exact, and all
+  retained detail/identity Debug output is redacted. Batch and cross-publication projection merges
+  reject counter or payload-accounting overflow before mutating retained activity;
+- the application mailbox keeps an eight-event control admission budget plus ordered progressive
+  segments. Core ingress repeats the policy with 16 control admissions and at most 17 progressive
+  segments. Only adjacent correlated publications coalesce; every control remains an exact ordering
+  boundary, and each pending layer has one 8 MiB tracked-detail bound. Older detail becomes a
+  same-position history-only marker rather than crossing or removing the boundary. A newer Core
+  generation prunes stale progressive backlog, while a current-generation segment admission failure
+  becomes a terminal stream failure instead of silent loss;
+- Core consumes each batch directly into an immutable `Arc` projection, applies history-only gaps,
+  rejects stale or uncorrelated batches, and resets on each new turn/thread. Production TUI polling
+  applies one Core outcome at a time instead of retaining a vector of COW snapshots; its live-agent
+  buffer synchronizes from the typed projection. The removed legacy delta enum can no longer bypass
+  this path;
+- progressive detail is excluded from the opt-in prompt-output log and has no serialization or
+  Admin/CLI/Telegram persistence path. The active-turn reducer sizes moderation and unknown payloads
+  through a counting writer. Early notifications retained across the response/stream handoff may
+  re-encode their existing JSON value once under the separate bounded pending-queue byte budget.
+
+Deterministic proof includes 100,000-publication reducer/mailbox streams; fixed high-rate agent,
+command, patch, diff, plan, token, and multi-agent reducers; exact
+`progress -> control -> progress` ordering, eight controls interleaved with nine 2 MiB progressive
+segments at application and Core ingress, approval/terminal survival, item-boundary drift failures,
+all 14 handled methods, schema
+shape fingerprints, exact command-line accounting across chunk boundaries, oversized UTF-8
+truncation, exact source/retained/loss byte accounting including rename destinations,
+cross-publication overflow rejection, post-compaction and schema-maximum context pressure, non-UTF-8
+transport rejection, history-only Core application, stale-generation pruning, and secret canaries.
+
+This slice intentionally adds no rich activity rail, diff/output drilldown UI, context-pressure
+presentation, Admin/CLI/Telegram projection, parallel persistence, durable restart recovery,
+released-runtime capture, or comparative performance claim. Deprecated compaction is represented
+by the P0-C1 `ContextCompaction` item instead of a second progressive fact; model reroute remains
+the P0-B applied-envelope owner.
 
 #### P0-D: Core And TUI Projection
 
@@ -793,7 +851,7 @@ inseparable. Later rows may begin only after their prerequisite semantic contrac
 | 1 | Live terminal receipt P0-A | P0 | current schema/fixtures | typed handler-to-caller receipt, sink negatives, no current false success |
 | 2 | Applied envelope P0-B | P0 | P0-A | main/resume/planning/parallel requested-vs-applied tests |
 | 3 | Closed item identity P0-C1 | P0 | P0-A | 18-kind inventory, identity/order, bounded summary, drift failure |
-| 4 | Bounded progressive activity P0-C2 | P0 | P0-C1 | measured reducer/backlog bounds and terminal-safe coalescing |
+| 4 | Bounded progressive activity P0-C2 | P0 | P0-C1 | code-tracked reducer/backlog bounds and terminal-safe coalescing |
 | 5 | Core and TUI projection P0-D | P0 | P0-B and P0-C2 | reducer, narrow/wide/vt100 and real-terminal drilldown proof |
 | 6 | Active turn steering | P0 | P0-A, P0-B, live identity | fake failure matrix plus real stable trace |
 | 7 | Exit/restart recovery correctness | P0 | P0-A, P0-B, P0-C1 | durable CAS/readback/child-kill matrix and no duplicate submit |
@@ -812,10 +870,10 @@ inseparable. Later rows may begin only after their prerequisite semantic contrac
 | 20 | Session catalog/provenance/fork | P2 existing | recovery and application identity | cursor/filter/lineage/fork TUI then Admin |
 | 21 | File approval/forms/additional inputs | P2 existing | row 16 and canary invariant | bounded typed UI and source-to-sink proof |
 
-Rows 1 and 2 are implemented as separate atomic slices: P0-A is already on `prerelease`, and this
-slice carries P0-B code and evidence together. Row 3, closed item identity, is next. Durable
-readback, child-loss CAS, validation/delivery/Admin projection, model UI, daemon topology, and broad
-event rendering remain with their later owners.
+Rows 1 through 3 are implemented as separate atomic slices on `prerelease`; this slice carries row
+4 P0-C2 code and evidence together. Row 5, Core and TUI projection, is next. Durable readback,
+child-loss CAS, validation/delivery/Admin projection, model UI, daemon topology, and broad event
+rendering remain with their later owners.
 
 ## Success Audit
 

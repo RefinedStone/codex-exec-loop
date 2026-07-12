@@ -716,6 +716,85 @@ This evidence is schema-and-fixture verified. It does not add a released app-ser
 capture, progressive delta retention, rich TUI rendering, Admin/CLI/Telegram projection, parallel
 persistence, or restart recovery, and it makes no comparative performance claim.
 
+## P0-C2 Bounded Progressive Activity Evidence
+
+The P0-C2 implementation adds one transient, typed progressive projection from the app-server
+adapter through the application mailbox and Core. Its manifest handles 14 methods: agent-message,
+command-output, terminal-interaction, file-patch, MCP, plan, three reasoning, turn diff, turn plan,
+token usage, moderation, and guardian activity. Deprecated file-output delta and thread compaction
+are schema-validated explicit ignores. Model safety buffering and verification remain
+schema-validated diagnostic-only notifications in this slice rather than silently inferred
+operator state.
+
+Every handled item activity requires the exact P0-C1 thread/turn/item identity and retained item
+kind before it is accepted. Missing start, kind drift, and activity after item completion first
+deliver the bounded observation and then fail the stream, preventing a later terminal from hiding a
+possibly significant payload. Stale scope delivers no event and consumes no sequence. A
+progressive-looking future item, turn, or turn-correlated thread method retains only a UTF-8-safe
+4 KiB method label and a payload byte count, marks history unknown, and then fails closed. The
+active-turn reducer obtains that count through a counting writer; an early notification retained
+across the response/stream handoff may first re-encode its existing JSON value under the separate
+bounded pending-queue byte budget. Malformed and oversized identity or payload data never becomes a
+false terminal or completed item fact.
+
+The domain retains at most 64 coalesced records and 8 MiB dynamic detail. Individual caps are 2 MiB
+for agent draft and diff/patch detail, 128 KiB for a 64-step plan, 64 KiB for command and MCP detail,
+16 KiB for paths, and 4 KiB for guardian copy and identifiers. Agent deltas append, command output
+keeps a bounded tail, latest-state payloads replace, and count-only reasoning/moderation data does
+not retain raw text. Command line count preserves newline/open-line state across chunk boundaries.
+Plan source and omitted bytes are separately accounted. Each single wire observation requires
+retained plus unretained bytes to equal source bytes, including a discarded rename destination;
+merged latest-state records leave superseded bytes under the coalescing counter instead of calling
+them truncation. Payload-truncation events and completely dropped observations are separate counters
+and are presented separately rather than as a false distinct-observation count. Batch/record
+construction is opaque outside the domain; validation rejects non-monotonic,
+mixed-correlation, malformed-range, oversized, counter-overflowing, and kind/payload-invalid batches
+before projection. Token snapshots require cumulative totals to contain every latest-context field;
+context pressure uses the latest active-context total rather than the session cumulative total.
+
+The application mailbox has an independent eight-control admission count and an ordered queue of
+progressive segments. Core ingress repeats the same policy with 16 control admissions and at most 17
+progressive segments. Only adjacent correlated progressive publications merge. Therefore
+`progress-1 -> item boundary -> progress-2` is consumed in exactly that order, including the
+retain-then-fail late-activity path. With all eight control boundaries pending, the maximum nine
+progressive segments still share one global 8 MiB dynamic-detail budget. Old detail is cleared in
+place into a correlated history-only batch, preserving its source sequence and loss counters on the
+correct side of the control boundary. Progressive pressure never consumes control admission, while
+approval, item boundary, failure, retry, and terminal events retain FIFO admission and ordering.
+Core removes superseded-generation progressive backlog before admitting a newer generation and turns
+a current-generation segment admission failure into a terminal stream failure instead of silent
+loss. Core consumes batches directly into its projection, and the production TUI applies one Core
+outcome at a time so old COW snapshots and full batch updates are not accumulated in a drain vector.
+
+Deterministic local proof covers:
+
+- 100,000 observations through the domain projection and 100,000 adjacent mailbox publications,
+  plus fixed high-rate agent, command, patch, diff, plan, token, and multi-agent reducers;
+- controls interleaved with 2 MiB agent segments at application and Core ingress, with each exact
+  recomputed tracked pending-byte total at or below 8 MiB and approval/terminal admission preserved;
+- all 14 handled methods in source order, both deprecated ignores, missing/mismatched/completed item
+  boundaries, stale scope, malformed values, and bounded unknown method drift;
+- exact schema `$ref` plus resolved nested type/array/nullability/closed-enum fingerprints, including
+  validation of a malformed 65th discarded patch change;
+- cross-publication overflow rejection, truncation, history-only Core application, stale-generation
+  pruning, `Arc` reuse/copy-on-write, new-turn reset, post-compaction and schema-maximum
+  context-pressure arithmetic, exact UTF-8 omitted bytes and rename loss, and non-UTF-8 line
+  rejection before JSON parsing;
+- a raw command-output secret canary that remains available only in transient typed memory and is
+  absent from batch/event Debug and prompt-log output capture.
+
+Core snapshots retain the bounded projection and incomplete-history counters. The existing TUI
+consumes only typed agent draft into its transient live buffer; the legacy uncorrelated delta event
+has been removed. No progressive type implements persistence serialization, enters prompt-log
+records, or is projected into Admin, CLI, Telegram, or parallel state in this slice.
+
+The memory assertions above are exact sums of retained `String`/identifier lengths and queue
+accounting, not allocator capacity, RSS, or a comparative performance measurement. This is
+schema-and-fixture plus deterministic local evidence. There is no released app-server
+progressive capture, rich TUI rail, diff/output drilldown, context-pressure UI, restart persistence,
+or comparative latency/RSS result. Those claims remain with P0-D, recovery, and the later native
+performance artifact.
+
 ## Akra Baseline Evidence
 
 All links below use Akra commit `226e4794b84107704378ecc1ea65f7d5c27750e5`.
