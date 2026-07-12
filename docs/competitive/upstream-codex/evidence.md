@@ -601,8 +601,9 @@ Class: `verified/source` plus `verified/local` process-tree observation.
 
 The checked-in [benchmark harness](scripts/benchmark-app-server.mjs) defines the clock boundary and
 uses the [shared Linux sampler](scripts/app-server-harness.mjs) to union every thread's `/proc`
-children list recursively and poll process `VmRSS` every requested 2 ms. Reproduce the one omitted
-warmup plus ten recorded runs with:
+children list recursively and poll process `VmRSS` every requested 2 ms. The sampler fails closed
+when no root-task `children` inventory is readable, rather than reporting root-only RSS as a complete
+tree. Reproduce the one omitted warmup plus ten recorded runs with:
 
 ```bash
 APP_SERVER_BIN=/tmp/akra-upstream-codex-v0.144.1-bin/codex-app-server-x86_64-unknown-linux-musl

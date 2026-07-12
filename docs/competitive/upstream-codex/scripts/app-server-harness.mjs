@@ -170,7 +170,7 @@ export class AppServerClient {
   }
 }
 
-export async function sampleLinuxProcessTree(rootPid) {
+export async function sampleLinuxProcessTree(rootPid, procRoot = "/proc") {
   const pids = [];
   const pending = [rootPid];
   const visited = new Set();
@@ -181,11 +181,16 @@ export async function sampleLinuxProcessTree(rootPid) {
     }
     visited.add(pid);
     try {
-      const taskIds = await readdir(`/proc/${pid}/task`);
+      const taskIds = await readdir(join(procRoot, String(pid), "task"));
       const children = new Set();
+      let readableChildrenFiles = 0;
       for (const taskId of taskIds) {
         try {
-          const body = await readFile(`/proc/${pid}/task/${taskId}/children`, "utf8");
+          const body = await readFile(
+            join(procRoot, String(pid), "task", taskId, "children"),
+            "utf8",
+          );
+          readableChildrenFiles += 1;
           for (const child of body.trim().split(/\s+/).filter(Boolean).map(Number)) {
             children.add(child);
           }
@@ -194,6 +199,9 @@ export async function sampleLinuxProcessTree(rootPid) {
             throw error;
           }
         }
+      }
+      if (pid === rootPid && readableChildrenFiles === 0) {
+        throw new Error("Linux /proc task children inventory is unavailable for the root process");
       }
       pending.push(...children);
       pids.push(pid);
@@ -208,7 +216,7 @@ export async function sampleLinuxProcessTree(rootPid) {
   let processCount = 0;
   for (const pid of pids) {
     try {
-      const status = await readFile(`/proc/${pid}/status`, "utf8");
+      const status = await readFile(join(procRoot, String(pid), "status"), "utf8");
       const match = status.match(/^VmRSS:\s+(\d+)\s+kB$/m);
       if (match) {
         rssKib += Number(match[1]);
