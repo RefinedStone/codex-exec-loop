@@ -17,7 +17,7 @@ use crate::adapter::inbound::tui::conversation_text::{
 use crate::application::service::planning::{
     PlanningRuntimeProjection, PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
 };
-use crate::core::app::{TurnStreamSnapshot, TurnStreamUpdate};
+use crate::core::app::{TurnStreamProgressiveActivityUpdate, TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalResolution, ConversationApprovalReview,
@@ -325,7 +325,9 @@ pub(super) fn reduce_conversation_runtime(
             });
         }
         ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => {
-            match take_stream_snapshot_update(&mut state, snapshot) {
+            let applied = take_stream_snapshot_update(&mut state, snapshot);
+            let progressive_activity = applied.progressive_activity;
+            match applied.update {
                 TurnStreamUpdate::AttachmentObserved { profile } => {
                     // Attachment information is a runtime notice, not a transcript
                     // row, because it describes bridge recovery rather than model
@@ -408,20 +410,38 @@ pub(super) fn reduce_conversation_runtime(
                         )]);
                     }
                 }
+                TurnStreamUpdate::ProgressiveActivityObserved {
+                    activity,
+                    rejection,
+                } => {
+                    if let Some(rejection) = rejection {
+                        state.extend_runtime_notices([format!(
+                            "ignored progressive activity observation: {}",
+                            rejection.notice_label()
+                        )]);
+                    } else {
+                        if let Some((item_id, phase, text)) = latest_agent_draft_for_update(
+                            progressive_activity.as_ref(),
+                            &activity,
+                        ) {
+                            state.sync_live_agent_draft(item_id, phase, text);
+                        }
+                        if progressive_activity_requires_runtime_notice(&activity) {
+                            state.extend_runtime_notices([format!(
+                                "progressive activity was bounded (superseded={}, payload_truncated={}, dropped={}, invalid={}, unknown={})",
+                                activity.superseded_publication_count,
+                                activity.payload_truncation_count,
+                                activity.dropped_observation_count,
+                                activity.invalid_observation_count,
+                                activity.unknown_observation_count,
+                            )]);
+                        }
+                    }
+                }
                 TurnStreamUpdate::StatusUpdated { text } => {
                     // Provider status copy owns the main status line while a turn is
                     // active, but it does not become durable transcript history.
                     state.status_text = text;
-                }
-                TurnStreamUpdate::AgentMessageDelta {
-                    item_id,
-                    phase,
-                    delta,
-                } => {
-                    // Deltas stay in the live buffer until completion, preserving
-                    // streaming responsiveness without committing partial transcript
-                    // rows as final history.
-                    state.push_live_agent_delta(item_id, phase, delta);
                 }
                 TurnStreamUpdate::AgentMessageCompleted {
                     item_id,
@@ -674,13 +694,64 @@ pub(super) fn reduce_conversation_runtime(
     ConversationRuntimeReduction { state, effects }
 }
 
+struct AppliedStreamSnapshot {
+    update: TurnStreamUpdate,
+    progressive_activity: std::sync::Arc<
+        crate::domain::conversation_progressive_activity::ConversationProgressiveActivityProjectionSnapshot,
+    >,
+}
+
 fn take_stream_snapshot_update(
     state: &mut ConversationViewModel,
     snapshot: Box<TurnStreamSnapshot>,
-) -> TurnStreamUpdate {
+) -> AppliedStreamSnapshot {
     let snapshot = *snapshot;
     state.runtime_envelope = snapshot.runtime_envelope.map(|envelope| *envelope);
-    snapshot.update
+    AppliedStreamSnapshot {
+        update: snapshot.update,
+        progressive_activity: snapshot.progressive_activity,
+    }
+}
+
+fn latest_agent_draft_for_update(
+    projection: &crate::domain::conversation_progressive_activity::ConversationProgressiveActivityProjectionSnapshot,
+    update: &TurnStreamProgressiveActivityUpdate,
+) -> Option<(String, Option<String>, String)> {
+    let first_sequence = update.first_sequence?;
+    let last_sequence = update.last_sequence?;
+    projection
+        .records
+        .iter()
+        .filter(|record| {
+            record.last_sequence() >= first_sequence && record.last_sequence() <= last_sequence
+        })
+        .filter_map(|record| {
+            let crate::domain::conversation_progressive_activity::ConversationProgressiveActivityPayload::AgentMessageDelta {
+                phase,
+                text,
+                ..
+            } = &record.observation().payload
+            else {
+                return None;
+            };
+            Some((
+                record.last_sequence(),
+                record.observation().item_id.clone().unwrap_or_default(),
+                phase.clone(),
+                text.clone(),
+            ))
+        })
+        .max_by_key(|(sequence, ..)| *sequence)
+        .map(|(_, item_id, phase, text)| (item_id, phase, text))
+}
+
+const fn progressive_activity_requires_runtime_notice(
+    activity: &TurnStreamProgressiveActivityUpdate,
+) -> bool {
+    activity.payload_truncation_count > 0
+        || activity.dropped_observation_count > 0
+        || activity.invalid_observation_count > 0
+        || activity.unknown_observation_count > 0
 }
 
 fn conversation_runtime_thread_status_label(
@@ -813,6 +884,10 @@ mod tests {
         ConversationApprovalReviewStatus, ConversationMessage, ConversationMessageKind,
         ConversationToolActivity, ConversationToolActivityKind,
     };
+    use crate::domain::conversation_progressive_activity::{
+        ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
+        ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
+    };
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeConfigurationObservation, ConversationRuntimeConfigurationRequest,
         ConversationRuntimeEnvelope, ConversationRuntimeLaunchEnvironment,
@@ -824,20 +899,77 @@ mod tests {
 
     fn stream_snapshot_event(event: ConversationStreamEvent) -> ConversationRuntimeEvent {
         let mut stream_state = TurnStreamState::new();
-        if let ConversationStreamEvent::TurnTerminal { receipt } = &event {
-            stream_state.seed_loaded_thread_identity(
-                receipt.thread_id.clone(),
-                "Test thread",
-                "/tmp/workspace",
-            );
-            stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
-                turn_id: receipt.turn_id.clone(),
-                runtime_request: Box::default(),
-            });
+        match &event {
+            ConversationStreamEvent::TurnTerminal { receipt } => {
+                stream_state.seed_loaded_thread_identity(
+                    receipt.thread_id.clone(),
+                    "Test thread",
+                    "/tmp/workspace",
+                );
+                stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+                    turn_id: receipt.turn_id.clone(),
+                    runtime_request: Box::default(),
+                });
+            }
+            ConversationStreamEvent::ProgressiveActivityObserved { batch } => {
+                let observation = &batch
+                    .records()
+                    .first()
+                    .expect("progressive test event should retain an observation")
+                    .observation();
+                stream_state.seed_loaded_thread_identity(
+                    observation.thread_id.clone(),
+                    "Test thread",
+                    "/tmp/workspace",
+                );
+                if let Some(turn_id) = observation.turn_id.clone() {
+                    stream_state.apply_stream_event(
+                        crate::core::app::TurnStreamEvent::TurnStarted {
+                            turn_id,
+                            runtime_request: Box::default(),
+                        },
+                    );
+                }
+            }
+            _ => {}
         }
         ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
             stream_state.apply_stream_event(core_turn_stream_event_from_application(event)),
         ))
+    }
+
+    fn progressive_agent_event(text: &str) -> ConversationStreamEvent {
+        ConversationStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(0, text)),
+        }
+    }
+
+    fn progressive_agent_batch(sequence: u64, text: &str) -> ConversationProgressiveActivityBatch {
+        ConversationProgressiveActivityBatch::single(ConversationProgressiveActivityObservation {
+            sequence,
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("agent-1".to_string()),
+            kind: ConversationProgressiveActivityKind::AgentMessageDelta,
+            payload: ConversationProgressiveActivityPayload::AgentMessageDelta {
+                phase: Some("analysis".to_string()),
+                text: text.to_string(),
+                source_bytes: text.len() as u64,
+                truncated_bytes: 0,
+            },
+        })
+        .expect("progressive agent test event should be valid")
+    }
+
+    fn coalesced_progressive_agent_event() -> ConversationStreamEvent {
+        let mut batch = progressive_agent_batch(0, "hel");
+        batch
+            .try_merge_from(progressive_agent_batch(1, "lo"))
+            .unwrap();
+        batch.record_superseded_publication().unwrap();
+        ConversationStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch),
+        }
     }
 
     fn completed_stream_event(thread_id: &str, turn_id: &str) -> ConversationStreamEvent {
@@ -1182,11 +1314,7 @@ mod tests {
 
         reduction = reduce_conversation_runtime(
             reduction.state,
-            stream_snapshot_event(ConversationStreamEvent::AgentMessageDelta {
-                item_id: "agent-1".to_string(),
-                phase: Some("analysis".to_string()),
-                delta: "hel".to_string(),
-            }),
+            stream_snapshot_event(progressive_agent_event("hel")),
         );
         assert_eq!(
             reduction
@@ -1285,6 +1413,30 @@ mod tests {
                 .messages
                 .iter()
                 .any(|message| message.text == "provider failed")
+        );
+    }
+
+    #[test]
+    fn normal_progressive_coalescing_updates_live_draft_without_a_loss_notice() {
+        let reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            stream_snapshot_event(coalesced_progressive_agent_event()),
+        );
+
+        assert_eq!(
+            reduction
+                .state
+                .live_agent_message
+                .as_ref()
+                .map(|message| message.text.as_str()),
+            Some("hello")
+        );
+        assert!(
+            reduction
+                .state
+                .runtime_notices
+                .iter()
+                .all(|notice| !notice.contains("progressive activity was bounded"))
         );
     }
 

@@ -204,6 +204,7 @@ impl ConversationViewModel {
      * message에 누적하고, 다른 item이 열리면 기존 live message를 먼저 transcript에
      * commit해 두 agent response가 하나의 message로 합쳐지지 않게 한다.
      */
+    #[cfg(test)]
     pub(crate) fn push_live_agent_delta(
         &mut self,
         item_id: String,
@@ -229,6 +230,30 @@ impl ConversationViewModel {
         self.commit_live_agent_message();
         let mut message =
             ConversationMessage::new(ConversationMessageKind::Agent, delta, phase, Some(item_id));
+        bound_conversation_message(&mut message);
+        self.live_agent_message = Some(message);
+    }
+
+    pub(crate) fn sync_live_agent_draft(
+        &mut self,
+        item_id: String,
+        phase: Option<String>,
+        text: String,
+    ) {
+        if let Some(message) = self.live_agent_message.as_mut()
+            && message.item_id.as_deref() == Some(item_id.as_str())
+        {
+            message.text = text;
+            if phase.is_some() {
+                message.phase = phase;
+            }
+            bound_conversation_message(message);
+            return;
+        }
+
+        self.commit_live_agent_message();
+        let mut message =
+            ConversationMessage::new(ConversationMessageKind::Agent, text, phase, Some(item_id));
         bound_conversation_message(&mut message);
         self.live_agent_message = Some(message);
     }
@@ -371,6 +396,7 @@ fn text_line_count(value: &str) -> usize {
         .saturating_add(1)
 }
 
+#[cfg(test)]
 fn append_bounded_text(value: &mut String, addition: &str, max_bytes: usize, max_lines: usize) {
     if value.ends_with(TEXT_RETENTION_MARKER) {
         return;

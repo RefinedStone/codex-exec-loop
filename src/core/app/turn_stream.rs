@@ -7,6 +7,10 @@ use crate::domain::conversation_item_lifecycle::{
     ConversationItemLifecycleObservation, ConversationItemLifecycleProjection,
     ConversationItemLifecycleProjectionSnapshot, ConversationItemLifecycleRejection,
 };
+use crate::domain::conversation_progressive_activity::{
+    ConversationProgressiveActivityBatch, ConversationProgressiveActivityProjection,
+    ConversationProgressiveActivityProjectionSnapshot, ConversationProgressiveActivityRejection,
+};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeEnvelopeObservationRejection,
@@ -27,6 +31,7 @@ pub struct TurnStreamState {
     cwd: Option<String>,
     runtime_envelope: Option<ConversationRuntimeEnvelope>,
     item_lifecycle: ConversationItemLifecycleProjection,
+    progressive_activity: ConversationProgressiveActivityProjection,
     active_turn_id: Option<String>,
     status_text: Option<String>,
     terminal: Option<TurnStreamTerminalSnapshot>,
@@ -42,6 +47,7 @@ impl TurnStreamState {
             cwd: None,
             runtime_envelope: None,
             item_lifecycle: ConversationItemLifecycleProjection::default(),
+            progressive_activity: ConversationProgressiveActivityProjection::default(),
             active_turn_id: None,
             status_text: None,
             terminal: None,
@@ -87,6 +93,7 @@ impl TurnStreamState {
         self.cwd = Some(cwd.into());
         self.runtime_envelope = None;
         self.item_lifecycle = item_lifecycle;
+        self.progressive_activity = ConversationProgressiveActivityProjection::default();
         self.active_turn_id = None;
         self.status_text = None;
         self.terminal = None;
@@ -119,6 +126,7 @@ impl TurnStreamState {
                 if thread_changed {
                     self.item_lifecycle = ConversationItemLifecycleProjection::default();
                 }
+                self.progressive_activity = ConversationProgressiveActivityProjection::default();
                 self.active_turn_id = None;
                 self.terminal = None;
                 self.last_applied_post_turn_evaluation_id = None;
@@ -135,6 +143,7 @@ impl TurnStreamState {
                 runtime_request,
             } => {
                 self.active_turn_id = Some(turn_id.clone());
+                self.progressive_activity = ConversationProgressiveActivityProjection::default();
                 self.runtime_envelope
                     .get_or_insert_with(ConversationRuntimeEnvelope::unobserved)
                     .record_turn_request(*runtime_request);
@@ -152,19 +161,13 @@ impl TurnStreamState {
             TurnStreamEvent::ItemLifecycleObserved { observation } => {
                 self.item_lifecycle_observed_update(*observation)
             }
+            TurnStreamEvent::ProgressiveActivityObserved { batch } => {
+                self.progressive_activity_observed_update(*batch)
+            }
             TurnStreamEvent::StatusUpdated { text } => {
                 self.status_text = Some(text.clone());
                 TurnStreamUpdate::StatusUpdated { text }
             }
-            TurnStreamEvent::AgentMessageDelta {
-                item_id,
-                phase,
-                delta,
-            } => TurnStreamUpdate::AgentMessageDelta {
-                item_id,
-                phase,
-                delta,
-            },
             TurnStreamEvent::AgentMessageCompleted {
                 item_id,
                 phase,
@@ -333,6 +336,25 @@ impl TurnStreamState {
         }
     }
 
+    fn progressive_activity_observed_update(
+        &mut self,
+        batch: ConversationProgressiveActivityBatch,
+    ) -> TurnStreamUpdate {
+        let activity = TurnStreamProgressiveActivityUpdate::from_batch(&batch);
+        let rejection = self
+            .progressive_activity
+            .apply_batch_correlated(
+                self.thread_id.as_deref(),
+                self.active_turn_id.as_deref(),
+                batch,
+            )
+            .err();
+        TurnStreamUpdate::ProgressiveActivityObserved {
+            activity,
+            rejection,
+        }
+    }
+
     fn turn_terminal_update(
         &mut self,
         receipt: ConversationTurnTerminalReceipt,
@@ -410,6 +432,7 @@ impl TurnStreamState {
             cwd: self.cwd.clone(),
             runtime_envelope: self.runtime_envelope.clone().map(Box::new),
             item_lifecycle: self.item_lifecycle.snapshot(),
+            progressive_activity: self.progressive_activity.snapshot(),
             active_turn_id: self.active_turn_id.clone(),
             status_text: self.status_text.clone(),
             terminal: self.terminal.clone(),
@@ -432,10 +455,46 @@ pub struct TurnStreamSnapshot {
     pub cwd: Option<String>,
     pub runtime_envelope: Option<Box<ConversationRuntimeEnvelope>>,
     pub item_lifecycle: Arc<ConversationItemLifecycleProjectionSnapshot>,
+    pub progressive_activity: Arc<ConversationProgressiveActivityProjectionSnapshot>,
     pub active_turn_id: Option<String>,
     pub status_text: Option<String>,
     pub terminal: Option<TurnStreamTerminalSnapshot>,
     pub update: TurnStreamUpdate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnStreamProgressiveActivityUpdate {
+    pub first_sequence: Option<u64>,
+    pub last_sequence: Option<u64>,
+    pub source_observation_count: u64,
+    pub superseded_publication_count: u64,
+    pub payload_truncation_count: u64,
+    pub dropped_observation_count: u64,
+    pub invalid_observation_count: u64,
+    pub unknown_observation_count: u64,
+}
+
+impl TurnStreamProgressiveActivityUpdate {
+    fn from_batch(batch: &ConversationProgressiveActivityBatch) -> Self {
+        Self {
+            first_sequence: batch.first_sequence(),
+            last_sequence: batch.last_sequence(),
+            source_observation_count: batch.source_observation_count(),
+            superseded_publication_count: batch.superseded_publication_count(),
+            payload_truncation_count: batch.payload_truncation_count(),
+            dropped_observation_count: batch.dropped_observation_count(),
+            invalid_observation_count: batch.invalid_observation_count(),
+            unknown_observation_count: batch.unknown_observation_count(),
+        }
+    }
+
+    pub const fn history_incomplete(&self) -> bool {
+        self.superseded_publication_count > 0
+            || self.payload_truncation_count > 0
+            || self.dropped_observation_count > 0
+            || self.invalid_observation_count > 0
+            || self.unknown_observation_count > 0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -459,13 +518,11 @@ pub enum TurnStreamEvent {
     ItemLifecycleObserved {
         observation: Box<ConversationItemLifecycleObservation>,
     },
+    ProgressiveActivityObserved {
+        batch: Box<ConversationProgressiveActivityBatch>,
+    },
     StatusUpdated {
         text: String,
-    },
-    AgentMessageDelta {
-        item_id: String,
-        phase: Option<String>,
-        delta: String,
     },
     AgentMessageCompleted {
         item_id: String,
@@ -536,13 +593,12 @@ pub enum TurnStreamUpdate {
         consistency: Option<ConversationItemLifecycleConsistency>,
         rejection: Option<ConversationItemLifecycleRejection>,
     },
+    ProgressiveActivityObserved {
+        activity: TurnStreamProgressiveActivityUpdate,
+        rejection: Option<ConversationProgressiveActivityRejection>,
+    },
     StatusUpdated {
         text: String,
-    },
-    AgentMessageDelta {
-        item_id: String,
-        phase: Option<String>,
-        delta: String,
     },
     AgentMessageCompleted {
         item_id: String,
@@ -656,6 +712,10 @@ mod tests {
         ConversationApprovalResolution, ConversationApprovalReview,
         ConversationApprovalReviewStatus, ConversationToolActivity, ConversationToolActivityKind,
     };
+    use crate::domain::conversation_progressive_activity::{
+        ConversationProgressiveActivityKind, ConversationProgressiveActivityObservation,
+        ConversationProgressiveActivityPayload,
+    };
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeConfigurationObservation, ConversationRuntimeLaunchEnvironment,
         ConversationRuntimeModelReroute, ConversationRuntimeModelRerouteReason,
@@ -703,6 +763,29 @@ mod tests {
                 crate::domain::conversation_item_lifecycle::ConversationItemOutcome::InProgress,
             summary: "command bytes=10; status=inProgress".to_string(),
         }
+    }
+
+    fn progressive_agent_batch(
+        sequence: u64,
+        thread_id: &str,
+        turn_id: &str,
+        item_id: &str,
+        text: &str,
+    ) -> ConversationProgressiveActivityBatch {
+        ConversationProgressiveActivityBatch::single(ConversationProgressiveActivityObservation {
+            sequence,
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            item_id: Some(item_id.to_string()),
+            kind: ConversationProgressiveActivityKind::AgentMessageDelta,
+            payload: ConversationProgressiveActivityPayload::AgentMessageDelta {
+                phase: Some("output".to_string()),
+                text: text.to_string(),
+                source_bytes: text.len() as u64,
+                truncated_bytes: 0,
+            },
+        })
+        .expect("progressive agent batch should be valid")
     }
 
     fn runtime_envelope_with_applied_model(model: &str) -> ConversationRuntimeEnvelope {
@@ -1148,23 +1231,200 @@ mod tests {
     }
 
     #[test]
-    fn agent_delta_projects_snapshot_update() {
-        let mut state = TurnStreamState::new();
+    fn progressive_activity_projects_batch_update_and_reuses_snapshot_arc() {
+        let mut state = prepared_turn_state();
+        let batch = progressive_agent_batch(1, "thread-1", "turn-1", "item-1", "hello");
 
-        let snapshot = state.apply_stream_event(TurnStreamEvent::AgentMessageDelta {
-            item_id: "item-1".to_string(),
-            phase: Some("output".to_string()),
-            delta: "hello".to_string(),
+        let observed = state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch.clone()),
         });
 
+        assert!(matches!(
+            &observed.update,
+            TurnStreamUpdate::ProgressiveActivityObserved {
+                activity,
+                rejection: None,
+            } if activity.first_sequence == batch.first_sequence()
+                && activity.last_sequence == batch.last_sequence()
+                && activity.source_observation_count == batch.source_observation_count()
+        ));
+        assert_eq!(observed.progressive_activity.last_sequence, Some(1));
+        assert_eq!(observed.progressive_activity.source_observation_count, 1);
+        assert_eq!(observed.progressive_activity.records.len(), 1);
+
+        let status = state.apply_stream_event(TurnStreamEvent::StatusUpdated {
+            text: "working".to_string(),
+        });
+        assert!(Arc::ptr_eq(
+            &observed.progressive_activity,
+            &status.progressive_activity
+        ));
+
+        let appended = state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(
+                2, "thread-1", "turn-1", "item-1", " world",
+            )),
+        });
+        assert!(!Arc::ptr_eq(
+            &observed.progressive_activity,
+            &appended.progressive_activity
+        ));
+        assert_eq!(observed.progressive_activity.source_observation_count, 1);
+        assert_eq!(appended.progressive_activity.source_observation_count, 2);
+        assert_eq!(appended.progressive_activity.records.len(), 1);
         assert_eq!(
-            snapshot.update,
-            TurnStreamUpdate::AgentMessageDelta {
-                item_id: "item-1".to_string(),
-                phase: Some("output".to_string()),
-                delta: "hello".to_string(),
-            }
+            appended.progressive_activity.records[0].observation_count(),
+            2
         );
+    }
+
+    #[test]
+    fn progressive_activity_resets_for_each_new_turn_and_thread() {
+        let mut state = prepared_turn_state();
+        state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(
+                1,
+                "thread-1",
+                "turn-1",
+                "item-1",
+                "first turn",
+            )),
+        });
+
+        let next_turn = state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-2".to_string(),
+            runtime_request: Box::default(),
+        });
+        assert!(next_turn.progressive_activity.records.is_empty());
+        assert_eq!(next_turn.progressive_activity.last_sequence, None);
+        assert_eq!(next_turn.progressive_activity.source_observation_count, 0);
+
+        state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(
+                1,
+                "thread-1",
+                "turn-2",
+                "item-2",
+                "second turn",
+            )),
+        });
+        let next_thread = state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
+            thread_id: "thread-2".to_string(),
+            title: "Next thread".to_string(),
+            cwd: "/tmp/next-workspace".to_string(),
+            runtime_envelope: Box::default(),
+        });
+        assert!(next_thread.progressive_activity.records.is_empty());
+        assert_eq!(next_thread.progressive_activity.last_sequence, None);
+        assert_eq!(next_thread.progressive_activity.source_observation_count, 0);
+    }
+
+    #[test]
+    fn progressive_activity_rejects_stale_and_uncorrelated_batches() {
+        let mut state = prepared_turn_state();
+        state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(
+                7, "thread-1", "turn-1", "item-1", "accepted",
+            )),
+        });
+
+        let stale = state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(
+                7, "thread-1", "turn-1", "item-1", "replayed",
+            )),
+        });
+        assert!(matches!(
+            stale.update,
+            TurnStreamUpdate::ProgressiveActivityObserved {
+                rejection: Some(ConversationProgressiveActivityRejection::StaleSequence {
+                    last_sequence: 7
+                }),
+                ..
+            }
+        ));
+
+        let wrong_thread = state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(
+                8,
+                "thread-other",
+                "turn-1",
+                "item-2",
+                "wrong thread",
+            )),
+        });
+        assert!(matches!(
+            wrong_thread.update,
+            TurnStreamUpdate::ProgressiveActivityObserved {
+                rejection: Some(ConversationProgressiveActivityRejection::ThreadMismatch),
+                ..
+            }
+        ));
+
+        let wrong_turn = state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(progressive_agent_batch(
+                9,
+                "thread-1",
+                "turn-other",
+                "item-3",
+                "wrong turn",
+            )),
+        });
+        assert!(matches!(
+            wrong_turn.update,
+            TurnStreamUpdate::ProgressiveActivityObserved {
+                rejection: Some(ConversationProgressiveActivityRejection::TurnMismatch),
+                ..
+            }
+        ));
+        assert_eq!(wrong_turn.progressive_activity.records.len(), 1);
+        assert_eq!(wrong_turn.progressive_activity.last_sequence, Some(7));
+        assert_eq!(wrong_turn.progressive_activity.invalid_observation_count, 3);
+    }
+
+    #[test]
+    fn progressive_activity_preserves_incomplete_history_counters() {
+        let mut state = prepared_turn_state();
+        let mut batch = progressive_agent_batch(1, "thread-1", "turn-1", "item-1", "bounded");
+        batch.record_superseded_publication().unwrap();
+        batch.set_incomplete_counters_for_test(2, 3, 4, 5);
+
+        let snapshot = state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch),
+        });
+
+        assert!(snapshot.progressive_activity.history_incomplete());
+        assert_eq!(
+            snapshot.progressive_activity.superseded_publication_count,
+            1
+        );
+        assert_eq!(snapshot.progressive_activity.coalesced_observation_count, 2);
+        assert_eq!(snapshot.progressive_activity.loss_event_count(), 3);
+        assert_eq!(snapshot.progressive_activity.invalid_observation_count, 4);
+        assert_eq!(snapshot.progressive_activity.unknown_observation_count, 5);
+    }
+
+    #[test]
+    fn progressive_history_only_batch_advances_core_sequence_and_retains_gap() {
+        let mut state = prepared_turn_state();
+        let mut batch = progressive_agent_batch(4, "thread-1", "turn-1", "item-1", "discarded");
+        batch.discard_retained_records();
+
+        let snapshot = state.apply_stream_event(TurnStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch),
+        });
+
+        assert!(matches!(
+            snapshot.update,
+            TurnStreamUpdate::ProgressiveActivityObserved {
+                rejection: None,
+                ..
+            }
+        ));
+        assert_eq!(snapshot.progressive_activity.last_sequence, Some(4));
+        assert_eq!(snapshot.progressive_activity.source_observation_count, 1);
+        assert_eq!(snapshot.progressive_activity.dropped_observation_count, 1);
+        assert!(snapshot.progressive_activity.records.is_empty());
+        assert!(snapshot.progressive_activity.history_incomplete());
     }
 
     #[test]

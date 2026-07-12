@@ -3,6 +3,7 @@ use crate::domain::conversation::{
     ConversationToolActivity,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleObservation;
+use crate::domain::conversation_progressive_activity::ConversationProgressiveActivityBatch;
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
     ConversationRuntimeEnvelopeObservation,
@@ -31,13 +32,11 @@ pub enum ConversationStreamEvent {
     ItemLifecycleObserved {
         observation: Box<ConversationItemLifecycleObservation>,
     },
+    ProgressiveActivityObserved {
+        batch: Box<ConversationProgressiveActivityBatch>,
+    },
     StatusUpdated {
         text: String,
-    },
-    AgentMessageDelta {
-        item_id: String,
-        phase: Option<String>,
-        delta: String,
     },
     AgentMessageCompleted {
         item_id: String,

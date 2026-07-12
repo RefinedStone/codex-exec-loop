@@ -144,16 +144,10 @@ pub(super) fn core_turn_stream_event_from_application(
         ConversationStreamEvent::ItemLifecycleObserved { observation } => {
             TurnStreamEvent::ItemLifecycleObserved { observation }
         }
+        ConversationStreamEvent::ProgressiveActivityObserved { batch } => {
+            TurnStreamEvent::ProgressiveActivityObserved { batch }
+        }
         ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
-        ConversationStreamEvent::AgentMessageDelta {
-            item_id,
-            phase,
-            delta,
-        } => TurnStreamEvent::AgentMessageDelta {
-            item_id,
-            phase,
-            delta,
-        },
         ConversationStreamEvent::AgentMessageCompleted {
             item_id,
             phase,
@@ -221,6 +215,10 @@ mod tests {
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
     };
+    use crate::domain::conversation_progressive_activity::{
+        ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
+        ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
+    };
     use crate::domain::parallel_mode::{
         ParallelModeControlPlaneWorkerEvent, ParallelModeControlPlaneWorkerEventKind,
     };
@@ -253,6 +251,22 @@ mod tests {
             .with_application_delivery(
                 crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
             );
+        let progressive_batch = ConversationProgressiveActivityBatch::single(
+            ConversationProgressiveActivityObservation {
+                sequence: 0,
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                item_id: Some("item-1".to_string()),
+                kind: ConversationProgressiveActivityKind::AgentMessageDelta,
+                payload: ConversationProgressiveActivityPayload::AgentMessageDelta {
+                    phase: Some("analysis".to_string()),
+                    text: "hello".to_string(),
+                    source_bytes: 5,
+                    truncated_bytes: 0,
+                },
+            },
+        )
+        .expect("progressive mapping fixture should be valid");
 
         let cases = vec![
             (
@@ -294,15 +308,11 @@ mod tests {
                 },
             ),
             (
-                ConversationStreamEvent::AgentMessageDelta {
-                    item_id: "item-1".to_string(),
-                    phase: Some("analysis".to_string()),
-                    delta: "hello".to_string(),
+                ConversationStreamEvent::ProgressiveActivityObserved {
+                    batch: Box::new(progressive_batch.clone()),
                 },
-                TurnStreamEvent::AgentMessageDelta {
-                    item_id: "item-1".to_string(),
-                    phase: Some("analysis".to_string()),
-                    delta: "hello".to_string(),
+                TurnStreamEvent::ProgressiveActivityObserved {
+                    batch: Box::new(progressive_batch),
                 },
             ),
             (
@@ -1363,9 +1373,12 @@ impl NativeTuiApp {
     }
 
     pub(super) fn poll_core_runtime_inputs(&mut self, max_inputs: usize) -> bool {
-        let outcomes = self.core_runtime.drain_pending_inputs(max_inputs);
-        let changed = !outcomes.is_empty();
-        for outcome in outcomes {
+        let mut changed = false;
+        for _ in 0..max_inputs {
+            let Some(outcome) = self.core_runtime.poll_pending_input() else {
+                break;
+            };
+            changed = true;
             self.apply_core_dispatch_outcome(outcome);
         }
         changed

@@ -129,11 +129,22 @@ fn run_conversation_stream_worker(
             }
             break;
         }
-        let _ = input_sender.send(conversation_stream_core_input(
-            correlation,
-            event,
-            &execution_snapshot_capture,
-        ));
+        let core_input =
+            conversation_stream_core_input(correlation, event, &execution_snapshot_capture);
+        if let Err(error) = input_sender.send(core_input) {
+            if matches!(
+                error.0,
+                CoreInput::ConversationStreamUpdated {
+                    event: TurnStreamEvent::ProgressiveActivityObserved { .. },
+                    ..
+                }
+            ) {
+                let message =
+                    "Core progressive ingress rejected a bounded stream segment".to_string();
+                observed_terminal_failure = Some(message);
+            }
+            break;
+        }
     }
 
     // A bounded producer may still attempt to send after a terminal event.
@@ -304,16 +315,10 @@ fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStr
         ConversationStreamEvent::ItemLifecycleObserved { observation } => {
             TurnStreamEvent::ItemLifecycleObserved { observation }
         }
+        ConversationStreamEvent::ProgressiveActivityObserved { batch } => {
+            TurnStreamEvent::ProgressiveActivityObserved { batch }
+        }
         ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
-        ConversationStreamEvent::AgentMessageDelta {
-            item_id,
-            phase,
-            delta,
-        } => TurnStreamEvent::AgentMessageDelta {
-            item_id,
-            phase,
-            delta,
-        },
         ConversationStreamEvent::AgentMessageCompleted {
             item_id,
             phase,

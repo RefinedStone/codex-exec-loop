@@ -4,5 +4,7 @@
  * runtime workers convert application service completion into CoreInput.
  */
 pub mod driver;
+mod input_mailbox;
 
-pub use driver::{CoreEffectExecutor, CoreInputSender, CoreRuntime, core_input_channel};
+pub use driver::{CoreEffectExecutor, CoreRuntime};
+pub use input_mailbox::{CoreInputReceiver, CoreInputSender, core_input_channel};

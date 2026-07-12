@@ -7863,6 +7863,17 @@ mod tests {
     }
 
     #[test]
+    fn bounded_line_reader_rejects_non_utf8_protocol_bytes() {
+        let mut reader = BufReader::new(Cursor::new(vec![0xff, b'\n']));
+        let error = match read_bounded_line(&mut reader, 16) {
+            Err(error) => error,
+            Ok(_) => panic!("app-server protocol lines must be valid UTF-8"),
+        };
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn stdout_limit_supports_complete_long_lived_thread_responses() {
         let payload = vec![b'a'; 2 * 1024 * 1024 + 1];
         let mut reader = BufReader::new(Cursor::new(payload));

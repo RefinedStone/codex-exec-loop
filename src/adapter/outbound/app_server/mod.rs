@@ -91,7 +91,6 @@ const PLANNING_WORKER_SERVICE_NAME: &str = "akra-planning-worker";
 const PROMPT_LOG_CAPTURE_CHANNEL_CAPACITY: usize = APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION;
 const MAX_STREAM_IDENTIFIER_BYTES: usize = 4 * 1024;
 const MAX_STREAM_METADATA_BYTES: usize = 64 * 1024;
-const MAX_STREAM_DELTA_BYTES: usize = 256 * 1024;
 const MAX_STREAM_COMPLETED_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STREAM_CHANGED_PATHS: usize = 256;
 const MAX_STREAM_PATH_BYTES: usize = 16 * 1024;
@@ -299,6 +298,22 @@ impl AppServerEventSender for mpsc::Sender<ConversationStreamEvent> {
     }
 }
 
+#[cfg(test)]
+impl AppServerEventSender for mpsc::SyncSender<ConversationStreamEvent> {
+    fn try_send_prebounded(
+        &self,
+        event: ConversationStreamEvent,
+    ) -> std::result::Result<(), AppServerEventTrySendError> {
+        match mpsc::SyncSender::try_send(self, event) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err(AppServerEventTrySendError::Full),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(AppServerEventTrySendError::Disconnected)
+            }
+        }
+    }
+}
+
 fn send_required_app_server_event(
     event_sender: &dyn AppServerEventSender,
     event: ConversationStreamEvent,
@@ -372,17 +387,11 @@ fn bounded_app_server_stream_event(event: ConversationStreamEvent) -> Conversati
         ConversationStreamEvent::ItemLifecycleObserved { observation } => {
             ConversationStreamEvent::ItemLifecycleObserved { observation }
         }
+        ConversationStreamEvent::ProgressiveActivityObserved { batch } => {
+            ConversationStreamEvent::ProgressiveActivityObserved { batch }
+        }
         ConversationStreamEvent::StatusUpdated { text } => ConversationStreamEvent::StatusUpdated {
             text: bounded_stream_text(text, MAX_STREAM_METADATA_BYTES),
-        },
-        ConversationStreamEvent::AgentMessageDelta {
-            item_id,
-            phase,
-            delta,
-        } => ConversationStreamEvent::AgentMessageDelta {
-            item_id: bounded_stream_text(item_id, MAX_STREAM_IDENTIFIER_BYTES),
-            phase: phase.map(|phase| bounded_stream_text(phase, MAX_STREAM_IDENTIFIER_BYTES)),
-            delta: bounded_stream_text(delta, MAX_STREAM_DELTA_BYTES),
         },
         ConversationStreamEvent::AgentMessageCompleted {
             item_id,
@@ -1902,13 +1911,13 @@ mod tests {
     use super::{
         AppServerEventSender, AppServerPromptOutputCapture, CodexAppServerAdapter,
         ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
-        MAX_STREAM_CHANGED_PATHS, MAX_STREAM_COMPLETED_MESSAGE_BYTES, MAX_STREAM_DELTA_BYTES,
+        MAX_STREAM_CHANGED_PATHS, MAX_STREAM_COMPLETED_MESSAGE_BYTES,
         PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
         PlanningWorkerContinuationWatcher, STREAM_TRUNCATION_MARKER,
         bounded_app_server_stream_event, codex_raw_trust_key, finish_stream_result,
         persisted_error_summary, prompt_log_input_records, prompt_log_output_record,
         prompt_log_stream_forwarder, prompt_log_terminal_error, prompt_log_terminal_status,
-        protected_thread_workspace, reasoning_effort_label,
+        protected_thread_workspace, reasoning_effort_label, send_required_app_server_event,
     };
     #[cfg(unix)]
     use super::{ConversationTurnTerminalOutcome, PLANNING_WORKER_MODEL};
@@ -1935,6 +1944,10 @@ mod tests {
     };
     #[cfg(unix)]
     use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
+    use crate::domain::conversation_progressive_activity::{
+        ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
+        ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
+    };
     #[cfg(unix)]
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeApprovalPolicy, ConversationRuntimeApprovalsReviewer,
@@ -3045,17 +3058,6 @@ mod tests {
         );
         assert!(text.ends_with(STREAM_TRUNCATION_MARKER));
 
-        let delta = bounded_app_server_stream_event(ConversationStreamEvent::AgentMessageDelta {
-            item_id: "item-1".to_string(),
-            phase: None,
-            delta: "한".repeat(MAX_STREAM_DELTA_BYTES),
-        });
-        let ConversationStreamEvent::AgentMessageDelta { delta, .. } = delta else {
-            panic!("delta should remain the same event kind");
-        };
-        assert!(delta.len() <= MAX_STREAM_DELTA_BYTES + STREAM_TRUNCATION_MARKER.len());
-        assert!(delta.ends_with(STREAM_TRUNCATION_MARKER));
-
         let receipt = ConversationTurnTerminalReceipt::completed(
             "thread-1",
             "turn-1",
@@ -3141,12 +3143,158 @@ mod tests {
     }
 
     #[test]
+    fn app_server_progressive_burst_preserves_control_approval_and_terminal_delivery() {
+        const PUBLICATION_COUNT: u64 = 10_000;
+        let (sender, receiver) = conversation_stream_channel();
+
+        for sequence in 0..PUBLICATION_COUNT {
+            send_required_app_server_event(
+                &sender,
+                progressive_plan_event(sequence),
+                "progressive activity",
+            )
+            .expect("progressive pressure must not consume control FIFO capacity");
+        }
+
+        let status = ConversationStreamEvent::StatusUpdated {
+            text: "control remains live".to_string(),
+        };
+        let approval = ConversationStreamEvent::ApprovalRequested {
+            request: ConversationApprovalRequest {
+                approval_id: "approval-1".to_string(),
+                server_request_id: "request-1".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind: ConversationApprovalRequestKind::CommandExecution,
+                summary: "approve command".to_string(),
+                details: vec!["cargo test".to_string()],
+            },
+        };
+        let terminal = ConversationStreamEvent::TurnTerminal {
+            receipt: ConversationTurnTerminalReceipt::completed(
+                "thread-progressive",
+                "turn-progressive",
+                Vec::new(),
+            )
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+        };
+        for (name, event) in [
+            ("status", status.clone()),
+            ("approval", approval.clone()),
+            ("terminal", terminal.clone()),
+        ] {
+            send_required_app_server_event(&sender, event, name)
+                .expect("progressive pressure must not crowd out required events");
+        }
+
+        let ConversationStreamEvent::ProgressiveActivityObserved { batch } = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("pending progressive activity should arrive before later controls")
+        else {
+            panic!("progressive activity was reordered behind a later control event");
+        };
+        assert_eq!(batch.first_sequence(), Some(0));
+        assert_eq!(batch.last_sequence(), Some(PUBLICATION_COUNT - 1));
+        assert_eq!(batch.source_observation_count(), PUBLICATION_COUNT);
+        assert_eq!(batch.superseded_publication_count(), PUBLICATION_COUNT - 1);
+        for expected in [status, approval, terminal] {
+            assert_eq!(
+                receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("required event should remain admitted in FIFO order"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn progressive_secret_canary_stays_out_of_debug_and_prompt_log_output() {
+        let secret = "progressive-secret-canary-2fd9966b";
+        let event = progressive_command_output_event(secret);
+        let bounded = bounded_app_server_stream_event(event);
+
+        assert!(prompt_log_output_record(&bounded).is_none());
+        assert!(!format!("{bounded:?}").contains(secret));
+
+        let (ui_sender, ui_receiver) = conversation_stream_channel();
+        let (prompt_sender, capture_worker) = prompt_log_stream_forwarder(ui_sender);
+        send_required_app_server_event(&prompt_sender, bounded, "progressive command output")
+            .expect("progressive activity should reach the application mailbox");
+        drop(prompt_sender);
+
+        let delivered = ui_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("transient progressive activity should remain available to the reducer");
+        assert!(!format!("{delivered:?}").contains(secret));
+        let ConversationStreamEvent::ProgressiveActivityObserved { batch } = delivered else {
+            panic!("progressive activity should retain its event kind");
+        };
+        let ConversationProgressiveActivityPayload::CommandOutput { tail, .. } =
+            &batch.records()[0].observation().payload
+        else {
+            panic!("progressive activity should retain its typed command payload");
+        };
+        assert_eq!(
+            tail, secret,
+            "the canary must exercise raw transient detail"
+        );
+
+        let capture = capture_worker
+            .join()
+            .expect("prompt capture worker should shut down cleanly");
+        assert!(capture.output_items.is_empty());
+    }
+
+    #[test]
     fn persisted_error_summary_never_contains_the_error_payload() {
         let secret = "private-app-server-error-payload";
         let summary = persisted_error_summary(&anyhow::anyhow!(secret));
 
         assert!(summary.starts_with("app-server error redacted"));
         assert!(!summary.contains(secret));
+    }
+
+    fn progressive_plan_event(sequence: u64) -> ConversationStreamEvent {
+        let batch = ConversationProgressiveActivityBatch::single(
+            ConversationProgressiveActivityObservation {
+                sequence,
+                thread_id: "thread-progressive".to_string(),
+                turn_id: Some("turn-progressive".to_string()),
+                item_id: Some("item-plan".to_string()),
+                kind: ConversationProgressiveActivityKind::PlanDelta,
+                payload: ConversationProgressiveActivityPayload::PlanDelta {
+                    chunk_count: 1,
+                    source_bytes: 1,
+                },
+            },
+        )
+        .expect("test progressive activity should satisfy domain bounds");
+        ConversationStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch),
+        }
+    }
+
+    fn progressive_command_output_event(secret: &str) -> ConversationStreamEvent {
+        let batch = ConversationProgressiveActivityBatch::single(
+            ConversationProgressiveActivityObservation {
+                sequence: 0,
+                thread_id: "thread-progressive".to_string(),
+                turn_id: Some("turn-progressive".to_string()),
+                item_id: Some("item-command".to_string()),
+                kind: ConversationProgressiveActivityKind::CommandOutput,
+                payload: ConversationProgressiveActivityPayload::CommandOutput {
+                    tail: secret.to_string(),
+                    chunk_count: 1,
+                    source_bytes: secret.len() as u64,
+                    newline_count: 0,
+                    ends_with_newline: false,
+                    truncated_bytes: 0,
+                },
+            },
+        )
+        .expect("test progressive activity should satisfy domain bounds");
+        ConversationStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch),
+        }
     }
 
     #[test]
@@ -3954,6 +4102,20 @@ for line in sys.stdin:
             },
         })
         if scenario != "early_runtime_envelope":
+            send({
+                "method": "item/started",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "startedAtMs": 0,
+                    "item": {
+                        "type": "agentMessage",
+                        "id": "agent-1",
+                        "phase": "commentary",
+                        "text": "",
+                    },
+                },
+            })
             send({
                 "method": "item/agentMessage/delta",
                 "params": {

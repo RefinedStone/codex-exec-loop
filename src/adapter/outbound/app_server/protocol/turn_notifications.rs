@@ -16,6 +16,11 @@ use crate::domain::conversation_item_lifecycle::{
     ConversationItemLifecycleProjection, ConversationItemOutcome,
     MAX_RETAINED_CONVERSATION_ITEM_LIFECYCLE_RECORDS,
 };
+use crate::domain::conversation_progressive_activity::{
+    ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
+    ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
+    MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES, bounded_progressive_prefix,
+};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservationGap,
 };
@@ -77,9 +82,16 @@ impl AppServerNotification {
         self.method == "error"
             || self.method == "thread/status/changed"
             || self.method == "thread/settings/updated"
+            || self.method == "thread/tokenUsage/updated"
             || self.method == "model/rerouted"
+            || self.method == "model/safetyBuffering/updated"
+            || self.method == "model/verification"
+            || self.method == "guardianWarning"
             || self.method.starts_with("turn/")
             || self.method.starts_with("item/")
+            || (self.method.starts_with("thread/")
+                && self.params.get("turnId").is_some()
+                && has_progressive_method_suffix(&self.method))
     }
 
     pub(in crate::adapter::outbound::app_server) fn warning_text(&self, context: &str) -> String {
@@ -140,6 +152,7 @@ pub(in crate::adapter::outbound::app_server) struct ActiveTurnNotificationState 
     runtime_envelope_observation_gap: ConversationRuntimeObservationGap,
     item_lifecycle: ConversationItemLifecycleProjection,
     item_effect_identities: ItemEffectIdentityLedger,
+    next_progressive_activity_sequence: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -162,6 +175,14 @@ enum ItemEffectIdentityObservation {
     DuplicateCompletion,
     KindMismatch,
     Exhausted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgressiveItemIdentityObservation {
+    Accepted,
+    MissingBoundary,
+    KindMismatch,
+    AfterCompletion,
 }
 
 impl ItemEffectIdentityLedger {
@@ -210,6 +231,30 @@ impl ItemEffectIdentityLedger {
                 ItemEffectIdentityObservation::Accepted
             }
         }
+    }
+
+    fn classify_progressive(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        item_id: &str,
+        expected_kind: &ConversationItemKind,
+    ) -> ProgressiveItemIdentityObservation {
+        let identity_fingerprint = item_identity_fingerprint(thread_id, turn_id, item_id);
+        let Some(record) = self
+            .records
+            .iter()
+            .find(|record| record.identity_fingerprint == identity_fingerprint)
+        else {
+            return ProgressiveItemIdentityObservation::MissingBoundary;
+        };
+        if record.kind_fingerprint != item_kind_fingerprint(expected_kind) {
+            return ProgressiveItemIdentityObservation::KindMismatch;
+        }
+        if record.completion_seen {
+            return ProgressiveItemIdentityObservation::AfterCompletion;
+        }
+        ProgressiveItemIdentityObservation::Accepted
     }
 }
 
@@ -292,6 +337,15 @@ impl ActiveTurnNotificationState {
         self.terminal_receipt = Some(receipt.clone());
         TurnNotificationHandling::Terminal { receipt }
     }
+
+    fn allocate_progressive_activity_sequence(&mut self) -> Result<u64> {
+        let sequence = self.next_progressive_activity_sequence;
+        self.next_progressive_activity_sequence = self
+            .next_progressive_activity_sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("progressive activity sequence exhausted"))?;
+        Ok(sequence)
+    }
 }
 
 pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
@@ -312,6 +366,107 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
         return Ok(TurnNotificationHandling::Dropped(
             notification.warning_text("after the active turn already had a terminal receipt"),
         ));
+    }
+
+    let progressive_sequence = state.next_progressive_activity_sequence;
+    if matches!(
+        super::progressive_activity::classify_progressive_activity_scope(
+            notification.method(),
+            params,
+            thread_id,
+            turn_id,
+        ),
+        super::progressive_activity::ProgressiveActivityScope::Stale
+    ) {
+        return Ok(TurnNotificationHandling::Dropped(
+            notification.warning_text("that did not match the active turn stream"),
+        ));
+    }
+    match super::parse_progressive_activity_notification(
+        notification.method(),
+        params,
+        progressive_sequence,
+    ) {
+        super::ProgressiveActivityNotificationHandling::Activity(parsed) => {
+            let observation = parsed
+                .batch
+                .records()
+                .first()
+                .map(|record| record.observation())
+                .expect("single progressive parser batch must retain one observation");
+            if !progressive_observation_matches_active_turn(observation, thread_id, turn_id) {
+                return Ok(TurnNotificationHandling::Dropped(
+                    notification.warning_text("that did not match the active turn stream"),
+                ));
+            }
+            let item_identity = match (
+                parsed.expected_item_kind.as_ref(),
+                observation.item_id.as_deref(),
+                observation.turn_id.as_deref(),
+            ) {
+                (Some(expected_kind), Some(item_id), Some(observed_turn_id)) => state
+                    .item_effect_identities
+                    .classify_progressive(thread_id, observed_turn_id, item_id, expected_kind),
+                (Some(_), _, _) => ProgressiveItemIdentityObservation::MissingBoundary,
+                (None, _, _) => ProgressiveItemIdentityObservation::Accepted,
+            };
+            state.allocate_progressive_activity_sequence()?;
+            send_required_app_server_event(
+                event_sender,
+                ConversationStreamEvent::ProgressiveActivityObserved {
+                    batch: Box::new(parsed.batch),
+                },
+                notification.method(),
+            )?;
+            match item_identity {
+                ProgressiveItemIdentityObservation::Accepted => {
+                    return Ok(TurnNotificationHandling::Consumed);
+                }
+                ProgressiveItemIdentityObservation::MissingBoundary => {
+                    anyhow::bail!(
+                        "progressive item activity arrived without a retained item boundary"
+                    );
+                }
+                ProgressiveItemIdentityObservation::KindMismatch => {
+                    anyhow::bail!("progressive item activity changed retained item kind");
+                }
+                ProgressiveItemIdentityObservation::AfterCompletion => {
+                    anyhow::bail!("progressive item activity arrived after item completion");
+                }
+            }
+        }
+        super::ProgressiveActivityNotificationHandling::ExplicitlyIgnored => {
+            if !matches_progressive_params_scope(params, thread_id, turn_id) {
+                return Ok(TurnNotificationHandling::Dropped(
+                    notification.warning_text("that did not match the active turn stream"),
+                ));
+            }
+            return Ok(TurnNotificationHandling::Consumed);
+        }
+        super::ProgressiveActivityNotificationHandling::DiagnosticOnly => {
+            return Ok(TurnNotificationHandling::Dropped(
+                notification.warning_text(
+                    "that remains diagnostic-only outside the active progressive projection",
+                ),
+            ));
+        }
+        super::ProgressiveActivityNotificationHandling::Invalid(error) => {
+            anyhow::bail!(
+                "active progressive notification violated the projection contract: {}",
+                error.notice_label()
+            );
+        }
+        super::ProgressiveActivityNotificationHandling::NotOwned => {
+            if is_unknown_progressive_method(notification.method(), params) {
+                return handle_unknown_progressive_notification(
+                    notification,
+                    thread_id,
+                    turn_id,
+                    state,
+                    event_sender,
+                );
+            }
+        }
     }
 
     match notification.method() {
@@ -414,38 +569,6 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
             // turn/start response already emitted the required TurnStarted event
             // together with the exact request envelope. The notification confirms
             // correlation but must not replace that request with inferred defaults.
-            Ok(TurnNotificationHandling::Consumed)
-        }
-        "item/agentMessage/delta" => {
-            /*
-             * Delta items update the live transcript only. The completed agent message
-             * is emitted by `item/completed`, so replay and final transcript state do
-             * not depend on reconstructing text from a possibly missing delta stream.
-             */
-            if !matches_active_turn(params, thread_id, turn_id) {
-                return Ok(TurnNotificationHandling::Dropped(
-                    notification.warning_text("that did not match the active turn stream"),
-                ));
-            }
-
-            let item_id = params
-                .get("itemId")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let delta = params
-                .get("delta")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let _ = event_sender.send(ConversationStreamEvent::AgentMessageDelta {
-                item_id,
-                phase: params
-                    .get("phase")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                delta,
-            });
             Ok(TurnNotificationHandling::Consumed)
         }
         "item/started" => {
@@ -1329,6 +1452,125 @@ fn matches_active_turn(params: &Value, thread_id: &str, turn_id: &str) -> bool {
         && params.get("turnId").and_then(Value::as_str) == Some(turn_id)
 }
 
+fn progressive_observation_matches_active_turn(
+    observation: &ConversationProgressiveActivityObservation,
+    thread_id: &str,
+    turn_id: &str,
+) -> bool {
+    observation.thread_id == thread_id
+        && observation
+            .turn_id
+            .as_deref()
+            .is_none_or(|observed_turn_id| observed_turn_id == turn_id)
+}
+
+fn is_unknown_progressive_method(method: &str, params: &Value) -> bool {
+    let Some((family, _)) = method.split_once('/') else {
+        return false;
+    };
+    matches!(family, "item" | "turn") && has_progressive_method_suffix(method)
+        || (family == "thread"
+            && params.get("turnId").is_some()
+            && has_progressive_method_suffix(method))
+}
+
+fn has_progressive_method_suffix(method: &str) -> bool {
+    let Some((_, event)) = method.rsplit_once('/') else {
+        return false;
+    };
+    event == "progress"
+        || event == "delta"
+        || event == "updated"
+        || event == "added"
+        || event == "terminalInteraction"
+        || event.ends_with("Delta")
+        || event.ends_with("Updated")
+        || event.ends_with("Added")
+}
+
+fn handle_unknown_progressive_notification(
+    notification: &AppServerNotification,
+    thread_id: &str,
+    turn_id: &str,
+    state: &mut ActiveTurnNotificationState,
+    event_sender: &dyn AppServerEventSender,
+) -> Result<TurnNotificationHandling> {
+    let params = notification.params();
+    let observed_thread_id = required_unknown_progressive_identity(params, "threadId")?;
+    if observed_thread_id != thread_id {
+        return Ok(TurnNotificationHandling::Dropped(
+            notification.warning_text("that did not match the active turn stream"),
+        ));
+    }
+    let observed_turn_id = required_unknown_progressive_identity(params, "turnId")?;
+    if observed_turn_id != turn_id {
+        return Ok(TurnNotificationHandling::Dropped(
+            notification.warning_text("that did not match the active turn stream"),
+        ));
+    }
+    if notification.method().starts_with("item/") {
+        let _ = required_unknown_progressive_identity(params, "itemId")?;
+    }
+
+    let sequence = state.next_progressive_activity_sequence;
+    let (method, _) = bounded_progressive_prefix(
+        notification.method(),
+        MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES,
+    );
+    let payload_bytes = super::progressive_activity::capped_json_byte_count(params);
+    let batch =
+        ConversationProgressiveActivityBatch::single(ConversationProgressiveActivityObservation {
+            sequence,
+            thread_id: observed_thread_id.to_string(),
+            turn_id: Some(observed_turn_id.to_string()),
+            item_id: None,
+            kind: ConversationProgressiveActivityKind::Unknown(method),
+            payload: ConversationProgressiveActivityPayload::Unknown { payload_bytes },
+        })
+        .map_err(|rejection| {
+            anyhow::anyhow!(
+                "unknown progressive activity could not enter the bounded projection: {}",
+                rejection.notice_label()
+            )
+        })?;
+    state.allocate_progressive_activity_sequence()?;
+    send_required_app_server_event(
+        event_sender,
+        ConversationStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch),
+        },
+        notification.method(),
+    )?;
+    anyhow::bail!(
+        "unknown progressive-looking item notification was retained before failing closed"
+    );
+}
+
+fn required_unknown_progressive_identity<'a>(
+    params: &'a Value,
+    field: &'static str,
+) -> Result<&'a str> {
+    params
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty() && value.len() <= MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown progressive-looking item notification had missing or invalid {field}"
+            )
+        })
+}
+
+fn matches_progressive_params_scope(params: &Value, thread_id: &str, turn_id: &str) -> bool {
+    params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+        && params
+            .get("turnId")
+            .and_then(Value::as_str)
+            .is_none_or(|observed_turn_id| observed_turn_id == turn_id)
+}
+
 fn matches_started_turn(params: &Value, thread_id: &str, turn_id: &str) -> bool {
     !thread_id.is_empty()
         && !turn_id.is_empty()
@@ -1796,8 +2038,338 @@ mod terminal_receipt_tests {
     }
 
     #[test]
-    fn delta_and_completed_item_distinguish_stale_from_missing_active_ids() {
-        let invalid_notifications = [
+    fn all_progressive_notifications_reach_the_application_in_wire_order() {
+        let fixture: Vec<Value> =
+            serde_json::from_str(include_str!("fixtures/progressive_turn_notifications.json"))
+                .expect("progressive fixture should be valid JSON");
+        let expected = vec![
+            (
+                "item/agentMessage/delta",
+                ConversationProgressiveActivityKind::AgentMessageDelta,
+            ),
+            (
+                "item/commandExecution/outputDelta",
+                ConversationProgressiveActivityKind::CommandOutput,
+            ),
+            (
+                "item/commandExecution/terminalInteraction",
+                ConversationProgressiveActivityKind::TerminalInteraction,
+            ),
+            (
+                "item/fileChange/patchUpdated",
+                ConversationProgressiveActivityKind::FileChangePatch,
+            ),
+            (
+                "turn/diff/updated",
+                ConversationProgressiveActivityKind::TurnDiff,
+            ),
+            (
+                "turn/plan/updated",
+                ConversationProgressiveActivityKind::TurnPlan,
+            ),
+            (
+                "thread/tokenUsage/updated",
+                ConversationProgressiveActivityKind::TokenUsage,
+            ),
+            (
+                "item/mcpToolCall/progress",
+                ConversationProgressiveActivityKind::McpProgress,
+            ),
+            (
+                "item/plan/delta",
+                ConversationProgressiveActivityKind::PlanDelta,
+            ),
+            (
+                "item/reasoning/summaryTextDelta",
+                ConversationProgressiveActivityKind::ReasoningSummaryTextDelta,
+            ),
+            (
+                "item/reasoning/summaryPartAdded",
+                ConversationProgressiveActivityKind::ReasoningSummaryPartAdded,
+            ),
+            (
+                "item/reasoning/textDelta",
+                ConversationProgressiveActivityKind::ReasoningTextDelta,
+            ),
+            (
+                "turn/moderationMetadata",
+                ConversationProgressiveActivityKind::Moderation,
+            ),
+            (
+                "guardianWarning",
+                ConversationProgressiveActivityKind::GuardianWarning,
+            ),
+        ];
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        for (item_id, wire_type) in [
+            ("agent-1", "agentMessage"),
+            ("command-1", "commandExecution"),
+            ("patch-1", "fileChange"),
+            ("mcp-1", "mcpToolCall"),
+            ("plan-1", "plan"),
+            ("reasoning-1", "reasoning"),
+        ] {
+            start_progressive_item(&mut state, &sender, &receiver, item_id, wire_type);
+        }
+
+        for (sequence, (method, expected_kind)) in expected.into_iter().enumerate() {
+            let mut value = fixture
+                .iter()
+                .find(|value| value.get("method").and_then(Value::as_str) == Some(method))
+                .cloned()
+                .unwrap_or_else(|| panic!("fixture should include {method}"));
+            let params = value
+                .get_mut("params")
+                .and_then(Value::as_object_mut)
+                .expect("fixture params should be an object");
+            params.insert("threadId".to_string(), json!(THREAD_ID));
+            if params.contains_key("turnId") {
+                params.insert("turnId".to_string(), json!(TURN_ID));
+            }
+            let notification =
+                AppServerNotification::from_value(value).expect("progressive notification");
+
+            assert_eq!(
+                handle_turn_notification(&notification, THREAD_ID, TURN_ID, &mut state, &sender,)
+                    .unwrap_or_else(|error| panic!("{method} should reduce: {error}")),
+                TurnNotificationHandling::Consumed,
+                "method: {method}"
+            );
+            let batch = receive_progressive_batch(&receiver);
+            assert_eq!(batch.first_sequence(), Some(sequence as u64));
+            assert_eq!(batch.last_sequence(), Some(sequence as u64));
+            assert_eq!(batch.records().len(), 1);
+            assert_eq!(batch.records()[0].observation().kind, expected_kind);
+        }
+
+        assert_eq!(state.next_progressive_activity_sequence, 14);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn progressive_item_without_start_is_retained_before_failing_closed() {
+        let notification = progressive_agent_delta(TURN_ID, "agent-missing", json!("draft"));
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+
+        let error =
+            handle_turn_notification(&notification, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect_err("missing lifecycle boundary must fail the active stream");
+
+        assert!(
+            error
+                .to_string()
+                .contains("without a retained item boundary")
+        );
+        let batch = receive_progressive_batch(&receiver);
+        assert_eq!(batch.first_sequence(), Some(0));
+        assert_eq!(
+            batch.records()[0].observation().kind,
+            ConversationProgressiveActivityKind::AgentMessageDelta
+        );
+        assert_eq!(state.next_progressive_activity_sequence, 1);
+    }
+
+    #[test]
+    fn progressive_item_kind_drift_is_retained_before_failing_closed() {
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        start_progressive_item(
+            &mut state,
+            &sender,
+            &receiver,
+            "shared-item",
+            "commandExecution",
+        );
+
+        let error = handle_turn_notification(
+            &progressive_agent_delta(TURN_ID, "shared-item", json!("draft")),
+            THREAD_ID,
+            TURN_ID,
+            &mut state,
+            &sender,
+        )
+        .expect_err("kind drift must fail the active stream");
+
+        assert!(error.to_string().contains("changed retained item kind"));
+        assert_eq!(
+            receive_progressive_batch(&receiver).first_sequence(),
+            Some(0)
+        );
+        assert_eq!(state.next_progressive_activity_sequence, 1);
+    }
+
+    #[test]
+    fn progressive_item_after_completion_is_retained_before_failing_closed() {
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        start_progressive_item(
+            &mut state,
+            &sender,
+            &receiver,
+            "agent-complete",
+            "agentMessage",
+        );
+        assert_eq!(
+            handle_turn_notification(
+                &progressive_item_completed_notification("agent-complete", "agentMessage"),
+                THREAD_ID,
+                TURN_ID,
+                &mut state,
+                &sender,
+            )
+            .expect("completion should reduce"),
+            TurnNotificationHandling::Consumed
+        );
+        while receiver.try_recv().is_ok() {}
+
+        let error = handle_turn_notification(
+            &progressive_agent_delta(TURN_ID, "agent-complete", json!("late draft")),
+            THREAD_ID,
+            TURN_ID,
+            &mut state,
+            &sender,
+        )
+        .expect_err("activity after completion must fail the active stream");
+
+        assert!(error.to_string().contains("after item completion"));
+        assert_eq!(
+            receive_progressive_batch(&receiver).first_sequence(),
+            Some(0)
+        );
+        assert_eq!(state.next_progressive_activity_sequence, 1);
+    }
+
+    #[test]
+    fn stale_progressive_turn_drops_without_consuming_a_sequence() {
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        start_progressive_item(&mut state, &sender, &receiver, "agent-1", "agentMessage");
+
+        assert!(matches!(
+            handle_turn_notification(
+                &progressive_agent_delta("turn-stale", "agent-1", json!("stale")),
+                THREAD_ID,
+                TURN_ID,
+                &mut state,
+                &sender,
+            )
+            .expect("stale activity should be diagnostic"),
+            TurnNotificationHandling::Dropped(_)
+        ));
+        assert_eq!(state.next_progressive_activity_sequence, 0);
+        assert!(receiver.try_recv().is_err());
+
+        assert_eq!(
+            handle_turn_notification(
+                &progressive_agent_delta(TURN_ID, "agent-1", json!("active")),
+                THREAD_ID,
+                TURN_ID,
+                &mut state,
+                &sender,
+            )
+            .expect("active activity should reduce"),
+            TurnNotificationHandling::Consumed
+        );
+        assert_eq!(
+            receive_progressive_batch(&receiver).first_sequence(),
+            Some(0)
+        );
+        assert_eq!(state.next_progressive_activity_sequence, 1);
+    }
+
+    #[test]
+    fn stale_known_progressive_scope_precedes_item_and_payload_validation() {
+        let fixture: Vec<Value> =
+            serde_json::from_str(include_str!("fixtures/progressive_turn_notifications.json"))
+                .expect("progressive fixture should be valid JSON");
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+
+        for value in fixture {
+            let method = value["method"]
+                .as_str()
+                .expect("fixture method should be a string");
+            let has_turn_scope = value["params"].get("turnId").is_some();
+            let stale_thread = progressive_notification(
+                method,
+                if has_turn_scope {
+                    json!({ "threadId": "thread-stale", "turnId": TURN_ID })
+                } else {
+                    json!({ "threadId": "thread-stale" })
+                },
+            );
+            assert!(
+                matches!(
+                    handle_turn_notification(
+                        &stale_thread,
+                        THREAD_ID,
+                        TURN_ID,
+                        &mut state,
+                        &sender,
+                    )
+                    .unwrap_or_else(|error| panic!("stale {method} should drop: {error}")),
+                    TurnNotificationHandling::Dropped(_)
+                ),
+                "method: {method}"
+            );
+
+            if has_turn_scope {
+                for stale_params in [
+                    json!({ "threadId": "thread-stale" }),
+                    json!({ "threadId": "thread-stale", "turnId": [] }),
+                    json!({
+                        "threadId": "thread-stale",
+                        "turnId": "x".repeat(MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES + 1)
+                    }),
+                ] {
+                    let stale_thread = progressive_notification(method, stale_params);
+                    assert!(matches!(
+                        handle_turn_notification(
+                            &stale_thread,
+                            THREAD_ID,
+                            TURN_ID,
+                            &mut state,
+                            &sender,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("stale-thread malformed-turn {method} should drop: {error}")
+                        }),
+                        TurnNotificationHandling::Dropped(_)
+                    ));
+                }
+            }
+
+            if has_turn_scope {
+                let stale_turn = progressive_notification(
+                    method,
+                    json!({ "threadId": THREAD_ID, "turnId": "turn-stale" }),
+                );
+                assert!(
+                    matches!(
+                        handle_turn_notification(
+                            &stale_turn,
+                            THREAD_ID,
+                            TURN_ID,
+                            &mut state,
+                            &sender,
+                        )
+                        .unwrap_or_else(|error| panic!("stale {method} should drop: {error}")),
+                        TurnNotificationHandling::Dropped(_)
+                    ),
+                    "method: {method}"
+                );
+            }
+        }
+
+        assert_eq!(state.next_progressive_activity_sequence, 0);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn malformed_progressive_identity_or_payload_fails_closed_without_false_projection() {
+        let cases = [
             json!({
                 "method": "item/agentMessage/delta",
                 "params": {
@@ -1806,6 +2378,282 @@ mod terminal_receipt_tests {
                     "delta": "missing thread"
                 }
             }),
+            json!({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": THREAD_ID,
+                    "turnId": [],
+                    "itemId": "agent-1",
+                    "delta": "invalid turn"
+                }
+            }),
+            json!({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": THREAD_ID,
+                    "turnId": TURN_ID,
+                    "itemId": "agent-1",
+                    "delta": 42
+                }
+            }),
+        ];
+
+        for value in cases {
+            let notification =
+                AppServerNotification::from_value(value).expect("malformed fixture notification");
+            let (sender, receiver) = channel();
+            let mut state = ActiveTurnNotificationState::new();
+
+            let error =
+                handle_turn_notification(&notification, THREAD_ID, TURN_ID, &mut state, &sender)
+                    .expect_err("malformed active progressive data must fail closed");
+
+            assert!(error.to_string().contains("projection contract"));
+            assert_eq!(state.next_progressive_activity_sequence, 0);
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn deprecated_progressive_notifications_ignore_only_matching_scope() {
+        let cases = [
+            (
+                "item/fileChange/outputDelta",
+                json!({
+                    "threadId": THREAD_ID,
+                    "turnId": TURN_ID,
+                    "itemId": "patch-legacy",
+                    "delta": "deprecated"
+                }),
+            ),
+            (
+                "thread/compacted",
+                json!({ "threadId": THREAD_ID, "turnId": TURN_ID }),
+            ),
+        ];
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+
+        for (method, params) in cases {
+            let active = progressive_notification(method, params.clone());
+            assert_eq!(
+                handle_turn_notification(&active, THREAD_ID, TURN_ID, &mut state, &sender,)
+                    .expect("matching deprecated activity should be consumed"),
+                TurnNotificationHandling::Consumed
+            );
+
+            let mut stale_params = params;
+            stale_params["turnId"] = json!("turn-stale");
+            let stale = progressive_notification(method, stale_params);
+            assert!(matches!(
+                handle_turn_notification(&stale, THREAD_ID, TURN_ID, &mut state, &sender,)
+                    .expect("stale deprecated activity should be diagnostic"),
+                TurnNotificationHandling::Dropped(_)
+            ));
+        }
+
+        assert_eq!(state.next_progressive_activity_sequence, 0);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn unknown_progressive_item_method_is_bounded_retained_and_fails_closed() {
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        let notification = progressive_notification(
+            "item/future/outputDelta",
+            json!({
+                "threadId": THREAD_ID,
+                "turnId": TURN_ID,
+                "itemId": "future-1",
+                "delta": "unclassified detail"
+            }),
+        );
+
+        let error =
+            handle_turn_notification(&notification, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect_err("unknown progressive item method must fail closed");
+
+        assert!(error.to_string().contains("retained before failing closed"));
+        let batch = receive_progressive_batch(&receiver);
+        assert_eq!(batch.first_sequence(), Some(0));
+        assert_eq!(batch.unknown_observation_count(), 1);
+        assert!(batch.history_incomplete());
+        assert!(matches!(
+            &batch.records()[0].observation().kind,
+            ConversationProgressiveActivityKind::Unknown(method)
+                if method == "item/future/outputDelta"
+        ));
+        assert!(matches!(
+            batch.records()[0].observation().payload,
+            ConversationProgressiveActivityPayload::Unknown { payload_bytes }
+                if payload_bytes > 0
+        ));
+        assert_eq!(state.next_progressive_activity_sequence, 1);
+
+        let long_method = format!(
+            "item/{}/outputDelta",
+            "x".repeat(MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES + 100)
+        );
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        let long_notification = progressive_notification(
+            &long_method,
+            json!({
+                "threadId": THREAD_ID,
+                "turnId": TURN_ID,
+                "itemId": "future-2",
+                "delta": "detail"
+            }),
+        );
+        handle_turn_notification(&long_notification, THREAD_ID, TURN_ID, &mut state, &sender)
+            .expect_err("oversized unknown method should be bounded then fail closed");
+        let batch = receive_progressive_batch(&receiver);
+        let ConversationProgressiveActivityKind::Unknown(method) =
+            &batch.records()[0].observation().kind
+        else {
+            panic!("expected unknown progressive kind");
+        };
+        assert_eq!(method.len(), MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES);
+    }
+
+    #[test]
+    fn unknown_progressive_item_stale_or_malformed_scope_does_not_project() {
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        let stale = progressive_notification(
+            "item/future/outputDelta",
+            json!({
+                "threadId": THREAD_ID,
+                "turnId": "turn-stale",
+                "delta": "stale"
+            }),
+        );
+        assert!(matches!(
+            handle_turn_notification(&stale, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("stale unknown activity should be diagnostic"),
+            TurnNotificationHandling::Dropped(_)
+        ));
+        assert_eq!(state.next_progressive_activity_sequence, 0);
+        assert!(receiver.try_recv().is_err());
+
+        let stale_thread_without_turn = progressive_notification(
+            "item/future/outputDelta",
+            json!({
+                "threadId": "thread-stale",
+                "delta": "stale"
+            }),
+        );
+        assert!(matches!(
+            handle_turn_notification(
+                &stale_thread_without_turn,
+                THREAD_ID,
+                TURN_ID,
+                &mut state,
+                &sender,
+            )
+            .expect("stale unknown thread should drop before turn/item validation"),
+            TurnNotificationHandling::Dropped(_)
+        ));
+        assert_eq!(state.next_progressive_activity_sequence, 0);
+        assert!(receiver.try_recv().is_err());
+
+        let malformed = progressive_notification(
+            "item/future/outputDelta",
+            json!({
+                "threadId": THREAD_ID,
+                "turnId": TURN_ID,
+                "delta": "missing item identity"
+            }),
+        );
+        let error = handle_turn_notification(&malformed, THREAD_ID, TURN_ID, &mut state, &sender)
+            .expect_err("malformed unknown activity must fail closed");
+        assert!(error.to_string().contains("itemId"));
+        assert_eq!(state.next_progressive_activity_sequence, 0);
+        assert!(receiver.try_recv().is_err());
+
+        let oversized = progressive_notification(
+            "item/future/outputDelta",
+            json!({
+                "threadId": THREAD_ID,
+                "turnId": TURN_ID,
+                "itemId": "x".repeat(MAX_PROGRESSIVE_ACTIVITY_IDENTIFIER_BYTES + 1),
+                "delta": "oversized identity"
+            }),
+        );
+        let error = handle_turn_notification(&oversized, THREAD_ID, TURN_ID, &mut state, &sender)
+            .expect_err("oversized unknown identity must fail closed");
+        assert!(error.to_string().contains("itemId"));
+        assert_eq!(state.next_progressive_activity_sequence, 0);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn unknown_turn_and_turn_correlated_thread_progressive_methods_fail_closed() {
+        for method in ["turn/future/delta", "thread/future/updated"] {
+            let (sender, receiver) = channel();
+            let mut state = ActiveTurnNotificationState::new();
+            let notification = progressive_notification(
+                method,
+                json!({
+                    "threadId": THREAD_ID,
+                    "turnId": TURN_ID,
+                    "detail": "future wire detail"
+                }),
+            );
+            assert!(notification.should_defer_to_turn_stream());
+
+            let error =
+                handle_turn_notification(&notification, THREAD_ID, TURN_ID, &mut state, &sender)
+                    .expect_err("future turn-scoped progressive method must fail closed");
+            assert!(error.to_string().contains("retained before failing closed"));
+            let batch = receive_progressive_batch(&receiver);
+            assert!(matches!(
+                &batch.records()[0].observation().kind,
+                ConversationProgressiveActivityKind::Unknown(observed) if observed == method
+            ));
+            assert_eq!(batch.first_sequence(), Some(0));
+            assert_eq!(state.next_progressive_activity_sequence, 1);
+        }
+
+        let unrelated_thread_update = progressive_notification(
+            "thread/name/updated",
+            json!({"threadId": THREAD_ID, "name": "renamed"}),
+        );
+        assert!(!unrelated_thread_update.should_defer_to_turn_stream());
+
+        for notification in [
+            progressive_notification(
+                "model/safetyBuffering/updated",
+                json!({
+                    "threadId": THREAD_ID,
+                    "turnId": TURN_ID,
+                    "model": "gpt-test",
+                    "fasterModel": null,
+                    "reasons": [],
+                    "useCases": [],
+                    "showBufferingUi": false
+                }),
+            ),
+            progressive_notification(
+                "model/verification",
+                json!({
+                    "threadId": THREAD_ID,
+                    "turnId": TURN_ID,
+                    "verifications": ["trustedAccessForCyber"]
+                }),
+            ),
+        ] {
+            assert!(
+                notification.should_defer_to_turn_stream(),
+                "diagnostic-only progressive input must reach manifest validation after an early turn/start race"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_delta_and_completed_item_do_not_cross_the_active_turn_boundary() {
+        let invalid_notifications = [
             json!({
                 "method": "item/agentMessage/delta",
                 "params": {
@@ -1833,7 +2681,7 @@ mod terminal_receipt_tests {
             let mut state = ActiveTurnNotificationState::new();
             let handling =
                 handle_turn_notification(&notification, THREAD_ID, TURN_ID, &mut state, &sender)
-                    .expect("stale or missing identity should be diagnostic");
+                    .expect("stale identity should be diagnostic");
 
             assert!(matches!(handling, TurnNotificationHandling::Dropped(_)));
             assert!(receiver.try_recv().is_err());
@@ -2343,6 +3191,129 @@ mod terminal_receipt_tests {
         let (sender, _receiver) = channel();
         handle_turn_notification(&notification, THREAD_ID, TURN_ID, state, &sender)
             .expect("notification should reduce")
+    }
+
+    fn progressive_notification(method: &str, params: Value) -> AppServerNotification {
+        AppServerNotification::from_value(json!({
+            "method": method,
+            "params": params,
+        }))
+        .expect("progressive notification")
+    }
+
+    fn progressive_agent_delta(
+        turn_id: &str,
+        item_id: &str,
+        delta: Value,
+    ) -> AppServerNotification {
+        progressive_notification(
+            "item/agentMessage/delta",
+            json!({
+                "threadId": THREAD_ID,
+                "turnId": turn_id,
+                "itemId": item_id,
+                "delta": delta,
+            }),
+        )
+    }
+
+    fn start_progressive_item(
+        state: &mut ActiveTurnNotificationState,
+        sender: &std::sync::mpsc::Sender<ConversationStreamEvent>,
+        receiver: &std::sync::mpsc::Receiver<ConversationStreamEvent>,
+        item_id: &str,
+        wire_type: &str,
+    ) {
+        let notification = AppServerNotification::from_value(json!({
+            "method": "item/started",
+            "params": {
+                "threadId": THREAD_ID,
+                "turnId": TURN_ID,
+                "startedAtMs": 1,
+                "item": progressive_item_fixture(item_id, wire_type, "inProgress"),
+            }
+        }))
+        .expect("item start notification");
+        assert_eq!(
+            handle_turn_notification(&notification, THREAD_ID, TURN_ID, state, sender)
+                .expect("item start should reduce"),
+            TurnNotificationHandling::Consumed
+        );
+        assert!(matches!(
+            receiver.recv().expect("item start should be projected"),
+            ConversationStreamEvent::ItemLifecycleObserved { observation }
+                if observation.item_id == item_id
+        ));
+    }
+
+    fn progressive_item_completed_notification(
+        item_id: &str,
+        wire_type: &str,
+    ) -> AppServerNotification {
+        AppServerNotification::from_value(json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": THREAD_ID,
+                "turnId": TURN_ID,
+                "completedAtMs": 2,
+                "item": progressive_item_fixture(item_id, wire_type, "completed"),
+            }
+        }))
+        .expect("item completion notification")
+    }
+
+    fn progressive_item_fixture(item_id: &str, wire_type: &str, status: &str) -> Value {
+        match wire_type {
+            "agentMessage" => json!({
+                "id": item_id,
+                "type": wire_type,
+                "text": "authoritative text",
+            }),
+            "commandExecution" => json!({
+                "id": item_id,
+                "type": wire_type,
+                "command": "printf activity",
+                "commandActions": [],
+                "cwd": "/repo",
+                "status": status,
+            }),
+            "fileChange" => json!({
+                "id": item_id,
+                "type": wire_type,
+                "changes": [],
+                "status": status,
+            }),
+            "mcpToolCall" => json!({
+                "id": item_id,
+                "type": wire_type,
+                "arguments": {},
+                "server": "server",
+                "tool": "tool",
+                "status": status,
+            }),
+            "plan" => json!({
+                "id": item_id,
+                "type": wire_type,
+                "text": "plan",
+            }),
+            "reasoning" => json!({
+                "id": item_id,
+                "type": wire_type,
+            }),
+            _ => panic!("unsupported progressive item fixture: {wire_type}"),
+        }
+    }
+
+    fn receive_progressive_batch(
+        receiver: &std::sync::mpsc::Receiver<ConversationStreamEvent>,
+    ) -> ConversationProgressiveActivityBatch {
+        let ConversationStreamEvent::ProgressiveActivityObserved { batch } = receiver
+            .recv()
+            .expect("progressive activity should be projected")
+        else {
+            panic!("expected progressive activity event");
+        };
+        *batch
     }
 
     fn terminal_notification(turn: Value) -> AppServerNotification {

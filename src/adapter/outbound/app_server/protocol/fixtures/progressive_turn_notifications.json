@@ -1,0 +1,213 @@
+[
+  {
+    "method": "item/agentMessage/delta",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "agent-1",
+      "delta": "draft response",
+      "phase": "commentary"
+    }
+  },
+  {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "command-1",
+      "delta": "first line\nsecond line\n"
+    }
+  },
+  {
+    "method": "item/commandExecution/terminalInteraction",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "command-1",
+      "processId": "process-1",
+      "stdin": "AKRA_PROGRESSIVE_SECRET_CANARY_STDIN"
+    }
+  },
+  {
+    "method": "item/fileChange/patchUpdated",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "patch-1",
+      "changes": [
+        {
+          "path": "src/lib.rs",
+          "diff": "@@ -1 +1 @@\n-old\n+new\n",
+          "kind": {
+            "type": "update",
+            "move_path": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "method": "turn/diff/updated",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "diff": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
+    }
+  },
+  {
+    "method": "turn/plan/updated",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "explanation": "bounded plan detail",
+      "plan": [
+        {
+          "step": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "status": "pending"
+        },
+        {
+          "step": "verify focused tests",
+          "status": "inProgress"
+        },
+        {
+          "step": "report outcome",
+          "status": "completed"
+        }
+      ]
+    }
+  },
+  {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "tokenUsage": {
+        "last": {
+          "cachedInputTokens": 5,
+          "inputTokens": 10,
+          "outputTokens": 4,
+          "reasoningOutputTokens": 2,
+          "totalTokens": 14
+        },
+        "total": {
+          "cachedInputTokens": 25,
+          "inputTokens": 50,
+          "outputTokens": 20,
+          "reasoningOutputTokens": 8,
+          "totalTokens": 70
+        },
+        "modelContextWindow": 114000
+      }
+    }
+  },
+  {
+    "method": "item/mcpToolCall/progress",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "mcp-1",
+      "message": "retrieving bounded tool result"
+    }
+  },
+  {
+    "method": "item/plan/delta",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "plan-1",
+      "delta": "AKRA_PROGRESSIVE_SECRET_CANARY_PLAN_DELTA"
+    }
+  },
+  {
+    "method": "item/reasoning/summaryTextDelta",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "reasoning-1",
+      "summaryIndex": 0,
+      "delta": "AKRA_PROGRESSIVE_SECRET_CANARY_REASONING_SUMMARY"
+    }
+  },
+  {
+    "method": "item/reasoning/summaryPartAdded",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "reasoning-1",
+      "summaryIndex": 1
+    }
+  },
+  {
+    "method": "item/reasoning/textDelta",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "reasoning-1",
+      "contentIndex": 0,
+      "delta": "AKRA_PROGRESSIVE_SECRET_CANARY_REASONING_TEXT"
+    }
+  },
+  {
+    "method": "turn/moderationMetadata",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "metadata": {
+        "verdict": "AKRA_PROGRESSIVE_SECRET_CANARY_MODERATION",
+        "scores": [
+          0.1,
+          0.2
+        ]
+      }
+    }
+  },
+  {
+    "method": "guardianWarning",
+    "params": {
+      "threadId": "thread-progressive",
+      "message": "Review the requested operation before continuing."
+    }
+  },
+  {
+    "method": "item/fileChange/outputDelta",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "itemId": "patch-legacy",
+      "delta": "AKRA_PROGRESSIVE_SECRET_CANARY_DEPRECATED_PATCH_OUTPUT"
+    }
+  },
+  {
+    "method": "thread/compacted",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive"
+    }
+  },
+  {
+    "method": "model/safetyBuffering/updated",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "model": "gpt-5.4",
+      "fasterModel": null,
+      "reasons": [
+        "policy"
+      ],
+      "showBufferingUi": true,
+      "useCases": [
+        "coding"
+      ]
+    }
+  },
+  {
+    "method": "model/verification",
+    "params": {
+      "threadId": "thread-progressive",
+      "turnId": "turn-progressive",
+      "verifications": [
+        "trustedAccessForCyber"
+      ]
+    }
+  }
+]

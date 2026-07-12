@@ -34,27 +34,31 @@ const HANDLED_NOTIFICATION_METHODS: &[&str] = &[
     "item/autoApprovalReview/completed",
     "item/autoApprovalReview/started",
     "item/completed",
-    "item/started",
-    "model/rerouted",
-    "thread/settings/updated",
-    "thread/status/changed",
-    "turn/completed",
-    "turn/started",
-];
-
-const DEFERRED_NOTIFICATION_METHODS: &[&str] = &[
     "item/commandExecution/outputDelta",
     "item/commandExecution/terminalInteraction",
     "item/fileChange/patchUpdated",
-    "item/fileChange/outputDelta",
     "item/mcpToolCall/progress",
     "item/plan/delta",
     "item/reasoning/summaryPartAdded",
     "item/reasoning/summaryTextDelta",
     "item/reasoning/textDelta",
+    "item/started",
+    "guardianWarning",
+    "model/rerouted",
+    "thread/settings/updated",
+    "thread/status/changed",
+    "thread/tokenUsage/updated",
+    "turn/completed",
     "turn/diff/updated",
     "turn/moderationMetadata",
     "turn/plan/updated",
+    "turn/started",
+];
+
+const DEFERRED_NOTIFICATION_METHODS: &[&str] = &[
+    "item/fileChange/outputDelta",
+    "model/safetyBuffering/updated",
+    "model/verification",
 ];
 
 const DIAGNOSTIC_ONLY_NOTIFICATION_METHODS: &[&str] = &[
@@ -70,19 +74,15 @@ const DIAGNOSTIC_ONLY_NOTIFICATION_METHODS: &[&str] = &[
     "fs/changed",
     "fuzzyFileSearch/sessionCompleted",
     "fuzzyFileSearch/sessionUpdated",
-    "guardianWarning",
     "hook/completed",
     "hook/started",
     "mcpServer/oauthLogin/completed",
     "mcpServer/startupStatus/updated",
-    "model/safetyBuffering/updated",
-    "model/verification",
     "process/exited",
     "process/outputDelta",
     "remoteControl/status/changed",
     "serverRequest/resolved",
     "skills/changed",
-    "thread/tokenUsage/updated",
     "windows/worldWritableWarning",
     "windowsSandbox/setupCompleted",
     "warning",
@@ -232,6 +232,7 @@ fn live_turn_notification_sequence_reduces_to_stream_events() {
     assert_eq!(
         lifecycle,
         vec![
+            ("agent-live", ConversationItemLifecyclePhase::Started),
             ("agent-live", ConversationItemLifecyclePhase::Completed),
             (
                 "file-change-live",
@@ -239,20 +240,28 @@ fn live_turn_notification_sequence_reduces_to_stream_events() {
             ),
         ]
     );
-    let visible_events = outcome
+    let mut visible_events = outcome
         .events
         .iter()
         .filter(|event| !matches!(event, ConversationStreamEvent::ItemLifecycleObserved { .. }))
         .cloned()
         .collect::<Vec<_>>();
+    let progressive = visible_events.remove(0);
+    let ConversationStreamEvent::ProgressiveActivityObserved { batch } = progressive else {
+        panic!("agent delta should use the bounded progressive activity rail")
+    };
+    assert_eq!(batch.records().len(), 1);
+    assert!(matches!(
+        &batch.records()[0].observation().payload,
+        crate::domain::conversation_progressive_activity::ConversationProgressiveActivityPayload::AgentMessageDelta {
+            phase: Some(phase),
+            text,
+            ..
+        } if phase == "commentary" && text == "delta text should stay live-only"
+    ));
     assert_eq!(
         visible_events,
         vec![
-            ConversationStreamEvent::AgentMessageDelta {
-                item_id: "agent-live".to_string(),
-                phase: Some("commentary".to_string()),
-                delta: "delta text should stay live-only".to_string(),
-            },
             ConversationStreamEvent::AgentMessageCompleted {
                 item_id: "agent-live".to_string(),
                 phase: Some("final_answer".to_string()),

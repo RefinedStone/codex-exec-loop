@@ -1,19 +1,8 @@
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-
 use crate::core::app::{
     AppCommand, AppSnapshot, CoreController, CoreDispatchOutcome, CoreEffect, CoreInput,
 };
 
-// Effect workers share one bounded ingress so a fast provider cannot retain an
-// unbounded number of transcript snapshots while the terminal is painting.
-// This is deliberately larger than the provider stream queue because unrelated
-// startup/session completions use the same FIFO.
-pub const CORE_INPUT_CHANNEL_CAPACITY: usize = 16;
-pub type CoreInputSender = SyncSender<CoreInput>;
-
-pub fn core_input_channel() -> (CoreInputSender, Receiver<CoreInput>) {
-    sync_channel(CORE_INPUT_CHANNEL_CAPACITY)
-}
+use super::input_mailbox::CoreInputReceiver;
 
 /*
  * CoreRuntime is the headless command loop around CoreController. Inbound
@@ -23,7 +12,7 @@ pub fn core_input_channel() -> (CoreInputSender, Receiver<CoreInput>) {
 pub struct CoreRuntime<E> {
     controller: CoreController,
     effect_executor: E,
-    input_receiver: Receiver<CoreInput>,
+    input_receiver: CoreInputReceiver,
 }
 
 pub trait CoreEffectExecutor {
@@ -37,14 +26,14 @@ impl<E> CoreRuntime<E>
 where
     E: CoreEffectExecutor,
 {
-    pub fn new(effect_executor: E, input_receiver: Receiver<CoreInput>) -> Self {
+    pub fn new(effect_executor: E, input_receiver: CoreInputReceiver) -> Self {
         Self::from_parts(CoreController::new(), effect_executor, input_receiver)
     }
 
     pub fn from_parts(
         controller: CoreController,
         effect_executor: E,
-        input_receiver: Receiver<CoreInput>,
+        input_receiver: CoreInputReceiver,
     ) -> Self {
         Self {
             controller,
@@ -61,17 +50,23 @@ where
         self.dispatch_input(CoreInput::Command(command))
     }
 
-    pub fn drain_pending_inputs(&mut self, max_inputs: usize) -> Vec<CoreDispatchOutcome> {
+    #[cfg(test)]
+    pub(crate) fn drain_pending_inputs(&mut self, max_inputs: usize) -> Vec<CoreDispatchOutcome> {
         let mut outcomes = Vec::new();
 
         for _ in 0..max_inputs {
-            let Ok(input) = self.input_receiver.try_recv() else {
+            let Some(outcome) = self.poll_pending_input() else {
                 break;
             };
-            outcomes.push(self.dispatch_input(input));
+            outcomes.push(outcome);
         }
 
         outcomes
+    }
+
+    pub fn poll_pending_input(&mut self) -> Option<CoreDispatchOutcome> {
+        let input = self.input_receiver.try_recv().ok()?;
+        Some(self.dispatch_input(input))
     }
 
     pub fn dispatch_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
@@ -101,7 +96,6 @@ where
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
-    use std::sync::mpsc;
     use std::sync::mpsc::TrySendError;
 
     use super::*;
@@ -111,6 +105,7 @@ mod tests {
         SessionCatalogSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
         StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSubmissionRequest,
     };
+    use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::recent_sessions::RecentSessions;
 
     #[test]
@@ -172,7 +167,7 @@ mod tests {
 
     #[test]
     fn dispatch_command_updates_state_and_runs_returned_effects() {
-        let (_tx, rx) = mpsc::channel();
+        let (_tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
 
@@ -197,7 +192,7 @@ mod tests {
 
     #[test]
     fn submit_turn_command_runs_submit_turn_effect_without_snapshot_change() {
-        let (_tx, rx) = mpsc::channel();
+        let (_tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
         let request = TurnSubmissionRequest {
@@ -224,7 +219,7 @@ mod tests {
 
     #[test]
     fn prepare_manual_prompt_command_runs_prepare_effect_without_snapshot_change() {
-        let (_tx, rx) = mpsc::channel();
+        let (_tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
         let request = ManualPromptPreparationRequest {
@@ -251,7 +246,7 @@ mod tests {
 
     #[test]
     fn immediate_manual_prompt_effect_is_accepted_before_dispatch_returns() {
-        let (_tx, rx) = mpsc::channel();
+        let (_tx, rx) = core_input_channel();
         let mut runtime = CoreRuntime::new(ImmediateManualPromptExecutor, rx);
         let request = ManualPromptPreparationRequest {
             correlation: crate::domain::planning::ManualPromptCorrelation {
@@ -282,7 +277,7 @@ mod tests {
 
     #[test]
     fn drain_pending_inputs_reenters_completions_through_controller() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
         runtime.dispatch_command(AppCommand::RunStartupChecks);
@@ -346,7 +341,7 @@ mod tests {
 
     #[test]
     fn drain_pending_inputs_respects_batch_limit() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects, rx);
 

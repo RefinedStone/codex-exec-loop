@@ -9,6 +9,20 @@
     }
   },
   {
+    "method": "item/started",
+    "params": {
+      "threadId": "thread-live",
+      "turnId": "turn-live",
+      "startedAtMs": 1783842000500,
+      "item": {
+        "type": "agentMessage",
+        "id": "agent-live",
+        "phase": "commentary",
+        "text": ""
+      }
+    }
+  },
+  {
     "method": "item/agentMessage/delta",
     "params": {
       "threadId": "thread-live",

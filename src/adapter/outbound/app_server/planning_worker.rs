@@ -141,8 +141,8 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 ConversationStreamEvent::AttachmentObserved { .. }
                 | ConversationStreamEvent::RuntimeEnvelopeObserved { .. }
                 | ConversationStreamEvent::ItemLifecycleObserved { .. }
+                | ConversationStreamEvent::ProgressiveActivityObserved { .. }
                 | ConversationStreamEvent::StatusUpdated { .. }
-                | ConversationStreamEvent::AgentMessageDelta { .. }
                 | ConversationStreamEvent::ToolActivity { .. }
                 | ConversationStreamEvent::ApprovalReviewUpdated { .. }
                 | ConversationStreamEvent::ApprovalRequested { .. }

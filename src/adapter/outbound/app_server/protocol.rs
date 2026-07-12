@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod item_lifecycle;
+mod progressive_activity;
 mod runtime_envelope;
 mod turn_notifications;
 
@@ -14,6 +15,9 @@ use self::item_lifecycle::{
     UNKNOWN_ITEM_PROJECTION_DECISION,
 };
 use self::item_lifecycle::{parse_live_item_lifecycle, parse_snapshot_item_lifecycle};
+pub(super) use self::progressive_activity::{
+    ProgressiveActivityNotificationHandling, parse_progressive_activity_notification,
+};
 pub(super) use self::runtime_envelope::{
     model_reroute, runtime_configuration_request, settings_observation, status_observation,
     to_runtime_envelope,

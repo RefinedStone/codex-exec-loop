@@ -35,7 +35,7 @@ pub use startup::{
 };
 pub use state::AppState;
 pub use turn_stream::{
-    TurnStreamEvent, TurnStreamRuntimeEnvelopeRejection, TurnStreamSnapshot, TurnStreamState,
-    TurnStreamTerminalSnapshot, TurnStreamUpdate,
+    TurnStreamEvent, TurnStreamProgressiveActivityUpdate, TurnStreamRuntimeEnvelopeRejection,
+    TurnStreamSnapshot, TurnStreamState, TurnStreamTerminalSnapshot, TurnStreamUpdate,
 };
 pub use turn_submission::{CorePromptOrigin, TurnSubmissionCorrelation, TurnSubmissionRequest};
