@@ -53,7 +53,9 @@
     "params": {
       "threadId": "thread-live",
       "turn": {
-        "id": "turn-live"
+        "id": "turn-live",
+        "items": [],
+        "status": "completed"
       }
     }
   }

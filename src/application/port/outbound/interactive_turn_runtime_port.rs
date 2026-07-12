@@ -11,6 +11,7 @@ use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationRuntimeControlTruth, ConversationSnapshot,
     ConversationTurnOptions,
 };
+use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
 // `InteractiveTurnRuntimePort`는 `ConversationService`가 outbound runtime에 요구하는 대화 실행 계약이다.
 // 실제 구현은 Codex app-server adapter이지만, application 계층은 새 thread 실행, 기존 thread 실행, snapshot 조회,
@@ -39,8 +40,8 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         anyhow::bail!("interactive approval decisions are not supported by this runtime")
     }
 
-    // 아직 thread_id가 없는 새 대화를 시작하고 첫 prompt를 stream으로 실행한다.
-    // 성공은 "stream worker를 시작했다"는 의미이고, 실제 메시지/완료/실패 상태는 `event_sender`로 이어서 전달된다.
+    // 아직 thread_id가 없는 새 대화를 시작하고 첫 prompt의 stream이 닫힐 때까지 실행한다.
+    // `Ok`는 transport가 terminal receipt까지 도달했다는 뜻이며, turn 성공 여부는 receipt를 확인해야 한다.
     fn run_new_thread_stream(
         &self,
         // 새 app-server thread가 실행될 workspace directory이다.
@@ -52,10 +53,10 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         // outbound runtime이 `ThreadPrepared`, `TurnStarted`, delta, tool activity, completion/failure를 보낼 채널이다.
         // sender 소유권을 넘기는 이유는 runtime worker가 호출 stack보다 오래 살아 있을 수 있기 때문이다.
         event_sender: ConversationStreamSender,
-    ) -> Result<()>;
+    ) -> Result<ConversationTurnTerminalReceipt>;
 
-    // 이미 존재하는 conversation thread에 후속 prompt를 stream으로 실행한다.
-    // 새 thread와 같은 event contract를 쓰므로 TUI 수신 루프는 두 실행 경로를 거의 같은 reducer로 처리할 수 있다.
+    // 이미 존재하는 conversation thread에 후속 prompt를 실행하고 닫힌 typed receipt를 반환한다.
+    // 새 thread와 같은 event contract를 쓰므로 TUI 수신 루프는 두 실행 경로를 같은 reducer로 처리할 수 있다.
     fn run_turn_stream(
         &self,
         // app-server/session store가 알고 있는 conversation thread 식별자이다.
@@ -66,5 +67,5 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         options: ConversationTurnOptions,
         // 후속 turn의 stream event를 전달할 채널이다. 실패도 panic이 아니라 `Failed` 이벤트나 `Result` 오류로 표현된다.
         event_sender: ConversationStreamSender,
-    ) -> Result<()>;
+    ) -> Result<ConversationTurnTerminalReceipt>;
 }

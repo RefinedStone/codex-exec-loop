@@ -192,14 +192,17 @@ where
                     &supervisor_snapshot,
                 )
             });
+            let orchestrator_tick_signature = parallel_mode_or_recovery_tick_signature(
+                &parallel_mode_service,
+                &workspace_directory,
+                &supervisor_snapshot,
+            );
             event_sink.send_control_plane_event(
                 ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                     workspace_directory,
                     epoch_id,
                     effect_id,
-                    orchestrator_tick_signature: parallel_mode_distributor_tick_signature(
-                        &supervisor_snapshot,
-                    ),
+                    orchestrator_tick_signature,
                     supervisor_snapshot: Box::new(supervisor_snapshot),
                 },
             );
@@ -440,8 +443,11 @@ where
                 (supervisor_snapshot, status_text)
             };
 
-            let orchestrator_tick_signature =
-                parallel_mode_distributor_tick_signature(&supervisor_snapshot);
+            let orchestrator_tick_signature = parallel_mode_or_recovery_tick_signature(
+                &parallel_mode_service,
+                &workspace_directory,
+                &supervisor_snapshot,
+            );
             if !automation_guard.is_active(&workspace_directory, epoch_id) {
                 return;
             }
@@ -509,8 +515,11 @@ where
                 },
             );
 
-            let orchestrator_tick_signature =
-                parallel_mode_distributor_tick_signature(&result.supervisor_snapshot);
+            let orchestrator_tick_signature = parallel_mode_or_recovery_tick_signature(
+                &parallel_mode_service,
+                &workspace_directory,
+                &result.supervisor_snapshot,
+            );
             event_sink.send_control_plane_event(
                 ParallelModeControlPlaneBackgroundEvent::OrchestratorWakeCompleted {
                     workspace_directory: result.workspace_directory,
@@ -772,14 +781,47 @@ pub(crate) fn parallel_mode_distributor_tick_signature(
     ))
 }
 
+fn parallel_mode_or_recovery_tick_signature(
+    parallel_mode_service: &ParallelModeService,
+    workspace_directory: &str,
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> Option<String> {
+    let pending_commit_ready = parallel_mode_service
+        .pending_commit_ready_recovery_signature(workspace_directory)
+        .ok()
+        .flatten();
+    combine_parallel_mode_tick_signature(
+        workspace_directory,
+        pending_commit_ready.as_deref(),
+        snapshot,
+    )
+}
+
+fn combine_parallel_mode_tick_signature(
+    workspace_directory: &str,
+    pending_commit_ready: Option<&str>,
+    snapshot: &ParallelModeSupervisorSnapshot,
+) -> Option<String> {
+    let distributor_head = parallel_mode_distributor_tick_signature(snapshot);
+    let pending_commit_ready =
+        pending_commit_ready.map(|signature| format!("{workspace_directory}|{signature}"));
+    match (distributor_head, pending_commit_ready) {
+        (Some(head), Some(recovery)) => Some(format!("{head}|recovery:{recovery}")),
+        (Some(head), None) => Some(head),
+        (None, Some(recovery)) => Some(recovery),
+        (None, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use crate::domain::parallel_mode::{
-        ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
-        ParallelModePoolBoardSnapshot, ParallelModePoolResetSlotAction,
-        ParallelModePoolResetSlotOutcome, ParallelModePoolResetSlotReport,
+        ParallelModeAgentRosterSnapshot, ParallelModeDistributorQueueItem,
+        ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot,
+        ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
+        ParallelModePoolResetSlotReport, ParallelModeQueueItemState,
         ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorState,
     };
 
@@ -795,6 +837,59 @@ mod tests {
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "none"),
             None,
         )
+    }
+
+    #[test]
+    fn commit_ready_only_authority_state_produces_a_control_plane_wake_signature() {
+        assert_eq!(
+            combine_parallel_mode_tick_signature(
+                "/repo",
+                Some("commit-ready|slot-1@generation-1|2026-07-12T00:00:00Z"),
+                &supervisor_snapshot(),
+            ),
+            Some("/repo|commit-ready|slot-1@generation-1|2026-07-12T00:00:00Z".to_string())
+        );
+    }
+
+    #[test]
+    fn active_head_and_recovery_state_share_one_stable_wake_signature() {
+        let mut snapshot = supervisor_snapshot();
+        snapshot.distributor = ParallelModeDistributorSnapshot::new(
+            vec![ParallelModeDistributorQueueItem::new(
+                "agent-a",
+                "Queued A",
+                ParallelModeQueueItemState::Queued,
+                "akra-agent/slot-1/a",
+                "abc1234",
+                "queued",
+            )],
+            Vec::new(),
+            "queued",
+            "active",
+        );
+        let dirty = combine_parallel_mode_tick_signature(
+            "/repo",
+            Some("commit-ready|slot-2@generation-2|updated|source:untracked files"),
+            &snapshot,
+        )
+        .expect("active head and recovery should be wakeable");
+        let unchanged = combine_parallel_mode_tick_signature(
+            "/repo",
+            Some("commit-ready|slot-2@generation-2|updated|source:untracked files"),
+            &snapshot,
+        )
+        .expect("unchanged state should retain its signature");
+        let clean = combine_parallel_mode_tick_signature(
+            "/repo",
+            Some("commit-ready|slot-2@generation-2|updated|source:clean"),
+            &snapshot,
+        )
+        .expect("externally repaired recovery should remain wakeable");
+
+        assert_eq!(dirty, unchanged);
+        assert_ne!(dirty, clean);
+        assert!(dirty.starts_with("/repo|agent-a|akra-agent/slot-1/a|abc1234|queued|"));
+        assert!(dirty.contains("|recovery:/repo|commit-ready|slot-2@generation-2|"));
     }
 
     #[test]

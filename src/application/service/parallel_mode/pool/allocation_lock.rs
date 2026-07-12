@@ -51,29 +51,46 @@ fn acquire_pool_mutation_lock_at(pool_root: &Path) -> Result<PoolMutationLock, S
     let deadline = Instant::now() + POOL_MUTATION_LOCK_TIMEOUT;
     let owner_record = pool_mutation_lock_owner_record()?;
     loop {
-        match platform::try_acquire(pool_root, &lock_path, &owner_record) {
-            Ok(Some(platform_lock)) => {
-                return Ok(PoolMutationLock {
-                    platform_lock,
-                    lock_path,
-                    pool_root: pool_root.to_path_buf(),
-                });
-            }
-            Ok(None) if Instant::now() < deadline => thread::sleep(POOL_MUTATION_LOCK_RETRY),
-            Ok(None) => {
+        match try_acquire_pool_mutation_lock_at_with_owner(pool_root, &lock_path, &owner_record)? {
+            Some(pool_mutation_lock) => return Ok(pool_mutation_lock),
+            None if Instant::now() < deadline => thread::sleep(POOL_MUTATION_LOCK_RETRY),
+            None => {
                 return Err(format!(
                     "pool mutation lock is busy at `{}`",
                     lock_path.display()
                 ));
             }
-            Err(error) => {
-                return Err(format!(
-                    "pool mutation lock could not be acquired at `{}`: {error}",
-                    lock_path.display()
-                ));
-            }
         }
     }
+}
+
+pub(in crate::application::service::parallel_mode) fn try_acquire_pool_mutation_lock_at(
+    pool_root: &Path,
+) -> Result<Option<PoolMutationLock>, String> {
+    let lock_path = pool_root.join(POOL_MUTATION_LOCK_FILE);
+    let owner_record = pool_mutation_lock_owner_record()?;
+    try_acquire_pool_mutation_lock_at_with_owner(pool_root, &lock_path, &owner_record)
+}
+
+fn try_acquire_pool_mutation_lock_at_with_owner(
+    pool_root: &Path,
+    lock_path: &Path,
+    owner_record: &str,
+) -> Result<Option<PoolMutationLock>, String> {
+    platform::try_acquire(pool_root, lock_path, owner_record)
+        .map(|platform_lock| {
+            platform_lock.map(|platform_lock| PoolMutationLock {
+                platform_lock,
+                lock_path: lock_path.to_path_buf(),
+                pool_root: pool_root.to_path_buf(),
+            })
+        })
+        .map_err(|error| {
+            format!(
+                "pool mutation lock could not be acquired at `{}`: {error}",
+                lock_path.display()
+            )
+        })
 }
 
 fn pool_mutation_lock_owner_record() -> Result<String, String> {

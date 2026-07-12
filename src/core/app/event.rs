@@ -4,24 +4,25 @@ use super::{
 };
 use super::{ConversationLoadCorrelation, StartupCheckCorrelation};
 use super::{StartupReadySnapshot, StartupSnapshot};
-use super::{TurnStreamEvent, TurnStreamSnapshot};
+use super::{TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionCorrelation};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
-use crate::domain::planning::{
-    ManualPromptOutcome, PostTurnExecution, RuntimeProjection, TurnSnapshotCapture,
-};
+use crate::domain::planning::{ManualPromptOutcome, PostTurnExecution, RuntimeProjection};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
     Command(super::AppCommand),
     EffectCompleted(CoreEffectCompletion),
-    ConversationStreamUpdated(TurnStreamEvent),
-    ConversationTurnCompleted {
-        turn_id: String,
-        changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: TurnSnapshotCapture,
+    ConversationStreamUpdated {
+        correlation: TurnSubmissionCorrelation,
+        event: TurnStreamEvent,
     },
     ConversationRuntimeNotice(String),
+    ConversationTurnRuntimeNotice {
+        correlation: TurnSubmissionCorrelation,
+        notice: String,
+    },
     ConversationTurnWorkspaceChanged {
+        correlation: TurnSubmissionCorrelation,
         workspace_directory: String,
     },
     ParallelModeSupervisorSnapshotInvalidated,

@@ -1,6 +1,7 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
-    CoreEffectCompletion, CoreInput, StartupCheckCorrelation, TurnStreamState,
+    CoreEffectCompletion, CoreInput, StartupCheckCorrelation, TurnStreamEvent, TurnStreamState,
+    TurnStreamUpdate, TurnSubmissionCorrelation,
 };
 use crate::domain::planning::ManualPromptCorrelation;
 
@@ -20,6 +21,8 @@ pub struct CoreController {
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
+    next_turn_submission_generation: u64,
+    active_turn_submission: Option<TurnSubmissionCorrelation>,
 }
 
 impl CoreController {
@@ -32,6 +35,8 @@ impl CoreController {
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
             in_flight_manual_prompt_preparation: None,
+            next_turn_submission_generation: 1,
+            active_turn_submission: None,
         }
     }
 
@@ -72,6 +77,7 @@ impl CoreController {
                 thread_id,
                 fallback_workspace_directory,
             }) => {
+                self.active_turn_submission = None;
                 let correlation = ConversationLoadCorrelation::new(
                     take_generation(
                         &mut self.next_conversation_load_generation,
@@ -91,6 +97,7 @@ impl CoreController {
             }
             CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
                 self.in_flight_conversation_load = None;
+                self.active_turn_submission = None;
                 self.state.reset_conversation();
                 self.turn_stream_state = TurnStreamState::new();
                 self.conversation_changed_outcome(None, Vec::new())
@@ -125,11 +132,20 @@ impl CoreController {
                 self.in_flight_manual_prompt_preparation = None;
                 self.unchanged_outcome()
             }
-            CoreInput::Command(AppCommand::SubmitTurn(request)) => CoreDispatchOutcome {
-                events: Vec::new(),
-                effects: vec![CoreEffect::SubmitTurn(request)],
-                snapshot: self.snapshot(),
-            },
+            CoreInput::Command(AppCommand::SubmitTurn(request)) => {
+                if self.active_turn_submission.is_some() {
+                    return self.unchanged_outcome();
+                }
+                let correlation = self.begin_turn_submission();
+                CoreDispatchOutcome {
+                    events: Vec::new(),
+                    effects: vec![CoreEffect::SubmitTurn {
+                        correlation,
+                        request,
+                    }],
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::Command(AppCommand::EvaluatePostTurn(request)) => CoreDispatchOutcome {
                 events: Vec::new(),
                 effects: vec![CoreEffect::EvaluatePostTurn(request)],
@@ -170,6 +186,7 @@ impl CoreController {
                     )
                 });
                 self.in_flight_conversation_load = None;
+                self.active_turn_submission = None;
                 self.state.apply_conversation_result(result);
                 self.turn_stream_state = TurnStreamState::new();
                 if let Some((thread_id, title, cwd)) = loaded_stream_identity {
@@ -222,29 +239,8 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
-            CoreInput::ConversationStreamUpdated(event) => {
-                let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
-                CoreDispatchOutcome {
-                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
-                    effects: Vec::new(),
-                    snapshot: self.snapshot(),
-                }
-            }
-            CoreInput::ConversationTurnCompleted {
-                turn_id,
-                changed_planning_file_paths,
-                execution_snapshot_capture,
-            } => {
-                let stream_snapshot = self.turn_stream_state.apply_turn_completed(
-                    turn_id,
-                    changed_planning_file_paths,
-                    execution_snapshot_capture,
-                );
-                CoreDispatchOutcome {
-                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
-                    effects: Vec::new(),
-                    snapshot: self.snapshot(),
-                }
+            CoreInput::ConversationStreamUpdated { correlation, event } => {
+                self.apply_correlated_turn_stream_event(correlation, event)
             }
             CoreInput::ConversationRuntimeNotice(notice) => {
                 let stream_snapshot = self.turn_stream_state.apply_runtime_notice(notice);
@@ -254,15 +250,35 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
+            CoreInput::ConversationTurnRuntimeNotice {
+                correlation,
+                notice,
+            } => {
+                if self.active_turn_submission != Some(correlation) {
+                    return self.unchanged_outcome();
+                }
+                let stream_snapshot = self.turn_stream_state.apply_runtime_notice(notice);
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::ConversationTurnWorkspaceChanged {
+                correlation,
                 workspace_directory,
-            } => CoreDispatchOutcome {
-                events: vec![AppEvent::ConversationTurnWorkspaceChanged {
-                    workspace_directory,
-                }],
-                effects: Vec::new(),
-                snapshot: self.snapshot(),
-            },
+            } => {
+                if self.active_turn_submission != Some(correlation) {
+                    return self.unchanged_outcome();
+                }
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::ConversationTurnWorkspaceChanged {
+                        workspace_directory,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::ParallelModeSupervisorSnapshotInvalidated => CoreDispatchOutcome {
                 events: vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated],
                 effects: Vec::new(),
@@ -294,6 +310,67 @@ impl CoreController {
             effects: Vec::new(),
             snapshot,
         }
+    }
+
+    fn begin_turn_submission(&mut self) -> TurnSubmissionCorrelation {
+        let correlation = TurnSubmissionCorrelation::new(take_generation(
+            &mut self.next_turn_submission_generation,
+            "turn submission",
+        ));
+        self.active_turn_submission = Some(correlation);
+        self.turn_stream_state.begin_submission();
+        correlation
+    }
+
+    fn apply_correlated_turn_stream_event(
+        &mut self,
+        correlation: TurnSubmissionCorrelation,
+        event: TurnStreamEvent,
+    ) -> CoreDispatchOutcome {
+        if self.active_turn_submission != Some(correlation) {
+            return self.unchanged_outcome();
+        }
+
+        let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
+        let closes_submission = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnCompleted { .. }
+                | TurnStreamUpdate::TurnTerminal { .. }
+                | TurnStreamUpdate::Failed { .. }
+        );
+        let rejected_terminal = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnTerminalIgnored { .. }
+        );
+        let mut events = vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)];
+
+        if rejected_terminal {
+            let failed = self
+                .turn_stream_state
+                .apply_stream_event(TurnStreamEvent::Failed {
+                    message: "active turn returned a terminal receipt with mismatched identity"
+                        .to_string(),
+                });
+            events.push(AppEvent::TurnStreamSnapshotChanged(failed));
+            self.active_turn_submission = None;
+        } else if closes_submission {
+            self.active_turn_submission = None;
+        }
+
+        CoreDispatchOutcome {
+            events,
+            effects: Vec::new(),
+            snapshot: self.snapshot(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn begin_test_turn_submission(&mut self) -> TurnSubmissionCorrelation {
+        assert!(
+            self.active_turn_submission.is_none(),
+            "test turn submission must not supersede an active generation"
+        );
+        self.begin_turn_submission()
     }
 
     fn unchanged_outcome(&self) -> CoreDispatchOutcome {
@@ -370,8 +447,8 @@ mod tests {
     };
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
-        ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
-        SessionCatalogSnapshot,
+        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
+        SessionCatalogReadySnapshot, SessionCatalogSnapshot, TurnSubmissionRequest,
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
@@ -648,8 +725,122 @@ mod tests {
             controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(request.clone())));
 
         assert!(outcome.events.is_empty());
-        assert_eq!(outcome.effects, vec![CoreEffect::SubmitTurn(request)]);
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::SubmitTurn {
+                correlation: TurnSubmissionCorrelation::new(1),
+                request,
+            }]
+        );
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
+    }
+
+    #[test]
+    fn active_turn_submission_rejects_a_second_submit_effect() {
+        let mut controller = CoreController::new();
+        let first = test_turn_submission_request(Some("thread-1"));
+        let second = test_turn_submission_request(Some("thread-1"));
+
+        let first_outcome =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(first)));
+        let second_outcome =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(second)));
+
+        assert_eq!(first_outcome.effects.len(), 1);
+        assert!(second_outcome.events.is_empty());
+        assert!(second_outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn next_submission_recovers_pre_start_failure_and_ignores_stale_worker_inputs() {
+        let mut controller = CoreController::new();
+        let old_correlation = apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let current_correlation = submit_test_turn(&mut controller, Some("thread-1"));
+
+        let stale_notice = controller.handle_input(CoreInput::ConversationTurnRuntimeNotice {
+            correlation: old_correlation,
+            notice: "stale worker notice".to_string(),
+        });
+        let stale_failure = controller.handle_input(test_turn_stream_input(
+            old_correlation,
+            TurnStreamEvent::Failed {
+                message: "stale worker failed".to_string(),
+            },
+        ));
+        assert!(stale_notice.events.is_empty());
+        assert!(stale_failure.events.is_empty());
+
+        let current_failure = controller.handle_input(test_turn_stream_input(
+            current_correlation,
+            TurnStreamEvent::Failed {
+                message: "resume failed before turn/start".to_string(),
+            },
+        ));
+        assert!(matches!(
+            current_failure.events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if matches!(snapshot.update, TurnStreamUpdate::Failed { .. })
+        ));
+
+        let next = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            test_turn_submission_request(Some("thread-1")),
+        )));
+        assert!(matches!(
+            next.effects.as_slice(),
+            [CoreEffect::SubmitTurn {
+                correlation: TurnSubmissionCorrelation { generation: 3 },
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn unconfirmed_terminal_receipt_stays_recovery_pending_and_closes_submission() {
+        let mut controller = CoreController::new();
+        let correlation = controller.begin_test_turn_submission();
+        controller.handle_input(test_turn_stream_input(
+            correlation,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Recovery pending".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+            },
+        ));
+        controller.handle_input(test_turn_stream_input(
+            correlation,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+            },
+        ));
+        let receipt = crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
+            "thread-1",
+            "turn-1",
+            Vec::new(),
+        )
+        .with_application_delivery(
+            crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Unconfirmed(
+                crate::domain::turn_terminal::ConversationTurnApplicationDeliveryFailure::Disconnected,
+            ),
+        );
+
+        let outcome = controller.handle_input(test_turn_stream_input(
+            correlation,
+            TurnStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+                execution_snapshot_capture: None,
+            },
+        ));
+
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if matches!(
+                    &snapshot.update,
+                    TurnStreamUpdate::TurnTerminal { receipt: projected, status_text, .. }
+                        if projected.as_ref() == &receipt && status_text == "turn recovery pending"
+                )
+        ));
+        assert!(controller.active_turn_submission.is_none());
     }
 
     #[test]
@@ -996,14 +1187,17 @@ mod tests {
             fallback_workspace_directory: "/tmp/a".to_string(),
         }));
         controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
-        controller.handle_input(CoreInput::ConversationStreamUpdated(
+        let turn_correlation = controller.begin_test_turn_submission();
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
             TurnStreamEvent::ThreadPrepared {
                 thread_id: "thread-draft".to_string(),
                 title: "New draft".to_string(),
                 cwd: "/tmp/new".to_string(),
             },
         ));
-        controller.handle_input(CoreInput::ConversationStreamUpdated(
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: "turn-new".to_string(),
             },
@@ -1080,11 +1274,13 @@ mod tests {
     #[test]
     fn conversation_stream_event_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
+        let turn_correlation = controller.begin_test_turn_submission();
         let stream_event = TurnStreamEvent::StatusUpdated {
             text: "thinking".to_string(),
         };
 
-        let outcome = controller.handle_input(CoreInput::ConversationStreamUpdated(stream_event));
+        let outcome =
+            controller.handle_input(test_turn_stream_input(turn_correlation, stream_event));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
@@ -1106,41 +1302,56 @@ mod tests {
     }
 
     #[test]
-    fn conversation_turn_completion_reduces_to_core_snapshot_without_state_revision() {
+    fn typed_turn_completion_reduces_to_core_snapshot() {
         let mut controller = CoreController::new();
+        let turn_correlation = controller.begin_test_turn_submission();
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Typed terminal".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+            },
+        ));
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+            },
+        ));
         let execution_snapshot_capture = TurnSnapshotCapture::capture_failed(
             "/tmp/workspace",
             "planning capture failed".to_string(),
         );
+        let terminal_receipt =
+            confirmed_terminal_receipt("thread-1", "turn-1", vec!["new/docs/plan.md".to_string()]);
 
-        let outcome = controller.handle_input(CoreInput::ConversationTurnCompleted {
-            turn_id: "turn-1".to_string(),
-            changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
-            execution_snapshot_capture: execution_snapshot_capture.clone(),
-        });
+        let outcome = controller.handle_input(test_turn_stream_input(
+            turn_correlation,
+            TurnStreamEvent::TurnTerminal {
+                receipt: terminal_receipt.clone(),
+                execution_snapshot_capture: Some(execution_snapshot_capture.clone()),
+            },
+        ));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        let [AppEvent::TurnStreamSnapshotChanged(snapshot)] = outcome.events.as_slice() else {
+            panic!("typed completion should produce one stream snapshot");
+        };
+        assert_eq!(snapshot.revision, 3);
         assert_eq!(
-            outcome.events,
-            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
-                revision: 1,
-                thread_id: None,
-                title: None,
-                cwd: None,
-                active_turn_id: None,
-                status_text: Some("turn completed".to_string()),
-                terminal: Some(TurnStreamTerminalSnapshot::Completed {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
-                }),
-                update: TurnStreamUpdate::TurnCompleted {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
-                    execution_snapshot_capture: Some(execution_snapshot_capture),
-                    status_text: "turn completed".to_string(),
-                },
-            })]
+            snapshot.terminal,
+            Some(TurnStreamTerminalSnapshot::Turn {
+                receipt: Box::new(terminal_receipt),
+            })
         );
+        assert!(matches!(
+            &snapshot.update,
+            TurnStreamUpdate::TurnCompleted {
+                execution_snapshot_capture: Some(capture),
+                ..
+            } if capture == &execution_snapshot_capture
+        ));
         assert!(outcome.effects.is_empty());
     }
 
@@ -1174,7 +1385,9 @@ mod tests {
     #[test]
     fn conversation_load_replaces_previous_turn_stream_identity() {
         let mut controller = CoreController::new();
-        controller.handle_input(CoreInput::ConversationStreamUpdated(
+        let old_turn_correlation = controller.begin_test_turn_submission();
+        controller.handle_input(test_turn_stream_input(
+            old_turn_correlation,
             TurnStreamEvent::ThreadPrepared {
                 thread_id: "old-thread".to_string(),
                 title: "Old Thread".to_string(),
@@ -1227,19 +1440,23 @@ mod tests {
                 result: Ok(Box::new(sample_conversation_ready_snapshot())),
             },
         ));
-        controller.handle_input(CoreInput::ConversationStreamUpdated(
+        let turn_correlation = controller.begin_test_turn_submission();
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
             },
         ));
-        controller.handle_input(CoreInput::ConversationTurnCompleted {
-            turn_id: "turn-1".to_string(),
-            changed_planning_file_paths: Vec::new(),
-            execution_snapshot_capture: TurnSnapshotCapture::capture_failed(
-                "/tmp/workspace",
-                "test capture skipped".to_string(),
-            ),
-        });
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt("thread-1", "turn-1", Vec::new()),
+                execution_snapshot_capture: Some(TurnSnapshotCapture::capture_failed(
+                    "/tmp/workspace",
+                    "test capture skipped".to_string(),
+                )),
+            },
+        ));
         let execution = Box::new(sample_post_turn_execution());
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
@@ -1407,8 +1624,10 @@ mod tests {
     #[test]
     fn conversation_workspace_change_passes_through_core_without_state_revision() {
         let mut controller = CoreController::new();
+        let turn_correlation = controller.begin_test_turn_submission();
 
         let outcome = controller.handle_input(CoreInput::ConversationTurnWorkspaceChanged {
+            correlation: turn_correlation,
             workspace_directory: "/tmp/slot-worktree".to_string(),
         });
 
@@ -1487,27 +1706,83 @@ mod tests {
         .into()
     }
 
-    fn apply_completed_turn(controller: &mut CoreController, thread_id: &str, turn_id: &str) {
-        controller.handle_input(CoreInput::ConversationStreamUpdated(
+    fn confirmed_terminal_receipt(
+        thread_id: &str,
+        turn_id: &str,
+        changed_planning_file_paths: Vec<String>,
+    ) -> crate::domain::turn_terminal::ConversationTurnTerminalReceipt {
+        crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
+            thread_id,
+            turn_id,
+            changed_planning_file_paths,
+        )
+        .with_application_delivery(
+            crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
+        )
+    }
+
+    fn apply_completed_turn(
+        controller: &mut CoreController,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> TurnSubmissionCorrelation {
+        let turn_correlation = controller.begin_test_turn_submission();
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
             TurnStreamEvent::ThreadPrepared {
                 thread_id: thread_id.to_string(),
                 title: "Core runtime".to_string(),
                 cwd: "/tmp/workspace".to_string(),
             },
         ));
-        controller.handle_input(CoreInput::ConversationStreamUpdated(
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
             },
         ));
-        controller.handle_input(CoreInput::ConversationTurnCompleted {
-            turn_id: turn_id.to_string(),
-            changed_planning_file_paths: Vec::new(),
-            execution_snapshot_capture: TurnSnapshotCapture::capture_failed(
-                "/tmp/workspace",
-                "test capture skipped".to_string(),
-            ),
-        });
+        controller.handle_input(test_turn_stream_input(
+            turn_correlation,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt(thread_id, turn_id, Vec::new()),
+                execution_snapshot_capture: Some(TurnSnapshotCapture::capture_failed(
+                    "/tmp/workspace",
+                    "test capture skipped".to_string(),
+                )),
+            },
+        ));
+        turn_correlation
+    }
+
+    fn test_turn_stream_input(
+        correlation: TurnSubmissionCorrelation,
+        event: TurnStreamEvent,
+    ) -> CoreInput {
+        CoreInput::ConversationStreamUpdated { correlation, event }
+    }
+
+    fn test_turn_submission_request(thread_id: Option<&str>) -> TurnSubmissionRequest {
+        TurnSubmissionRequest {
+            workspace_directory: "/tmp/workspace".to_string(),
+            thread_id: thread_id.map(str::to_string),
+            prompt: "ship it".to_string(),
+            prompt_origin: CorePromptOrigin::Manual,
+            turn_options: Default::default(),
+            slot_lease_handoff: None,
+        }
+    }
+
+    fn submit_test_turn(
+        controller: &mut CoreController,
+        thread_id: Option<&str>,
+    ) -> TurnSubmissionCorrelation {
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            test_turn_submission_request(thread_id),
+        )));
+        let [CoreEffect::SubmitTurn { correlation, .. }] = outcome.effects.as_slice() else {
+            panic!("test submission should produce one correlated effect");
+        };
+        *correlation
     }
 
     fn sample_post_turn_execution()

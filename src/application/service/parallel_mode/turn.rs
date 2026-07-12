@@ -64,6 +64,16 @@ pub struct ParallelTurnStreamCompletionOutcome {
     pub runtime_notice: Option<String>,
     pub invalidate_supervisor_snapshot: bool,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct ParallelTurnStreamCompletionEvidence<'a> {
+    saw_turn_started: bool,
+    saw_failed_before_turn_started: bool,
+    saw_failed_event: bool,
+    terminal_failure_observed: bool,
+    terminal_failure_detail: Option<&'a str>,
+    terminal_failure_persisted: bool,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelTurnStreamLifecycleEventOutcome {
     pub runtime_notice: Option<String>,
@@ -83,6 +93,8 @@ pub struct ParallelTurnStreamLifecycle {
     saw_turn_started: bool,
     saw_failed_before_turn_started: bool,
     saw_failed_event: bool,
+    terminal_failure_detail: Option<String>,
+    terminal_failure_persisted: bool,
 }
 impl std::fmt::Debug for ParallelTurnStreamLifecycle {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -95,6 +107,11 @@ impl std::fmt::Debug for ParallelTurnStreamLifecycle {
                 &self.saw_failed_before_turn_started,
             )
             .field("saw_failed_event", &self.saw_failed_event)
+            .field("terminal_failure_detail", &self.terminal_failure_detail)
+            .field(
+                "terminal_failure_persisted",
+                &self.terminal_failure_persisted,
+            )
             .finish()
     }
 }
@@ -111,6 +128,8 @@ impl ParallelTurnStreamLifecycle {
             saw_turn_started: false,
             saw_failed_before_turn_started: false,
             saw_failed_event: false,
+            terminal_failure_detail: None,
+            terminal_failure_persisted: false,
         }
     }
 
@@ -127,18 +146,42 @@ impl ParallelTurnStreamLifecycle {
 
         let should_stop_stream_forwarding = matches!(
             event,
-            ConversationStreamEvent::TurnCompleted { .. } | ConversationStreamEvent::Failed { .. }
+            ConversationStreamEvent::TurnTerminal { .. } | ConversationStreamEvent::Failed { .. }
         );
-        if matches!(event, ConversationStreamEvent::Failed { .. }) {
+        let terminal_failure = matches!(event, ConversationStreamEvent::Failed { .. })
+            || matches!(
+                event,
+                ConversationStreamEvent::TurnTerminal { receipt }
+                    if !receipt.is_completed_and_confirmed()
+            );
+        if terminal_failure {
             self.saw_failed_event = true;
+            self.terminal_failure_detail = Some(stream_terminal_failure_detail(event));
             if !self.saw_turn_started {
                 self.saw_failed_before_turn_started = true;
             }
         }
 
+        let mut runtime_notice = outcome.runtime_notice;
+        let mut invalidate_supervisor_snapshot = outcome.invalidate_supervisor_snapshot;
+        if terminal_failure && self.saw_turn_started {
+            let failure_detail = self
+                .terminal_failure_detail
+                .as_deref()
+                .expect("terminal failure detail should accompany a terminal failure");
+            let (failure_outcome, persisted) = self.turn_service.record_running_turn_failure_inner(
+                &self.workspace_directory,
+                self.expected_lease.as_ref(),
+                failure_detail,
+            );
+            runtime_notice = failure_outcome.runtime_notice;
+            invalidate_supervisor_snapshot |= failure_outcome.invalidate_supervisor_snapshot;
+            self.terminal_failure_persisted |= persisted;
+        }
+
         ParallelTurnStreamLifecycleEventOutcome {
-            runtime_notice: outcome.runtime_notice,
-            invalidate_supervisor_snapshot: outcome.invalidate_supervisor_snapshot,
+            runtime_notice,
+            invalidate_supervisor_snapshot,
             should_stop_stream_forwarding,
         }
     }
@@ -150,10 +193,14 @@ impl ParallelTurnStreamLifecycle {
         self.turn_service.finalize_stream_completion_inner(
             &self.workspace_directory,
             self.expected_lease.as_ref(),
-            self.saw_turn_started,
-            self.saw_failed_before_turn_started,
-            self.saw_failed_event,
-            terminal_failure_observed,
+            ParallelTurnStreamCompletionEvidence {
+                saw_turn_started: self.saw_turn_started,
+                saw_failed_before_turn_started: self.saw_failed_before_turn_started,
+                saw_failed_event: self.saw_failed_event,
+                terminal_failure_observed,
+                terminal_failure_detail: self.terminal_failure_detail.as_deref(),
+                terminal_failure_persisted: self.terminal_failure_persisted,
+            },
         )
     }
 }
@@ -169,9 +216,62 @@ pub struct ParallelModeTurnService {
     automation_guard: Option<super::ParallelModeAutomationGuard>,
 }
 
-pub(crate) struct ParallelOfficialCompletionSuccessPreparation {
-    pub(crate) notices: Vec<String>,
-    pub(crate) should_run_delivery_tick: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelOfficialCompletionDurableProof {
+    CommitReadyRecord,
+    CommitReadyAwaitingAutomation,
+    DistributorQueueRecord,
+}
+
+impl ParallelOfficialCompletionDurableProof {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::CommitReadyRecord => "commit_ready_record",
+            Self::CommitReadyAwaitingAutomation => "commit_ready_awaiting_automation",
+            Self::DistributorQueueRecord => "distributor_queue_record",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelOfficialCompletionFinalizeFailureStage {
+    CommitReadyPersistence,
+    DistributorEnqueue,
+}
+
+impl ParallelOfficialCompletionFinalizeFailureStage {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::CommitReadyPersistence => "commit_ready_persistence",
+            Self::DistributorEnqueue => "distributor_enqueue",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParallelOfficialCompletionFinalizeOutcome {
+    Durable {
+        notices: Vec<String>,
+        proof: ParallelOfficialCompletionDurableProof,
+        expected_lease: Box<ParallelModeSlotLeaseSnapshot>,
+    },
+    Failed {
+        notices: Vec<String>,
+        stage: ParallelOfficialCompletionFinalizeFailureStage,
+    },
+}
+
+enum ParallelOfficialCompletionSuccessPreparation {
+    Durable {
+        notices: Vec<String>,
+        proof: ParallelOfficialCompletionDurableProof,
+        expected_lease: Box<ParallelModeSlotLeaseSnapshot>,
+        should_run_delivery_tick: bool,
+    },
+    Failed {
+        notices: Vec<String>,
+        stage: ParallelOfficialCompletionFinalizeFailureStage,
+    },
 }
 impl std::fmt::Debug for ParallelModeTurnService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -409,10 +509,14 @@ impl ParallelModeTurnService {
         self.finalize_stream_completion_inner(
             workspace_directory,
             None,
-            saw_turn_started,
-            saw_failed_before_turn_started,
-            saw_failed_event,
-            terminal_failure_observed,
+            ParallelTurnStreamCompletionEvidence {
+                saw_turn_started,
+                saw_failed_before_turn_started,
+                saw_failed_event,
+                terminal_failure_observed,
+                terminal_failure_detail: None,
+                terminal_failure_persisted: false,
+            },
         )
     }
 
@@ -427,10 +531,14 @@ impl ParallelModeTurnService {
         self.finalize_stream_completion_inner(
             &expected_lease.worktree_path,
             Some(expected_lease),
-            saw_turn_started,
-            saw_failed_before_turn_started,
-            saw_failed_event,
-            terminal_failure_observed,
+            ParallelTurnStreamCompletionEvidence {
+                saw_turn_started,
+                saw_failed_before_turn_started,
+                saw_failed_event,
+                terminal_failure_observed,
+                terminal_failure_detail: None,
+                terminal_failure_persisted: false,
+            },
         )
     }
 
@@ -438,11 +546,16 @@ impl ParallelModeTurnService {
         &self,
         workspace_directory: &str,
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
-        saw_turn_started: bool,
-        saw_failed_before_turn_started: bool,
-        saw_failed_event: bool,
-        terminal_failure_observed: bool,
+        evidence: ParallelTurnStreamCompletionEvidence<'_>,
     ) -> ParallelTurnStreamCompletionOutcome {
+        let ParallelTurnStreamCompletionEvidence {
+            saw_turn_started,
+            saw_failed_before_turn_started,
+            saw_failed_event,
+            terminal_failure_observed,
+            terminal_failure_detail,
+            terminal_failure_persisted,
+        } = evidence;
         if should_release_unstarted_slot_lease(
             saw_turn_started,
             saw_failed_before_turn_started,
@@ -480,6 +593,24 @@ impl ParallelModeTurnService {
                     invalidate_supervisor_snapshot: false,
                 },
             };
+        }
+        if saw_turn_started && (saw_failed_event || terminal_failure_observed) {
+            if terminal_failure_persisted {
+                return ParallelTurnStreamCompletionOutcome {
+                    runtime_notice: None,
+                    invalidate_supervisor_snapshot: false,
+                };
+            }
+            let failure_detail = terminal_failure_detail.unwrap_or(
+                "conversation stream ended without a confirmed successful terminal after TurnStarted",
+            );
+            return self
+                .record_running_turn_failure_inner(
+                    workspace_directory,
+                    expected_lease,
+                    failure_detail,
+                )
+                .0;
         }
         if should_mark_cleanup_pending_after_success(
             saw_turn_started,
@@ -531,6 +662,53 @@ impl ParallelModeTurnService {
         ParallelTurnStreamCompletionOutcome {
             runtime_notice: None,
             invalidate_supervisor_snapshot: false,
+        }
+    }
+
+    fn record_running_turn_failure_inner(
+        &self,
+        workspace_directory: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+        failure_detail: &str,
+    ) -> (ParallelTurnStreamCompletionOutcome, bool) {
+        let transition = match expected_lease {
+            Some(expected) => self
+                .parallel_mode_service
+                .mark_workspace_official_completion_failed_for_lease(expected, failure_detail),
+            None => self
+                .parallel_mode_service
+                .mark_workspace_official_completion_failed(workspace_directory, failure_detail),
+        };
+        match transition {
+            Ok(Some(detail)) => (
+                ParallelTurnStreamCompletionOutcome {
+                    runtime_notice: Some(format!(
+                        "running slot recorded failed after non-success terminal / session: {} / {}",
+                        detail.session_key, failure_detail
+                    )),
+                    invalidate_supervisor_snapshot: true,
+                },
+                true,
+            ),
+            Ok(None) => (
+                ParallelTurnStreamCompletionOutcome {
+                    runtime_notice: Some(
+                        "running slot failure was not recorded because the expected lease generation no longer matched"
+                            .to_string(),
+                    ),
+                    invalidate_supervisor_snapshot: true,
+                },
+                false,
+            ),
+            Err(error) => (
+                ParallelTurnStreamCompletionOutcome {
+                    runtime_notice: Some(format!(
+                        "running slot failure could not be recorded after non-success terminal: {error}"
+                    )),
+                    invalidate_supervisor_snapshot: true,
+                },
+                false,
+            ),
         }
     }
 
@@ -610,8 +788,27 @@ impl ParallelModeTurnService {
         failure_detail: &str,
     ) {
         let _ = self
+            .mark_official_completion_failed_for_lease_with_notice(expected_lease, failure_detail);
+    }
+
+    pub(crate) fn mark_official_completion_failed_for_lease_with_notice(
+        &self,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+        failure_detail: &str,
+    ) -> Option<String> {
+        match self
             .parallel_mode_service
-            .mark_workspace_official_completion_failed_for_lease(expected_lease, failure_detail);
+            .mark_workspace_official_completion_failed_for_lease(expected_lease, failure_detail)
+        {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(
+                "official completion failure was not recorded because the captured slot lease generation is stale"
+                    .to_string(),
+            ),
+            Err(error) => Some(format!(
+                "official completion failure state could not be recorded: {error}"
+            )),
+        }
     }
     pub fn mark_official_completion_refreshing(&self, workspace_directory: &str) -> Option<String> {
         match self
@@ -633,7 +830,11 @@ impl ParallelModeTurnService {
             .parallel_mode_service
             .mark_workspace_official_completion_refreshing_for_lease(expected_lease)
         {
-            Ok(_) => None,
+            Ok(Some(_)) => None,
+            Ok(None) => Some(
+                "official completion refreshing was not recorded because the captured slot lease generation is stale"
+                    .to_string(),
+            ),
             Err(error) => Some(format!(
                 "official completion refreshing state could not be recorded: {error}"
             )),
@@ -654,7 +855,7 @@ impl ParallelModeTurnService {
         &self,
         workspace_directory: &str,
         authority_refresh_outcome: &str,
-    ) -> Vec<String> {
+    ) -> ParallelOfficialCompletionFinalizeOutcome {
         self.finalize_official_completion_success_inner(
             workspace_directory,
             None,
@@ -670,7 +871,7 @@ impl ParallelModeTurnService {
         planning_workspace_directory: &str,
         epoch_id: u64,
         authority_refresh_outcome: &str,
-    ) -> Vec<String> {
+    ) -> ParallelOfficialCompletionFinalizeOutcome {
         self.finalize_official_completion_success_inner(
             workspace_directory,
             None,
@@ -685,7 +886,7 @@ impl ParallelModeTurnService {
         planning_workspace_directory: &str,
         epoch_id: u64,
         authority_refresh_outcome: &str,
-    ) -> Vec<String> {
+    ) -> ParallelOfficialCompletionFinalizeOutcome {
         self.finalize_official_completion_success_inner(
             &expected_lease.worktree_path,
             Some(expected_lease),
@@ -700,57 +901,90 @@ impl ParallelModeTurnService {
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
         authority_refresh_outcome: &str,
         automation_epoch: Option<(&str, u64)>,
-    ) -> Vec<String> {
-        let preparation = self.prepare_official_completion_success_inner(
+    ) -> ParallelOfficialCompletionFinalizeOutcome {
+        match self.prepare_official_completion_success_inner(
             workspace_directory,
             expected_lease,
             authority_refresh_outcome,
             automation_epoch,
-        );
-        let mut notices = preparation.notices;
-        if preparation.should_run_delivery_tick {
-            notices.extend(self.run_official_completion_delivery_tick_inner(
-                workspace_directory,
-                automation_epoch,
-            ));
+        ) {
+            ParallelOfficialCompletionSuccessPreparation::Durable {
+                mut notices,
+                proof,
+                expected_lease,
+                should_run_delivery_tick,
+            } => {
+                if should_run_delivery_tick {
+                    notices.extend(self.run_official_completion_delivery_tick_inner(
+                        workspace_directory,
+                        automation_epoch,
+                    ));
+                }
+                ParallelOfficialCompletionFinalizeOutcome::Durable {
+                    notices,
+                    proof,
+                    expected_lease,
+                }
+            }
+            ParallelOfficialCompletionSuccessPreparation::Failed { notices, stage } => {
+                ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage }
+            }
         }
-        notices
     }
 
-    pub(crate) fn mark_official_completion_success_for_post_turn(
+    pub(crate) fn mark_official_completion_success_for_post_turn_for_lease(
         &self,
-        workspace_directory: &str,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
         authority_refresh_outcome: &str,
-    ) -> Vec<String> {
-        self.parallel_mode_service
-            .mark_workspace_commit_ready(workspace_directory, authority_refresh_outcome)
-            .err()
-            .map(|error| {
-                format!("commit-ready state could not be recorded after official refresh: {error}")
-            })
-            .into_iter()
-            .collect()
+    ) -> ParallelOfficialCompletionFinalizeOutcome {
+        match self
+            .parallel_mode_service
+            .mark_workspace_commit_ready_for_lease(expected_lease, authority_refresh_outcome)
+        {
+            Ok(Some(persistence)) => ParallelOfficialCompletionFinalizeOutcome::Durable {
+                notices: persistence.notices,
+                proof: ParallelOfficialCompletionDurableProof::CommitReadyRecord,
+                expected_lease: Box::new(persistence.lease),
+            },
+            Ok(None) => ParallelOfficialCompletionFinalizeOutcome::Failed {
+                notices: vec![
+                    "commit-ready state was not recorded because the captured slot lease generation is stale"
+                        .to_string(),
+                ],
+                stage: ParallelOfficialCompletionFinalizeFailureStage::CommitReadyPersistence,
+            },
+            Err(error) => ParallelOfficialCompletionFinalizeOutcome::Failed {
+                notices: vec![format!(
+                    "commit-ready state could not be recorded after official refresh: {error}"
+                )],
+                stage: ParallelOfficialCompletionFinalizeFailureStage::CommitReadyPersistence,
+            },
+        }
     }
 
     pub(crate) fn run_official_completion_delivery_tick_for_post_turn(
         &self,
-        workspace_directory: &str,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
         planning_workspace_directory: &str,
         epoch_id: u64,
         continuation_permit: &PostTurnContinuationPermit,
-    ) -> Vec<String> {
+    ) -> ParallelOfficialCompletionFinalizeOutcome {
         let Some(permit) = self
             .automation_permit(planning_workspace_directory, epoch_id)
             .map(|permit| permit.with_continuation_permit(continuation_permit.clone()))
         else {
-            return vec![
-                "parallel result remains queued because no guarded automation epoch is available"
-                    .to_string(),
-            ];
+            return ParallelOfficialCompletionFinalizeOutcome::Durable {
+                notices: vec![
+                    "parallel result remains commit-ready because no guarded automation epoch is available"
+                        .to_string(),
+                ],
+                proof: ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation,
+                expected_lease: Box::new(expected_lease.clone()),
+            };
         };
         let mut notices = match self
             .parallel_mode_service
-            .enqueue_workspace_commit_ready_result_guarded(workspace_directory, &permit)
+            .enqueue_workspace_commit_ready_result_for_lease_guarded(expected_lease, &permit)
         {
             Ok(Some(item)) => vec![format!(
                 "commit-ready result entered the distributor queue / agent: {} / task: {} / state: {}",
@@ -759,16 +993,33 @@ impl ParallelModeTurnService {
                 item.queue_state.label()
             )],
             Ok(None) if !permit.is_active() => {
-                return vec![
-                    "parallel result was not enqueued because its automation epoch was closed"
-                        .to_string(),
-                ];
+                return ParallelOfficialCompletionFinalizeOutcome::Durable {
+                    notices: vec![
+                        "parallel result remains commit-ready because its automation epoch or post-turn continuation was closed"
+                            .to_string(),
+                    ],
+                    proof: ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation,
+                    expected_lease: Box::new(expected_lease.clone()),
+                };
             }
-            Ok(None) => Vec::new(),
+            Ok(None) => {
+                return ParallelOfficialCompletionFinalizeOutcome::Failed {
+                    notices: vec![
+                        "distributor enqueue did not persist a queue record after official refresh because the current running lease or commit-ready session no longer matched"
+                            .to_string(),
+                    ],
+                    stage: ParallelOfficialCompletionFinalizeFailureStage::DistributorEnqueue,
+                };
+            }
             Err(error) => {
-                return vec![format!(
-                    "distributor enqueue failed after official refresh: {error}"
-                )];
+                return ParallelOfficialCompletionFinalizeOutcome::Failed {
+                    notices: vec![
+                        format!("distributor enqueue failed after official refresh: {error}"),
+                        "the durable commit-ready result remains available for distributor enqueue recovery"
+                            .to_string(),
+                    ],
+                    stage: ParallelOfficialCompletionFinalizeFailureStage::DistributorEnqueue,
+                };
             }
         };
         if !permit.is_active() {
@@ -776,10 +1027,14 @@ impl ParallelModeTurnService {
                 "parallel result remains queued because its automation epoch was closed"
                     .to_string(),
             );
-            return notices;
+            return ParallelOfficialCompletionFinalizeOutcome::Durable {
+                notices,
+                proof: ParallelOfficialCompletionDurableProof::DistributorQueueRecord,
+                expected_lease: Box::new(expected_lease.clone()),
+            };
         }
         match self.parallel_mode_service.run_orchestrator_tick_guarded(
-            workspace_directory,
+            &expected_lease.worktree_path,
             ParallelModeOrchestratorTrigger::PlanningRefreshCompleted,
             &permit,
         ) {
@@ -788,7 +1043,11 @@ impl ParallelModeTurnService {
                 "orchestrator tick failed after official refresh: {error}"
             )),
         }
-        notices
+        ParallelOfficialCompletionFinalizeOutcome::Durable {
+            notices,
+            proof: ParallelOfficialCompletionDurableProof::DistributorQueueRecord,
+            expected_lease: Box::new(expected_lease.clone()),
+        }
     }
 
     fn prepare_official_completion_success_inner(
@@ -804,12 +1063,8 @@ impl ParallelModeTurnService {
                 self.automation_epoch_is_active(planning_workspace_directory, epoch_id)
             })
         };
-        /*
-        mark_workspace_commit_ready updates the session ledger before enqueue.
-        Even if this write fails, enqueue is still attempted because the queue
-        record may be recoverable from the lease/session state and should surface
-        its own failure separately.
-        */
+        // commit_ready is the recovery source for a missing distributor queue record.
+        // Enqueue must not run unless this durable state was actually persisted.
         let commit_ready = match expected_lease {
             Some(expected) => self
                 .parallel_mode_service
@@ -818,29 +1073,45 @@ impl ParallelModeTurnService {
                 .parallel_mode_service
                 .mark_workspace_commit_ready(workspace_directory, authority_refresh_outcome),
         };
-        if let Err(error) = commit_ready {
-            notices.push(format!(
-                "commit-ready state could not be recorded after official refresh: {error}"
-            ));
-        }
+        let commit_ready = match commit_ready {
+            Ok(Some(persistence)) => persistence,
+            Ok(None) => {
+                notices.push(
+                    "commit-ready state was not recorded after official refresh because the current running lease no longer matched"
+                        .to_string(),
+                );
+                return ParallelOfficialCompletionSuccessPreparation::Failed {
+                    notices,
+                    stage: ParallelOfficialCompletionFinalizeFailureStage::CommitReadyPersistence,
+                };
+            }
+            Err(error) => {
+                notices.push(format!(
+                    "commit-ready state could not be recorded after official refresh: {error}"
+                ));
+                return ParallelOfficialCompletionSuccessPreparation::Failed {
+                    notices,
+                    stage: ParallelOfficialCompletionFinalizeFailureStage::CommitReadyPersistence,
+                };
+            }
+        };
+        notices.extend(commit_ready.notices);
+        let durable_lease = Box::new(commit_ready.lease);
         if !automation_is_active() {
             notices.push(
                 "parallel result was durably marked commit-ready and awaits a new automation epoch"
                     .to_string(),
             );
-            return ParallelOfficialCompletionSuccessPreparation {
+            return ParallelOfficialCompletionSuccessPreparation::Durable {
                 notices,
+                proof: ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation,
+                expected_lease: durable_lease,
                 should_run_delivery_tick: false,
             };
         }
-        let enqueue = match expected_lease {
-            Some(expected) => self
-                .parallel_mode_service
-                .enqueue_workspace_commit_ready_result_for_lease(expected),
-            None => self
-                .parallel_mode_service
-                .enqueue_workspace_commit_ready_result(workspace_directory),
-        };
+        let enqueue = self
+            .parallel_mode_service
+            .enqueue_workspace_commit_ready_result_for_lease(&durable_lease);
         match enqueue {
             Ok(Some(item)) => notices.push(format!(
                 "commit-ready result entered the distributor queue / agent: {} / task: {} / state: {}",
@@ -848,7 +1119,16 @@ impl ParallelModeTurnService {
                 item.task_title,
                 item.queue_state.label()
             )),
-            Ok(None) => {}
+            Ok(None) => {
+                notices.push(
+                    "distributor enqueue did not persist a queue record after official refresh because the current running lease or commit-ready session no longer matched"
+                        .to_string(),
+                );
+                return ParallelOfficialCompletionSuccessPreparation::Failed {
+                    notices,
+                    stage: ParallelOfficialCompletionFinalizeFailureStage::DistributorEnqueue,
+                };
+            }
             Err(error) => {
                 /*
                 Without an enqueue record there is no queue head for the
@@ -858,9 +1138,13 @@ impl ParallelModeTurnService {
                 notices.push(format!(
                     "distributor enqueue failed after official refresh: {error}"
                 ));
-                return ParallelOfficialCompletionSuccessPreparation {
+                notices.push(
+                    "the durable commit-ready result remains available for distributor enqueue recovery"
+                        .to_string(),
+                );
+                return ParallelOfficialCompletionSuccessPreparation::Failed {
                     notices,
-                    should_run_delivery_tick: false,
+                    stage: ParallelOfficialCompletionFinalizeFailureStage::DistributorEnqueue,
                 };
             }
         }
@@ -869,13 +1153,17 @@ impl ParallelModeTurnService {
                 "parallel result remains queued because its automation epoch was closed"
                     .to_string(),
             );
-            return ParallelOfficialCompletionSuccessPreparation {
+            return ParallelOfficialCompletionSuccessPreparation::Durable {
                 notices,
+                proof: ParallelOfficialCompletionDurableProof::DistributorQueueRecord,
+                expected_lease: durable_lease,
                 should_run_delivery_tick: false,
             };
         }
-        ParallelOfficialCompletionSuccessPreparation {
+        ParallelOfficialCompletionSuccessPreparation::Durable {
             notices,
+            proof: ParallelOfficialCompletionDurableProof::DistributorQueueRecord,
+            expected_lease: durable_lease,
             should_run_delivery_tick: true,
         }
     }
@@ -915,6 +1203,19 @@ impl ParallelModeTurnService {
         notices
     }
 }
+
+fn stream_terminal_failure_detail(event: &ConversationStreamEvent) -> String {
+    match event {
+        ConversationStreamEvent::Failed { message } => {
+            format!("conversation stream failed: {}", message.trim())
+        }
+        ConversationStreamEvent::TurnTerminal { receipt } => format!(
+            "conversation turn ended without confirmed completion: {}",
+            receipt.status_error_summary()
+        ),
+        _ => "conversation stream ended without confirmed completion".to_string(),
+    }
+}
 fn should_release_unstarted_slot_lease(
     saw_turn_started: bool,
     saw_failed_before_turn_started: bool,
@@ -945,8 +1246,8 @@ fn should_promote_missing_turn_started_before_success(
     terminal_failure_observed: bool,
 ) -> bool {
     /*
-    TurnCompleted without TurnStarted is an event-ordering anomaly, but terminal
-    success still proves the worker executed. Promote the slot to Running so
+    A confirmed completed terminal without TurnStarted is an event-ordering anomaly,
+    but the terminal receipt still proves the worker executed. Promote the slot to Running so
     official completion can capture the result instead of leaving a Leased slot
     orphaned.
     */
@@ -955,8 +1256,9 @@ fn should_promote_missing_turn_started_before_success(
 #[cfg(test)]
 mod tests {
     use super::{
-        ParallelModeTurnService, ParallelTurnSlotLeaseHandoff,
-        should_mark_cleanup_pending_after_success,
+        ParallelModeTurnService, ParallelOfficialCompletionDurableProof,
+        ParallelOfficialCompletionFinalizeFailureStage, ParallelOfficialCompletionFinalizeOutcome,
+        ParallelTurnSlotLeaseHandoff, should_mark_cleanup_pending_after_success,
         should_promote_missing_turn_started_before_success, should_release_unstarted_slot_lease,
         slot_lease_request_from_handoff,
     };
@@ -968,11 +1270,17 @@ mod tests {
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
     use crate::application::service::parallel_mode::{
-        ParallelModeAutomationGuard, ParallelModeService,
+        ParallelModeAutomationGuard, ParallelModeService, agent_session_detail_record_path,
+        derive_default_pool_root, write_slot_lease,
     };
     use crate::domain::parallel_mode::{
         ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
         ParallelModeSlotLeaseRequest,
+    };
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
+        ConversationTurnError, ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
+        ConversationTurnTerminalUncertainty,
     };
     use std::fs;
     use std::process::Command;
@@ -1259,12 +1567,26 @@ mod tests {
             .with_automation_guard(guard.clone());
         guard.cancel(&workspace.root);
 
-        let notices = turn_service.finalize_official_completion_success_for_epoch(
+        let outcome = turn_service.finalize_official_completion_success_for_epoch(
             &lease.worktree_path,
             &workspace.root,
             7,
             "official ledger refresh succeeded",
         );
+        let notices = match outcome {
+            ParallelOfficialCompletionFinalizeOutcome::Durable { notices, proof, .. } => {
+                assert_eq!(
+                    proof,
+                    ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation
+                );
+                notices
+            }
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                panic!(
+                    "closed epoch should preserve durable commit-ready state, not fail at {stage:?}: {notices:?}"
+                )
+            }
+        };
 
         assert!(
             notices
@@ -1279,6 +1601,191 @@ mod tests {
             .expect("commit-ready session detail should remain durable");
         assert_eq!(detail.state_label, "commit_ready");
         assert_eq!(snapshot.distributor.queue_depth(), 0);
+    }
+
+    #[test]
+    fn commit_ready_authority_proof_survives_runtime_mirror_failure() {
+        let workspace = TempGitWorkspace::new("parallel-commit-ready-mirror-failure");
+        let parallel_service = test_parallel_mode_service();
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(&workspace.root)
+            .expect("pool should initialize");
+        let lease = parallel_service
+            .acquire_slot_lease(
+                &workspace.root,
+                ParallelModeSlotLeaseRequest::from_task_identity(
+                    "task-mirror-failure",
+                    "Preserve authority proof",
+                ),
+            )
+            .expect("slot should lease");
+        parallel_service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should become running");
+        parallel_service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("official refresh state should persist");
+
+        let repo_root = fs::canonicalize(&workspace.root).expect("repo root should canonicalize");
+        let detail_path = agent_session_detail_record_path(
+            &derive_default_pool_root(&repo_root),
+            &lease.session_key(),
+        );
+        fs::remove_file(&detail_path).expect("existing session mirror should be removable");
+        fs::create_dir(&detail_path).expect("directory collision should fail mirror replacement");
+
+        let guard = ParallelModeAutomationGuard::default();
+        guard.activate(workspace.root.clone(), 8);
+        let turn_service = ParallelModeTurnService::new(parallel_service.clone())
+            .with_automation_guard(guard.clone());
+        guard.cancel(&workspace.root);
+        let outcome = turn_service.finalize_official_completion_success_for_epoch(
+            &lease.worktree_path,
+            &workspace.root,
+            8,
+            "official ledger refresh succeeded",
+        );
+
+        let notices = match outcome {
+            ParallelOfficialCompletionFinalizeOutcome::Durable { notices, proof, .. } => {
+                assert_eq!(
+                    proof,
+                    ParallelOfficialCompletionDurableProof::CommitReadyAwaitingAutomation
+                );
+                notices
+            }
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                panic!("authority proof must survive mirror failure at {stage:?}: {notices:?}")
+            }
+        };
+        assert!(notices.iter().any(|notice| {
+            notice.contains(
+                "commit-ready authority proof was persisted, but its runtime mirror could not be updated",
+            )
+        }));
+        let snapshot = parallel_service.build_passive_supervisor_snapshot(&workspace.root, None);
+        assert_eq!(
+            snapshot
+                .detail
+                .session
+                .as_ref()
+                .map(|detail| detail.state_label.as_str()),
+            Some("commit_ready")
+        );
+    }
+
+    #[test]
+    fn post_turn_delivery_rejects_a_reused_slot_generation() {
+        let workspace = TempGitWorkspace::new("parallel-post-turn-generation-race");
+        let parallel_service = test_parallel_mode_service();
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(&workspace.root)
+            .expect("pool should initialize");
+        let acquired_lease = parallel_service
+            .acquire_slot_lease(
+                &workspace.root,
+                ParallelModeSlotLeaseRequest::from_task_identity(
+                    "task-old-generation",
+                    "Old post-turn continuation",
+                ),
+            )
+            .expect("old slot generation should lease");
+        let old_lease = parallel_service
+            .mark_workspace_slot_running(&acquired_lease.worktree_path)
+            .expect("old slot generation should become running")
+            .expect("old slot generation should still match");
+        parallel_service
+            .mark_workspace_official_completion_refreshing(&old_lease.worktree_path)
+            .expect("old official refresh state should persist");
+
+        let guard = ParallelModeAutomationGuard::default();
+        guard.activate(workspace.root.clone(), 11);
+        let turn_service =
+            ParallelModeTurnService::new(parallel_service.clone()).with_automation_guard(guard);
+        let expected_old_lease = match turn_service
+            .mark_official_completion_success_for_post_turn_for_lease(
+                &old_lease,
+                "old official ledger refresh succeeded",
+            ) {
+            ParallelOfficialCompletionFinalizeOutcome::Durable {
+                proof,
+                expected_lease,
+                ..
+            } => {
+                assert_eq!(
+                    proof,
+                    ParallelOfficialCompletionDurableProof::CommitReadyRecord
+                );
+                assert!(expected_lease.same_generation_as(&old_lease));
+                expected_lease
+            }
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                panic!("old commit-ready proof should persist at {stage:?}: {notices:?}")
+            }
+        };
+
+        let authority = SqlitePlanningAuthorityAdapter::new();
+        let repo_root = fs::canonicalize(&workspace.root).expect("repo root should canonicalize");
+        let pool_root = derive_default_pool_root(&repo_root);
+        let mut replacement = (*expected_old_lease).clone();
+        replacement.task_id = "task-replacement-generation".to_string();
+        replacement.task_title = "Replacement post-turn continuation".to_string();
+        replacement.agent_id = "agent-replacement-generation".to_string();
+        replacement.lease_generation = Some("f".repeat(64));
+        replacement.leased_at = "2026-07-12T00:00:00Z".to_string();
+        replacement.running_started_at = Some("2026-07-12T00:00:01Z".to_string());
+        write_slot_lease(
+            &authority,
+            &GitParallelModeRuntimeAdapter::new(),
+            &workspace.root,
+            &pool_root,
+            &replacement,
+        )
+        .expect("replacement slot generation should persist");
+        assert!(!replacement.same_generation_as(&expected_old_lease));
+        parallel_service
+            .mark_workspace_official_completion_refreshing(&replacement.worktree_path)
+            .expect("replacement official refresh state should persist")
+            .expect("replacement running lease should resolve for official refresh");
+        parallel_service
+            .mark_workspace_commit_ready(
+                &replacement.worktree_path,
+                "replacement official ledger refresh succeeded",
+            )
+            .expect("replacement commit-ready state should persist")
+            .expect("replacement running lease should match");
+
+        let continuation_gate = crate::domain::planning::PostTurnContinuationGate::default();
+        let outcome = turn_service.run_official_completion_delivery_tick_for_post_turn(
+            &expected_old_lease,
+            &workspace.root,
+            11,
+            &continuation_gate.capture(),
+        );
+        match outcome {
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                assert_eq!(
+                    stage,
+                    ParallelOfficialCompletionFinalizeFailureStage::DistributorEnqueue
+                );
+                assert!(notices.iter().any(|notice| {
+                    notice
+                        .contains("current running lease or commit-ready session no longer matched")
+                }));
+            }
+            ParallelOfficialCompletionFinalizeOutcome::Durable { notices, proof, .. } => {
+                panic!("stale post-turn continuation must not produce {proof:?}: {notices:?}")
+            }
+        }
+        let projections = SqlitePlanningAuthorityAdapter::load_runtime_projections(&workspace.root)
+            .expect("authority projections should remain readable");
+        assert!(projections.distributor_queue_records.is_empty());
+        let replacement_detail = projections
+            .session_details
+            .iter()
+            .find(|detail| detail.session_key == replacement.session_key())
+            .expect("replacement session detail should remain present");
+        assert_eq!(replacement_detail.state_label, "commit_ready");
     }
     #[test]
     fn startup_failure_requests_unstarted_slot_release() {
@@ -1354,6 +1861,225 @@ mod tests {
         assert_eq!(supervisor.pool.leased_slots, 0);
     }
     #[test]
+    fn stream_lifecycle_stops_on_any_terminal_but_only_accepts_confirmed_completion() {
+        let service = ParallelModeTurnService::new(test_parallel_mode_service());
+        let confirmed =
+            ConversationTurnTerminalReceipt::completed("thread-1", "turn-completed", Vec::new())
+                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+        let interrupted = ConversationTurnTerminalReceipt::new(
+            "thread-1",
+            "turn-interrupted",
+            ConversationTurnTerminalOutcome::Interrupted,
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+        let unconfirmed =
+            ConversationTurnTerminalReceipt::completed("thread-1", "turn-unconfirmed", Vec::new())
+                .with_application_delivery(ConversationTurnApplicationDelivery::Unconfirmed(
+                    ConversationTurnApplicationDeliveryFailure::Full,
+                ));
+
+        let mut successful_lifecycle = service.stream_lifecycle("/tmp/no-slot-success");
+        let successful = successful_lifecycle
+            .observe_event(&ConversationStreamEvent::TurnTerminal { receipt: confirmed });
+        assert!(successful.should_stop_stream_forwarding);
+        assert!(!successful_lifecycle.saw_failed_event);
+
+        for (workspace, receipt) in [
+            ("/tmp/no-slot-interrupted", interrupted),
+            ("/tmp/no-slot-unconfirmed", unconfirmed),
+        ] {
+            let mut lifecycle = service.stream_lifecycle(workspace);
+            let outcome =
+                lifecycle.observe_event(&ConversationStreamEvent::TurnTerminal { receipt });
+            assert!(outcome.should_stop_stream_forwarding);
+            assert!(lifecycle.saw_failed_event);
+            assert!(lifecycle.saw_failed_before_turn_started);
+        }
+    }
+
+    #[test]
+    fn running_leases_persist_failed_detail_for_every_non_success_terminal_receipt() {
+        let receipts = [
+            (
+                "interrupted",
+                ConversationTurnTerminalReceipt::new(
+                    "thread-interrupted",
+                    "turn-interrupted",
+                    ConversationTurnTerminalOutcome::Interrupted,
+                )
+                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+                "interrupted",
+            ),
+            (
+                "failed",
+                ConversationTurnTerminalReceipt::new(
+                    "thread-failed",
+                    "turn-failed",
+                    ConversationTurnTerminalOutcome::Failed {
+                        error: ConversationTurnError::new("worker failed", None::<&str>, None),
+                    },
+                )
+                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+                "failed: worker failed",
+            ),
+            (
+                "unknown",
+                ConversationTurnTerminalReceipt::new(
+                    "thread-unknown",
+                    "turn-unknown",
+                    ConversationTurnTerminalOutcome::Unknown {
+                        reason: ConversationTurnTerminalUncertainty::protocol_inconsistency(
+                            "terminal proof was inconsistent",
+                        ),
+                        observed_error: None,
+                    },
+                )
+                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+                "unknown: terminal proof was inconsistent",
+            ),
+            (
+                "unconfirmed",
+                ConversationTurnTerminalReceipt::completed(
+                    "thread-unconfirmed",
+                    "turn-unconfirmed",
+                    Vec::new(),
+                )
+                .with_application_delivery(
+                    ConversationTurnApplicationDelivery::Unconfirmed(
+                        ConversationTurnApplicationDeliveryFailure::DeadlineExceeded,
+                    ),
+                ),
+                "application delivery unconfirmed",
+            ),
+        ];
+
+        for (label, receipt, expected_failure_detail) in receipts {
+            let workspace = TempGitWorkspace::new(&format!("parallel-running-terminal-{label}"));
+            let parallel_service = test_parallel_mode_service();
+            parallel_service
+                .reset_pool_on_parallel_initial_setup_report(&workspace.root)
+                .expect("pool should initialize for terminal failure case");
+            let lease = parallel_service
+                .acquire_slot_lease(
+                    &workspace.root,
+                    ParallelModeSlotLeaseRequest::from_task_identity(
+                        format!("task-terminal-{label}"),
+                        format!("Terminal {label}"),
+                    ),
+                )
+                .expect("slot lease should be acquired");
+            let turn_service = ParallelModeTurnService::new(parallel_service.clone());
+            let mut lifecycle = turn_service.stream_lifecycle_for_lease(lease.clone());
+
+            let thread_prepared =
+                lifecycle.observe_event(&ConversationStreamEvent::ThreadPrepared {
+                    thread_id: receipt.thread_id.clone(),
+                    title: format!("Terminal {label}"),
+                    cwd: lease.worktree_path.clone(),
+                });
+            assert!(thread_prepared.invalidate_supervisor_snapshot);
+            let turn_started = lifecycle.observe_event(&ConversationStreamEvent::TurnStarted {
+                turn_id: receipt.turn_id.clone(),
+            });
+            assert!(turn_started.invalidate_supervisor_snapshot);
+            assert!(lifecycle.saw_turn_started);
+
+            let terminal =
+                lifecycle.observe_event(&ConversationStreamEvent::TurnTerminal { receipt });
+            assert!(terminal.should_stop_stream_forwarding);
+            assert!(terminal.invalidate_supervisor_snapshot);
+            assert!(terminal.runtime_notice.as_deref().is_some_and(|notice| {
+                notice.contains("running slot recorded failed after non-success terminal")
+                    && notice.contains(expected_failure_detail)
+            }));
+            let completion = lifecycle.finalize_after_stream_completion(false);
+            assert!(completion.runtime_notice.is_none());
+            assert!(!completion.invalidate_supervisor_snapshot);
+
+            let supervisor =
+                parallel_service.build_passive_supervisor_snapshot(&workspace.root, None);
+            let detail = supervisor
+                .detail
+                .session
+                .as_ref()
+                .expect("failed session detail should remain visible");
+            assert_eq!(detail.session_key, lease.session_key());
+            assert_eq!(detail.state_label, "failed");
+            assert_eq!(detail.completion_state_label, "failed");
+            assert!(
+                detail
+                    .authority_refresh_outcome
+                    .contains(expected_failure_detail)
+            );
+            let roster_entry = supervisor
+                .roster
+                .entries
+                .iter()
+                .find(|entry| entry.slot_id == lease.slot_id)
+                .expect("failed running lease should remain in the roster");
+            assert_eq!(roster_entry.state_label, "failed");
+        }
+    }
+
+    #[test]
+    fn producer_return_failure_after_turn_started_persists_generic_failed_detail() {
+        let workspace = TempGitWorkspace::new("parallel-running-producer-return-failure");
+        let parallel_service = test_parallel_mode_service();
+        parallel_service
+            .reset_pool_on_parallel_initial_setup_report(&workspace.root)
+            .expect("pool should initialize for producer return failure");
+        let lease = parallel_service
+            .acquire_slot_lease(
+                &workspace.root,
+                ParallelModeSlotLeaseRequest::from_task_identity(
+                    "task-producer-return-failure",
+                    "Producer return failure",
+                ),
+            )
+            .expect("slot lease should be acquired");
+        let turn_service = ParallelModeTurnService::new(parallel_service.clone());
+        let mut lifecycle = turn_service.stream_lifecycle_for_lease(lease.clone());
+        lifecycle.observe_event(&ConversationStreamEvent::TurnStarted {
+            turn_id: "turn-producer-return-failure".to_string(),
+        });
+
+        let completion = lifecycle.finalize_after_stream_completion(true);
+        assert!(completion.invalidate_supervisor_snapshot);
+        assert!(completion.runtime_notice.as_deref().is_some_and(|notice| {
+            notice.contains("running slot recorded failed after non-success terminal")
+                && notice.contains(
+                    "conversation stream ended without a confirmed successful terminal after TurnStarted",
+                )
+        }));
+
+        let supervisor = parallel_service.build_passive_supervisor_snapshot(&workspace.root, None);
+        let detail = supervisor
+            .detail
+            .session
+            .as_ref()
+            .expect("producer return failure detail should persist");
+        assert_eq!(detail.session_key, lease.session_key());
+        assert_eq!(detail.state_label, "failed");
+        assert_eq!(detail.completion_state_label, "failed");
+        assert!(detail.authority_refresh_outcome.contains(
+            "conversation stream ended without a confirmed successful terminal after TurnStarted"
+        ));
+    }
+    #[test]
+    fn stream_lifecycle_keeps_retrying_event_nonterminal() {
+        let service = ParallelModeTurnService::new(test_parallel_mode_service());
+        let mut lifecycle = service.stream_lifecycle("/tmp/no-slot-retry");
+
+        let outcome = lifecycle.observe_event(&ConversationStreamEvent::TurnRetrying {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            error: ConversationTurnError::new("retrying", None::<&str>, None),
+        });
+
+        assert!(!outcome.should_stop_stream_forwarding);
+        assert!(!lifecycle.saw_failed_event);
+    }
+    #[test]
     fn turn_started_without_slot_lease_keeps_snapshot_steady() {
         let workspace = TempGitWorkspace::new("parallel-turn-no-lease");
         let service = ParallelModeTurnService::new(test_parallel_mode_service());
@@ -1400,15 +2126,30 @@ mod tests {
     fn official_completion_finalize_surfaces_commit_ready_transition_failure() {
         let workspace = create_temp_directory("parallel-turn-commit-ready-failure");
         let service = ParallelModeTurnService::new(test_parallel_mode_service());
-        let notices = service
+        let outcome = service
             .finalize_official_completion_success(&workspace, "official ledger refresh succeeded");
+        let notices = match outcome {
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                assert_eq!(
+                    stage,
+                    ParallelOfficialCompletionFinalizeFailureStage::CommitReadyPersistence
+                );
+                notices
+            }
+            ParallelOfficialCompletionFinalizeOutcome::Durable { notices, proof, .. } => {
+                panic!("invalid workspace must not produce durable proof {proof:?}: {notices:?}")
+            }
+        };
 
         assert!(notices.iter().any(|notice| {
             notice.contains("commit-ready state could not be recorded after official refresh")
         }));
-        assert!(notices.iter().any(|notice| {
-            notice.contains("distributor enqueue failed after official refresh")
-        }));
+        assert!(
+            notices
+                .iter()
+                .all(|notice| !notice.contains("distributor enqueue")),
+            "enqueue must not run without durable commit-ready proof: {notices:?}"
+        );
         let _ = fs::remove_dir_all(workspace);
     }
 }

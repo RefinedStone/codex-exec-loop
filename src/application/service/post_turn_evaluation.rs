@@ -956,6 +956,10 @@ mod tests {
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
     use crate::adapter::outbound::github::GithubAutomationAdapter;
+    use crate::application::port::outbound::github_automation_port::{
+        GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
+        GithubRepositoryVisibility,
+    };
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::{
         NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
@@ -969,6 +973,12 @@ mod tests {
         OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
         PlanningRuntimeWorkspaceStatus, PlanningWorkerRunOutcome,
+    };
+    use crate::domain::parallel_mode::{
+        ParallelModeAgentSessionDetailSnapshot, ParallelModeCapabilityKey,
+        ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
+        ParallelModeLiveSessionDetailDefaults, ParallelModeSlotLeaseRequest,
+        ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
@@ -1358,8 +1368,21 @@ mod tests {
         let mut request = test_request(context);
         request.workspace_directory = workspace.path.clone();
         let permit = request.continuation_permit.clone();
+        let (execution_tx, execution_rx) = std::sync::mpsc::channel();
 
-        let execution = service.evaluate_with_timeout(request, Duration::from_millis(500));
+        let evaluator = std::thread::spawn(move || {
+            let execution = service.evaluate_with_timeout(request, Duration::from_millis(500));
+            execution_tx
+                .send(execution)
+                .expect("timeout execution should be observed");
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("hidden worker should enter before the timeout result is observed");
+        let execution = execution_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("timeout execution should return after cancellation settlement");
 
         assert_eq!(
             execution.evaluation.action,
@@ -1368,13 +1391,11 @@ mod tests {
             }
         );
         assert!(!permit.is_current());
-        started_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("hidden worker should have been in flight at timeout");
         release_tx.send(()).expect("hidden worker should release");
         returned_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .expect("hidden worker should return after cancellation");
+        evaluator.join().expect("timeout evaluator should join");
     }
 
     #[test]
@@ -1845,6 +1866,7 @@ mod tests {
             let mut request = test_request(context.clone());
             request.changed_planning_file_paths =
                 vec![".codex-exec-loop/planning/result.md".into()];
+            attach_synthetic_expected_lease(&mut request);
 
             let capture = executor.begin_official_completion_if_needed(&context, &request);
 
@@ -1878,6 +1900,7 @@ mod tests {
             context.parallel_mode_enabled = true;
             let mut request = test_request(context);
             request.workspace_directory = workspace.path.clone();
+            attach_synthetic_expected_lease(&mut request);
 
             let execution = service.evaluate(request);
 
@@ -1906,12 +1929,155 @@ mod tests {
     }
 
     #[test]
+    fn stale_captured_lease_before_completion_begin_does_not_touch_replacement_session() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new_git("official-stale-before-begin");
+            let parallel_service = test_parallel_mode_service_for_post_turn();
+            parallel_service
+                .reset_pool_on_parallel_initial_setup_report(&workspace.path)
+                .expect("parallel pool should initialize");
+            let lease = parallel_service
+                .acquire_slot_lease(
+                    &workspace.path,
+                    ParallelModeSlotLeaseRequest::from_task_identity("task-1", "Queue head"),
+                )
+                .expect("parallel slot should lease");
+            parallel_service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("parallel slot should become running");
+            let replacement = replace_slot_generation(&workspace.path, &lease);
+            let mut executor = test_executor_with_parallel_mode_service(parallel_service);
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = lease.worktree_path.clone();
+            attach_expected_lease(&mut request, lease);
+
+            let capture = executor.begin_official_completion_if_needed(&context, &request);
+
+            assert!(matches!(
+                capture,
+                OfficialCompletionCapture::Failed { detail }
+                    if detail.contains("captured slot lease generation is stale")
+            ));
+            assert_replacement_generation_unmodified(&workspace.path, &replacement);
+        });
+    }
+
+    #[test]
+    fn stale_captured_lease_before_refresh_does_not_touch_replacement_session() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new_git("official-stale-before-refresh");
+            let parallel_service = test_parallel_mode_service_for_post_turn();
+            parallel_service
+                .reset_pool_on_parallel_initial_setup_report(&workspace.path)
+                .expect("parallel pool should initialize");
+            let lease = parallel_service
+                .acquire_slot_lease(
+                    &workspace.path,
+                    ParallelModeSlotLeaseRequest::from_task_identity("task-1", "Queue head"),
+                )
+                .expect("parallel slot should lease");
+            parallel_service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("parallel slot should become running");
+            let worker = Arc::new(CountingPlanningWorkerPort::default());
+            let mut executor = test_executor_with_worker_and_parallel_mode_service(
+                worker.clone(),
+                parallel_service,
+            );
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = lease.worktree_path.clone();
+            attach_expected_lease(&mut request, lease.clone());
+            let report = match executor.begin_official_completion_if_needed(&context, &request) {
+                OfficialCompletionCapture::Captured(report) => report,
+                capture => panic!("current captured lease should begin completion: {capture:?}"),
+            };
+            let replacement = replace_slot_generation(&workspace.path, &lease);
+
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &request.workspace_directory,
+                &context.current_runtime_projection,
+                &report,
+            );
+
+            assert_eq!(worker.call_count(), 0);
+            assert!(
+                outcome
+                    .runtime_projection
+                    .auto_follow_pause_reason()
+                    .is_some_and(
+                        |detail| detail.contains("captured slot lease generation is stale")
+                    )
+            );
+            assert_replacement_generation_unmodified(&workspace.path, &replacement);
+        });
+    }
+
+    #[test]
+    fn stale_captured_lease_before_commit_ready_does_not_touch_replacement_session() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new_git("official-stale-before-commit-ready");
+            let parallel_service = test_parallel_mode_service_for_post_turn();
+            parallel_service
+                .reset_pool_on_parallel_initial_setup_report(&workspace.path)
+                .expect("parallel pool should initialize");
+            let lease = parallel_service
+                .acquire_slot_lease(
+                    &workspace.path,
+                    ParallelModeSlotLeaseRequest::from_task_identity("task-1", "Queue head"),
+                )
+                .expect("parallel slot should lease");
+            parallel_service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("parallel slot should become running");
+            let replacement = replacement_slot_generation(&lease);
+            let worker = Arc::new(ReuseSlotBeforeCommitReadyWorkerPort::new(
+                &workspace.path,
+                lease.clone(),
+            ));
+            let mut executor =
+                test_executor_with_worker_and_parallel_mode_service(worker, parallel_service);
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = lease.worktree_path.clone();
+            attach_expected_lease(&mut request, lease);
+            let report = match executor.begin_official_completion_if_needed(&context, &request) {
+                OfficialCompletionCapture::Captured(report) => report,
+                capture => panic!("current captured lease should begin completion: {capture:?}"),
+            };
+
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &request.workspace_directory,
+                &context.current_runtime_projection,
+                &report,
+            );
+
+            assert!(
+                outcome
+                    .runtime_projection
+                    .auto_follow_pause_reason()
+                    .is_some_and(|detail| {
+                        detail.contains("commit_ready_persistence")
+                            && detail.contains("captured slot lease generation is stale")
+                    })
+            );
+            assert_replacement_generation_unmodified(&workspace.path, &replacement);
+        });
+    }
+
+    #[test]
     fn official_completion_refresh_blocks_when_planning_workspace_is_unavailable() {
         with_test_event_logging(|| {
             let blocked_workspace = TempPlanningWorkspaceBlocker::new("official-refresh-blocked");
             let mut executor = test_executor();
             let context = test_context(ready_projection(Some(queue_task())));
-            let request = test_request(context.clone());
+            let mut request = test_request(context.clone());
+            attach_synthetic_expected_lease(&mut request);
             let contract = official_completion_contract();
 
             let outcome = executor.run_official_completion_refresh(
@@ -1938,7 +2104,9 @@ mod tests {
                 outcome.runtime_projection.failure_reason(),
                 Some(failure_detail)
             );
-            assert!(outcome.runtime_notices.is_empty());
+            assert!(outcome.runtime_notices.iter().any(|notice| {
+                notice.contains("official completion failure state could not be recorded")
+            }));
         });
     }
 
@@ -1950,6 +2118,7 @@ mod tests {
             let context = test_context(ready_projection(Some(queue_task())));
             let mut request = test_request(context.clone());
             request.workspace_directory = workspace.path.clone();
+            attach_synthetic_expected_lease(&mut request);
             let contract = official_completion_contract();
 
             let outcome = executor.run_official_completion_refresh(
@@ -1988,11 +2157,25 @@ mod tests {
     #[test]
     fn official_completion_refresh_success_finalizes_slot_and_preserves_worker_summary() {
         with_test_event_logging(|| {
-            let workspace = TempPlanningWorkspace::new("official-refresh-success");
-            let mut executor = test_executor();
+            let workspace = TempPlanningWorkspace::new_git("official-refresh-success");
+            let parallel_service = test_parallel_mode_service_for_post_turn();
+            parallel_service
+                .reset_pool_on_parallel_initial_setup_report(&workspace.path)
+                .expect("parallel pool should initialize");
+            let lease = parallel_service
+                .acquire_slot_lease(
+                    &workspace.path,
+                    ParallelModeSlotLeaseRequest::from_task_identity("task-1", "Queue head"),
+                )
+                .expect("parallel slot should lease");
+            parallel_service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("parallel slot should enter running state");
+            let mut executor = test_executor_with_parallel_mode_service(parallel_service.clone());
             let context = test_context(ready_projection(Some(queue_task())));
             let mut request = test_request(context.clone());
-            request.workspace_directory = workspace.path.clone();
+            request.workspace_directory = lease.worktree_path.clone();
+            attach_expected_lease(&mut request, lease);
             let contract = official_completion_contract();
 
             let outcome = executor.run_official_completion_refresh(
@@ -2029,6 +2212,54 @@ mod tests {
                 outcome.runtime_projection.workspace_status(),
                 PlanningRuntimeWorkspaceStatus::ReadyNoTask
             );
+            let snapshot =
+                parallel_service.build_passive_supervisor_snapshot(&workspace.path, None);
+            assert_eq!(
+                snapshot
+                    .detail
+                    .session
+                    .as_ref()
+                    .map(|detail| detail.state_label.as_str()),
+                Some("commit_ready")
+            );
+            assert!(outcome.runtime_notices.iter().any(|notice| {
+                notice.contains("remains commit-ready because no guarded automation epoch")
+            }));
+        });
+    }
+
+    #[test]
+    fn official_completion_commit_ready_failure_pauses_auto_follow() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new("official-refresh-commit-ready-failure");
+            let mut executor = test_executor();
+            let context = test_context(ready_projection(Some(queue_task())));
+            let mut request = test_request(context.clone());
+            request.workspace_directory = workspace.path.clone();
+            attach_synthetic_expected_lease(&mut request);
+            let contract = official_completion_contract();
+
+            let outcome = executor.run_official_completion_refresh(
+                &context,
+                &request,
+                &workspace.path,
+                &context.current_runtime_projection,
+                &contract,
+            );
+
+            assert_eq!(
+                executor.planning_worker_panel_state.status,
+                PlanningWorkerStatus::RefreshFailed
+            );
+            assert!(
+                outcome
+                    .runtime_projection
+                    .auto_follow_pause_reason()
+                    .is_some_and(|reason| reason.contains("commit_ready_persistence"))
+            );
+            assert!(outcome.runtime_notices.iter().any(|notice| {
+                notice.contains("commit-ready state could not be recorded after official refresh")
+            }));
         });
     }
 
@@ -2042,6 +2273,7 @@ mod tests {
             let context = test_context(ready_projection(Some(queue_task())));
             let mut request = test_request(context.clone());
             request.workspace_directory = workspace.path.clone();
+            attach_synthetic_expected_lease(&mut request);
             let contract = official_completion_contract();
 
             let outcome = executor.run_official_completion_refresh(
@@ -2070,20 +2302,36 @@ mod tests {
     #[test]
     fn official_completion_refresh_resolved_repair_uses_repaired_projection() {
         with_test_event_logging(|| {
-            let workspace = TempPlanningWorkspace::new("official-refresh-resolved-repair");
+            let workspace = TempPlanningWorkspace::new_git("official-refresh-resolved-repair");
+            let parallel_service = test_parallel_mode_service_for_post_turn();
+            parallel_service
+                .reset_pool_on_parallel_initial_setup_report(&workspace.path)
+                .expect("parallel pool should initialize");
+            let lease = parallel_service
+                .acquire_slot_lease(
+                    &workspace.path,
+                    ParallelModeSlotLeaseRequest::from_task_identity("task-1", "Queue head"),
+                )
+                .expect("parallel slot should lease");
+            parallel_service
+                .mark_workspace_slot_running(&lease.worktree_path)
+                .expect("parallel slot should enter running state");
             seed_ready_queue_authority(&workspace.path);
-            let mut executor =
-                test_executor_with_worker(Arc::new(SequencedPlanningWorkerPort::new([
+            let mut executor = test_executor_with_worker_and_parallel_mode_service(
+                Arc::new(SequencedPlanningWorkerPort::new([
                     invalid_task_command_worker_message(),
                     done_task_command_worker_message(),
-                ])));
+                ])),
+                parallel_service,
+            );
             let current_projection = executor
                 .planning_feature
                 .runtime
                 .load_runtime_projection_or_invalid(&workspace.path);
             let context = test_context(current_projection);
             let mut request = test_request(context.clone());
-            request.workspace_directory = workspace.path.clone();
+            request.workspace_directory = lease.worktree_path.clone();
+            attach_expected_lease(&mut request, lease);
             let contract = official_completion_contract();
 
             let outcome = executor.run_official_completion_refresh(
@@ -2125,6 +2373,7 @@ mod tests {
             context.previous_handoff_task = Some(queue_handoff());
             let mut request = test_request(context.clone());
             request.workspace_directory = workspace.path.clone();
+            attach_synthetic_expected_lease(&mut request);
             let contract = official_completion_contract();
 
             let outcome = executor.run_official_completion_refresh(
@@ -2180,6 +2429,216 @@ mod tests {
 
     fn test_executor() -> PostTurnEvaluationExecutor {
         test_executor_with_worker(Arc::new(NoopPlanningWorkerPort))
+    }
+
+    #[derive(Debug)]
+    struct PostTurnTestGithubAutomationPort;
+
+    impl GithubAutomationPort for PostTurnTestGithubAutomationPort {
+        fn inspect_capabilities(&self, _repo_root: &str) -> GithubAutomationCapabilities {
+            let ready = |key| {
+                ParallelModeCapabilitySnapshot::new(
+                    key,
+                    ParallelModeCapabilityState::Ready,
+                    "test capability ready",
+                    None,
+                )
+            };
+            GithubAutomationCapabilities::new(
+                ready(ParallelModeCapabilityKey::PushRemote),
+                ready(ParallelModeCapabilityKey::GhBinary),
+                ready(ParallelModeCapabilityKey::GhAuth),
+            )
+        }
+
+        fn repository_identity(&self, _repo_root: &str) -> anyhow::Result<String> {
+            Ok("RefinedStone/codex-exec-loop".to_string())
+        }
+
+        fn repository_visibility(
+            &self,
+            _repo_root: &str,
+        ) -> anyhow::Result<GithubRepositoryVisibility> {
+            Ok(GithubRepositoryVisibility::Private)
+        }
+
+        fn repository_identity_for_push_url(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            _credential_redacted_push_url: &str,
+        ) -> anyhow::Result<String> {
+            self.repository_identity(repo_root)
+        }
+
+        fn repository_visibility_for_push_url(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            _credential_redacted_push_url: &str,
+        ) -> anyhow::Result<GithubRepositoryVisibility> {
+            self.repository_visibility(repo_root)
+        }
+
+        fn credential_redacted_push_url_for_remote(
+            &self,
+            repo_root: &str,
+            push_remote: &str,
+        ) -> anyhow::Result<String> {
+            let output = Command::new("git")
+                .current_dir(repo_root)
+                .args(["remote", "get-url", "--push", push_remote])
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "test push remote URL is unavailable"
+            );
+            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+        }
+
+        fn remote_branch_names_for_prefix_for_delivery_target(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            credential_redacted_push_url: &str,
+            branch_prefix: &str,
+        ) -> anyhow::Result<Vec<String>> {
+            let remote_pattern = format!("refs/heads/{branch_prefix}*");
+            let output = Command::new("git")
+                .current_dir(repo_root)
+                .args([
+                    "ls-remote",
+                    "--heads",
+                    credential_redacted_push_url,
+                    remote_pattern.as_str(),
+                ])
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()?;
+            anyhow::ensure!(output.status.success(), "test remote branch listing failed");
+            String::from_utf8(output.stdout)?
+                .lines()
+                .map(|line| {
+                    let (_, remote_ref) = line
+                        .split_once(char::is_whitespace)
+                        .ok_or_else(|| anyhow::anyhow!("test remote branch row is malformed"))?;
+                    remote_ref
+                        .trim()
+                        .strip_prefix("refs/heads/")
+                        .map(str::to_string)
+                        .ok_or_else(|| anyhow::anyhow!("test remote branch ref is malformed"))
+                })
+                .collect()
+        }
+
+        fn fetch_branch_to_tracking_ref_for_delivery_target(
+            &self,
+            repo_root: &str,
+            _push_remote: &str,
+            credential_redacted_push_url: &str,
+            branch_name: &str,
+            tracking_ref: &str,
+        ) -> anyhow::Result<String> {
+            let refspec = format!("+refs/heads/{branch_name}:{tracking_ref}");
+            let status = Command::new("git")
+                .current_dir(repo_root)
+                .args(["fetch", "--quiet", credential_redacted_push_url, &refspec])
+                .status()?;
+            anyhow::ensure!(status.success(), "test frozen-target fetch failed");
+            let output = Command::new("git")
+                .current_dir(repo_root)
+                .args(["rev-parse", tracking_ref])
+                .output()?;
+            anyhow::ensure!(output.status.success(), "test tracking ref is unavailable");
+            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+        }
+
+        fn push_branch(
+            &self,
+            _repo_root: &str,
+            _branch_name: &str,
+            _force_with_lease: bool,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn ensure_pull_request(
+            &self,
+            _repo_root: &str,
+            base_branch: &str,
+            head_branch: &str,
+            _title: &str,
+            _body: &str,
+        ) -> anyhow::Result<GithubAutomationPullRequest> {
+            Ok(GithubAutomationPullRequest::new(
+                1,
+                "https://example.invalid/pr/1",
+                "OPEN",
+                base_branch,
+                head_branch,
+                false,
+            ))
+        }
+
+        fn inspect_pull_request(
+            &self,
+            _repo_root: &str,
+            pr_number: u64,
+        ) -> anyhow::Result<GithubAutomationPullRequest> {
+            Ok(GithubAutomationPullRequest::new(
+                pr_number,
+                "https://example.invalid/pr/1",
+                "OPEN",
+                "prerelease",
+                "akra-agent/test",
+                false,
+            ))
+        }
+
+        fn push_integration_branch(
+            &self,
+            _repo_root: &str,
+            _branch_name: &str,
+            _expected_old_commit_sha: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn close_pull_request(&self, _repo_root: &str, _pr_number: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_parallel_mode_service_for_post_turn() -> ParallelModeService {
+        ParallelModeService::new(
+            Arc::new(SqlitePlanningAuthorityAdapter::new()),
+            Arc::new(PostTurnTestGithubAutomationPort),
+            Arc::new(GitParallelModeRuntimeAdapter::new()),
+        )
+    }
+
+    fn test_executor_with_parallel_mode_service(
+        parallel_mode_service: ParallelModeService,
+    ) -> PostTurnEvaluationExecutor {
+        test_executor_with_worker_and_parallel_mode_service(
+            Arc::new(NoopPlanningWorkerPort),
+            parallel_mode_service,
+        )
+    }
+
+    fn test_executor_with_worker_and_parallel_mode_service(
+        planning_worker_port: Arc<dyn PlanningWorkerPort>,
+        parallel_mode_service: ParallelModeService,
+    ) -> PostTurnEvaluationExecutor {
+        PostTurnEvaluationExecutor::new(
+            PlanningServices::from_ports(
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                Arc::new(NoopPlanningAuthorityPort::default()),
+                Arc::new(NoopPlanningTaskRepositoryPort),
+                planning_worker_port,
+            ),
+            ParallelModeTurnService::new(parallel_mode_service),
+            PlanningWorkerPanelState::default(),
+        )
     }
 
     fn test_service() -> PostTurnEvaluationService {
@@ -2255,6 +2714,99 @@ mod tests {
             planning_worker_panel_state: PlanningWorkerPanelState::default(),
             continuation_permit: continuation_gate.capture(),
         }
+    }
+
+    fn attach_synthetic_expected_lease(request: &mut PostTurnEvaluationRequest) {
+        let lease = ParallelModeSlotLeaseSnapshot::new(
+            "slot-test",
+            "task-1",
+            "Queue head",
+            "agent-task-1",
+            "akra-agent/slot-test/task-1",
+            request.workspace_directory.clone(),
+            ParallelModeSlotLeaseState::Running,
+            "2026-07-12T00:00:00Z",
+            Some("2026-07-12T00:00:01Z".to_string()),
+        )
+        .with_lease_generation("a".repeat(64));
+        attach_expected_lease(request, lease);
+    }
+
+    fn attach_expected_lease(
+        request: &mut PostTurnEvaluationRequest,
+        lease: ParallelModeSlotLeaseSnapshot,
+    ) {
+        request.execution_snapshot_capture = Some(
+            crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::ready(
+                request.workspace_directory.clone(),
+                crate::application::service::planning::PlanningExecutionSnapshot::default(),
+            )
+            .with_parallel_slot_lease(Some(lease)),
+        );
+    }
+
+    fn replace_slot_generation(
+        workspace_directory: &str,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> ParallelModeSlotLeaseSnapshot {
+        let replacement = replacement_slot_generation(expected_lease);
+        SqlitePlanningAuthorityAdapter::upsert_runtime_slot_lease(
+            workspace_directory,
+            &replacement,
+        )
+        .expect("replacement slot generation should persist");
+        let mut detail = ParallelModeAgentSessionDetailSnapshot::assigned_for_lease(
+            &replacement,
+            ParallelModeLiveSessionDetailDefaults {
+                validation_summary: "replacement validation pending",
+                authority_refresh_outcome: "replacement authority refresh pending",
+            },
+        );
+        detail.state_label = "running".to_string();
+        detail.completion_state_label = "in_progress".to_string();
+        detail.latest_summary = "replacement session is running".to_string();
+        SqlitePlanningAuthorityAdapter::upsert_runtime_session_detail(workspace_directory, &detail)
+            .expect("replacement session detail should persist");
+        replacement
+    }
+
+    fn replacement_slot_generation(
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
+    ) -> ParallelModeSlotLeaseSnapshot {
+        let mut replacement = expected_lease.clone();
+        replacement.task_id = "replacement-task".to_string();
+        replacement.task_title = "Replacement task".to_string();
+        replacement.agent_id = "replacement-agent".to_string();
+        replacement.state = ParallelModeSlotLeaseState::Running;
+        replacement.leased_at = "2026-07-12T01:00:00Z".to_string();
+        replacement.running_started_at = Some("2026-07-12T01:00:01Z".to_string());
+        replacement.lease_generation = Some("b".repeat(64));
+        replacement
+    }
+
+    fn assert_replacement_generation_unmodified(
+        workspace_directory: &str,
+        replacement: &ParallelModeSlotLeaseSnapshot,
+    ) {
+        let projections =
+            SqlitePlanningAuthorityAdapter::load_runtime_projections(workspace_directory)
+                .expect("replacement authority projections should load");
+        assert_eq!(
+            projections.slot_leases.get(&replacement.slot_id),
+            Some(replacement)
+        );
+        let detail = projections
+            .session_details
+            .iter()
+            .find(|detail| detail.session_key == replacement.session_key())
+            .expect("replacement session detail should remain present");
+        assert_eq!(detail.state_label, "running");
+        assert_eq!(detail.completion_state_label, "in_progress");
+        assert_eq!(
+            detail.authority_refresh_outcome,
+            "replacement authority refresh pending"
+        );
+        assert!(projections.distributor_queue_records.is_empty());
     }
 
     fn ready_projection(queue_head: Option<PriorityQueueTask>) -> PlanningRuntimeProjection {
@@ -2494,6 +3046,45 @@ mod tests {
         }
     }
 
+    struct ReuseSlotBeforeCommitReadyWorkerPort {
+        workspace_directory: String,
+        expected_lease: ParallelModeSlotLeaseSnapshot,
+        calls: Mutex<usize>,
+    }
+
+    impl ReuseSlotBeforeCommitReadyWorkerPort {
+        fn new(
+            workspace_directory: impl Into<String>,
+            expected_lease: ParallelModeSlotLeaseSnapshot,
+        ) -> Self {
+            Self {
+                workspace_directory: workspace_directory.into(),
+                expected_lease,
+                calls: Mutex::new(0),
+            }
+        }
+    }
+
+    impl PlanningWorkerPort for ReuseSlotBeforeCommitReadyWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            let mut calls = self.calls.lock().expect("reuse worker mutex should hold");
+            if *calls == 0 {
+                replace_slot_generation(&self.workspace_directory, &self.expected_lease);
+            }
+            *calls += 1;
+            Ok(PlanningWorkerResponse {
+                operation: request.operation,
+                thread_id: Some("replacement-worker-thread".to_string()),
+                turn_id: Some("replacement-worker-turn".to_string()),
+                final_agent_message: Some("planning worker disabled".to_string()),
+                changed_planning_file_paths: Vec::new(),
+            })
+        }
+    }
+
     impl PlanningWorkerPort for PanickingPlanningWorkerPort {
         fn run_planning_session(
             &self,
@@ -2624,6 +3215,15 @@ mod tests {
                 .expect("seed file should write");
             run_git(&workspace.path, &["add", "README.md"]);
             run_git(&workspace.path, &["commit", "-qm", "init"]);
+            run_git(&workspace.path, &["branch", "akra"]);
+            run_git(&workspace.path, &["branch", "prerelease"]);
+            let origin = format!("{}/.git/test-origin.git", workspace.path);
+            run_git(&workspace.path, &["init", "--bare", "-q", &origin]);
+            run_git(&workspace.path, &["remote", "add", "origin", &origin]);
+            run_git(
+                &workspace.path,
+                &["push", "-q", "-u", "origin", "prerelease"],
+            );
             workspace
         }
     }

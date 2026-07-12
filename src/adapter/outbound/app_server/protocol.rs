@@ -7,7 +7,8 @@ mod turn_notifications;
 
 use self::turn_notifications::to_conversation_message;
 pub(super) use self::turn_notifications::{
-    AppServerNotification, TurnNotificationHandling, handle_turn_notification,
+    ActiveTurnNotificationState, AppServerNotification, TurnNotificationHandling,
+    handle_turn_notification,
 };
 use super::{
     MAX_SNAPSHOT_MESSAGES, MAX_SNAPSHOT_TOTAL_TEXT_BYTES, MAX_STREAM_COMPLETED_MESSAGE_BYTES,

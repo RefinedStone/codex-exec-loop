@@ -38,4 +38,4 @@ pub use turn_stream::{
     TurnStreamEvent, TurnStreamSnapshot, TurnStreamState, TurnStreamTerminalSnapshot,
     TurnStreamUpdate,
 };
-pub use turn_submission::{CorePromptOrigin, TurnSubmissionRequest};
+pub use turn_submission::{CorePromptOrigin, TurnSubmissionCorrelation, TurnSubmissionRequest};

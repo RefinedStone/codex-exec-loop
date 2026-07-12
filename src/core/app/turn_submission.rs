@@ -2,6 +2,17 @@ use crate::domain::conversation::ConversationTurnOptions;
 use crate::domain::planning::ParallelTurnHandoff;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnSubmissionCorrelation {
+    pub generation: u64,
+}
+
+impl TurnSubmissionCorrelation {
+    pub const fn new(generation: u64) -> Self {
+        Self { generation }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CorePromptOrigin {
     Manual,
     ManualIntake,

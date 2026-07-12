@@ -7,6 +7,7 @@ use anyhow::Result;
 // 이 공유 vocabulary 덕분에 dispatch worker는 worker 전용 protocol을 새로 만들지 않고도
 // final assistant text, completion, failure, tool activity를 기존 reducer 관점으로 관찰할 수 있다.
 use crate::application::service::conversation_runtime_event::ConversationStreamSender;
+use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // `ParallelAgentWorkerStreamRequest`는 application layer가 확정한 sub-session prompt 경계이다.
@@ -28,9 +29,9 @@ pub struct ParallelAgentWorkerStreamRequest<'a> {
 // distributor가 나중에 담당한다. port를 분리하면 adapter는 같은 app-server transport를 쓰더라도
 // "사용자 대화 turn"과 "고립된 작업자 실행"의 계약을 혼동하지 않는다.
 pub trait ParallelAgentWorkerPort: Send + Sync {
-    // leased worktree directory에서 isolated new thread를 시작한다. 성공은 worker stream이
-    // 시작되었다는 뜻일 뿐이며, 실제 작업 성공/실패는 `event_sender`로 들어오는
-    // completion/failure event를 dispatch worker가 환원해 결정한다.
+    // leased worktree directory에서 isolated new thread를 시작하고 app-server가 확정한
+    // terminal receipt를 반환한다. `Ok`는 transport 성공이며, caller는 receipt의 outcome과
+    // stream에 투영된 terminal event가 일치하는지를 다시 검증해야 한다.
     fn run_isolated_new_thread_stream(
         &self,
         // slot worktree, turn prompt, thread metadata를 담은 실행 요청이다.
@@ -39,13 +40,12 @@ pub trait ParallelAgentWorkerPort: Send + Sync {
         // thread prepared, message completed, tool activity, terminal completion 같은 app-server
         // event를 이 통로로 전달하고, dispatch worker는 그 흐름을 slot 상태로 축약한다.
         event_sender: ConversationStreamSender,
-    ) -> Result<()>;
+    ) -> Result<ConversationTurnTerminalReceipt>;
 }
 
 #[derive(Debug, Default)]
 // `NoopParallelAgentWorkerPort`는 테스트 fixture나 parallel worker capability가 비활성인 구성에서
-// 쓰는 fallback이다. stream을 시작하지 않고 즉시 성공을 돌려주므로, caller는 별도 fake를 만들지
-// 않아도 TUI shell runtime의 dependency graph를 구성할 수 있다.
+// 쓰는 fallback이다. stream을 시작하지 않으며 terminal 완료를 꾸며내지 않는다.
 pub struct NoopParallelAgentWorkerPort;
 
 impl ParallelAgentWorkerPort for NoopParallelAgentWorkerPort {
@@ -57,8 +57,34 @@ impl ParallelAgentWorkerPort for NoopParallelAgentWorkerPort {
         _request: ParallelAgentWorkerStreamRequest<'_>,
         // noop은 stream events를 보내지 않으므로 sender도 사용하지 않는다.
         _event_sender: ConversationStreamSender,
-    ) -> Result<()> {
-        // 성공을 반환해 shell/runtime 구성 테스트가 parallel worker adapter 없이도 진행되게 한다.
-        Ok(())
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        anyhow::bail!("parallel agent worker capability is unavailable")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        NoopParallelAgentWorkerPort, ParallelAgentWorkerPort, ParallelAgentWorkerStreamRequest,
+    };
+    use crate::application::service::conversation_runtime_event::conversation_stream_channel;
+
+    #[test]
+    fn noop_worker_does_not_invent_a_completed_terminal_receipt() {
+        let (event_sender, _event_receiver) = conversation_stream_channel();
+
+        let error = NoopParallelAgentWorkerPort
+            .run_isolated_new_thread_stream(
+                ParallelAgentWorkerStreamRequest {
+                    cwd: "/tmp/workspace",
+                    prompt: "run",
+                    developer_instructions: "",
+                    service_name: "test",
+                },
+                event_sender,
+            )
+            .expect_err("disabled worker capability must fail closed");
+
+        assert!(error.to_string().contains("capability is unavailable"));
     }
 }

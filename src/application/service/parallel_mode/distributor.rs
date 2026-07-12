@@ -1,6 +1,6 @@
 use super::pool::{
-    acquire_pool_mutation_lock, reconcile_pool_board_and_context_with_target,
-    reconcile_pool_board_and_context_with_target_locked,
+    SlotGitStatus, acquire_pool_mutation_lock, reconcile_pool_board_and_context_with_target,
+    reconcile_pool_board_and_context_with_target_locked, try_acquire_pool_mutation_lock_at,
 };
 use super::{
     FreshPoolIntegrationTargetProof, ParallelModeDeliverySafetyPolicy, PoolRuntimeContext,
@@ -29,15 +29,21 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseState,
 };
 use chrono::{DateTime, TimeDelta, Utc};
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const STALE_LEDGER_REFRESHING_AFTER_SECS: i64 = 300;
 const DISTRIBUTOR_RETRY_BASE_DELAY_SECS: i64 = 5;
 const DISTRIBUTOR_RETRY_MAX_DELAY_SECS: i64 = 300;
 const DISTRIBUTOR_RETRY_MAX_ATTEMPTS: u32 = 8;
 const MAX_DISTRIBUTOR_SOURCE_COMMITS: usize = 128;
+const DISTRIBUTOR_ENQUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
+const DISTRIBUTOR_ENQUEUE_LOCK_RETRY: Duration = Duration::from_millis(25);
 pub(super) type ParallelModeDistributorQueueRecord = PlanningAuthorityDistributorQueueRecord;
 mod delivery;
 #[cfg(test)]
@@ -57,6 +63,60 @@ use self::store::{
     write_distributor_queue_record,
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_DISTRIBUTOR_ENQUEUE_PREFLIGHT_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        RefCell::new(None);
+    static AFTER_DISTRIBUTOR_ENQUEUE_POOL_BUSY_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(super) fn install_after_distributor_enqueue_preflight_hook(hook: impl FnOnce() + 'static) {
+    AFTER_DISTRIBUTOR_ENQUEUE_PREFLIGHT_HOOK.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(hook));
+        assert!(
+            previous.is_none(),
+            "distributor enqueue preflight test hook already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+pub(super) fn install_after_distributor_enqueue_pool_busy_hook(hook: impl FnOnce() + 'static) {
+    AFTER_DISTRIBUTOR_ENQUEUE_POOL_BUSY_HOOK.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(hook));
+        assert!(
+            previous.is_none(),
+            "distributor enqueue pool-busy test hook already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn run_after_distributor_enqueue_preflight_hook() {
+    AFTER_DISTRIBUTOR_ENQUEUE_PREFLIGHT_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(test)]
+fn run_after_distributor_enqueue_pool_busy_hook() {
+    AFTER_DISTRIBUTOR_ENQUEUE_POOL_BUSY_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_after_distributor_enqueue_preflight_hook() {}
+
+#[cfg(not(test))]
+fn run_after_distributor_enqueue_pool_busy_hook() {}
 
 fn fetch_distributor_integration_target(
     github_automation: &dyn GithubAutomationPort,
@@ -136,9 +196,21 @@ fn freeze_distributor_source_range(
                 )
             },
         )?;
-    if integration_target.commit_sha != expected_integration_base_commit_sha {
+    if integration_target.commit_sha != expected_integration_base_commit_sha
+        && !command_succeeds(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "merge-base",
+                "--is-ancestor",
+                expected_integration_base_commit_sha,
+                integration_target.commit_sha.as_str(),
+            ],
+        )
+    {
         return Err(format!(
-            "integration target moved from lease-frozen base `{}` to `{}` before enqueue",
+            "integration target moved outside lease-frozen history from `{}` to `{}` before enqueue",
             short_sha(expected_integration_base_commit_sha),
             short_sha(&integration_target.commit_sha)
         ));
@@ -161,6 +233,14 @@ fn freeze_distributor_source_range(
             integration_target.commit_sha
         )
     })?;
+    if source_base != expected_integration_base_commit_sha {
+        return Err(format!(
+            "source result `{}` no longer has lease-frozen base `{}` against integration target `{}`",
+            short_sha(source_tip),
+            short_sha(expected_integration_base_commit_sha),
+            short_sha(&integration_target.commit_sha)
+        ));
+    }
     let commits = resolve_linear_distributor_source_range(repo_root, &source_base, source_tip)?;
     Ok((source_base, commits))
 }
@@ -518,6 +598,42 @@ pub(super) struct ParallelModeDistributorService {
     pub(super) delivery_safety_policy: ParallelModeDeliverySafetyPolicy,
 }
 
+struct DistributorEnqueuePreflight {
+    repo_root: String,
+    pool_root: PathBuf,
+    lease: ParallelModeSlotLeaseSnapshot,
+    session_detail: ParallelModeAgentSessionDetailSnapshot,
+    source_status: SlotGitStatus,
+    source_head: String,
+    record: ParallelModeDistributorQueueRecord,
+}
+
+enum DistributorEnqueuePreparation {
+    Existing(ParallelModeDistributorQueueItem),
+    Ready(Box<DistributorEnqueuePreflight>),
+}
+
+enum DistributorEnqueueCommitAttempt {
+    Complete(Option<ParallelModeDistributorQueueItem>),
+    PoolBusy,
+}
+
+#[derive(Clone, Copy)]
+enum MissingHandoffRecovery<'a> {
+    Disabled,
+    Unguarded,
+    Guarded(&'a super::ParallelModeAutomationPermit),
+}
+
+impl<'a> MissingHandoffRecovery<'a> {
+    fn automation_permit(self) -> Option<&'a super::ParallelModeAutomationPermit> {
+        match self {
+            Self::Guarded(permit) => Some(permit),
+            Self::Disabled | Self::Unguarded => None,
+        }
+    }
+}
+
 /*
 queue head claim은 "이 프로세스가 지금 queue head를 처리 중"이라는 짧은
 락이다. permit 타입이 `Drop`에서 claim을 release하므로, 정상 반환뿐 아니라 중간
@@ -632,12 +748,16 @@ impl ParallelModeDistributorService {
         )
     }
 
-    pub(super) fn enqueue_workspace_commit_ready_result_guarded(
+    pub(super) fn enqueue_workspace_commit_ready_result_for_lease_guarded(
         &self,
-        workspace_dir: &str,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
         permit: &super::ParallelModeAutomationPermit,
     ) -> Result<Option<ParallelModeDistributorQueueItem>, String> {
-        self.enqueue_workspace_commit_ready_result_with_permit(workspace_dir, None, Some(permit))
+        self.enqueue_workspace_commit_ready_result_with_permit(
+            &expected_lease.worktree_path,
+            Some(expected_lease),
+            Some(permit),
+        )
     }
 
     fn enqueue_workspace_commit_ready_result_with_permit(
@@ -649,6 +769,23 @@ impl ParallelModeDistributorService {
         if permit.is_some_and(|permit| !permit.is_active()) {
             return Ok(None);
         }
+        let Some(preparation) = self.prepare_distributor_enqueue(workspace_dir, expected_lease)?
+        else {
+            return Ok(None);
+        };
+        let preflight = match preparation {
+            DistributorEnqueuePreparation::Existing(item) => return Ok(Some(item)),
+            DistributorEnqueuePreparation::Ready(preflight) => preflight,
+        };
+        run_after_distributor_enqueue_preflight_hook();
+        self.commit_distributor_enqueue_preflight_with_retry(&preflight, permit)
+    }
+
+    fn prepare_distributor_enqueue(
+        &self,
+        workspace_dir: &str,
+        expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+    ) -> Result<Option<DistributorEnqueuePreparation>, String> {
         let pool_mutation_lock =
             acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         let Some(resolution) =
@@ -686,8 +823,14 @@ impl ParallelModeDistributorService {
             &resolution.context.distributor_queue_records,
             &session_key,
         ) {
-            return Ok(Some(existing.display_item()));
+            return Ok(Some(DistributorEnqueuePreparation::Existing(
+                existing.display_item(),
+            )));
         }
+        let repo_root = resolution.context.repo_root.clone();
+        let pool_root = resolution.context.pool_root.clone();
+        drop(pool_mutation_lock);
+
         let source_status =
             inspect_slot_git_status(&resolution.workspace_path).map_err(|error| {
                 format!(
@@ -714,20 +857,18 @@ impl ParallelModeDistributorService {
         })?;
         let delivery_target = validate_lease_delivery_target(
             self.github_automation.as_ref(),
-            &resolution.context.repo_root,
+            &repo_root,
             lease_delivery_target,
             &self.delivery_safety_policy,
         )?;
         let (source_base_commit_sha, source_commits) = freeze_distributor_source_range(
             self.github_automation.as_ref(),
-            &resolution.context.repo_root,
+            &repo_root,
             &delivery_target,
             &lease_delivery_target.integration_base_commit_sha,
             &commit_sha,
         )?;
-        let github_capabilities = self
-            .github_automation
-            .inspect_capabilities(&resolution.context.repo_root);
+        let github_capabilities = self.github_automation.inspect_capabilities(&repo_root);
         let updated_at = current_timestamp();
         let enqueued_at = DateTime::parse_from_rfc3339(&detail.updated_at)
             .map(|_| detail.updated_at.clone())
@@ -752,7 +893,7 @@ impl ParallelModeDistributorService {
             branch_name: resolution.lease.branch_name.clone(),
             worktree_path: resolution.lease.worktree_path.clone(),
             original_commit_sha: Some(commit_sha.clone()),
-            commit_sha,
+            commit_sha: commit_sha.clone(),
             planning_refresh_state: "done".to_string(),
             integration_state: "queued".to_string(),
             integration_base_commit_sha: None,
@@ -774,45 +915,160 @@ impl ParallelModeDistributorService {
             retry_attempts: 0,
             retry_not_before: None,
         };
+        Ok(Some(DistributorEnqueuePreparation::Ready(Box::new(
+            DistributorEnqueuePreflight {
+                repo_root,
+                pool_root,
+                lease: resolution.lease,
+                session_detail: detail,
+                source_status,
+                source_head: commit_sha,
+                record,
+            },
+        ))))
+    }
+
+    fn commit_distributor_enqueue_preflight_with_retry(
+        &self,
+        preflight: &DistributorEnqueuePreflight,
+        permit: Option<&super::ParallelModeAutomationPermit>,
+    ) -> Result<Option<ParallelModeDistributorQueueItem>, String> {
+        let deadline = Instant::now() + DISTRIBUTOR_ENQUEUE_LOCK_TIMEOUT;
+        loop {
+            let attempt = match permit {
+                Some(permit) => {
+                    let Some(attempt) = permit.with_active_commit(|| {
+                        self.try_commit_distributor_enqueue_preflight(preflight)
+                    }) else {
+                        return Ok(None);
+                    };
+                    attempt?
+                }
+                None => self.try_commit_distributor_enqueue_preflight(preflight)?,
+            };
+            match attempt {
+                DistributorEnqueueCommitAttempt::Complete(item) => return Ok(item),
+                DistributorEnqueueCommitAttempt::PoolBusy if Instant::now() < deadline => {
+                    run_after_distributor_enqueue_pool_busy_hook();
+                    if permit.is_some_and(|permit| !permit.is_active()) {
+                        return Ok(None);
+                    }
+                    thread::sleep(DISTRIBUTOR_ENQUEUE_LOCK_RETRY);
+                }
+                DistributorEnqueueCommitAttempt::PoolBusy => {
+                    return Err(format!(
+                        "pool mutation lock is busy at `{}` during final distributor enqueue commit",
+                        preflight.pool_root.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    fn try_commit_distributor_enqueue_preflight(
+        &self,
+        preflight: &DistributorEnqueuePreflight,
+    ) -> Result<DistributorEnqueueCommitAttempt, String> {
+        let Some(pool_mutation_lock) = try_acquire_pool_mutation_lock_at(&preflight.pool_root)?
+        else {
+            return Ok(DistributorEnqueueCommitAttempt::PoolBusy);
+        };
+        let Some(resolution) = resolve_workspace_slot_lease(
+            self.planning_authority.as_ref(),
+            &preflight.lease.worktree_path,
+        )?
+        else {
+            return Ok(DistributorEnqueueCommitAttempt::Complete(None));
+        };
+        pool_mutation_lock.verify_pool_root(&resolution.context.pool_root)?;
+        if resolution.context.repo_root != preflight.repo_root
+            || resolution.context.pool_root != preflight.pool_root
+            || !resolution.lease.same_generation_as(&preflight.lease)
+            || resolution.lease.state != ParallelModeSlotLeaseState::Running
+        {
+            return Ok(DistributorEnqueueCommitAttempt::Complete(None));
+        }
+        let session_key = lease_session_key(&resolution.lease);
+        if let Some(existing) = find_distributor_queue_record_by_session_key(
+            &resolution.context.distributor_queue_records,
+            &session_key,
+        ) {
+            return Ok(DistributorEnqueueCommitAttempt::Complete(Some(
+                existing.display_item(),
+            )));
+        }
+        let Some(detail) = resolution
+            .context
+            .session_details
+            .iter()
+            .find(|detail| detail.session_key == session_key)
+        else {
+            return Ok(DistributorEnqueueCommitAttempt::Complete(None));
+        };
+        if !matches!(
+            detail.state_label.as_str(),
+            "commit_ready" | "merge_queued" | "integrating"
+        ) || detail != &preflight.session_detail
+        {
+            return Ok(DistributorEnqueueCommitAttempt::Complete(None));
+        }
+        let source_status =
+            inspect_slot_git_status(&resolution.workspace_path).map_err(|error| {
+                format!(
+                    "slot `{}` git status could not be revalidated for distributor enqueue: {error}",
+                    resolution.lease.slot_id
+                )
+            })?;
+        let source_head =
+            resolve_workspace_head_sha(&resolution.workspace_path).ok_or_else(|| {
+                format!(
+                    "slot `{}` workspace head could not be revalidated for distributor enqueue",
+                    resolution.lease.slot_id
+                )
+            })?;
+        if source_status != preflight.source_status
+            || !source_status.is_clean_for_frozen_delivery()
+            || source_head != preflight.source_head
+            || preflight.record.session_key != session_key
+            || preflight.record.commit_sha != source_head
+        {
+            return Ok(DistributorEnqueueCommitAttempt::Complete(None));
+        }
         /*
         Queue persistence happens before session detail is marked merge_queued.
         If the history write fails, the durable queue item still exists and the
         next supervisor snapshot can reconstruct distributor state from authority.
         */
-        let persist = || -> Result<Option<ParallelModeDistributorQueueItem>, String> {
-            write_distributor_queue_record(
-                self.planning_authority.as_ref(),
-                self.parallel_runtime.as_ref(),
-                &resolution.context.repo_root,
-                &resolution.context.pool_root,
-                &record,
-            )?;
-            let _ = record_merge_queued_session_detail(
-                self.planning_authority.as_ref(),
-                self.parallel_runtime.as_ref(),
-                &resolution.context.repo_root,
-                &resolution.context.pool_root,
-                &resolution.lease,
-            );
-            Ok(Some(record.display_item()))
-        };
-        match permit {
-            Some(permit) => permit.with_active_commit(persist).unwrap_or(Ok(None)),
-            None => persist(),
-        }
+        write_distributor_queue_record(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            &preflight.repo_root,
+            &preflight.pool_root,
+            &preflight.record,
+        )?;
+        let _ = record_merge_queued_session_detail(
+            self.planning_authority.as_ref(),
+            self.parallel_runtime.as_ref(),
+            &preflight.repo_root,
+            &preflight.pool_root,
+            &resolution.lease,
+        );
+        Ok(DistributorEnqueueCommitAttempt::Complete(Some(
+            preflight.record.display_item(),
+        )))
     }
 
     /*
-    queue processing은 distributor의 실제 tick이다. 먼저 pool reconcile과
-    runtime recovery를 수행해 재시작 이후의 record/lease 상태를 가능한 만큼 정상화한다.
-    그 다음 Done이 아닌 첫 record만 head로 잡는다. 뒤쪽 queue item을 건너뛰지 않는
-    이유는 통합 브랜치가 순서 의존적인 공유 자원이기 때문이다.
+    queue processing은 distributor의 실제 tick이다. 이미 durable queue head가 있으면 그 head를
+    먼저 처리하고, queue가 비어 있을 때만 commit-ready handoff 누락을 복구한다. 복구 후보 하나의
+    worktree 문제가 기존 queue를 굶기지 않게 하는 순서다. Done이 아닌 첫 record만 head로 잡고
+    뒤쪽 queue item을 건너뛰지 않는 이유는 통합 브랜치가 순서 의존적인 공유 자원이기 때문이다.
 
     head가 Blocked/Failed이면 사람이 복구해야 하므로 notice만 반환한다. 처리 가능한
     head라면 planning authority claim을 획득한 프로세스만 delivery를 진행한다.
     */
     pub(super) fn process_queue(&self, workspace_dir: &str) -> Result<Vec<String>, String> {
-        self.process_queue_with_permit(workspace_dir, None)
+        self.process_queue_with_recovery(workspace_dir, MissingHandoffRecovery::Unguarded)
     }
 
     pub(super) fn process_queue_guarded(
@@ -820,14 +1076,15 @@ impl ParallelModeDistributorService {
         workspace_dir: &str,
         permit: &super::ParallelModeAutomationPermit,
     ) -> Result<Vec<String>, String> {
-        self.process_queue_with_permit(workspace_dir, Some(permit))
+        self.process_queue_with_recovery(workspace_dir, MissingHandoffRecovery::Guarded(permit))
     }
 
-    fn process_queue_with_permit(
+    fn process_queue_with_recovery(
         &self,
         workspace_dir: &str,
-        permit: Option<&super::ParallelModeAutomationPermit>,
+        missing_handoff_recovery: MissingHandoffRecovery<'_>,
     ) -> Result<Vec<String>, String> {
+        let permit = missing_handoff_recovery.automation_permit();
         if permit.is_some_and(|permit| !permit.is_active()) {
             return Ok(vec![
                 "parallel automation epoch closed before distributor queue processing".to_string(),
@@ -842,10 +1099,15 @@ impl ParallelModeDistributorService {
         the queue is empty; otherwise an idle distributor can never discover
         the result that it is responsible for delivering.
         */
-        self.recover_missing_commit_ready_queue_records(&preflight_context)?;
-        preflight_context =
-            load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
-                .map_err(|(_, detail)| detail.to_string())?;
+        if !has_active_distributor_queue_record(&preflight_context) {
+            self.recover_missing_commit_ready_queue_records(
+                &preflight_context,
+                missing_handoff_recovery,
+            )?;
+            preflight_context =
+                load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+                    .map_err(|(_, detail)| detail.to_string())?;
+        }
         let Some(mut preflight_head) = preflight_context
             .distributor_queue_records
             .iter()
@@ -919,7 +1181,11 @@ impl ParallelModeDistributorService {
         )
         .map_err(|error| error.1)?;
         drop(pool_mutation_lock);
-        let context = self.recover_runtime_state_with_proof(workspace_dir, &integration_target)?;
+        let context = self.recover_runtime_state_with_proof(
+            workspace_dir,
+            &integration_target,
+            missing_handoff_recovery,
+        )?;
         let mut records = context.distributor_queue_records.clone();
         let Some(head_index) = records
             .iter()
@@ -1074,13 +1340,18 @@ impl ParallelModeDistributorService {
             &push_url,
             &integration_branch,
         )?;
-        self.recover_runtime_state_with_proof(workspace_dir, &integration_target)
+        self.recover_runtime_state_with_proof(
+            workspace_dir,
+            &integration_target,
+            MissingHandoffRecovery::Disabled,
+        )
     }
 
     fn recover_runtime_state_with_proof(
         &self,
         workspace_dir: &str,
         integration_target: &IntegrationTargetProof,
+        missing_handoff_recovery: MissingHandoffRecovery<'_>,
     ) -> Result<PoolRuntimeContext, String> {
         let mut context =
             load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
@@ -1093,9 +1364,11 @@ impl ParallelModeDistributorService {
         )?;
         context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
             .map_err(|(_, detail)| detail.to_string())?;
-        self.recover_missing_commit_ready_queue_records(&context)?;
-        context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
-            .map_err(|(_, detail)| detail.to_string())?;
+        if !has_active_distributor_queue_record(&context) {
+            self.recover_missing_commit_ready_queue_records(&context, missing_handoff_recovery)?;
+            context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+                .map_err(|(_, detail)| detail.to_string())?;
+        }
         for index in 0..context.distributor_queue_records.len() {
             let mut record = context.distributor_queue_records[index].clone();
             let matching_lease = matching_lease_for_queue_record(&context, &record).cloned();
@@ -1327,39 +1600,24 @@ impl ParallelModeDistributorService {
     fn recover_missing_commit_ready_queue_records(
         &self,
         context: &PoolRuntimeContext,
+        missing_handoff_recovery: MissingHandoffRecovery<'_>,
     ) -> Result<(), String> {
-        let mut candidates = context
-            .session_details
-            .iter()
-            .filter(|detail| detail.state_label == "commit_ready")
-            .filter(|detail| {
-                !context
-                    .distributor_queue_records
-                    .iter()
-                    .any(|record| record.session_key == detail.session_key)
-            })
-            .filter_map(|detail| {
-                context
-                    .slot_leases
-                    .values()
-                    .find(|lease| {
-                        lease.state == ParallelModeSlotLeaseState::Running
-                            && lease_session_key(lease) == detail.session_key
-                    })
-                    .map(|lease| {
-                        (
-                            detail.updated_at.clone(),
-                            detail.session_key.clone(),
-                            lease.worktree_path.clone(),
-                        )
-                    })
-            })
-            .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-
-        for (_, session_key, worktree_path) in candidates {
-            self.enqueue_workspace_commit_ready_result(&worktree_path)
-                .map_err(|error| {
+        if matches!(missing_handoff_recovery, MissingHandoffRecovery::Disabled) {
+            return Ok(());
+        }
+        for (_, session_key, lease) in missing_commit_ready_queue_candidates(context) {
+            let enqueue = match missing_handoff_recovery {
+                MissingHandoffRecovery::Disabled => unreachable!(
+                    "disabled missing-handoff recovery should return before candidate iteration"
+                ),
+                MissingHandoffRecovery::Unguarded => {
+                    self.enqueue_workspace_commit_ready_result_for_lease(&lease)
+                }
+                MissingHandoffRecovery::Guarded(permit) => {
+                    self.enqueue_workspace_commit_ready_result_for_lease_guarded(&lease, permit)
+                }
+            };
+            enqueue.map_err(|error| {
                     format!(
                         "commit-ready distributor enqueue recovery failed for session `{session_key}`: {error}"
                     )
@@ -1367,6 +1625,70 @@ impl ParallelModeDistributorService {
         }
         Ok(())
     }
+
+    pub(super) fn pending_commit_ready_recovery_signature(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<String>, String> {
+        let context = load_pool_runtime_context(self.planning_authority.as_ref(), workspace_dir)
+            .map_err(|(_, detail)| detail.to_string())?;
+        Ok(missing_commit_ready_queue_candidates(&context)
+            .first()
+            .map(|(updated_at, session_key, lease)| {
+                let source_readiness =
+                    inspect_slot_git_status(std::path::Path::new(&lease.worktree_path))
+                        .map(|status| status.detail_label())
+                        .unwrap_or_else(|error| format!("unavailable:{error}"));
+                let source_head = resolve_workspace_head_sha(std::path::Path::new(
+                    &lease.worktree_path,
+                ))
+                .unwrap_or_else(|| "unavailable".to_string());
+                format!(
+                    "commit-ready|{session_key}|{updated_at}|source:{source_readiness}|head:{source_head}"
+                )
+            }))
+    }
+}
+
+fn has_active_distributor_queue_record(context: &PoolRuntimeContext) -> bool {
+    context
+        .distributor_queue_records
+        .iter()
+        .any(|record| record.queue_state != ParallelModeQueueItemState::Done)
+}
+
+fn missing_commit_ready_queue_candidates(
+    context: &PoolRuntimeContext,
+) -> Vec<(String, String, ParallelModeSlotLeaseSnapshot)> {
+    let mut candidates = context
+        .session_details
+        .iter()
+        .filter(|detail| detail.state_label == "commit_ready")
+        .filter(|detail| {
+            !context
+                .distributor_queue_records
+                .iter()
+                .any(|record| record.session_key == detail.session_key)
+        })
+        .filter_map(|detail| {
+            context
+                .slot_leases
+                .values()
+                .find(|lease| {
+                    lease.state == ParallelModeSlotLeaseState::Running
+                        && lease_session_key(lease) == detail.session_key
+                })
+                .map(|lease| {
+                    (
+                        detail.updated_at.clone(),
+                        detail.session_key.clone(),
+                        lease.clone(),
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    candidates
 }
 
 fn recover_stale_ledger_refreshing_sessions(

@@ -14,6 +14,26 @@ use crate::domain::parallel_mode::{
 
 use super::lease_session_key;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AgentSessionDetailStoreWriteOutcome {
+    AuthorityRejected { error: String },
+    AuthorityCommitted { mirror_warning: Option<String> },
+}
+
+pub(super) struct AgentSessionDetailRecordUpdateOutcome {
+    pub(super) detail: ParallelModeAgentSessionDetailSnapshot,
+    pub(super) mirror_warning: Option<String>,
+}
+
+impl AgentSessionDetailRecordUpdateOutcome {
+    fn into_detail(self) -> ParallelModeAgentSessionDetailSnapshot {
+        if let Some(warning) = self.mirror_warning {
+            tracing::warn!(warning = %warning, "agent session detail mirror projection failed");
+        }
+        self.detail
+    }
+}
+
 pub(super) fn push_session_history(
     detail: &mut ParallelModeAgentSessionDetailSnapshot,
     state_label: &str,
@@ -66,23 +86,108 @@ where
         Option<ParallelModeAgentSessionDetailSnapshot>,
     ) -> ParallelModeAgentSessionDetailSnapshot,
 {
+    update_agent_session_detail_record_with_outcome(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        lease,
+        mutate,
+    )
+    .map(AgentSessionDetailRecordUpdateOutcome::into_detail)
+}
+
+pub(super) fn update_agent_session_detail_record_with_outcome<F>(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+    mutate: F,
+) -> Result<AgentSessionDetailRecordUpdateOutcome, String>
+where
+    F: FnOnce(
+        Option<ParallelModeAgentSessionDetailSnapshot>,
+    ) -> ParallelModeAgentSessionDetailSnapshot,
+{
     /*
-    session_key는 lease의 slot, agent, task, branch 정체성을 묶는 안정 키이다.
-    workspace path는 cleanup이나 worktree 재생성 과정에서 달라질 수 있으므로, detail record를
-    찾을 때는 lease에서 계산한 session_key를 사용한다. 이렇게 해야 recovery가 store-backed
-    queue record와 session detail을 같은 logical session으로 다시 연결할 수 있다.
+    session_key는 lease generation과 slot 정체성을 묶는 안정 키이다. authority lookup은
+    lease에서 계산한 session_key를 사용하고, legacy mirror fallback은 아래 identity gate에서
+    lease의 나머지 불변 필드까지 확인한다.
     */
-    let session_key = lease_session_key(lease);
-    let current = read_agent_session_detail_record(runtime, pool_root, &session_key);
+    let current = read_current_agent_session_detail_record(
+        planning_authority,
+        runtime,
+        workspace_dir,
+        pool_root,
+        lease,
+    )?;
     let detail = mutate(current);
-    write_agent_session_detail_record(
+    match write_agent_session_detail_record(
         planning_authority,
         runtime,
         workspace_dir,
         pool_root,
         &detail,
-    )?;
-    Ok(detail)
+    ) {
+        AgentSessionDetailStoreWriteOutcome::AuthorityRejected { error } => Err(error),
+        AgentSessionDetailStoreWriteOutcome::AuthorityCommitted { mirror_warning } => {
+            Ok(AgentSessionDetailRecordUpdateOutcome {
+                detail,
+                mirror_warning,
+            })
+        }
+    }
+}
+
+fn read_current_agent_session_detail_record(
+    planning_authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace_dir: &str,
+    pool_root: &Path,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+    let session_key = lease_session_key(lease);
+    let snapshot = planning_authority
+        .load_runtime_projections(workspace_dir)
+        .map_err(|error| {
+            format!("failed to load authoritative agent session detail `{session_key}`: {error}")
+        })?;
+    let current = snapshot
+        .session_details
+        .into_iter()
+        .find(|detail| detail.session_key == session_key);
+    if current.is_some() {
+        return Ok(current);
+    }
+
+    // A mirror-only record can seed an authority row created by an older runtime. Once
+    // authority has a row, this fallback is never consulted again. Sanitized filenames
+    // are not unique identities, so decoded legacy content must also match every immutable
+    // lease field shared by the session detail schema.
+    let legacy = read_agent_session_detail_record(runtime, pool_root, &session_key);
+    if legacy
+        .as_ref()
+        .is_some_and(|detail| !legacy_session_detail_matches_lease(detail, lease))
+    {
+        tracing::warn!(session_key = %session_key, "ignored mismatched legacy session detail mirror");
+        return Ok(None);
+    }
+    Ok(legacy)
+}
+
+fn legacy_session_detail_matches_lease(
+    detail: &ParallelModeAgentSessionDetailSnapshot,
+    lease: &ParallelModeSlotLeaseSnapshot,
+) -> bool {
+    detail.session_key == lease_session_key(lease)
+        && detail.slot_id == lease.slot_id
+        && detail.agent_id == lease.agent_id
+        && detail.task_id == lease.task_id
+        && detail.task_title == lease.task_title
+        && detail.branch_name == lease.branch_name
+        && detail.worktree_path == lease.worktree_path
+        && detail.lease_started_at == lease.leased_at
 }
 
 /*
@@ -111,10 +216,9 @@ session detail store에 upsert해 application의 source of truth를 갱신하고
 아래 JSON mirror를 쓴다. authority write가 실패하면 파일 mirror만 앞서가는 split-brain
 상태가 생길 수 있으므로 즉시 오류를 반환한다.
 
-반대로 파일 mirror 쓰기는 authority 성공 뒤에 수행된다. mirror 실패는 caller에게 오류로
-전파되지만, 이미 authority store에는 최신 detail이 남아 있다. 이 비대칭은 queue recovery와
-supervisor rendering이 authority를 우선으로 보고 mirror는 호환성과 검사 편의를 위한 보조물로
-다루는 현재 구조를 반영한다.
+반대로 파일 mirror 쓰기는 authority 성공 뒤에 수행된다. mirror 실패는 authority commit과
+분리된 warning으로 반환한다. 이 비대칭은 queue recovery와 supervisor rendering이 authority를
+우선으로 보고 mirror는 호환성과 검사 편의를 위한 보조물로 다루는 현재 구조를 반영한다.
 */
 pub(super) fn write_agent_session_detail_record(
     planning_authority: &dyn PlanningAuthorityPort,
@@ -122,20 +226,20 @@ pub(super) fn write_agent_session_detail_record(
     workspace_dir: &str,
     pool_root: &Path,
     detail: &ParallelModeAgentSessionDetailSnapshot,
-) -> Result<(), String> {
+) -> AgentSessionDetailStoreWriteOutcome {
     /*
     `workspace_dir`를 authority port에 넘기는 이유는 adapter가 어느 repo와 runtime
     namespace에 기록해야 하는지 결정하게 하기 위해서이다. application service는 sqlite,
     file-backed store, test fake 같은 실제 구현을 알지 않고, port contract만 호출한다.
     */
-    planning_authority
-        .upsert_runtime_session_detail(workspace_dir, detail)
-        .map_err(|error| {
-            format!(
+    if let Err(error) = planning_authority.upsert_runtime_session_detail(workspace_dir, detail) {
+        return AgentSessionDetailStoreWriteOutcome::AuthorityRejected {
+            error: format!(
                 "failed to store agent session detail `{}`: {error}",
                 detail.session_key
-            )
-        })?;
+            ),
+        };
+    }
 
     /*
     `.agent-sessions` 디렉터리는 pool root와 함께 움직이는 runtime mirror이다.
@@ -143,25 +247,37 @@ pub(super) fn write_agent_session_detail_record(
     history가 보존되고, supervisor snapshot이 idle로 돌아간 slot의 직전 작업 이력을 계속 보여
     줄 수 있다.
     */
-    let body = serde_json::to_string_pretty(detail)
-        .map_err(|error| format!("failed to serialize agent session detail: {error}"))?;
+    let body = match serde_json::to_string_pretty(detail) {
+        Ok(body) => body,
+        Err(error) => {
+            return AgentSessionDetailStoreWriteOutcome::AuthorityCommitted {
+                mirror_warning: Some(format!(
+                    "agent session detail `{}` committed to authority, but its runtime mirror could not be serialized: {error}",
+                    detail.session_key
+                )),
+            };
+        }
+    };
     /*
     파일 mirror는 adapter의 pinned-root private atomic install로 교체한다. application이
     예측 가능한 temp path를 만들지 않으며, 중간에 프로세스가 종료되어도 기존 JSON을 절반만
     덮어쓴 상태로 남기지 않는다.
     */
-    runtime
+    let mirror_warning = runtime
         .write_runtime_mirror_atomic(
             pool_root,
             &agent_session_detail_record_relative_path(&detail.session_key),
             &body,
         )
-        .map_err(|error| {
+        .err()
+        .map(|error| {
             format!(
-                "failed to persist agent session detail `{}`: {error}",
+                "agent session detail `{}` committed to authority, but its runtime mirror could not be persisted: {error}",
                 detail.session_key
             )
-        })
+        });
+
+    AgentSessionDetailStoreWriteOutcome::AuthorityCommitted { mirror_warning }
 }
 
 /*

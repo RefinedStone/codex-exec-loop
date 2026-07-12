@@ -6,7 +6,10 @@ use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, conversation_stream_channel,
 };
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
-use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+use crate::application::service::parallel_mode::turn::{
+    ParallelModeTurnService, ParallelOfficialCompletionFinalizeFailureStage,
+    ParallelOfficialCompletionFinalizeOutcome,
+};
 use crate::application::service::planning::{
     PlanningOfficialCompletionRefreshRequest, PlanningRuntimeProjection,
     PlanningRuntimeWorkspaceStatus, PlanningServices, PlanningTaskHandoff,
@@ -18,6 +21,7 @@ use crate::domain::parallel_mode::{
     ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent,
     ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot, ParallelModeSupervisorSnapshot,
 };
+use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 use chrono::Utc;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -656,7 +660,7 @@ struct ParallelDispatchWorkerRequest {
 }
 
 // 스트림 이벤트는 순서대로 오지만, 최종 판단에는 "시작 전 실패", "실패 이벤트",
-// "TurnCompleted", "마지막 답변"을 한 번에 보존해야 한다.
+// confirmed completed terminal, "마지막 답변"을 한 번에 보존해야 한다.
 #[derive(Debug, Clone, Default)]
 struct ParallelDispatchWorkerStreamState {
     /*
@@ -667,19 +671,29 @@ struct ParallelDispatchWorkerStreamState {
     saw_turn_started: bool,
     saw_failed_before_turn_started: bool,
     saw_failed_event: bool,
+    prepared_thread_id: Option<String>,
+    started_turn_id: Option<String>,
     /*
-     * TurnCompleted는 official completion refresh의 유일한 성공 입구다. app-server stream이
-     * 답변 text를 끝냈더라도 TurnCompleted가 없으면 changed planning files와 turn id가 없어
-     * authority ledger에 안전하게 completion contract를 남길 수 없다.
+     * A confirmed completed terminal is the only official-completion success entry. Even when
+     * the app-server finishes response text, another terminal outcome cannot authorize an
+     * authority-ledger completion contract.
      */
     turn_completed: Option<ParallelDispatchTurnCompleted>,
-    // main reply는 official completion prompt의 증거 문맥으로 쓰되, slot 성공 판정 자체는 TurnCompleted가 맡는다.
+    terminal_receipt: Option<ConversationTurnTerminalReceipt>,
+    // main reply는 official completion prompt의 증거 문맥으로 쓰되, slot 성공 판정 자체는 typed receipt가 맡는다.
     latest_main_reply: Option<String>,
 }
 #[derive(Debug, Clone)]
 struct ParallelDispatchTurnCompleted {
-    turn_id: String,
-    changed_planning_file_paths: Vec<String>,
+    receipt: ConversationTurnTerminalReceipt,
+}
+
+impl ParallelDispatchTurnCompleted {
+    fn from_receipt(receipt: ConversationTurnTerminalReceipt) -> Option<Self> {
+        receipt
+            .is_completed_and_confirmed()
+            .then_some(Self { receipt })
+    }
 }
 
 struct ParallelDispatchWorkerRunResult {
@@ -796,7 +810,7 @@ fn run_parallel_dispatch_worker(
     let mut notices = Vec::new();
     let mut stream_state = ParallelDispatchWorkerStreamState::default();
 
-    // TurnCompleted 또는 Failed 이후의 이벤트는 official completion 판단에 쓰지 않는다.
+    // TurnTerminal 또는 transport Failed 이후의 이벤트는 official completion 판단에 쓰지 않는다.
     // 워커 스레드 join은 별도로 수행해 스트림 포트 자체의 오류까지 notice로 남긴다.
     while let Ok(event) = event_rx.recv() {
         emit_parallel_worker_stream_event(&request, &event);
@@ -805,7 +819,7 @@ fn run_parallel_dispatch_worker(
             .for_each(|notice| notices.push(notice));
         if matches!(
             event,
-            ConversationStreamEvent::TurnCompleted { .. } | ConversationStreamEvent::Failed { .. }
+            ConversationStreamEvent::TurnTerminal { .. } | ConversationStreamEvent::Failed { .. }
         ) {
             break;
         }
@@ -815,8 +829,10 @@ fn run_parallel_dispatch_worker(
     // post-terminal producer send into a channel error instead of a blocked join.
     drop(event_rx);
 
+    let mut producer_receipt = None;
     match service_thread.join() {
-        Ok(Ok(())) => {
+        Ok(Ok(receipt)) => {
+            producer_receipt = Some(receipt);
             event_log::emit_lazy("parallel_worker_stream_joined", || {
                 serde_json::json!({
                     "worktree": &request.worktree_directory,
@@ -830,12 +846,12 @@ fn run_parallel_dispatch_worker(
         }
         Ok(Err(error)) => {
             /*
-             * A port error may happen after the event stream already emitted TurnCompleted
+             * A port error may happen after the event stream already emitted TurnTerminal
              * or Failed. Only synthesize a failure flag when the stream itself did not
              * provide a terminal event, otherwise finalize_stream_completion would double
              * count the failure class.
              */
-            if stream_state.turn_completed.is_none() && !stream_state.saw_failed_event {
+            if !stream_state.saw_failed_event {
                 stream_state.saw_failed_event = true;
                 if !stream_state.saw_turn_started {
                     stream_state.saw_failed_before_turn_started = true;
@@ -863,7 +879,7 @@ fn run_parallel_dispatch_worker(
              * saw_turn_started so the turn service can distinguish a dirty running
              * slot from a launch failure that can be released.
              */
-            if stream_state.turn_completed.is_none() && !stream_state.saw_failed_event {
+            if !stream_state.saw_failed_event {
                 stream_state.saw_failed_event = true;
                 if !stream_state.saw_turn_started {
                     stream_state.saw_failed_before_turn_started = true;
@@ -886,6 +902,50 @@ fn run_parallel_dispatch_worker(
         }
     }
 
+    match (&stream_state.terminal_receipt, &producer_receipt) {
+        (Some(observed), Some(returned)) if observed == returned => {
+            if !returned.is_completed_and_confirmed() {
+                stream_state.saw_failed_event = true;
+                if !stream_state.saw_turn_started {
+                    stream_state.saw_failed_before_turn_started = true;
+                }
+            } else if stream_state.prepared_thread_id.as_deref()
+                != Some(returned.thread_id.as_str())
+                || stream_state.started_turn_id.as_deref() != Some(returned.turn_id.as_str())
+            {
+                stream_state.saw_failed_event = true;
+                stream_state.turn_completed = None;
+                notices.push(format!(
+                    "parallel worker terminal receipt did not match prepared/started identity / task: {}",
+                    request.handoff_task.task_title
+                ));
+            }
+        }
+        (Some(_), Some(_)) => {
+            stream_state.saw_failed_event = true;
+            if !stream_state.saw_turn_started {
+                stream_state.saw_failed_before_turn_started = true;
+            }
+            notices.push(format!(
+                "parallel worker terminal receipt did not match the producer result / task: {}",
+                request.handoff_task.task_title
+            ));
+        }
+        (None, Some(returned)) => {
+            stream_state.saw_failed_event = true;
+            if !stream_state.saw_turn_started {
+                stream_state.saw_failed_before_turn_started = true;
+            }
+            notices.push(format!(
+                "parallel worker stream ended without a terminal receipt event / task: {} / producer terminal: {} / delivery: {:?}",
+                request.handoff_task.task_title,
+                returned.status_error_summary(),
+                returned.application_delivery
+            ));
+        }
+        (Some(_), None) | (None, None) => {}
+    }
+
     // 채널이 정상 종료돼도 완료 이벤트가 없으면 슬롯은 실패로 닫아야 한다. 그래야
     // 병렬 supervisor가 같은 worktree를 성공 슬롯으로 오인하지 않는다.
     if !stream_state.saw_failed_event && stream_state.turn_completed.is_none() {
@@ -894,7 +954,7 @@ fn run_parallel_dispatch_worker(
             stream_state.saw_failed_before_turn_started = true;
         }
         notices.push(format!(
-            "parallel worker stream ended without a completed turn / task: {}",
+            "parallel worker stream ended without a confirmed completed terminal / task: {}",
             request.handoff_task.task_title
         ));
     }
@@ -927,10 +987,6 @@ fn run_parallel_dispatch_worker(
          * The planning ledger must not record an authoritative completion for a slot whose
          * app-server turn did not reach a clean terminal success.
          */
-        turn_service.mark_official_completion_failed_for_lease(
-            &request.expected_lease,
-            "parallel worker stream failed before official completion refresh",
-        );
         return if stream_state.saw_failed_before_turn_started {
             ParallelDispatchWorkerRunResult::launch_failed(notices)
         } else {
@@ -946,7 +1002,7 @@ fn run_parallel_dispatch_worker(
          */
         turn_service.mark_official_completion_failed_for_lease(
             &request.expected_lease,
-            "parallel worker stream ended without a completed turn",
+            "parallel worker stream ended without a confirmed completed terminal",
         );
         return ParallelDispatchWorkerRunResult::stream_failed(notices);
     };
@@ -1002,18 +1058,20 @@ fn emit_parallel_worker_stream_event(
         } => event_log::emit_lazy("parallel_worker_stream_event", || {
             parallel_worker_agent_message_completed_trace_payload(request, item_id, phase, text)
         }),
-        ConversationStreamEvent::TurnCompleted {
-            turn_id,
-            changed_planning_file_paths,
-        } => event_log::emit_lazy("parallel_worker_stream_event", || {
-            serde_json::json!({
-                "event": "turn_completed",
-                "worktree": &request.worktree_directory,
-                "task_id": &request.handoff_task.task_id,
-                "turn_id": turn_id,
-                "changed_planning_file_paths": changed_planning_file_paths,
+        ConversationStreamEvent::TurnTerminal { receipt } => {
+            event_log::emit_lazy("parallel_worker_stream_event", || {
+                serde_json::json!({
+                    "event": "turn_terminal",
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "thread_id": &receipt.thread_id,
+                    "turn_id": &receipt.turn_id,
+                    "outcome": receipt.outcome.status_label(),
+                    "application_delivery": format!("{:?}", receipt.application_delivery),
+                    "changed_planning_file_paths": &receipt.observations.changed_planning_file_paths,
+                })
             })
-        }),
+        }
         ConversationStreamEvent::Failed { message } => {
             event_log::emit_lazy("parallel_worker_stream_event", || {
                 serde_json::json!({
@@ -1042,6 +1100,12 @@ fn sync_parallel_dispatch_worker_event(
     }
 
     match event {
+        ConversationStreamEvent::ThreadPrepared { thread_id, .. } => {
+            stream_state.prepared_thread_id = Some(thread_id.clone());
+        }
+        ConversationStreamEvent::TurnStarted { turn_id } => {
+            stream_state.started_turn_id = Some(turn_id.clone());
+        }
         ConversationStreamEvent::AgentMessageCompleted { text, .. } => {
             let text = text.trim();
             if !text.is_empty() {
@@ -1053,19 +1117,28 @@ fn sync_parallel_dispatch_worker_event(
                 stream_state.latest_main_reply = Some(text.to_string());
             }
         }
-        ConversationStreamEvent::TurnCompleted {
-            turn_id,
-            changed_planning_file_paths,
-        } => {
+        ConversationStreamEvent::TurnTerminal { receipt } => {
             /*
              * changed_planning_file_paths is copied out before the loop stops because the
-             * receiver exits on TurnCompleted. Later stream noise should not alter the
+             * receiver exits on TurnTerminal. Later stream noise should not alter the
              * official completion validation summary for this slot.
              */
-            stream_state.turn_completed = Some(ParallelDispatchTurnCompleted {
-                turn_id: turn_id.clone(),
-                changed_planning_file_paths: changed_planning_file_paths.clone(),
-            });
+            stream_state.terminal_receipt = Some(receipt.clone());
+            if receipt.is_completed_and_confirmed() {
+                stream_state.turn_completed =
+                    ParallelDispatchTurnCompleted::from_receipt(receipt.clone());
+            } else {
+                stream_state.saw_failed_event = true;
+                if !stream_state.saw_turn_started {
+                    stream_state.saw_failed_before_turn_started = true;
+                }
+                notices.push(format!(
+                    "parallel worker terminal outcome was not confirmed completed / task: {} / {} / delivery: {:?}",
+                    request.handoff_task.task_title,
+                    receipt.status_error_summary(),
+                    receipt.application_delivery
+                ));
+            }
         }
         ConversationStreamEvent::Failed { .. } => {
             stream_state.saw_failed_event = true;
@@ -1087,6 +1160,16 @@ fn run_parallel_dispatch_official_completion(
     latest_main_reply: Option<&str>,
 ) -> ParallelDispatchOfficialCompletionOutcome {
     let mut notices = Vec::new();
+    if !turn_completed.receipt.is_completed_and_confirmed() {
+        turn_service.mark_official_completion_failed_for_lease(
+            &request.expected_lease,
+            "parallel official completion rejected a non-confirmed terminal receipt",
+        );
+        return ParallelDispatchOfficialCompletionOutcome::failed(vec![format!(
+            "parallel official completion rejected a non-confirmed terminal receipt / task: {}",
+            request.handoff_task.task_title
+        )]);
+    }
     if !turn_service.automation_epoch_is_active(
         &request.planning_workspace_directory,
         request.automation_epoch_id,
@@ -1196,14 +1279,18 @@ fn run_parallel_dispatch_official_completion(
     let latest_main_reply = latest_main_reply
         .filter(|reply| !reply.trim().is_empty())
         .unwrap_or(
-            "parallel worker TurnCompleted was captured, but no final text response was recorded",
+            "parallel worker completed terminal was captured, but no final text response was recorded",
         );
-    let validation_summary =
-        parallel_dispatch_validation_summary(&turn_completed.changed_planning_file_paths);
+    let validation_summary = parallel_dispatch_validation_summary(
+        &turn_completed
+            .receipt
+            .observations
+            .changed_planning_file_paths,
+    );
 
     let completion_report = match turn_service.begin_official_completion_for_lease(
         &request.expected_lease,
-        &turn_completed.turn_id,
+        &turn_completed.receipt.turn_id,
         Some(refresh_order),
         Some(latest_main_reply),
         Some(&validation_summary),
@@ -1315,7 +1402,7 @@ fn run_parallel_dispatch_official_completion(
     };
 
     // A repair request or blocked runtime projection means the authority file is not safe for
-    // auto-follow even if the worker itself produced a valid TurnCompleted event.
+    // auto-follow even if the worker itself produced a valid completed terminal receipt.
     if outcome.repair_request.is_some() || outcome.runtime_projection.blocks_auto_follow() {
         let detail = outcome
             .runtime_projection
@@ -1373,25 +1460,62 @@ fn run_parallel_dispatch_official_completion(
         .as_deref()
         .map(|summary| format!("official ledger refresh succeeded: {summary}"))
         .unwrap_or_else(|| "official ledger refresh succeeded".to_string());
-    notices.extend(
-        turn_service.finalize_official_completion_success_for_epoch_and_lease(
-            &request.expected_lease,
-            &request.planning_workspace_directory,
-            request.automation_epoch_id,
-            &authority_refresh_outcome,
-        ),
+    let finalize_outcome = turn_service.finalize_official_completion_success_for_epoch_and_lease(
+        &request.expected_lease,
+        &request.planning_workspace_directory,
+        request.automation_epoch_id,
+        &authority_refresh_outcome,
     );
-    event_log::emit_lazy("parallel_official_completion_succeeded", || {
-        serde_json::json!({
-            "planning_workspace": &request.planning_workspace_directory,
-            "worktree": &request.worktree_directory,
-            "task_id": &request.handoff_task.task_id,
-            "refresh_order": refresh_order,
-            "authority_refresh_outcome": authority_refresh_outcome,
-            "notice_count": notices.len(),
-        })
-    });
-    ParallelDispatchOfficialCompletionOutcome::succeeded(notices)
+    match finalize_outcome {
+        ParallelOfficialCompletionFinalizeOutcome::Durable {
+            notices: finalize_notices,
+            proof,
+            ..
+        } => {
+            notices.extend(finalize_notices);
+            event_log::emit_lazy("parallel_official_completion_succeeded", || {
+                serde_json::json!({
+                    "planning_workspace": &request.planning_workspace_directory,
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "refresh_order": refresh_order,
+                    "authority_refresh_outcome": authority_refresh_outcome,
+                    "durable_proof": proof.label(),
+                    "notice_count": notices.len(),
+                })
+            });
+            ParallelDispatchOfficialCompletionOutcome::succeeded(notices)
+        }
+        ParallelOfficialCompletionFinalizeOutcome::Failed {
+            notices: finalize_notices,
+            stage,
+        } => {
+            notices.extend(finalize_notices);
+            if stage == ParallelOfficialCompletionFinalizeFailureStage::CommitReadyPersistence {
+                turn_service.mark_official_completion_failed_for_lease(
+                    &request.expected_lease,
+                    "official completion could not persist the durable commit-ready state",
+                );
+            }
+            notices.push(format!(
+                "parallel official completion finalization failed / task: {} / stage: {}",
+                request.handoff_task.task_title,
+                stage.label()
+            ));
+            event_log::emit_lazy("parallel_official_completion_failed", || {
+                serde_json::json!({
+                    "planning_workspace": &request.planning_workspace_directory,
+                    "worktree": &request.worktree_directory,
+                    "task_id": &request.handoff_task.task_id,
+                    "refresh_order": refresh_order,
+                    "authority_refresh_outcome": authority_refresh_outcome,
+                    "failure_stage": stage.label(),
+                    "notice_count": notices.len(),
+                })
+            });
+            ParallelDispatchOfficialCompletionOutcome::failed(notices)
+        }
+    }
 }
 
 fn parallel_official_completion_started_trace_payload(
@@ -1404,8 +1528,8 @@ fn parallel_official_completion_started_trace_payload(
         "worktree": &request.worktree_directory,
         "task_id": &request.handoff_task.task_id,
         "task_title": &request.handoff_task.task_title,
-        "turn_id": &turn_completed.turn_id,
-        "changed_planning_file_paths": &turn_completed.changed_planning_file_paths,
+        "turn_id": &turn_completed.receipt.turn_id,
+        "changed_planning_file_paths": &turn_completed.receipt.observations.changed_planning_file_paths,
         "latest_main_reply_chars": latest_main_reply.map(|reply| reply.chars().count()),
     })
 }
@@ -1509,6 +1633,11 @@ mod tests {
         ParallelModeDeliveryTargetSnapshot, ParallelModeRepositoryVisibility,
         ParallelModeRuntimeEvent, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
         ParallelModeSlotLeaseState,
+    };
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
+        ConversationTurnError, ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
+        ConversationTurnTerminalUncertainty,
     };
     use crate::test_utils::json_payload_contains;
     use anyhow::{Result, anyhow};
@@ -1764,13 +1893,34 @@ mod tests {
     #[derive(Debug)]
     struct ScriptedParallelAgentWorkerPort {
         events: Mutex<Vec<ConversationStreamEvent>>,
+        producer_receipt: ConversationTurnTerminalReceipt,
         exit: WorkerExit,
     }
 
     impl ScriptedParallelAgentWorkerPort {
         fn new(events: Vec<ConversationStreamEvent>, exit: WorkerExit) -> Self {
+            let producer_receipt = events
+                .iter()
+                .find_map(|event| match event {
+                    ConversationStreamEvent::TurnTerminal { receipt } => Some(receipt.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| completed_receipt("turn-scripted", Vec::new()));
             Self {
                 events: Mutex::new(events),
+                producer_receipt,
+                exit,
+            }
+        }
+
+        fn with_producer_receipt(
+            events: Vec<ConversationStreamEvent>,
+            exit: WorkerExit,
+            producer_receipt: ConversationTurnTerminalReceipt,
+        ) -> Self {
+            Self {
+                events: Mutex::new(events),
+                producer_receipt,
                 exit,
             }
         }
@@ -1781,7 +1931,7 @@ mod tests {
             &self,
             _request: ParallelAgentWorkerStreamRequest<'_>,
             event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-        ) -> Result<()> {
+        ) -> Result<ConversationTurnTerminalReceipt> {
             let events = self
                 .events
                 .lock()
@@ -1793,11 +1943,23 @@ mod tests {
                     .expect("worker reducer should still receive scripted events");
             }
             match self.exit {
-                WorkerExit::Ok => Ok(()),
+                WorkerExit::Ok => Ok(self.producer_receipt.clone()),
                 WorkerExit::Err => Err(anyhow!("scripted worker port failed")),
                 WorkerExit::Panic => panic!("scripted worker port panicked"),
             }
         }
+    }
+
+    fn completed_receipt(
+        turn_id: &str,
+        changed_planning_file_paths: Vec<String>,
+    ) -> ConversationTurnTerminalReceipt {
+        ConversationTurnTerminalReceipt::completed(
+            "thread-scripted",
+            turn_id,
+            changed_planning_file_paths,
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed)
     }
 
     fn run_scripted_worker(
@@ -1818,6 +1980,25 @@ mod tests {
         run_parallel_dispatch_worker(
             request,
             Arc::new(ScriptedParallelAgentWorkerPort::new(events, exit)),
+            turn_service,
+            planning,
+        )
+    }
+
+    fn run_scripted_worker_with_producer_receipt(
+        events: Vec<ConversationStreamEvent>,
+        producer_receipt: ConversationTurnTerminalReceipt,
+    ) -> ParallelDispatchWorkerRunResult {
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let turn_service = ParallelModeTurnService::new(test_parallel_service(authority.clone()));
+        let planning = test_planning_services(authority);
+        run_parallel_dispatch_worker(
+            worker_request_with_secret_bodies(),
+            Arc::new(ScriptedParallelAgentWorkerPort::with_producer_receipt(
+                events,
+                WorkerExit::Ok,
+                producer_receipt,
+            )),
             turn_service,
             planning,
         )
@@ -1892,6 +2073,34 @@ mod tests {
     }
 
     #[test]
+    fn official_completion_input_requires_confirmed_completed_receipt() {
+        let interrupted = ConversationTurnTerminalReceipt::new(
+            "thread-scripted",
+            "turn-interrupted",
+            ConversationTurnTerminalOutcome::Interrupted,
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+        let unconfirmed = ConversationTurnTerminalReceipt::completed(
+            "thread-scripted",
+            "turn-unconfirmed",
+            Vec::new(),
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Unconfirmed(
+            ConversationTurnApplicationDeliveryFailure::Disconnected,
+        ));
+
+        assert!(ParallelDispatchTurnCompleted::from_receipt(interrupted).is_none());
+        assert!(ParallelDispatchTurnCompleted::from_receipt(unconfirmed).is_none());
+        assert!(
+            ParallelDispatchTurnCompleted::from_receipt(completed_receipt(
+                "turn-completed",
+                Vec::new(),
+            ))
+            .is_some()
+        );
+    }
+
+    #[test]
     fn blocked_host_commit_does_not_consume_official_refresh_order() {
         let workspace = TempGitWorkspace::new("parallel-host-commit-no-order-gap");
         let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
@@ -1928,10 +2137,11 @@ mod tests {
             &request,
             &turn_service,
             &planning,
-            &ParallelDispatchTurnCompleted {
-                turn_id: "turn-no-order-gap".to_string(),
-                changed_planning_file_paths: Vec::new(),
-            },
+            &ParallelDispatchTurnCompleted::from_receipt(completed_receipt(
+                "turn-no-order-gap",
+                Vec::new(),
+            ))
+            .expect("confirmed completed receipt should build official completion input"),
             Some("completed without file changes"),
         );
 
@@ -1964,7 +2174,7 @@ mod tests {
             missing_completion
                 .notices
                 .iter()
-                .any(|notice| notice.contains("ended without a completed turn"))
+                .any(|notice| notice.contains("without a terminal receipt event"))
         );
 
         let port_error = run_scripted_worker(Vec::new(), WorkerExit::Err);
@@ -1993,6 +2203,32 @@ mod tests {
     }
 
     #[test]
+    fn scripted_worker_rejects_unconfirmed_receipt_without_terminal_projection() {
+        let unconfirmed = ConversationTurnTerminalReceipt::completed(
+            "thread-scripted",
+            "turn-sink-disconnected",
+            Vec::new(),
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Unconfirmed(
+            ConversationTurnApplicationDeliveryFailure::Disconnected,
+        ));
+        let result = run_scripted_worker_with_producer_receipt(Vec::new(), unconfirmed);
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::LaunchFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("without a terminal receipt event")),
+            "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
     fn scripted_worker_run_keeps_started_failures_as_stream_failures() {
         let result = run_scripted_worker(
             vec![ConversationStreamEvent::TurnStarted {
@@ -2014,9 +2250,179 @@ mod tests {
     }
 
     #[test]
+    fn scripted_worker_rejects_non_completed_or_unconfirmed_terminal_receipts() {
+        let failed_error = ConversationTurnError::new("worker failed", None::<&str>, None);
+        let receipts = [
+            ConversationTurnTerminalReceipt::new(
+                "thread-scripted",
+                "turn-interrupted",
+                ConversationTurnTerminalOutcome::Interrupted,
+            )
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+            ConversationTurnTerminalReceipt::new(
+                "thread-scripted",
+                "turn-failed",
+                ConversationTurnTerminalOutcome::Failed {
+                    error: failed_error.clone(),
+                },
+            )
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+            ConversationTurnTerminalReceipt::new(
+                "thread-scripted",
+                "turn-unknown",
+                ConversationTurnTerminalOutcome::Unknown {
+                    reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+                    observed_error: Some(failed_error),
+                },
+            )
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+            ConversationTurnTerminalReceipt::completed(
+                "thread-scripted",
+                "turn-unconfirmed",
+                Vec::new(),
+            )
+            .with_application_delivery(
+                ConversationTurnApplicationDelivery::Unconfirmed(
+                    ConversationTurnApplicationDeliveryFailure::DeadlineExceeded,
+                ),
+            ),
+        ];
+
+        for receipt in receipts {
+            let result = run_scripted_worker(
+                vec![
+                    ConversationStreamEvent::TurnStarted {
+                        turn_id: receipt.turn_id.clone(),
+                    },
+                    ConversationStreamEvent::TurnTerminal {
+                        receipt: receipt.clone(),
+                    },
+                ],
+                WorkerExit::Ok,
+            );
+
+            assert_eq!(
+                result.worker_event_kind,
+                ParallelModeControlPlaneWorkerEventKind::StreamFailed
+            );
+            assert!(
+                result
+                    .notices
+                    .iter()
+                    .any(|notice| notice.contains("not confirmed completed")),
+                "notices: {:?}",
+                result.notices
+            );
+        }
+    }
+
+    #[test]
+    fn scripted_worker_rejects_mismatched_event_and_producer_receipts() {
+        let observed = completed_receipt("turn-observed", Vec::new());
+        let result = run_scripted_worker_with_producer_receipt(
+            vec![
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: observed.turn_id.clone(),
+                },
+                ConversationStreamEvent::TurnTerminal { receipt: observed },
+            ],
+            completed_receipt("turn-returned", Vec::new()),
+        );
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("did not match the producer")),
+            "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
+    fn scripted_worker_rejects_terminal_receipt_with_mismatched_stream_identity() {
+        let receipt = completed_receipt("turn-identity", Vec::new());
+        let result = run_scripted_worker(
+            vec![
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: "thread-other".to_string(),
+                    title: "Prepared slot".to_string(),
+                    cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                },
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: "turn-other".to_string(),
+                },
+                ConversationStreamEvent::TurnTerminal { receipt },
+            ],
+            WorkerExit::Ok,
+        );
+
+        assert_eq!(
+            result.worker_event_kind,
+            ParallelModeControlPlaneWorkerEventKind::StreamFailed
+        );
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("did not match prepared/started identity")),
+            "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
+    fn retrying_event_does_not_stop_before_the_terminal_receipt() {
+        let receipt = completed_receipt("turn-after-retry", Vec::new());
+        let result = run_scripted_worker(
+            vec![
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: receipt.thread_id.clone(),
+                    title: "Prepared slot".to_string(),
+                    cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                },
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: receipt.turn_id.clone(),
+                },
+                ConversationStreamEvent::TurnRetrying {
+                    thread_id: receipt.thread_id.clone(),
+                    turn_id: receipt.turn_id.clone(),
+                    error: ConversationTurnError::new(
+                        "temporary stream disconnect",
+                        None::<&str>,
+                        None,
+                    ),
+                },
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: receipt.clone(),
+                },
+            ],
+            WorkerExit::Ok,
+        );
+
+        assert!(
+            result
+                .notices
+                .iter()
+                .all(|notice| !notice.contains("without a terminal receipt")),
+            "notices: {:?}",
+            result.notices
+        );
+    }
+
+    #[test]
     fn scripted_worker_run_skips_official_completion_without_running_slot_lease() {
         let result = run_scripted_worker(
             vec![
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: "thread-scripted".to_string(),
+                    title: "Prepared slot".to_string(),
+                    cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                },
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-lease-missing".to_string(),
                 },
@@ -2025,9 +2431,8 @@ mod tests {
                     phase: Some("final_answer".to_string()),
                     text: "done".to_string(),
                 },
-                ConversationStreamEvent::TurnCompleted {
-                    turn_id: "turn-lease-missing".to_string(),
-                    changed_planning_file_paths: Vec::new(),
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: completed_receipt("turn-lease-missing", Vec::new()),
                 },
             ],
             WorkerExit::Ok,
@@ -2057,12 +2462,16 @@ mod tests {
         let result = run_scripted_worker_with_request(
             request,
             vec![
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: "thread-scripted".to_string(),
+                    title: "Prepared slot".to_string(),
+                    cwd: workspace.path().to_string(),
+                },
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-no-lease".to_string(),
                 },
-                ConversationStreamEvent::TurnCompleted {
-                    turn_id: "turn-no-lease".to_string(),
-                    changed_planning_file_paths: Vec::new(),
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: completed_receipt("turn-no-lease", Vec::new()),
                 },
             ],
             WorkerExit::Ok,
@@ -2159,7 +2568,7 @@ mod tests {
     }
 
     #[test]
-    fn scripted_worker_keeps_port_error_notice_after_turn_completed() {
+    fn scripted_worker_port_error_after_terminal_blocks_official_completion() {
         let result = with_test_event_logging(|| {
             run_scripted_worker(
                 vec![
@@ -2171,11 +2580,11 @@ mod tests {
                         phase: Some("final_answer".to_string()),
                         text: "done before port error".to_string(),
                     },
-                    ConversationStreamEvent::TurnCompleted {
-                        turn_id: "turn-completed-before-port-error".to_string(),
-                        changed_planning_file_paths: vec![
-                            ".codex-exec-loop/planning/result.md".to_string(),
-                        ],
+                    ConversationStreamEvent::TurnTerminal {
+                        receipt: completed_receipt(
+                            "turn-completed-before-port-error",
+                            vec![".codex-exec-loop/planning/result.md".to_string()],
+                        ),
                     },
                 ],
                 WorkerExit::Err,
@@ -2198,7 +2607,7 @@ mod tests {
             result
                 .notices
                 .iter()
-                .any(|notice| notice.contains("host-owned parallel worker commit failed")),
+                .all(|notice| !notice.contains("host-owned parallel worker commit failed")),
             "notices: {:?}",
             result.notices
         );
@@ -2243,9 +2652,11 @@ mod tests {
         sync_parallel_dispatch_worker_event(
             &turn_service,
             &request,
-            &ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-1".to_string(),
-                changed_planning_file_paths: vec!["docs/plan/result-output.md".to_string()],
+            &ConversationStreamEvent::TurnTerminal {
+                receipt: completed_receipt(
+                    "turn-1",
+                    vec!["docs/plan/result-output.md".to_string()],
+                ),
             },
             &mut stream_state,
         );
@@ -2253,9 +2664,12 @@ mod tests {
             .turn_completed
             .as_ref()
             .expect("turn completed should be captured");
-        assert_eq!(turn_completed.turn_id, "turn-1");
+        assert_eq!(turn_completed.receipt.turn_id, "turn-1");
         assert_eq!(
-            turn_completed.changed_planning_file_paths,
+            turn_completed
+                .receipt
+                .observations
+                .changed_planning_file_paths,
             vec!["docs/plan/result-output.md".to_string()]
         );
 
@@ -2343,10 +2757,11 @@ mod tests {
     #[test]
     fn official_completion_started_trace_payload_keeps_latest_reply_body_out_of_log() {
         let request = worker_request_with_secret_bodies();
-        let turn_completed = ParallelDispatchTurnCompleted {
-            turn_id: "turn-secret".to_string(),
-            changed_planning_file_paths: vec!["docs/plan.md".to_string()],
-        };
+        let turn_completed = ParallelDispatchTurnCompleted::from_receipt(completed_receipt(
+            "turn-secret",
+            vec!["docs/plan.md".to_string()],
+        ))
+        .expect("confirmed completed receipt should build official completion input");
 
         let payload = parallel_official_completion_started_trace_payload(
             &request,

@@ -46,7 +46,9 @@ mod reconcile;
 mod slot_inspection;
 
 use self::allocation_lock::POOL_MUTATION_LOCK_FILE;
-pub(super) use self::allocation_lock::{PoolMutationLock, acquire_pool_mutation_lock};
+pub(super) use self::allocation_lock::{
+    PoolMutationLock, acquire_pool_mutation_lock, try_acquire_pool_mutation_lock_at,
+};
 use self::board::{
     build_blocked_pool_board, build_pool_board_from_context,
     build_pool_slots as build_pool_slots_from_context, build_unavailable_pool_board,

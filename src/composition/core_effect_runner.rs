@@ -101,8 +101,11 @@ impl CoreEffectRunner {
                     self.manual_prompt_preparation_service.prepare(*request),
                 )),
             )),
-            CoreEffect::SubmitTurn(request) => {
-                self.spawn_turn_submission(request);
+            CoreEffect::SubmitTurn {
+                correlation,
+                request,
+            } => {
+                self.spawn_turn_submission(correlation, request);
                 None
             }
             CoreEffect::EvaluatePostTurn(request) => {
@@ -150,8 +153,13 @@ impl CoreEffectRunner {
         });
     }
 
-    pub fn spawn_turn_submission(&self, request: crate::core::app::TurnSubmissionRequest) {
+    pub fn spawn_turn_submission(
+        &self,
+        correlation: crate::core::app::TurnSubmissionCorrelation,
+        request: crate::core::app::TurnSubmissionRequest,
+    ) {
         core_turn_submission::spawn_turn_submission_worker(
+            correlation,
             request,
             self.conversation_service.clone(),
             self.planning_runtime.clone(),

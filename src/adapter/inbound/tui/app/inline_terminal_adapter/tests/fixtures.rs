@@ -80,26 +80,34 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
         Ok(())
     }
 
-    // New-thread streams are intentionally silent because individual tests inject the conversation state they need.
+    // New-thread streams emit only the matching terminal pair; transcript details are injected by each test.
     fn run_new_thread_stream(
         &self,
-        _cwd: &str,
+        cwd: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
-        Ok(())
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            &event_sender,
+            "test-thread",
+            cwd,
+        )
     }
 
-    // Existing-thread streams follow the same deterministic contract; live deltas belong in targeted runtime tests.
+    // Existing-thread streams follow the same terminal-only contract; live deltas belong in targeted runtime tests.
     fn run_turn_stream(
         &self,
-        _thread_id: &str,
+        thread_id: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
-        Ok(())
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            &event_sender,
+            thread_id,
+            "/tmp/test-workspace",
+        )
     }
 }
 

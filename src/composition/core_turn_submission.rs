@@ -12,17 +12,23 @@ use crate::application::service::planning::{
     PlanningRuntimeUseCases, PlanningTurnExecutionSnapshotCapture,
     PlanningTurnExecutionSnapshotCaptureRequest,
 };
-use crate::core::app::{CoreInput, TurnStreamEvent, TurnSubmissionRequest};
+use crate::core::app::{
+    CoreInput, TurnStreamEvent, TurnSubmissionCorrelation, TurnSubmissionRequest,
+};
 use crate::core::runtime::CoreInputSender;
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
+use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StreamExecutionObservation {
+    projected_terminal_receipt: Option<ConversationTurnTerminalReceipt>,
     terminal_failure_message: Option<String>,
+    terminal_failure_observed: bool,
     runtime_notice: Option<String>,
 }
 
 pub(crate) fn spawn_turn_submission_worker(
+    correlation: TurnSubmissionCorrelation,
     request: TurnSubmissionRequest,
     conversation_service: ConversationService,
     planning_runtime: PlanningRuntimeUseCases,
@@ -34,31 +40,38 @@ pub(crate) fn spawn_turn_submission_worker(
             match resolve_stream_launch_request(&parallel_mode_turn_service, request) {
                 Ok(result) => result,
                 Err(error) => {
-                    let _ = input_sender.send(CoreInput::ConversationStreamUpdated(
-                        TurnStreamEvent::Failed {
+                    let _ = input_sender.send(CoreInput::ConversationStreamUpdated {
+                        correlation,
+                        event: TurnStreamEvent::Failed {
                             message: format!("parallel mode launch blocked: {error}"),
                         },
-                    ));
+                    });
                     return;
                 }
             };
 
         let _ = input_sender.send(CoreInput::ConversationTurnWorkspaceChanged {
+            correlation,
             workspace_directory: resolved_request.workspace_directory.clone(),
         });
         let execution_snapshot_capture = capture_turn_execution_snapshot(
             &planning_runtime,
             &resolved_request.workspace_directory,
-        );
+        )
+        .with_parallel_slot_lease(expected_lease.clone());
 
         if invalidate_supervisor_snapshot {
             let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
         }
         if let Some(notice) = launch_notice {
-            let _ = input_sender.send(CoreInput::ConversationRuntimeNotice(notice));
+            let _ = input_sender.send(CoreInput::ConversationTurnRuntimeNotice {
+                correlation,
+                notice,
+            });
         }
 
         run_conversation_stream_worker(
+            correlation,
             resolved_request,
             expected_lease,
             execution_snapshot_capture,
@@ -70,6 +83,7 @@ pub(crate) fn spawn_turn_submission_worker(
 }
 
 fn run_conversation_stream_worker(
+    correlation: TurnSubmissionCorrelation,
     request: TurnSubmissionRequest,
     expected_lease: Option<ParallelModeSlotLeaseSnapshot>,
     execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
@@ -88,7 +102,8 @@ fn run_conversation_stream_worker(
         |lease| parallel_mode_turn_service.stream_lifecycle_for_lease(lease),
     );
 
-    let mut saw_terminal_event = false;
+    let mut observed_terminal_receipt = None;
+    let mut observed_terminal_failure = None;
 
     while let Ok(event) = event_rx.recv() {
         let lifecycle_outcome = stream_lifecycle.observe_event(&event);
@@ -96,19 +111,29 @@ fn run_conversation_stream_worker(
             let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
         }
         if let Some(notice) = lifecycle_outcome.runtime_notice {
-            let _ = input_sender.send(CoreInput::ConversationRuntimeNotice(notice));
+            let _ = input_sender.send(CoreInput::ConversationTurnRuntimeNotice {
+                correlation,
+                notice,
+            });
         }
 
         if lifecycle_outcome.should_stop_stream_forwarding {
-            saw_terminal_event = true;
+            match event {
+                ConversationStreamEvent::TurnTerminal { receipt } => {
+                    observed_terminal_receipt = Some(receipt);
+                }
+                ConversationStreamEvent::Failed { message } => {
+                    observed_terminal_failure = Some(message);
+                }
+                _ => unreachable!("stream lifecycle stopped on a non-terminal event"),
+            }
+            break;
         }
         let _ = input_sender.send(conversation_stream_core_input(
+            correlation,
             event,
             &execution_snapshot_capture,
         ));
-        if lifecycle_outcome.should_stop_stream_forwarding {
-            break;
-        }
     }
 
     // A bounded producer may still attempt to send after a terminal event.
@@ -116,30 +141,66 @@ fn run_conversation_stream_worker(
     // against a receiver that intentionally stopped draining.
     drop(event_rx);
 
-    let observation = match service_thread.join() {
-        Ok(result) => observe_stream_completion(&request, saw_terminal_event, result),
-        Err(payload) => observe_stream_panic(&request, saw_terminal_event, payload),
+    let mut observation = match service_thread.join() {
+        Ok(result) => {
+            observe_stream_completion(&request, observed_terminal_receipt.as_ref(), result)
+        }
+        Err(payload) => observe_stream_panic(
+            &request,
+            observed_terminal_receipt.is_some() || observed_terminal_failure.is_some(),
+            payload,
+        ),
     };
-
-    if let Some(message) = observation.terminal_failure_message.as_ref() {
-        let _ = input_sender.send(CoreInput::ConversationStreamUpdated(
-            TurnStreamEvent::Failed {
-                message: message.clone(),
-            },
-        ));
+    if let Some(message) = observed_terminal_failure {
+        observation.projected_terminal_receipt = None;
+        observation.terminal_failure_message = Some(message);
+        observation.terminal_failure_observed = true;
+        observation.runtime_notice.get_or_insert_with(|| {
+            format!(
+                "{} emitted a terminal runtime failure",
+                request.request_label()
+            )
+        });
     }
 
-    let completion_outcome = stream_lifecycle
-        .finalize_after_stream_completion(observation.terminal_failure_message.is_some());
+    let StreamExecutionObservation {
+        projected_terminal_receipt,
+        terminal_failure_message,
+        terminal_failure_observed,
+        runtime_notice,
+    } = observation;
+    let completion_outcome =
+        stream_lifecycle.finalize_after_stream_completion(terminal_failure_observed);
     if completion_outcome.invalidate_supervisor_snapshot {
         let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
     }
     if let Some(notice) = completion_outcome.runtime_notice {
-        let _ = input_sender.send(CoreInput::ConversationRuntimeNotice(notice));
+        let _ = input_sender.send(CoreInput::ConversationTurnRuntimeNotice {
+            correlation,
+            notice,
+        });
     }
 
-    if let Some(notice) = observation.runtime_notice {
-        let _ = input_sender.send(CoreInput::ConversationRuntimeNotice(notice));
+    if let Some(notice) = runtime_notice {
+        let _ = input_sender.send(CoreInput::ConversationTurnRuntimeNotice {
+            correlation,
+            notice,
+        });
+    }
+
+    if let Some(receipt) = projected_terminal_receipt {
+        let _ = input_sender.send(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::TurnTerminal {
+                receipt,
+                execution_snapshot_capture: Some(execution_snapshot_capture),
+            },
+        });
+    } else if let Some(message) = terminal_failure_message {
+        let _ = input_sender.send(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::Failed { message },
+        });
     }
 }
 
@@ -195,19 +256,22 @@ fn capture_turn_execution_snapshot(
 }
 
 fn conversation_stream_core_input(
+    correlation: TurnSubmissionCorrelation,
     event: ConversationStreamEvent,
     execution_snapshot_capture: &PlanningTurnExecutionSnapshotCapture,
 ) -> CoreInput {
     match event {
-        ConversationStreamEvent::TurnCompleted {
-            turn_id,
-            changed_planning_file_paths,
-        } => CoreInput::ConversationTurnCompleted {
-            turn_id,
-            changed_planning_file_paths,
-            execution_snapshot_capture: execution_snapshot_capture.clone(),
+        ConversationStreamEvent::TurnTerminal { receipt } => CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::TurnTerminal {
+                receipt,
+                execution_snapshot_capture: Some(execution_snapshot_capture.clone()),
+            },
         },
-        event => CoreInput::ConversationStreamUpdated(turn_stream_event_from_application(event)),
+        event => CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: turn_stream_event_from_application(event),
+        },
     }
 }
 
@@ -266,8 +330,17 @@ fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStr
         ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
             TurnStreamEvent::TurnInterruptRequestFailed { message }
         }
-        ConversationStreamEvent::TurnCompleted { .. } => {
-            unreachable!("terminal turn completion is handled before stream event conversion")
+        ConversationStreamEvent::TurnRetrying {
+            thread_id,
+            turn_id,
+            error,
+        } => TurnStreamEvent::TurnRetrying {
+            thread_id,
+            turn_id,
+            error,
+        },
+        ConversationStreamEvent::TurnTerminal { .. } => {
+            unreachable!("typed terminal receipt is handled before stream event conversion")
         }
         ConversationStreamEvent::Failed { message } => TurnStreamEvent::Failed { message },
     }
@@ -277,7 +350,7 @@ fn run_stream_request(
     conversation_service: ConversationService,
     request: TurnSubmissionRequest,
     event_sender: ConversationStreamSender,
-) -> Result<(), String> {
+) -> Result<ConversationTurnTerminalReceipt, String> {
     match request.thread_id.as_deref() {
         Some(thread_id) => conversation_service
             .run_turn_stream(
@@ -300,15 +373,46 @@ fn run_stream_request(
 
 fn observe_stream_completion(
     request: &TurnSubmissionRequest,
-    saw_terminal_event: bool,
-    result: Result<(), String>,
+    observed_terminal_receipt: Option<&ConversationTurnTerminalReceipt>,
+    result: Result<ConversationTurnTerminalReceipt, String>,
 ) -> StreamExecutionObservation {
-    match (saw_terminal_event, result) {
-        (true, Ok(())) => StreamExecutionObservation {
+    match (observed_terminal_receipt, result) {
+        (Some(observed), Ok(returned)) if observed == &returned => StreamExecutionObservation {
+            terminal_failure_observed: !returned.is_completed_and_confirmed(),
+            projected_terminal_receipt: Some(returned),
             terminal_failure_message: None,
             runtime_notice: None,
         },
-        (false, Ok(())) => StreamExecutionObservation {
+        (Some(_), Ok(_)) => StreamExecutionObservation {
+            projected_terminal_receipt: None,
+            terminal_failure_message: Some(format!(
+                "{} returned a terminal receipt that did not match its terminal event",
+                request.request_label()
+            )),
+            runtime_notice: Some(format!(
+                "{} terminal receipt/event mismatch",
+                request.request_label()
+            )),
+            terminal_failure_observed: true,
+        },
+        (None, Ok(returned))
+            if matches!(
+                returned.application_delivery,
+                crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Unconfirmed(_)
+            ) =>
+        {
+            StreamExecutionObservation {
+                projected_terminal_receipt: Some(returned),
+                terminal_failure_message: None,
+                terminal_failure_observed: true,
+                runtime_notice: Some(format!(
+                    "{} reached an upstream terminal outcome with application delivery recovery pending",
+                    request.request_label()
+                )),
+            }
+        }
+        (None, Ok(_)) => StreamExecutionObservation {
+            projected_terminal_receipt: None,
             terminal_failure_message: Some(format!(
                 "{} ended without a terminal event; forcing a failure so the conversation can recover",
                 request.request_label()
@@ -317,8 +421,10 @@ fn observe_stream_completion(
                 "{} completed without a terminal event",
                 request.request_label()
             )),
+            terminal_failure_observed: true,
         },
-        (false, Err(error)) => StreamExecutionObservation {
+        (None, Err(error)) => StreamExecutionObservation {
+            projected_terminal_receipt: None,
             terminal_failure_message: Some(format!(
                 "{} failed before a terminal event: {error}",
                 request.request_label()
@@ -327,13 +433,19 @@ fn observe_stream_completion(
                 "{} returned an error before a terminal event: {error}",
                 request.request_label()
             )),
+            terminal_failure_observed: true,
         },
-        (true, Err(error)) => StreamExecutionObservation {
-            terminal_failure_message: None,
+        (Some(_), Err(error)) => StreamExecutionObservation {
+            projected_terminal_receipt: None,
+            terminal_failure_message: Some(format!(
+                "{} returned an error after emitting a terminal receipt: {error}",
+                request.request_label()
+            )),
             runtime_notice: Some(format!(
                 "{} returned an error after the terminal event: {error}",
                 request.request_label()
             )),
+            terminal_failure_observed: true,
         },
     }
 }
@@ -347,14 +459,20 @@ fn observe_stream_panic(
 
     if saw_terminal_event {
         StreamExecutionObservation {
-            terminal_failure_message: None,
+            projected_terminal_receipt: None,
+            terminal_failure_message: Some(format!(
+                "{} panicked after emitting an unverified terminal receipt: {panic_summary}",
+                request.request_label()
+            )),
             runtime_notice: Some(format!(
                 "{} panicked after the terminal event: {panic_summary}",
                 request.request_label()
             )),
+            terminal_failure_observed: true,
         }
     } else {
         StreamExecutionObservation {
+            projected_terminal_receipt: None,
             terminal_failure_message: Some(format!(
                 "{} panicked before a terminal event: {panic_summary}",
                 request.request_label()
@@ -363,6 +481,7 @@ fn observe_stream_panic(
                 "{} panicked before a terminal event: {panic_summary}",
                 request.request_label()
             )),
+            terminal_failure_observed: true,
         }
     }
 }
@@ -399,9 +518,25 @@ mod tests {
         }
     }
 
+    fn test_turn_correlation() -> TurnSubmissionCorrelation {
+        TurnSubmissionCorrelation::new(7)
+    }
+
+    fn completed_receipt() -> ConversationTurnTerminalReceipt {
+        ConversationTurnTerminalReceipt::completed(
+            "thread-1",
+            "turn-1",
+            vec!["new/docs/plan.md".to_string()],
+        )
+        .with_application_delivery(
+            crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
+        )
+    }
+
     #[test]
     fn missing_terminal_event_becomes_forced_failure_and_notice() {
-        let observation = observe_stream_completion(&sample_request(), false, Ok(()));
+        let observation =
+            observe_stream_completion(&sample_request(), None, Ok(completed_receipt()));
 
         assert_eq!(
             observation.terminal_failure_message,
@@ -417,12 +552,41 @@ mod tests {
     }
 
     #[test]
-    fn transport_error_before_terminal_event_becomes_failure_and_notice() {
-        let observation = observe_stream_completion(
-            &sample_request(),
-            false,
-            Err("transport closed".to_string()),
+    fn matching_terminal_event_and_return_receipt_are_verified() {
+        let receipt = completed_receipt();
+        let observation =
+            observe_stream_completion(&sample_request(), Some(&receipt), Ok(receipt.clone()));
+
+        assert_eq!(observation.projected_terminal_receipt, Some(receipt));
+        assert!(observation.terminal_failure_message.is_none());
+        assert!(!observation.terminal_failure_observed);
+        assert!(observation.runtime_notice.is_none());
+    }
+
+    #[test]
+    fn mismatched_terminal_event_and_return_receipt_fail_closed() {
+        let observed = completed_receipt();
+        let returned =
+            ConversationTurnTerminalReceipt::completed("thread-1", "different-turn", Vec::new())
+                .with_application_delivery(
+                    crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
+                );
+        let observation =
+            observe_stream_completion(&sample_request(), Some(&observed), Ok(returned));
+
+        assert!(observation.projected_terminal_receipt.is_none());
+        assert!(
+            observation
+                .terminal_failure_message
+                .as_deref()
+                .is_some_and(|message| message.contains("did not match"))
         );
+    }
+
+    #[test]
+    fn transport_error_before_terminal_event_becomes_failure_and_notice() {
+        let observation =
+            observe_stream_completion(&sample_request(), None, Err("transport closed".to_string()));
 
         assert_eq!(
             observation.terminal_failure_message,
@@ -438,11 +602,47 @@ mod tests {
     }
 
     #[test]
-    fn late_stream_error_becomes_runtime_notice_only() {
-        let observation =
-            observe_stream_completion(&sample_request(), true, Err("transport closed".to_string()));
+    fn unconfirmed_terminal_without_event_preserves_typed_recovery_pending_receipt() {
+        let receipt = ConversationTurnTerminalReceipt::completed(
+            "thread-1",
+            "turn-1",
+            Vec::new(),
+        )
+        .with_application_delivery(
+            crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Unconfirmed(
+                crate::domain::turn_terminal::ConversationTurnApplicationDeliveryFailure::Disconnected,
+            ),
+        );
 
+        let observation = observe_stream_completion(&sample_request(), None, Ok(receipt.clone()));
+
+        assert_eq!(observation.projected_terminal_receipt, Some(receipt));
         assert!(observation.terminal_failure_message.is_none());
+        assert!(observation.terminal_failure_observed);
+        assert!(
+            observation
+                .runtime_notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("recovery pending"))
+        );
+    }
+
+    #[test]
+    fn error_after_terminal_event_rejects_the_unverified_terminal() {
+        let receipt = completed_receipt();
+        let observation = observe_stream_completion(
+            &sample_request(),
+            Some(&receipt),
+            Err("transport closed".to_string()),
+        );
+
+        assert_eq!(
+            observation.terminal_failure_message,
+            Some(
+                "turn stream returned an error after emitting a terminal receipt: transport closed"
+                    .to_string()
+            )
+        );
         assert_eq!(
             observation.runtime_notice,
             Some(
@@ -468,10 +668,16 @@ mod tests {
     }
 
     #[test]
-    fn panic_after_terminal_event_becomes_runtime_notice_only() {
+    fn panic_after_terminal_event_rejects_the_unverified_terminal() {
         let observation = observe_stream_panic(&sample_request(), true, Box::new("worker crashed"));
 
-        assert!(observation.terminal_failure_message.is_none());
+        assert_eq!(
+            observation.terminal_failure_message,
+            Some(
+                "turn stream panicked after emitting an unverified terminal receipt: worker crashed"
+                    .to_string()
+            )
+        );
         assert_eq!(
             observation.runtime_notice,
             Some("turn stream panicked after the terminal event: worker crashed".to_string())
@@ -486,24 +692,28 @@ mod tests {
         );
 
         let input = conversation_stream_core_input(
-            ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-1".to_string(),
-                changed_planning_file_paths: vec!["new/docs/plan.md".to_string()],
+            test_turn_correlation(),
+            ConversationStreamEvent::TurnTerminal {
+                receipt: completed_receipt(),
             },
             &snapshot_capture,
         );
 
-        let CoreInput::ConversationTurnCompleted {
-            turn_id,
-            changed_planning_file_paths,
-            execution_snapshot_capture,
+        let CoreInput::ConversationStreamUpdated {
+            correlation,
+            event:
+                TurnStreamEvent::TurnTerminal {
+                    receipt,
+                    execution_snapshot_capture: Some(execution_snapshot_capture),
+                },
         } = input
         else {
-            panic!("turn completion should use the completion-specific core input");
+            panic!("terminal receipt should use the typed core stream input");
         };
-        assert_eq!(turn_id, "turn-1");
+        assert_eq!(correlation, test_turn_correlation());
+        assert_eq!(receipt.turn_id, "turn-1");
         assert_eq!(
-            changed_planning_file_paths,
+            receipt.observations.changed_planning_file_paths,
             vec!["new/docs/plan.md".to_string()]
         );
         assert_eq!(execution_snapshot_capture, snapshot_capture);
@@ -514,9 +724,8 @@ mod tests {
         let (sender, receiver) = conversation_stream_channel();
         let producer = thread::spawn(move || {
             sender
-                .send(ConversationStreamEvent::TurnCompleted {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: Vec::new(),
+                .send(ConversationStreamEvent::TurnTerminal {
+                    receipt: completed_receipt(),
                 })
                 .expect("terminal event should be admitted");
             loop {
@@ -530,7 +739,7 @@ mod tests {
 
         assert!(matches!(
             receiver.recv().expect("terminal event should arrive"),
-            ConversationStreamEvent::TurnCompleted { .. }
+            ConversationStreamEvent::TurnTerminal { .. }
         ));
         drop(receiver);
         assert_eq!(

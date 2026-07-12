@@ -10,6 +10,7 @@ use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, ConversationStreamSender, conversation_stream_channel,
 };
 use crate::diagnostics::event_log;
+use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 use serde_json::json;
 
 use super::persisted_error_summary;
@@ -32,7 +33,7 @@ pub(crate) trait PlanningThreadLauncher: Send + Sync {
         prompt: &str,
         event_sender: ConversationStreamSender,
         continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
-    ) -> Result<()>;
+    ) -> Result<ConversationTurnTerminalReceipt>;
 }
 
 #[derive(Clone)]
@@ -96,6 +97,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let mut failure_message = None;
         let mut captured_thread_id = None;
         let mut captured_turn_id = None;
+        let mut observed_terminal_receipt = None;
 
         // The producer runs concurrently because the stream queue is bounded.
         // Stop receiving at the first terminal event, then disconnect the queue
@@ -104,7 +106,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         for event in rx.iter() {
             let terminal = matches!(
                 event,
-                ConversationStreamEvent::TurnCompleted { .. }
+                ConversationStreamEvent::TurnTerminal { .. }
                     | ConversationStreamEvent::Failed { .. }
             );
             match event {
@@ -117,17 +119,15 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                      */
                     final_agent_message = Some(text);
                 }
-                ConversationStreamEvent::TurnCompleted {
-                    changed_planning_file_paths: paths,
-                    ..
-                } => {
+                ConversationStreamEvent::TurnTerminal { receipt } => {
                     /*
-                     * TurnCompleted is the only event that carries the planning
-                     * file change summary reduced by the app-server adapter. It
-                     * replaces any earlier value because a hidden worker turn has
-                     * one authoritative completion boundary.
+                     * The terminal receipt is the only authoritative planning-file
+                     * observation. Keep it intact so the event projection can be
+                     * compared with the producer's return value after join.
                      */
-                    changed_planning_file_paths = paths;
+                    changed_planning_file_paths =
+                        receipt.observations.changed_planning_file_paths.clone();
+                    observed_terminal_receipt = Some(receipt);
                 }
                 ConversationStreamEvent::ThreadPrepared { thread_id, .. } => {
                     captured_thread_id = Some(thread_id);
@@ -142,12 +142,13 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 | ConversationStreamEvent::ApprovalReviewUpdated { .. }
                 | ConversationStreamEvent::ApprovalRequested { .. }
                 | ConversationStreamEvent::ApprovalResolved { .. }
+                | ConversationStreamEvent::TurnRetrying { .. }
                 | ConversationStreamEvent::TurnInterruptRequestFailed { .. } => {}
                 ConversationStreamEvent::Failed { message } => {
                     /*
-                     * Keep draining after seeing a failure so channel closure
-                     * remains the synchronization point. The final response below
-                     * still treats any failure event as a hard worker error.
+                     * A transport/runtime failure is terminal for the planning
+                     * projection. The producer join below still captures its
+                     * transport result before this becomes a worker error.
                      */
                     failure_message = Some(message);
                 }
@@ -158,21 +159,24 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         }
         drop(rx);
 
-        let stream_result = service_thread
+        let producer_receipt = service_thread
             .join()
             .map_err(|_| anyhow!("planning worker stream producer panicked"))?;
-        if let Err(error) = stream_result {
-            event_log::emit_lazy("planning_worker_session_launch_failed", || {
-                json!({
-                    "thread_id": captured_thread_id.as_deref(),
-                    "operation": operation_label(request.operation),
-                    "phase": "launch_failed",
-                    "workspace_directory": &request.workspace_directory,
-                    "error_summary": persisted_error_summary(&error),
-                })
-            });
-            return Err(error);
-        }
+        let producer_receipt = match producer_receipt {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                event_log::emit_lazy("planning_worker_session_launch_failed", || {
+                    json!({
+                        "thread_id": captured_thread_id.as_deref(),
+                        "operation": operation_label(request.operation),
+                        "phase": "launch_failed",
+                        "workspace_directory": &request.workspace_directory,
+                        "error_summary": persisted_error_summary(&error),
+                    })
+                });
+                return Err(error);
+            }
+        };
 
         if let Some(message) = failure_message {
             event_log::emit_lazy("planning_worker_session_stream_failed", || {
@@ -188,6 +192,36 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 })
             });
             return Err(anyhow!("planning worker stream failed: {message}"));
+        }
+
+        let Some(observed_terminal_receipt) = observed_terminal_receipt else {
+            return Err(anyhow!(
+                "planning worker stream ended without a terminal receipt event; producer terminal: {} / delivery: {:?}",
+                producer_receipt.status_error_summary(),
+                producer_receipt.application_delivery
+            ));
+        };
+        if observed_terminal_receipt != producer_receipt {
+            return Err(anyhow!(
+                "planning worker terminal receipt did not match the producer result"
+            ));
+        }
+        if !producer_receipt.is_completed_and_confirmed() {
+            return Err(anyhow!(
+                "planning worker terminal outcome was not confirmed completed: {} / delivery: {:?}",
+                producer_receipt.status_error_summary(),
+                producer_receipt.application_delivery
+            ));
+        }
+        if captured_thread_id.as_deref() != Some(producer_receipt.thread_id.as_str()) {
+            return Err(anyhow!(
+                "planning worker terminal receipt did not match a prepared thread"
+            ));
+        }
+        if captured_turn_id.as_deref() != Some(producer_receipt.turn_id.as_str()) {
+            return Err(anyhow!(
+                "planning worker terminal receipt did not match a started turn"
+            ));
         }
 
         event_log::emit_lazy("planning_worker_session_reduced", || {
@@ -233,6 +267,11 @@ mod tests {
         PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
+        ConversationTurnError, ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
+        ConversationTurnTerminalUncertainty,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct HiddenPlanningThreadCall {
@@ -242,6 +281,8 @@ mod tests {
 
     struct FakePlanningThreadLauncher {
         events: Vec<ConversationStreamEvent>,
+        producer_receipt: ConversationTurnTerminalReceipt,
+        producer_error: Option<String>,
         calls: Mutex<Vec<HiddenPlanningThreadCall>>,
     }
 
@@ -252,7 +293,7 @@ mod tests {
             prompt: &str,
             event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
             _continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
-        ) -> Result<()> {
+        ) -> Result<ConversationTurnTerminalReceipt> {
             /*
              * The fake records launch input before sending events. That gives
              * the success test coverage for both halves of the port contract:
@@ -269,8 +310,20 @@ mod tests {
             for event in self.events.clone() {
                 let _ = event_sender.send(event);
             }
-            Ok(())
+            if let Some(message) = self.producer_error.as_deref() {
+                anyhow::bail!("{message}");
+            }
+            Ok(self.producer_receipt.clone())
         }
+    }
+
+    fn completed_receipt(
+        thread_id: &str,
+        turn_id: &str,
+        changed_planning_file_paths: Vec<String>,
+    ) -> ConversationTurnTerminalReceipt {
+        ConversationTurnTerminalReceipt::completed(thread_id, turn_id, changed_planning_file_paths)
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed)
     }
 
     #[test]
@@ -279,6 +332,8 @@ mod tests {
          * 정상 stream test는 hidden planning thread가 여러 UI-facing event를 보내도 port response에는
          * final message와 changed planning path만 남는다는 축약 계약을 고정한다.
          */
+        let receipt =
+            completed_receipt("thread-1", "turn-1", vec!["DB task authority".to_string()]);
         let fake_launcher = Arc::new(FakePlanningThreadLauncher {
             events: vec![
                 ConversationStreamEvent::codex_app_server_launch_attachment(),
@@ -295,11 +350,17 @@ mod tests {
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-1".to_string(),
                 },
-                ConversationStreamEvent::TurnCompleted {
+                ConversationStreamEvent::TurnRetrying {
+                    thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: vec!["DB task authority".to_string()],
+                    error: ConversationTurnError::new("temporary overload", None::<&str>, None),
+                },
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: receipt.clone(),
                 },
             ],
+            producer_receipt: receipt,
+            producer_error: None,
             calls: Mutex::new(Vec::new()),
         });
         let adapter = AppServerPlanningWorkerAdapter::new(fake_launcher.clone());
@@ -340,6 +401,8 @@ mod tests {
     fn canceled_continuation_never_invokes_hidden_thread_launcher() {
         let fake_launcher = Arc::new(FakePlanningThreadLauncher {
             events: Vec::new(),
+            producer_receipt: completed_receipt("thread-1", "turn-1", Vec::new()),
+            producer_error: None,
             calls: Mutex::new(Vec::new()),
         });
         let adapter = AppServerPlanningWorkerAdapter::new(fake_launcher.clone());
@@ -377,6 +440,8 @@ mod tests {
             events: vec![ConversationStreamEvent::Failed {
                 message: "planning worker crashed".to_string(),
             }],
+            producer_receipt: completed_receipt("thread-1", "turn-1", Vec::new()),
+            producer_error: None,
             calls: Mutex::new(Vec::new()),
         }));
 
@@ -390,5 +455,150 @@ mod tests {
             .expect_err("failed stream should surface as error");
 
         assert!(error.to_string().contains("planning worker crashed"));
+    }
+
+    #[test]
+    fn run_planning_session_rejects_missing_terminal_projection() {
+        let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
+            events: vec![ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+            }],
+            producer_receipt: ConversationTurnTerminalReceipt::completed(
+                "thread-1",
+                "turn-1",
+                Vec::new(),
+            )
+            .with_application_delivery(
+                ConversationTurnApplicationDelivery::Unconfirmed(
+                    ConversationTurnApplicationDeliveryFailure::Disconnected,
+                ),
+            ),
+            producer_error: None,
+            calls: Mutex::new(Vec::new()),
+        }));
+
+        let error = adapter
+            .run_planning_session(PlanningWorkerRequest {
+                operation: PlanningWorkerOperation::RefreshQueue,
+                workspace_directory: "/tmp/workspace".to_string(),
+                prompt: "refresh".to_string(),
+                continuation_permit: None,
+            })
+            .expect_err("producer receipt without a terminal event must fail closed");
+
+        assert!(error.to_string().contains("without a terminal receipt"));
+        assert!(error.to_string().contains(
+            "recovery pending: upstream completed; application delivery unconfirmed (disconnected)"
+        ));
+        assert!(error.to_string().contains("Unconfirmed(Disconnected)"));
+    }
+
+    #[test]
+    fn run_planning_session_rejects_mismatched_terminal_receipts() {
+        let observed = completed_receipt("thread-1", "turn-observed", Vec::new());
+        let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
+            events: vec![ConversationStreamEvent::TurnTerminal { receipt: observed }],
+            producer_receipt: completed_receipt("thread-1", "turn-returned", Vec::new()),
+            producer_error: None,
+            calls: Mutex::new(Vec::new()),
+        }));
+
+        let error = adapter
+            .run_planning_session(PlanningWorkerRequest {
+                operation: PlanningWorkerOperation::RefreshQueue,
+                workspace_directory: "/tmp/workspace".to_string(),
+                prompt: "refresh".to_string(),
+                continuation_permit: None,
+            })
+            .expect_err("event and producer receipts must agree");
+
+        assert!(error.to_string().contains("did not match the producer"));
+    }
+
+    #[test]
+    fn run_planning_session_rejects_transport_error_after_terminal_event() {
+        let receipt = completed_receipt("thread-1", "turn-1", Vec::new());
+        let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
+            events: vec![ConversationStreamEvent::TurnTerminal { receipt }],
+            producer_receipt: completed_receipt("thread-1", "turn-1", Vec::new()),
+            producer_error: Some("transport closed after terminal".to_string()),
+            calls: Mutex::new(Vec::new()),
+        }));
+
+        let error = adapter
+            .run_planning_session(PlanningWorkerRequest {
+                operation: PlanningWorkerOperation::RefreshQueue,
+                workspace_directory: "/tmp/workspace".to_string(),
+                prompt: "refresh".to_string(),
+                continuation_permit: None,
+            })
+            .expect_err("transport errors remain errors after an observed terminal event");
+
+        assert!(
+            error
+                .to_string()
+                .contains("transport closed after terminal")
+        );
+    }
+
+    #[test]
+    fn run_planning_session_rejects_every_non_confirmed_completion_terminal() {
+        let failed_error =
+            ConversationTurnError::new("planning failed", Some("bounded failure detail"), None);
+        let cases = [
+            ConversationTurnTerminalReceipt::new(
+                "thread-1",
+                "turn-interrupted",
+                ConversationTurnTerminalOutcome::Interrupted,
+            )
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+            ConversationTurnTerminalReceipt::new(
+                "thread-1",
+                "turn-failed",
+                ConversationTurnTerminalOutcome::Failed {
+                    error: failed_error.clone(),
+                },
+            )
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+            ConversationTurnTerminalReceipt::new(
+                "thread-1",
+                "turn-unknown",
+                ConversationTurnTerminalOutcome::Unknown {
+                    reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+                    observed_error: Some(failed_error),
+                },
+            )
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+            ConversationTurnTerminalReceipt::completed("thread-1", "turn-unconfirmed", Vec::new())
+                .with_application_delivery(ConversationTurnApplicationDelivery::Unconfirmed(
+                    ConversationTurnApplicationDeliveryFailure::Disconnected,
+                )),
+        ];
+
+        for receipt in cases {
+            let adapter =
+                AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
+                    events: vec![ConversationStreamEvent::TurnTerminal {
+                        receipt: receipt.clone(),
+                    }],
+                    producer_receipt: receipt,
+                    producer_error: None,
+                    calls: Mutex::new(Vec::new()),
+                }));
+
+            let error = adapter
+                .run_planning_session(PlanningWorkerRequest {
+                    operation: PlanningWorkerOperation::RefreshQueue,
+                    workspace_directory: "/tmp/workspace".to_string(),
+                    prompt: "refresh".to_string(),
+                    continuation_permit: None,
+                })
+                .expect_err("only confirmed completed terminals may succeed");
+
+            assert!(
+                error.to_string().contains("not confirmed completed"),
+                "unexpected error: {error}"
+            );
+        }
     }
 }

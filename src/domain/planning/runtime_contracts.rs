@@ -1,5 +1,7 @@
 use crate::domain::operator_alert::OperatorAlert;
-use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
+use crate::domain::parallel_mode::{
+    ParallelModePostTurnQueueSignal, ParallelModeSlotLeaseSnapshot,
+};
 use crate::domain::planning::{
     PlanningValidationReport, PriorityQueueProjection, PriorityQueueTask, QueueIdlePolicy,
 };
@@ -296,6 +298,7 @@ pub fn canonical_active_planning_file_path(path: &str) -> Option<&'static str> {
 pub struct TurnSnapshotCapture {
     pub workspace_directory: String,
     pub state: TurnSnapshotCaptureState,
+    pub parallel_slot_lease: Option<Box<ParallelModeSlotLeaseSnapshot>>,
 }
 
 impl TurnSnapshotCapture {
@@ -303,6 +306,7 @@ impl TurnSnapshotCapture {
         Self {
             workspace_directory: workspace_directory.into(),
             state: TurnSnapshotCaptureState::Ready(snapshot),
+            parallel_slot_lease: None,
         }
     }
 
@@ -310,7 +314,16 @@ impl TurnSnapshotCapture {
         Self {
             workspace_directory: workspace_directory.into(),
             state: TurnSnapshotCaptureState::CaptureFailed(message),
+            parallel_slot_lease: None,
         }
+    }
+
+    pub fn with_parallel_slot_lease(
+        mut self,
+        parallel_slot_lease: Option<ParallelModeSlotLeaseSnapshot>,
+    ) -> Self {
+        self.parallel_slot_lease = parallel_slot_lease.map(Box::new);
+        self
     }
 }
 
@@ -499,6 +512,14 @@ pub struct PostTurnRequest {
     pub execution_snapshot_capture: Option<TurnSnapshotCapture>,
     pub planning_worker_panel_state: PlanningWorkerPanelState,
     pub continuation_permit: PostTurnContinuationPermit,
+}
+
+impl PostTurnRequest {
+    pub fn expected_parallel_slot_lease(&self) -> Option<&ParallelModeSlotLeaseSnapshot> {
+        self.execution_snapshot_capture
+            .as_ref()
+            .and_then(|capture| capture.parallel_slot_lease.as_deref())
+    }
 }
 
 /*
