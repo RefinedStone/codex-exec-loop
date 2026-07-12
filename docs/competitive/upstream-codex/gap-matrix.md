@@ -18,10 +18,10 @@ Upstream Codex is both a dependency and a reference client. The matrix therefore
 
 P0-A terminal truth is present on `prerelease` at `5a9d342f`: current live paths preserve typed
 completed, failed, interrupted, and unknown outcomes instead of collapsing matching
-`turn/completed` notifications to generic success. This atomic slice implements the P0-B applied
-envelope contract below. After it lands, the next reviewable protocol slice is P0-C1 closed item
-identity. Durable recovery, validation/delivery projection, and broader surface rendering remain
-separate owners rather than implied consequences of P0-A or P0-B.
+`turn/completed` notifications to generic success. P0-B applied-envelope projection is present at
+`7960ecca`. This atomic slice implements P0-C1 closed item identity; P0-C2 progressive activity is
+next. Durable recovery, validation/delivery projection, and broader surface rendering remain
+separate owners rather than implied consequences of P0-A, P0-B, or P0-C1.
 
 ## Authority Boundary
 
@@ -463,6 +463,41 @@ including the bundled planning-worker skill path; it does not record raw respons
 - memory-bound reducer tests over a large completed-item stream;
 - source-to-application manifest showing preserved, bounded-redacted, explicitly ignored, and
   unknown decisions.
+
+**Implemented in this slice**
+
+- one adapter decoder projects all 18 stable kinds plus bounded `Unknown` for both live
+  `item/started`/`item/completed` and snapshot replay;
+- exact thread, turn, and item identity, provider timestamp, live started/completed or
+  snapshot-observed phase, reported outcome, safe summary, and FIFO application sequence reach the
+  domain/Core boundary; snapshot replay does not invent a completion boundary for active items;
+- the 256-record reducer exposes truncation, invalid identity, unknown kind, duplicate boundary,
+  completion-before-start, kind mismatch, and timestamp-regression state instead of upgrading any
+  of them to turn or delivery success;
+- immutable lifecycle snapshots are shared through `Arc` and copy on write only when lifecycle
+  state mutates; loaded snapshot records hydrate the same-thread live reducer and a different
+  thread preparation clears them;
+- all live item identities and their first kinds use a separate 512-entry, non-evicting SHA-256
+  ledger. Replay remains suppressed after lifecycle-record eviction, while kind drift retains the
+  new observation and fails the stream through the longer-lived ledger; capacity exhaustion retains
+  the lifecycle fact and fails the stream so missing final text cannot be
+  followed by a falsely confirmed turn;
+- malformed active `item/completed` payloads fail the stream before a later terminal notification
+  can confirm a turn whose final text or tool fact was discarded; a first uniquely identified
+  completion with a regressed timestamp still delivers its payload while retaining the anomaly;
+- file changes produce changed-path and tool-activity effects only for the typed `Completed`
+  outcome. Failed, declined, in-progress, unknown, and replayed file changes remain lifecycle facts;
+- the source manifest classifies every current item field as preserved, bounded-redacted, or
+  explicitly ignored, and compares item variants, fields, closed statuses, and notification methods
+  with the checked-in generated schema;
+- raw prompts, reasoning, plans, command/output/diff/path/query/image bodies, tool arguments/results,
+  collaboration prompts, and review text do not enter the lifecycle projection or prompt log;
+- `EnteredReviewMode` and `ExitedReviewMode` remain runtime observations only. They do not mutate
+  Review Center, GitHub review, planning, validation, merge, or delivery authority.
+
+This slice intentionally adds no progressive delta handling, rich lifecycle rail, Admin/CLI/
+Telegram projection, parallel activity persistence, durable restart recovery, or released-runtime
+capture. Those owners consume this typed contract later rather than parsing app-server JSON again.
 
 #### P0-C2: Bounded Progressive Activity
 

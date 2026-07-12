@@ -668,6 +668,54 @@ This authenticated run did not emit an `error` notification or a failed terminal
 error-field handling therefore remains schema-and-fixture verified rather than released-runtime
 verified; the capture does not overstate that branch as live evidence.
 
+## P0-C1 Closed Item Identity Evidence
+
+The P0-C1 implementation introduces a redacted lifecycle observation shared by live notifications
+and snapshot replay. It retains exact bounded thread, turn, and item IDs; one of the 18 stable kinds
+or bounded `Unknown`; live started/completed or snapshot-observed phase; source; provider millisecond
+timestamp when live; reported item outcome; and a metadata-only summary. Snapshot replay never
+invents a completion boundary, so an active item can later accept its live completion without being
+misclassified as a duplicate. Statusless live completion remains a lifecycle fact,
+not proof of successful turn, task, review, or delivery.
+
+The adapter manifest assigns every property of every checked-in `ThreadItem` variant to exactly one
+of preserved, bounded-redacted, or ignored. Its contract test compares that manifest with generated
+`ThreadItem.oneOf` properties and the closed command, file, MCP, dynamic-tool, and collaboration
+status enums. The existing notification-vocabulary gate now owns `item/started`. A new item kind,
+field, closed status, or notification method therefore fails classification until its decision is
+explicit. Runtime unknown kinds retain only bounded ID/type identity, discard all other fields, and
+mark the projection incomplete.
+
+Deterministic proof includes one schema-shaped snapshot fixture containing all 18 stable kinds,
+live start/completion parity over the same items, missing/mismatched/oversized identity, absent
+timestamp, duplicate boundaries, duplicate-side-effect suppression, completion without start, kind
+mismatch, timestamp regression, dynamic-tool outcome contradiction, unknown kind, and secret
+canaries across prompt, reasoning, command/output/diff/path/query/image/tool/collaboration/review
+payloads. A 100,000-completion reducer test retains only the newest 256 ordered records and exposes
+the exact truncation count. The canonical reducer snapshot is `Arc`-shared until lifecycle mutation,
+so ordinary delta/status events and cloned loaded conversation snapshots do not deep-copy the
+bounded ledger. Hydration tests preserve counters and sequence across same-thread resume, reject
+cross-thread or non-monotonic snapshots, append live records, and clear state on a different thread.
+
+All live item identities, their first kinds, and completion-seen state use a separate 512-entry,
+non-evicting SHA-256 ledger. Tests replay completion alone and a full started/completed pair after
+the main lifecycle window evicts their records; neither repeats the effect. An identity that changes
+kind after eviction retains the new lifecycle observation, is detected by the longer-lived identity
+ledger, and fails the stream instead of discarding a possible final payload and accepting a later
+terminal confirmation. A 513th unique identity still emits its lifecycle observation
+but fails the stream before authoritative final-agent text or tool effects can be lost and followed
+by a falsely confirmed turn. A malformed active `item/completed` also fails the stream instead of
+discarding final text or tool facts and accepting a later terminal confirmation. A first completion
+with a regressed provider timestamp retains the anomaly but still delivers its uniquely identified
+payload. Declined file change followed by an applied-looking replay remains suppressed. File-change
+path/tool effects and snapshot tool messages require the typed `Completed`
+outcome; failed, declined, in-progress, and unknown records stay visible only in the lifecycle
+projection. Lifecycle observations are explicitly excluded from the opt-in prompt-output log.
+
+This evidence is schema-and-fixture verified. It does not add a released app-server lifecycle
+capture, progressive delta retention, rich TUI rendering, Admin/CLI/Telegram projection, parallel
+persistence, or restart recovery, and it makes no comparative performance claim.
+
 ## Akra Baseline Evidence
 
 All links below use Akra commit `226e4794b84107704378ecc1ea65f7d5c27750e5`.
