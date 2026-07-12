@@ -23,6 +23,7 @@
     "params": {
       "threadId": "thread-live",
       "turnId": "turn-live",
+      "completedAtMs": 1783842001000,
       "item": {
         "type": "agentMessage",
         "id": "agent-live",
@@ -36,24 +37,29 @@
     "params": {
       "threadId": "thread-live",
       "turnId": "turn-live",
+      "completedAtMs": 1783842001500,
       "item": {
         "type": "fileChange",
         "id": "file-change-live",
+        "status": "completed",
         "changes": [
           {
             "path": ".codex-exec-loop/planning/result-output.md",
+            "diff": "",
             "kind": {
               "type": "update"
             }
           },
           {
             "path": "/tmp/workspace/.codex-exec-loop/planning/result-output.md",
+            "diff": "",
             "kind": {
               "type": "update"
             }
           },
           {
             "path": "src/main.rs",
+            "diff": "",
             "kind": {
               "type": "update"
             }

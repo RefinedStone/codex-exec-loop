@@ -252,6 +252,7 @@ mod tests {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         };
         assert!(!state.complete_conversation_load(
             first_request,
@@ -271,6 +272,7 @@ mod tests {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         };
         assert!(state.complete_conversation_load(
             second_request,

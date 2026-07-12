@@ -5,6 +5,7 @@
 pub(crate) mod conversation;
 // conversation_runtime_envelope preserves requested, applied, and later-observed app-server
 // execution state without exposing raw provider configuration or credentials.
+pub(crate) mod conversation_item_lifecycle;
 pub(crate) mod conversation_runtime_envelope;
 pub(crate) mod conversation_stream;
 // github_review는 review thread와 polling 결과를 서비스가 다루기 쉬운 값으로 표현한다.

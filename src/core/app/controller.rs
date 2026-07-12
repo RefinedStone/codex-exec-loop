@@ -3,6 +3,7 @@ use super::{
     CoreEffectCompletion, CoreInput, StartupCheckCorrelation, TurnStreamEvent, TurnStreamState,
     TurnStreamUpdate, TurnSubmissionCorrelation,
 };
+use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::ManualPromptCorrelation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,20 +179,38 @@ impl CoreController {
                 }) {
                     result = Err("conversation provider returned a different thread".to_string());
                 }
-                let loaded_stream_identity = result.as_ref().ok().map(|ready| {
-                    (
+                let lifecycle_hydration = result.as_ref().ok().map(|ready| {
+                    ConversationItemLifecycleProjection::from_snapshot_for_thread(
+                        &ready.thread_id,
+                        ready.conversation.item_lifecycle.clone(),
+                    )
+                });
+                if lifecycle_hydration.as_ref().is_some_and(Result::is_err) {
+                    result = Err(
+                        "conversation provider returned an invalid item lifecycle projection"
+                            .to_string(),
+                    );
+                }
+                let loaded_stream_identity = match (result.as_ref().ok(), lifecycle_hydration) {
+                    (Some(ready), Some(Ok(item_lifecycle))) => Some((
                         ready.thread_id.clone(),
                         ready.title.clone(),
                         ready.workspace_directory.clone(),
-                    )
-                });
+                        item_lifecycle,
+                    )),
+                    _ => None,
+                };
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
                 self.state.apply_conversation_result(result);
                 self.turn_stream_state = TurnStreamState::new();
-                if let Some((thread_id, title, cwd)) = loaded_stream_identity {
-                    self.turn_stream_state
-                        .seed_loaded_thread_identity(thread_id, title, cwd);
+                if let Some((thread_id, title, cwd, item_lifecycle)) = loaded_stream_identity {
+                    self.turn_stream_state.seed_loaded_thread_projection(
+                        thread_id,
+                        title,
+                        cwd,
+                        item_lifecycle,
+                    );
                 }
                 self.conversation_changed_outcome(Some(correlation), Vec::new())
             }
@@ -245,7 +264,7 @@ impl CoreController {
             CoreInput::ConversationRuntimeNotice(notice) => {
                 let stream_snapshot = self.turn_stream_state.apply_runtime_notice(notice);
                 CoreDispatchOutcome {
-                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
+                    events: vec![AppEvent::turn_stream_snapshot_changed(stream_snapshot)],
                     effects: Vec::new(),
                     snapshot: self.snapshot(),
                 }
@@ -259,7 +278,7 @@ impl CoreController {
                 }
                 let stream_snapshot = self.turn_stream_state.apply_runtime_notice(notice);
                 CoreDispatchOutcome {
-                    events: vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)],
+                    events: vec![AppEvent::turn_stream_snapshot_changed(stream_snapshot)],
                     effects: Vec::new(),
                     snapshot: self.snapshot(),
                 }
@@ -342,7 +361,7 @@ impl CoreController {
             &stream_snapshot.update,
             TurnStreamUpdate::TurnTerminalIgnored { .. }
         );
-        let mut events = vec![AppEvent::TurnStreamSnapshotChanged(stream_snapshot)];
+        let mut events = vec![AppEvent::turn_stream_snapshot_changed(stream_snapshot)];
 
         if rejected_terminal {
             let failed = self
@@ -351,7 +370,7 @@ impl CoreController {
                     message: "active turn returned a terminal receipt with mismatched identity"
                         .to_string(),
                 });
-            events.push(AppEvent::TurnStreamSnapshotChanged(failed));
+            events.push(AppEvent::turn_stream_snapshot_changed(failed));
             self.active_turn_submission = None;
         } else if closes_submission {
             self.active_turn_submission = None;
@@ -458,6 +477,11 @@ mod tests {
     use crate::domain::conversation::{
         ConversationMessage, ConversationMessageKind,
         ConversationSnapshot as DomainConversationSnapshot,
+    };
+    use crate::domain::conversation_item_lifecycle::{
+        ConversationItemKind, ConversationItemLifecycleConsistency,
+        ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
+        ConversationItemLifecycleSource, ConversationItemOutcome,
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::planning::TurnSnapshotCapture;
@@ -1289,12 +1313,13 @@ mod tests {
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
-            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
+            vec![AppEvent::turn_stream_snapshot_changed(TurnStreamSnapshot {
                 revision: 1,
                 thread_id: None,
                 title: None,
                 cwd: None,
                 runtime_envelope: None,
+                item_lifecycle: Default::default(),
                 active_turn_id: None,
                 status_text: Some("thinking".to_string()),
                 terminal: None,
@@ -1373,12 +1398,13 @@ mod tests {
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
-            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
+            vec![AppEvent::turn_stream_snapshot_changed(TurnStreamSnapshot {
                 revision: 1,
                 thread_id: None,
                 title: None,
                 cwd: None,
                 runtime_envelope: None,
+                item_lifecycle: Default::default(),
                 active_turn_id: None,
                 status_text: None,
                 terminal: None,
@@ -1420,12 +1446,13 @@ mod tests {
 
         assert_eq!(
             outcome.events,
-            vec![AppEvent::TurnStreamSnapshotChanged(TurnStreamSnapshot {
+            vec![AppEvent::turn_stream_snapshot_changed(TurnStreamSnapshot {
                 revision: 1,
                 thread_id: Some("thread-1".to_string()),
                 title: Some("Core runtime".to_string()),
                 cwd: Some("/tmp/workspace".to_string()),
                 runtime_envelope: None,
+                item_lifecycle: Default::default(),
                 active_turn_id: None,
                 status_text: None,
                 terminal: None,
@@ -1435,6 +1462,91 @@ mod tests {
             })]
         );
         assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn conversation_load_hydrates_item_lifecycle_into_turn_stream_state() {
+        let mut lifecycle = ConversationItemLifecycleProjection::default();
+        lifecycle
+            .apply(ConversationItemLifecycleObservation {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-loaded".to_string(),
+                item_id: "item-loaded".to_string(),
+                kind: ConversationItemKind::Reasoning,
+                phase: ConversationItemLifecyclePhase::SnapshotObserved,
+                source: ConversationItemLifecycleSource::Snapshot,
+                observed_at_ms: None,
+                outcome: ConversationItemOutcome::NotReported,
+                summary: "reasoning content_blocks=1; summary_blocks=1".to_string(),
+            })
+            .unwrap();
+        let mut ready = sample_conversation_ready_snapshot();
+        ready.conversation.item_lifecycle = lifecycle.snapshot();
+        let expected_lifecycle = ready.conversation.item_lifecycle.clone();
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-1"),
+                result: Ok(Box::new(ready)),
+            },
+        ));
+
+        let outcome = controller.handle_input(CoreInput::ConversationRuntimeNotice(
+            "runtime reattached".to_string(),
+        ));
+
+        let [AppEvent::TurnStreamSnapshotChanged(stream)] = outcome.events.as_slice() else {
+            panic!("loaded lifecycle should be visible on the next turn-stream snapshot");
+        };
+        assert!(std::sync::Arc::ptr_eq(
+            &stream.item_lifecycle,
+            &expected_lifecycle
+        ));
+        assert_eq!(stream.item_lifecycle.records.len(), 1);
+        assert_eq!(
+            stream.item_lifecycle.records[0].consistency,
+            ConversationItemLifecycleConsistency::SnapshotObserved
+        );
+    }
+
+    #[test]
+    fn conversation_load_rejects_invalid_lifecycle_before_app_state_acceptance() {
+        let mut ready = sample_conversation_ready_snapshot();
+        ready.conversation.item_lifecycle = std::sync::Arc::new(
+            crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjectionSnapshot {
+                truncated_record_count: 1,
+                ..Default::default()
+            },
+        );
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-1"),
+                result: Ok(Box::new(ready)),
+            },
+        ));
+
+        assert!(matches!(
+            outcome.snapshot.conversation,
+            ConversationSnapshot::Failed { ref message }
+                if message == "conversation provider returned an invalid item lifecycle projection"
+        ));
+        let notice = controller.handle_input(CoreInput::ConversationRuntimeNotice(
+            "load rejected".to_string(),
+        ));
+        assert!(matches!(
+            notice.events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(stream)] if stream.thread_id.is_none()
+        ));
     }
 
     #[test]
@@ -1713,6 +1825,7 @@ mod tests {
             )],
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         }
         .into()
     }

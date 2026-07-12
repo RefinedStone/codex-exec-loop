@@ -2,6 +2,7 @@ use crate::domain::conversation::{
     ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
     ConversationToolActivity,
 };
+use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleObservation;
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
     ConversationRuntimeEnvelopeObservation,
@@ -26,6 +27,9 @@ pub enum ConversationStreamEvent {
     },
     RuntimeEnvelopeObserved {
         observation: Box<ConversationRuntimeEnvelopeObservation>,
+    },
+    ItemLifecycleObserved {
+        observation: Box<ConversationItemLifecycleObservation>,
     },
     StatusUpdated {
         text: String,

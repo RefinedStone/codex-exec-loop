@@ -1,3 +1,6 @@
+use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjectionSnapshot;
+use std::sync::Arc;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 // ConversationSnapshot은 app-server 세션을 TUI view model로 넘길 때 쓰는 도메인 단위의
 // "현재 대화 전체 상태"이다. adapter가 raw event stream을 줄여 만든 결과를 application/UI 경계에 전달한다.
@@ -14,6 +17,8 @@ pub struct ConversationSnapshot {
     pub warnings: Vec<String>,
     // runtime_notices는 실행 중 발생한 안내/복구 정보이다. warning보다 운영 상태에 가까워 별도 footer row로 처리된다.
     pub runtime_notices: Vec<String>,
+    // The bounded, redacted item ledger is shared by snapshot replay and live runtime projections.
+    pub item_lifecycle: Arc<ConversationItemLifecycleProjectionSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,5 +500,25 @@ mod tests {
 
         assert_eq!(truth.approval, ConversationControlSupport::RuntimeNative);
         assert_eq!(truth.interrupt, ConversationControlSupport::ManualHandoff);
+    }
+
+    #[test]
+    fn conversation_snapshot_clone_shares_the_lifecycle_projection() {
+        let snapshot = ConversationSnapshot {
+            thread_id: "thread-1".to_string(),
+            title: "Shared lifecycle".to_string(),
+            cwd: "/repo".to_string(),
+            messages: Vec::new(),
+            warnings: Vec::new(),
+            runtime_notices: Vec::new(),
+            item_lifecycle: Arc::default(),
+        };
+
+        let cloned = snapshot.clone();
+
+        assert!(Arc::ptr_eq(
+            &snapshot.item_lifecycle,
+            &cloned.item_lifecycle
+        ));
     }
 }

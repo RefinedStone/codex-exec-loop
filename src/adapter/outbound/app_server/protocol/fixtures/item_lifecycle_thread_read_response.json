@@ -1,0 +1,144 @@
+{
+  "thread": {
+    "id": "thread-item-lifecycle",
+    "name": "Item lifecycle fixture",
+    "preview": "closed item identity",
+    "cwd": "/home/akra/project",
+    "source": "appServer",
+    "modelProvider": "openai",
+    "updatedAt": 1777910800,
+    "path": "/home/akra/.codex/sessions/thread-item-lifecycle.json",
+    "status": {
+      "type": "idle"
+    },
+    "gitInfo": null,
+    "turns": [
+      {
+        "id": "turn-item-lifecycle",
+        "status": "completed",
+        "items": [
+          {
+            "type": "userMessage",
+            "id": "item-user",
+            "content": [{ "type": "text", "text": "AKRA_SECRET_USER_TEXT" }]
+          },
+          {
+            "type": "hookPrompt",
+            "id": "item-hook",
+            "fragments": [{ "hookRunId": "hook-1", "text": "AKRA_SECRET_HOOK_TEXT" }]
+          },
+          {
+            "type": "agentMessage",
+            "id": "item-agent",
+            "phase": "final_answer",
+            "text": "AKRA_SECRET_AGENT_TEXT"
+          },
+          {
+            "type": "plan",
+            "id": "item-plan",
+            "text": "AKRA_SECRET_PLAN_TEXT"
+          },
+          {
+            "type": "reasoning",
+            "id": "item-reasoning",
+            "summary": ["AKRA_SECRET_REASONING_SUMMARY"],
+            "content": ["AKRA_SECRET_REASONING_CONTENT"]
+          },
+          {
+            "type": "commandExecution",
+            "id": "item-command",
+            "command": "echo AKRA_SECRET_COMMAND",
+            "commandActions": [],
+            "cwd": "/private/AKRA_SECRET_CWD",
+            "status": "completed",
+            "aggregatedOutput": "AKRA_SECRET_COMMAND_OUTPUT"
+          },
+          {
+            "type": "fileChange",
+            "id": "item-file",
+            "changes": [{
+              "path": "/private/AKRA_SECRET_PATH",
+              "diff": "AKRA_SECRET_DIFF",
+              "kind": { "type": "update" }
+            }],
+            "status": "declined"
+          },
+          {
+            "type": "mcpToolCall",
+            "id": "item-mcp",
+            "server": "fixture-server",
+            "tool": "fixture-tool",
+            "arguments": { "secret": "AKRA_SECRET_MCP_ARGUMENT" },
+            "status": "failed",
+            "result": { "content": ["AKRA_SECRET_MCP_RESULT"] }
+          },
+          {
+            "type": "dynamicToolCall",
+            "id": "item-dynamic",
+            "namespace": "fixture-namespace",
+            "tool": "fixture-tool",
+            "arguments": { "secret": "AKRA_SECRET_DYNAMIC_ARGUMENT" },
+            "status": "completed",
+            "success": false,
+            "contentItems": [{ "type": "inputText", "text": "AKRA_SECRET_DYNAMIC_RESULT" }]
+          },
+          {
+            "type": "collabAgentToolCall",
+            "id": "item-collab",
+            "tool": "spawnAgent",
+            "status": "completed",
+            "senderThreadId": "AKRA_SECRET_SENDER_THREAD",
+            "receiverThreadIds": ["AKRA_SECRET_RECEIVER_THREAD"],
+            "agentsStates": {},
+            "prompt": "AKRA_SECRET_COLLAB_PROMPT"
+          },
+          {
+            "type": "subAgentActivity",
+            "id": "item-subagent",
+            "agentPath": "AKRA_SECRET_AGENT_PATH",
+            "agentThreadId": "AKRA_SECRET_AGENT_THREAD",
+            "kind": "interrupted"
+          },
+          {
+            "type": "webSearch",
+            "id": "item-web",
+            "query": "AKRA_SECRET_WEB_QUERY",
+            "action": { "type": "search", "query": "AKRA_SECRET_WEB_ACTION" }
+          },
+          {
+            "type": "imageView",
+            "id": "item-image-view",
+            "path": "/private/AKRA_SECRET_IMAGE_PATH"
+          },
+          {
+            "type": "sleep",
+            "id": "item-sleep",
+            "durationMs": 250
+          },
+          {
+            "type": "imageGeneration",
+            "id": "item-image-generation",
+            "status": "completed",
+            "result": "AKRA_SECRET_IMAGE_RESULT",
+            "revisedPrompt": "AKRA_SECRET_IMAGE_PROMPT",
+            "savedPath": "/private/AKRA_SECRET_SAVED_IMAGE"
+          },
+          {
+            "type": "enteredReviewMode",
+            "id": "item-review-entered",
+            "review": "AKRA_SECRET_REVIEW_PROMPT"
+          },
+          {
+            "type": "exitedReviewMode",
+            "id": "item-review-exited",
+            "review": "AKRA_SECRET_REVIEW_RESULT"
+          },
+          {
+            "type": "contextCompaction",
+            "id": "item-compaction"
+          }
+        ]
+      }
+    ]
+  }
+}

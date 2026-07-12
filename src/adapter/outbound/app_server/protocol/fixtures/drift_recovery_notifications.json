@@ -28,10 +28,11 @@
     }
   },
   {
-    "method": "item/completed",
+    "method": "item/started",
     "params": {
       "threadId": "thread-live",
       "turnId": "turn-live",
+      "startedAtMs": 1783842001000,
       "item": null
     }
   },
@@ -40,6 +41,7 @@
     "params": {
       "threadId": "thread-live",
       "turnId": "turn-live",
+      "completedAtMs": 1783842002000,
       "item": {
         "type": "agentMessage",
         "id": "agent-after-malformed",

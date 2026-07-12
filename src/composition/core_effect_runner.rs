@@ -409,6 +409,7 @@ mod tests {
             )],
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         };
         let mut thread_review = ReviewCenterThreadProjection::new(
             "thread-1",
@@ -474,6 +475,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
             thread_review: Vec::new(),
         };
@@ -498,6 +500,7 @@ mod tests {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         };
 
         assert_eq!(
@@ -520,6 +523,7 @@ mod tests {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         };
         let CoreEffectCompletion::ParallelPeekConversationLoaded { result, .. } =
             parallel_peek_conversation_completion(8, "thread-peek".to_string(), Ok(mismatched))

@@ -73,11 +73,17 @@ pub enum AppEvent {
         thread_id: String,
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
-    TurnStreamSnapshotChanged(TurnStreamSnapshot),
+    TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationCompleted(Box<PostTurnExecution>),
     ConversationTurnWorkspaceChanged {
         workspace_directory: String,
     },
     ParallelModeSupervisorSnapshotInvalidated,
+}
+
+impl AppEvent {
+    pub fn turn_stream_snapshot_changed(snapshot: TurnStreamSnapshot) -> Self {
+        Self::TurnStreamSnapshotChanged(Box::new(snapshot))
+    }
 }

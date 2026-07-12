@@ -98,6 +98,7 @@ mod tests {
             )],
             warnings: vec!["partial replay".to_string()],
             runtime_notices: vec!["reattached runtime".to_string()],
+            item_lifecycle: Default::default(),
         };
 
         let ready = ConversationReadySnapshot::from(conversation.clone());
@@ -126,6 +127,7 @@ mod tests {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         };
 
         let ready = ConversationReadySnapshot::from_parts(

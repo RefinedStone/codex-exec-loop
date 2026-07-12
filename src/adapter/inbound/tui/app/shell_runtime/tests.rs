@@ -95,6 +95,7 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         })
     }
     fn request_stop_all_sessions(&self) -> Result<()> {
@@ -896,6 +897,7 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
         )))
         .expect("background message should enqueue");

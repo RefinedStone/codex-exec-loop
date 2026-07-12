@@ -33,6 +33,7 @@ fn ready_conversation() -> ConversationViewModel {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         },
         "/tmp/workspace".to_string(),
     );
@@ -231,6 +232,7 @@ fn from_snapshot_keeps_runtime_notices_out_of_status_text() {
                 "shared runtime reconnected after the previous app-server process exited"
                     .to_string(),
             ],
+            item_lifecycle: Default::default(),
         },
         "/tmp/draft-workspace".to_string(),
     );
@@ -320,6 +322,7 @@ fn new_and_resumed_conversations_default_auto_follow_to_off() {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         },
         "/tmp/workspace".to_string(),
     );

@@ -141,6 +141,9 @@ pub(super) fn core_turn_stream_event_from_application(
         ConversationStreamEvent::RuntimeEnvelopeObserved { observation } => {
             TurnStreamEvent::RuntimeEnvelopeObserved { observation }
         }
+        ConversationStreamEvent::ItemLifecycleObserved { observation } => {
+            TurnStreamEvent::ItemLifecycleObserved { observation }
+        }
         ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
         ConversationStreamEvent::AgentMessageDelta {
             item_id,
@@ -541,6 +544,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             })
         }
 
@@ -1003,6 +1007,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             }),
         ))
     }
@@ -1405,7 +1410,7 @@ impl NativeTuiApp {
             }
             AppEvent::TurnStreamSnapshotChanged(stream_snapshot) => {
                 self.dispatch_conversation_runtime(
-                    ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(stream_snapshot)),
+                    ConversationRuntimeEvent::StreamSnapshotApplied(stream_snapshot),
                 );
             }
             AppEvent::ManualPromptPrepared(result) => {

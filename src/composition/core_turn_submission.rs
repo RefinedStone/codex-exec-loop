@@ -301,6 +301,9 @@ fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStr
         ConversationStreamEvent::RuntimeEnvelopeObserved { observation } => {
             TurnStreamEvent::RuntimeEnvelopeObserved { observation }
         }
+        ConversationStreamEvent::ItemLifecycleObserved { observation } => {
+            TurnStreamEvent::ItemLifecycleObserved { observation }
+        }
         ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
         ConversationStreamEvent::AgentMessageDelta {
             item_id,

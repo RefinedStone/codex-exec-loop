@@ -6975,18 +6975,22 @@ mod tests {
                 "params": {
                     "threadId": "thread-1",
                     "turnId": "turn-1",
+                    "completedAtMs": 1,
                     "item": {
                         "id": "file-change-1",
                         "type": "fileChange",
+                        "status": "completed",
                         "changes": [
                             {
                                 "path": ".codex-exec-loop/planning/result-output.md",
+                                "diff": "",
                                 "kind": {
                                     "type": "update"
                                 }
                             },
                             {
                                 "path": "src/main.rs",
+                                "diff": "",
                                 "kind": {
                                     "type": "update"
                                 }
@@ -7021,6 +7025,7 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [
+                ConversationStreamEvent::ItemLifecycleObserved { .. },
                 ConversationStreamEvent::ToolActivity { .. },
                 ConversationStreamEvent::TurnTerminal { .. }
             ]
@@ -7035,6 +7040,160 @@ mod tests {
                 ),
             })
         );
+    }
+
+    #[test]
+    fn malformed_active_item_completion_cannot_be_followed_by_confirmed_terminal_delivery() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "completedAtMs": 1,
+                "item": {
+                    "id": "agent-final",
+                    "type": "agentMessage",
+                    "text": "authoritative final answer"
+                }
+            }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let error = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect_err("malformed final item must fail before terminal confirmation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing or invalid lifecycle correlation identity")
+        );
+        assert!(event_receiver.try_iter().all(|event| !matches!(
+            event,
+            ConversationStreamEvent::AgentMessageCompleted { .. }
+                | ConversationStreamEvent::TurnTerminal { .. }
+        )));
+    }
+
+    #[test]
+    fn timestamp_regressed_first_completion_delivers_agent_text_before_terminal_confirmation() {
+        let mut harness = TestConnection::new(true);
+        let item = json!({
+            "id": "agent-clock-regression",
+            "type": "agentMessage",
+            "text": "authoritative final answer"
+        });
+        harness.send_stdout(json!({
+            "method": "item/started",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "startedAtMs": 10,
+                "item": item.clone()
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "completedAtMs": 9,
+                "item": item
+            }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("clock regression must not discard a first completion payload");
+
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                ConversationStreamEvent::ItemLifecycleObserved { .. },
+                ConversationStreamEvent::ItemLifecycleObserved { .. },
+                ConversationStreamEvent::AgentMessageCompleted { text, .. },
+                ConversationStreamEvent::TurnTerminal { .. }
+            ] if text == "authoritative final answer"
+        ));
+    }
+
+    #[test]
+    fn item_kind_drift_cannot_discard_agent_text_then_confirm_terminal_delivery() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "completedAtMs": 1,
+                "item": {
+                    "id": "kind-drift",
+                    "type": "contextCompaction"
+                }
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "completedAtMs": 2,
+                "item": {
+                    "id": "kind-drift",
+                    "type": "agentMessage",
+                    "text": "must not be silently lost"
+                }
+            }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let error = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect_err("kind drift must fail before terminal confirmation");
+
+        assert!(error.to_string().contains("changed kind"));
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    ConversationStreamEvent::ItemLifecycleObserved { .. }
+                ))
+                .count(),
+            2
+        );
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            ConversationStreamEvent::AgentMessageCompleted { .. }
+                | ConversationStreamEvent::TurnTerminal { .. }
+        )));
     }
 
     #[test]

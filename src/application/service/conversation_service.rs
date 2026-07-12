@@ -400,6 +400,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
         });
         let review_repository = Arc::new(FakeReviewCenterRepository {
@@ -446,6 +447,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
         });
         let review_repository = Arc::new(FakeReviewCenterRepository {
@@ -533,6 +535,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
         });
         let service = ConversationService::new(runtime_port).with_review_center_read_service(
@@ -563,6 +566,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
         });
         let review_repository = Arc::new(FakeReviewCenterRepository::default());
@@ -642,6 +646,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
         });
         let mut existing_review = ReviewCenterThreadProjection::new(

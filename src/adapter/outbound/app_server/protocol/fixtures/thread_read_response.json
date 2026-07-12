@@ -16,6 +16,8 @@
     },
     "turns": [
       {
+        "id": "turn-snapshot",
+        "status": "completed",
         "items": [
           {
             "type": "userMessage",
@@ -36,15 +38,18 @@
           {
             "type": "fileChange",
             "id": "file-snapshot",
+            "status": "completed",
             "changes": [
               {
                 "path": ".codex-exec-loop/planning/result-output.md",
+                "diff": "",
                 "kind": {
                   "type": "update"
                 }
               },
               {
                 "path": "src/main.rs",
+                "diff": "",
                 "kind": {
                   "type": "update"
                 }
@@ -55,6 +60,8 @@
             "type": "commandExecution",
             "id": "command-snapshot",
             "command": "cargo test app_server::protocol",
+            "commandActions": [],
+            "cwd": "/home/akra/project",
             "status": "completed"
           },
           {

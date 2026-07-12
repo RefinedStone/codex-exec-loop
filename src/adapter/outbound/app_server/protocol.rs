@@ -4,13 +4,22 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod item_lifecycle;
 mod runtime_envelope;
 mod turn_notifications;
 
+#[cfg(test)]
+use self::item_lifecycle::{
+    ITEM_PROJECTION_MANIFEST, ItemProjectionManifestRow, SUBAGENT_ACTIVITY_OUTCOME_KINDS,
+    UNKNOWN_ITEM_PROJECTION_DECISION,
+};
+use self::item_lifecycle::{parse_live_item_lifecycle, parse_snapshot_item_lifecycle};
 pub(super) use self::runtime_envelope::{
     model_reroute, runtime_configuration_request, settings_observation, status_observation,
     to_runtime_envelope,
 };
+#[cfg(test)]
+use self::turn_notifications::MAX_RETAINED_ITEM_EFFECT_IDENTITIES;
 use self::turn_notifications::to_conversation_message;
 pub(super) use self::turn_notifications::{
     ActiveTurnNotificationState, AppServerNotification, TurnNotificationHandling,
@@ -22,6 +31,7 @@ use super::{
     bounded_stream_text,
 };
 use crate::domain::conversation::{ConversationReasoningEffort, ConversationSnapshot};
+use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::conversation_runtime_envelope::ConversationRuntimeThreadSource;
 use crate::domain::session_summary::SessionSummary;
 
@@ -94,11 +104,24 @@ pub(super) fn to_conversation_snapshot(
      */
     let (mut warnings, runtime_notices) = partition_runtime_notices(warnings);
     let title = bounded_stream_text(thread_title(&thread_record), MAX_STREAM_METADATA_BYTES);
-    let thread_id = bounded_stream_text(thread_record.id, MAX_STREAM_IDENTIFIER_BYTES);
+    let source_thread_id = thread_record.id;
+    let thread_id = bounded_stream_text(source_thread_id.clone(), MAX_STREAM_IDENTIFIER_BYTES);
     let cwd = bounded_stream_text(thread_record.cwd, MAX_STREAM_METADATA_BYTES);
     let mut messages = Vec::new();
     let mut retained_text_bytes = 0usize;
     let mut snapshot_truncated = false;
+    let mut item_lifecycle = ConversationItemLifecycleProjection::default();
+
+    for turn in &thread_record.turns {
+        for item in &turn.items {
+            match parse_snapshot_item_lifecycle(&source_thread_id, &turn.id, item) {
+                Ok(observation) => {
+                    let _ = item_lifecycle.apply(observation);
+                }
+                Err(_) => item_lifecycle.record_invalid_observation(),
+            }
+        }
+    }
 
     'turns: for turn in thread_record.turns.into_iter().rev() {
         for item in turn.items.into_iter().rev() {
@@ -145,6 +168,7 @@ pub(super) fn to_conversation_snapshot(
         messages,
         warnings,
         runtime_notices,
+        item_lifecycle: item_lifecycle.snapshot(),
     }
 }
 
@@ -753,6 +777,8 @@ impl<'de> Deserialize<'de> for SessionSourceValue {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ThreadTurnRecord {
+    #[serde(default)]
+    id: String,
     // item schemas are varied and evolving, so raw Value is parsed by turn_notifications::to_conversation_message.
     #[serde(default)]
     items: Vec<Value>,
@@ -858,6 +884,8 @@ mod tests {
                 "status": { "type": "idle" },
                 "gitInfo": null,
                 "turns": [{
+                    "id": "turn-1",
+                    "status": "completed",
                     "items": [{
                         "type": "agentMessage",
                         "id": "agent-1",

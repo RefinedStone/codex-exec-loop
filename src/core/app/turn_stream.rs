@@ -2,6 +2,11 @@ use crate::domain::conversation::{
     ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
     ConversationToolActivity,
 };
+use crate::domain::conversation_item_lifecycle::{
+    ConversationItemLifecycleConsistency, ConversationItemLifecycleHydrationRejection,
+    ConversationItemLifecycleObservation, ConversationItemLifecycleProjection,
+    ConversationItemLifecycleProjectionSnapshot, ConversationItemLifecycleRejection,
+};
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeEnvelopeObservationRejection,
@@ -12,6 +17,7 @@ use crate::domain::turn_terminal::{
     ConversationTurnApplicationDelivery, ConversationTurnError, ConversationTurnTerminalOutcome,
     ConversationTurnTerminalReceipt,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnStreamState {
@@ -20,6 +26,7 @@ pub struct TurnStreamState {
     title: Option<String>,
     cwd: Option<String>,
     runtime_envelope: Option<ConversationRuntimeEnvelope>,
+    item_lifecycle: ConversationItemLifecycleProjection,
     active_turn_id: Option<String>,
     status_text: Option<String>,
     terminal: Option<TurnStreamTerminalSnapshot>,
@@ -34,6 +41,7 @@ impl TurnStreamState {
             title: None,
             cwd: None,
             runtime_envelope: None,
+            item_lifecycle: ConversationItemLifecycleProjection::default(),
             active_turn_id: None,
             status_text: None,
             terminal: None,
@@ -47,10 +55,38 @@ impl TurnStreamState {
         title: impl Into<String>,
         cwd: impl Into<String>,
     ) {
+        let result = self.seed_loaded_thread(thread_id, title, cwd, Arc::default());
+        debug_assert!(result.is_ok());
+    }
+
+    pub fn seed_loaded_thread(
+        &mut self,
+        thread_id: impl Into<String>,
+        title: impl Into<String>,
+        cwd: impl Into<String>,
+        item_lifecycle: Arc<ConversationItemLifecycleProjectionSnapshot>,
+    ) -> Result<(), ConversationItemLifecycleHydrationRejection> {
+        let thread_id = thread_id.into();
+        let item_lifecycle = ConversationItemLifecycleProjection::from_snapshot_for_thread(
+            &thread_id,
+            item_lifecycle,
+        )?;
+        self.seed_loaded_thread_projection(thread_id, title, cwd, item_lifecycle);
+        Ok(())
+    }
+
+    pub fn seed_loaded_thread_projection(
+        &mut self,
+        thread_id: impl Into<String>,
+        title: impl Into<String>,
+        cwd: impl Into<String>,
+        item_lifecycle: ConversationItemLifecycleProjection,
+    ) {
         self.thread_id = Some(thread_id.into());
         self.title = Some(title.into());
         self.cwd = Some(cwd.into());
         self.runtime_envelope = None;
+        self.item_lifecycle = item_lifecycle;
         self.active_turn_id = None;
         self.status_text = None;
         self.terminal = None;
@@ -75,10 +111,14 @@ impl TurnStreamState {
                 cwd,
                 runtime_envelope,
             } => {
+                let thread_changed = self.thread_id.as_deref() != Some(thread_id.as_str());
                 self.thread_id = Some(thread_id.clone());
                 self.title = Some(title.clone());
                 self.cwd = Some(cwd.clone());
                 self.runtime_envelope = Some(*runtime_envelope);
+                if thread_changed {
+                    self.item_lifecycle = ConversationItemLifecycleProjection::default();
+                }
                 self.active_turn_id = None;
                 self.terminal = None;
                 self.last_applied_post_turn_evaluation_id = None;
@@ -108,6 +148,9 @@ impl TurnStreamState {
             }
             TurnStreamEvent::RuntimeEnvelopeObserved { observation } => {
                 self.runtime_envelope_observed_update(*observation)
+            }
+            TurnStreamEvent::ItemLifecycleObserved { observation } => {
+                self.item_lifecycle_observed_update(*observation)
             }
             TurnStreamEvent::StatusUpdated { text } => {
                 self.status_text = Some(text.clone());
@@ -274,6 +317,22 @@ impl TurnStreamState {
         }
     }
 
+    fn item_lifecycle_observed_update(
+        &mut self,
+        observation: ConversationItemLifecycleObservation,
+    ) -> TurnStreamUpdate {
+        let result = self.item_lifecycle.apply_correlated(
+            self.thread_id.as_deref(),
+            self.active_turn_id.as_deref(),
+            observation.clone(),
+        );
+        TurnStreamUpdate::ItemLifecycleObserved {
+            observation: Box::new(observation),
+            consistency: result.as_ref().ok().copied(),
+            rejection: result.err(),
+        }
+    }
+
     fn turn_terminal_update(
         &mut self,
         receipt: ConversationTurnTerminalReceipt,
@@ -350,6 +409,7 @@ impl TurnStreamState {
             title: self.title.clone(),
             cwd: self.cwd.clone(),
             runtime_envelope: self.runtime_envelope.clone().map(Box::new),
+            item_lifecycle: self.item_lifecycle.snapshot(),
             active_turn_id: self.active_turn_id.clone(),
             status_text: self.status_text.clone(),
             terminal: self.terminal.clone(),
@@ -371,6 +431,7 @@ pub struct TurnStreamSnapshot {
     pub title: Option<String>,
     pub cwd: Option<String>,
     pub runtime_envelope: Option<Box<ConversationRuntimeEnvelope>>,
+    pub item_lifecycle: Arc<ConversationItemLifecycleProjectionSnapshot>,
     pub active_turn_id: Option<String>,
     pub status_text: Option<String>,
     pub terminal: Option<TurnStreamTerminalSnapshot>,
@@ -394,6 +455,9 @@ pub enum TurnStreamEvent {
     },
     RuntimeEnvelopeObserved {
         observation: Box<ConversationRuntimeEnvelopeObservation>,
+    },
+    ItemLifecycleObserved {
+        observation: Box<ConversationItemLifecycleObservation>,
     },
     StatusUpdated {
         text: String,
@@ -466,6 +530,11 @@ pub enum TurnStreamUpdate {
     RuntimeEnvelopeObserved {
         observation: Box<ConversationRuntimeEnvelopeObservation>,
         rejection: Option<TurnStreamRuntimeEnvelopeRejection>,
+    },
+    ItemLifecycleObserved {
+        observation: Box<ConversationItemLifecycleObservation>,
+        consistency: Option<ConversationItemLifecycleConsistency>,
+        rejection: Option<ConversationItemLifecycleRejection>,
     },
     StatusUpdated {
         text: String,
@@ -612,6 +681,28 @@ mod tests {
             runtime_request: Box::default(),
         });
         state
+    }
+
+    fn item_lifecycle_observation(
+        thread_id: &str,
+        turn_id: &str,
+        item_id: &str,
+        phase: crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase,
+    ) -> ConversationItemLifecycleObservation {
+        ConversationItemLifecycleObservation {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            item_id: item_id.to_string(),
+            kind:
+                crate::domain::conversation_item_lifecycle::ConversationItemKind::CommandExecution,
+            phase,
+            source:
+                crate::domain::conversation_item_lifecycle::ConversationItemLifecycleSource::Live,
+            observed_at_ms: Some(10),
+            outcome:
+                crate::domain::conversation_item_lifecycle::ConversationItemOutcome::InProgress,
+            summary: "command bytes=10; status=inProgress".to_string(),
+        }
     }
 
     fn runtime_envelope_with_applied_model(model: &str) -> ConversationRuntimeEnvelope {
@@ -1094,6 +1185,160 @@ mod tests {
                 text: "final answer".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn item_lifecycle_event_requires_core_thread_and_turn_correlation() {
+        let mut state = prepared_turn_state();
+
+        let accepted = state.apply_stream_event(TurnStreamEvent::ItemLifecycleObserved {
+            observation: Box::new(item_lifecycle_observation(
+                "thread-1",
+                "turn-1",
+                "item-1",
+                crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase::Started,
+            )),
+        });
+        assert!(matches!(
+            accepted.update,
+            TurnStreamUpdate::ItemLifecycleObserved {
+                consistency: Some(ConversationItemLifecycleConsistency::Accepted),
+                rejection: None,
+                ..
+            }
+        ));
+        assert_eq!(accepted.item_lifecycle.records.len(), 1);
+
+        let rejected = state.apply_stream_event(TurnStreamEvent::ItemLifecycleObserved {
+            observation: Box::new(item_lifecycle_observation(
+                "thread-other",
+                "turn-1",
+                "item-2",
+                crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase::Completed,
+            )),
+        });
+        assert!(matches!(
+            rejected.update,
+            TurnStreamUpdate::ItemLifecycleObserved {
+                consistency: None,
+                rejection: Some(ConversationItemLifecycleRejection::ThreadMismatch { .. }),
+                ..
+            }
+        ));
+        assert_eq!(rejected.item_lifecycle.records.len(), 1);
+        assert_eq!(rejected.item_lifecycle.invalid_record_count, 1);
+    }
+
+    #[test]
+    fn non_lifecycle_events_reuse_the_lifecycle_snapshot_arc() {
+        let mut state = prepared_turn_state();
+        let observed = state.apply_stream_event(TurnStreamEvent::ItemLifecycleObserved {
+            observation: Box::new(item_lifecycle_observation(
+                "thread-1",
+                "turn-1",
+                "item-1",
+                crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase::Started,
+            )),
+        });
+
+        let status = state.apply_stream_event(TurnStreamEvent::StatusUpdated {
+            text: "working".to_string(),
+        });
+
+        assert!(Arc::ptr_eq(
+            &observed.item_lifecycle,
+            &status.item_lifecycle
+        ));
+    }
+
+    #[test]
+    fn loaded_lifecycle_survives_same_thread_prepare_and_appends_live_records() {
+        let mut loaded_projection = ConversationItemLifecycleProjection::default();
+        let mut loaded_observation = item_lifecycle_observation(
+            "thread-1",
+            "turn-loaded",
+            "item-loaded",
+            crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase::SnapshotObserved,
+        );
+        loaded_observation.source =
+            crate::domain::conversation_item_lifecycle::ConversationItemLifecycleSource::Snapshot;
+        loaded_observation.observed_at_ms = None;
+        loaded_observation.outcome =
+            crate::domain::conversation_item_lifecycle::ConversationItemOutcome::Completed;
+        loaded_projection.apply(loaded_observation).unwrap();
+
+        let mut state = TurnStreamState::new();
+        state
+            .seed_loaded_thread(
+                "thread-1",
+                "Loaded thread",
+                "/tmp/workspace",
+                loaded_projection.snapshot(),
+            )
+            .unwrap();
+        let prepared = state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
+            thread_id: "thread-1".to_string(),
+            title: "Loaded thread".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            runtime_envelope: Box::default(),
+        });
+        assert_eq!(prepared.item_lifecycle.records.len(), 1);
+
+        state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-live".to_string(),
+            runtime_request: Box::default(),
+        });
+        let live = state.apply_stream_event(TurnStreamEvent::ItemLifecycleObserved {
+            observation: Box::new(item_lifecycle_observation(
+                "thread-1",
+                "turn-live",
+                "item-live",
+                crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase::Started,
+            )),
+        });
+
+        assert_eq!(live.item_lifecycle.records.len(), 2);
+        assert_eq!(
+            live.item_lifecycle.records[0].observation.source,
+            crate::domain::conversation_item_lifecycle::ConversationItemLifecycleSource::Snapshot
+        );
+        assert_eq!(
+            live.item_lifecycle.records[1].observation.source,
+            crate::domain::conversation_item_lifecycle::ConversationItemLifecycleSource::Live
+        );
+    }
+
+    #[test]
+    fn different_thread_prepare_clears_hydrated_lifecycle() {
+        let mut loaded_projection = ConversationItemLifecycleProjection::default();
+        let mut loaded_observation = item_lifecycle_observation(
+            "thread-loaded",
+            "turn-loaded",
+            "item-loaded",
+            crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase::SnapshotObserved,
+        );
+        loaded_observation.source =
+            crate::domain::conversation_item_lifecycle::ConversationItemLifecycleSource::Snapshot;
+        loaded_observation.observed_at_ms = None;
+        loaded_projection.apply(loaded_observation).unwrap();
+        let mut state = TurnStreamState::new();
+        state
+            .seed_loaded_thread(
+                "thread-loaded",
+                "Loaded thread",
+                "/tmp/workspace",
+                loaded_projection.snapshot(),
+            )
+            .unwrap();
+
+        let prepared = state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
+            thread_id: "thread-new".to_string(),
+            title: "New thread".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            runtime_envelope: Box::default(),
+        });
+
+        assert!(prepared.item_lifecycle.records.is_empty());
     }
 
     #[test]

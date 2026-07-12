@@ -956,6 +956,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             },
             "/tmp/fallback-root".to_string(),
             ConversationRuntimeControlTruth::default(),
@@ -977,6 +978,7 @@ mod tests {
             messages: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            item_lifecycle: Default::default(),
         }
     }
 

@@ -375,6 +375,39 @@ pub(super) fn reduce_conversation_runtime(
                         );
                     }
                 }
+                TurnStreamUpdate::ItemLifecycleObserved {
+                    observation,
+                    consistency,
+                    rejection,
+                } => {
+                    if let Some(rejection) = rejection {
+                        state.extend_runtime_notices([format!(
+                            "ignored item lifecycle observation: {}",
+                            rejection.notice_label()
+                        )]);
+                    } else if matches!(
+                        consistency,
+                        Some(
+                            crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::DuplicateStart
+                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::DuplicateCompletion
+                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::StartAfterCompletion
+                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::KindMismatch
+                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::TimestampRegression
+                        )
+                    ) {
+                        state.extend_runtime_notices([format!(
+                            "app-server item lifecycle anomaly for {}",
+                            observation.item_id
+                        )]);
+                    } else if let crate::domain::conversation_item_lifecycle::ConversationItemKind::Unknown(
+                        wire_type,
+                    ) = &observation.kind
+                    {
+                        state.extend_runtime_notices([format!(
+                            "app-server reported an unclassified item kind: {wire_type}"
+                        )]);
+                    }
+                }
                 TurnStreamUpdate::StatusUpdated { text } => {
                     // Provider status copy owns the main status line while a turn is
                     // active, but it does not become durable transcript history.

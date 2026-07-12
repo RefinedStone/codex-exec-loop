@@ -369,6 +369,9 @@ fn bounded_app_server_stream_event(event: ConversationStreamEvent) -> Conversati
                 observation: Box::new(observation),
             }
         }
+        ConversationStreamEvent::ItemLifecycleObserved { observation } => {
+            ConversationStreamEvent::ItemLifecycleObserved { observation }
+        }
         ConversationStreamEvent::StatusUpdated { text } => ConversationStreamEvent::StatusUpdated {
             text: bounded_stream_text(text, MAX_STREAM_METADATA_BYTES),
         },
@@ -3338,6 +3341,24 @@ mod tests {
             })
             .is_none()
         );
+        assert!(
+            prompt_log_output_record(&ConversationStreamEvent::ItemLifecycleObserved {
+                observation: Box::new(
+                    crate::domain::conversation_item_lifecycle::ConversationItemLifecycleObservation {
+                        thread_id: "thread-secret".to_string(),
+                        turn_id: "turn-secret".to_string(),
+                        item_id: "item-secret".to_string(),
+                        kind: crate::domain::conversation_item_lifecycle::ConversationItemKind::Reasoning,
+                        phase: crate::domain::conversation_item_lifecycle::ConversationItemLifecyclePhase::Completed,
+                        source: crate::domain::conversation_item_lifecycle::ConversationItemLifecycleSource::Live,
+                        observed_at_ms: Some(1),
+                        outcome: crate::domain::conversation_item_lifecycle::ConversationItemOutcome::NotReported,
+                        summary: "reasoning summary_parts=1; content_parts=1".to_string(),
+                    },
+                ),
+            })
+            .is_none()
+        );
         assert!(capture.output_items.is_empty());
         capture.record(
             prompt_log_output_record(&ConversationStreamEvent::AgentMessageCompleted {
@@ -3947,6 +3968,7 @@ for line in sys.stdin:
                 "params": {
                     "threadId": thread_id,
                     "turnId": turn_id,
+                    "completedAtMs": 1,
                     "item": {
                         "type": "agentMessage",
                         "id": "agent-1",

@@ -897,6 +897,7 @@ mod tests {
                 messages: Vec::new(),
                 warnings: Vec::new(),
                 runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
             })
         }
 

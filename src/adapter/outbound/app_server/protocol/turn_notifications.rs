@@ -2,6 +2,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::adapter::outbound::app_server::{AppServerEventSender, send_required_app_server_event};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
@@ -9,6 +10,11 @@ use crate::application::service::planning::canonical_active_planning_file_path;
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
     ConversationMessageKind, ConversationToolActivity, ConversationToolActivityKind,
+};
+use crate::domain::conversation_item_lifecycle::{
+    ConversationItemKind, ConversationItemLifecycleConsistency, ConversationItemLifecyclePhase,
+    ConversationItemLifecycleProjection, ConversationItemOutcome,
+    MAX_RETAINED_CONVERSATION_ITEM_LIFECYCLE_RECORDS,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservationGap,
@@ -20,6 +26,8 @@ use crate::domain::turn_terminal::{
 };
 
 const MAX_TERMINAL_PROTOCOL_TEXT_BYTES: usize = 4 * 1024;
+pub(super) const MAX_RETAINED_ITEM_EFFECT_IDENTITIES: usize =
+    MAX_RETAINED_CONVERSATION_ITEM_LIFECYCLE_RECORDS * 2;
 
 /*
  * turn_notifications.rs owns the app-server notification stream translation. connection.rs only reads JSON-RPC
@@ -130,6 +138,96 @@ pub(in crate::adapter::outbound::app_server) struct ActiveTurnNotificationState 
     changed_planning_file_paths: Vec<String>,
     terminal_receipt: Option<ConversationTurnTerminalReceipt>,
     runtime_envelope_observation_gap: ConversationRuntimeObservationGap,
+    item_lifecycle: ConversationItemLifecycleProjection,
+    item_effect_identities: ItemEffectIdentityLedger,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ItemEffectIdentityLedger {
+    records: Vec<ItemEffectIdentityRecord>,
+    exhausted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ItemEffectIdentityRecord {
+    identity_fingerprint: [u8; 32],
+    kind_fingerprint: [u8; 32],
+    completion_seen: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemEffectIdentityObservation {
+    Accepted,
+    FirstCompletion,
+    DuplicateCompletion,
+    KindMismatch,
+    Exhausted,
+}
+
+impl ItemEffectIdentityLedger {
+    fn observe(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        item_id: &str,
+        kind: &ConversationItemKind,
+        phase: ConversationItemLifecyclePhase,
+    ) -> ItemEffectIdentityObservation {
+        let identity_fingerprint = item_identity_fingerprint(thread_id, turn_id, item_id);
+        let kind_fingerprint = item_kind_fingerprint(kind);
+        if let Some(record) = self
+            .records
+            .iter_mut()
+            .find(|record| record.identity_fingerprint == identity_fingerprint)
+        {
+            if record.kind_fingerprint != kind_fingerprint {
+                return ItemEffectIdentityObservation::KindMismatch;
+            }
+            if phase == ConversationItemLifecyclePhase::Completed {
+                if record.completion_seen {
+                    return ItemEffectIdentityObservation::DuplicateCompletion;
+                }
+                record.completion_seen = true;
+                return ItemEffectIdentityObservation::FirstCompletion;
+            }
+            return ItemEffectIdentityObservation::Accepted;
+        }
+        if self.exhausted || self.records.len() == MAX_RETAINED_ITEM_EFFECT_IDENTITIES {
+            self.exhausted = true;
+            return ItemEffectIdentityObservation::Exhausted;
+        }
+        self.records.push(ItemEffectIdentityRecord {
+            identity_fingerprint,
+            kind_fingerprint,
+            completion_seen: phase == ConversationItemLifecyclePhase::Completed,
+        });
+        match phase {
+            ConversationItemLifecyclePhase::Started => ItemEffectIdentityObservation::Accepted,
+            ConversationItemLifecyclePhase::Completed => {
+                ItemEffectIdentityObservation::FirstCompletion
+            }
+            ConversationItemLifecyclePhase::SnapshotObserved => {
+                ItemEffectIdentityObservation::Accepted
+            }
+        }
+    }
+}
+
+fn item_identity_fingerprint(thread_id: &str, turn_id: &str, item_id: &str) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    for value in [thread_id, turn_id, item_id] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+    digest.finalize().into()
+}
+
+fn item_kind_fingerprint(kind: &ConversationItemKind) -> [u8; 32] {
+    let label = kind.stable_wire_label().unwrap_or_else(|| match kind {
+        ConversationItemKind::Unknown(label) => label,
+        _ => unreachable!("stable item kinds always expose a wire label"),
+    });
+    Sha256::digest(label.as_bytes()).into()
 }
 
 impl ActiveTurnNotificationState {
@@ -350,6 +448,54 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
             });
             Ok(TurnNotificationHandling::Consumed)
         }
+        "item/started" => {
+            if !matches_active_turn(params, thread_id, turn_id) {
+                return Ok(TurnNotificationHandling::Dropped(
+                    notification.warning_text("that did not match the active turn stream"),
+                ));
+            }
+
+            let observation = match super::parse_live_item_lifecycle(
+                params,
+                ConversationItemLifecyclePhase::Started,
+            ) {
+                Ok(observation) => observation,
+                Err(error) => {
+                    return Ok(TurnNotificationHandling::Dropped(
+                        notification.warning_text(&format!("with {}", error.notice_label())),
+                    ));
+                }
+            };
+            if state
+                .item_lifecycle
+                .apply_correlated(Some(thread_id), Some(turn_id), observation.clone())
+                .is_err()
+            {
+                return Ok(TurnNotificationHandling::Dropped(
+                    notification.warning_text("with an invalid item lifecycle observation"),
+                ));
+            }
+            let identity_observation = state.item_effect_identities.observe(
+                thread_id,
+                turn_id,
+                &observation.item_id,
+                &observation.kind,
+                observation.phase,
+            );
+            send_required_app_server_event(
+                event_sender,
+                ConversationStreamEvent::ItemLifecycleObserved {
+                    observation: Box::new(observation),
+                },
+                "item/started",
+            )?;
+            if identity_observation == ItemEffectIdentityObservation::Exhausted {
+                anyhow::bail!(
+                    "bounded item identity ledger exhausted after retaining lifecycle observation"
+                );
+            }
+            Ok(TurnNotificationHandling::Consumed)
+        }
         "item/completed" => {
             /*
              * Completed items are the live stream's finalization point for transcript
@@ -357,10 +503,90 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
              * before UI fan-out so the later `turn/completed` event can carry the full
              * turn-level planning refresh summary.
              */
-            if !matches_active_turn(params, thread_id, turn_id) {
+            let observed_thread_id = params.get("threadId").and_then(Value::as_str);
+            let observed_turn_id = params.get("turnId").and_then(Value::as_str);
+            if observed_thread_id.is_none_or(str::is_empty)
+                || observed_turn_id.is_none_or(str::is_empty)
+            {
+                anyhow::bail!(
+                    "active item/completed had missing or invalid lifecycle correlation identity"
+                );
+            }
+            if observed_thread_id != Some(thread_id) || observed_turn_id != Some(turn_id) {
                 return Ok(TurnNotificationHandling::Dropped(
                     notification.warning_text("that did not match the active turn stream"),
                 ));
+            }
+
+            let observation = match super::parse_live_item_lifecycle(
+                params,
+                ConversationItemLifecyclePhase::Completed,
+            ) {
+                Ok(observation) => observation,
+                Err(error) => {
+                    anyhow::bail!(
+                        "active item/completed violated the lifecycle contract: {}",
+                        error.notice_label()
+                    );
+                }
+            };
+            let consistency = match state.item_lifecycle.apply_correlated(
+                Some(thread_id),
+                Some(turn_id),
+                observation.clone(),
+            ) {
+                Ok(consistency) => consistency,
+                Err(_) => {
+                    anyhow::bail!(
+                        "active item/completed violated lifecycle correlation after parsing"
+                    );
+                }
+            };
+            let identity_observation = state.item_effect_identities.observe(
+                thread_id,
+                turn_id,
+                &observation.item_id,
+                &observation.kind,
+                observation.phase,
+            );
+            let permits_outcome_side_effect =
+                permits_completed_item_side_effect(&observation.kind, &observation.outcome);
+            send_required_app_server_event(
+                event_sender,
+                ConversationStreamEvent::ItemLifecycleObserved {
+                    observation: Box::new(observation),
+                },
+                "item/completed/lifecycle",
+            )?;
+
+            let consistency_permits_legacy_side_effect =
+                matches!(consistency, ConversationItemLifecycleConsistency::Accepted)
+                    || matches!(
+                        consistency,
+                        ConversationItemLifecycleConsistency::CompletionWithoutStart
+                            | ConversationItemLifecycleConsistency::TimestampRegression
+                    );
+            match identity_observation {
+                ItemEffectIdentityObservation::DuplicateCompletion => {
+                    return Ok(TurnNotificationHandling::Consumed);
+                }
+                ItemEffectIdentityObservation::KindMismatch => {
+                    anyhow::bail!(
+                        "active item identity changed kind after retaining lifecycle observation"
+                    );
+                }
+                ItemEffectIdentityObservation::Exhausted => {
+                    anyhow::bail!(
+                        "bounded item identity ledger exhausted after retaining lifecycle observation"
+                    );
+                }
+                ItemEffectIdentityObservation::FirstCompletion => {}
+                ItemEffectIdentityObservation::Accepted => {
+                    return Ok(TurnNotificationHandling::Consumed);
+                }
+            }
+            if !consistency_permits_legacy_side_effect || !permits_outcome_side_effect {
+                return Ok(TurnNotificationHandling::Consumed);
             }
 
             record_changed_planning_file_paths(
@@ -794,12 +1020,14 @@ pub(super) fn to_conversation_message(item: Value) -> Option<ConversationMessage
                 .map(str::to_string),
             item.get("id").and_then(Value::as_str).map(str::to_string),
         )),
-        "fileChange" => Some(ConversationMessage::new(
-            ConversationMessageKind::Tool,
-            format_file_change_summary(&item),
-            None,
-            item.get("id").and_then(Value::as_str).map(str::to_string),
-        )),
+        "fileChange" if item.get("status").and_then(Value::as_str) == Some("completed") => {
+            Some(ConversationMessage::new(
+                ConversationMessageKind::Tool,
+                format_file_change_summary(&item),
+                None,
+                item.get("id").and_then(Value::as_str).map(str::to_string),
+            ))
+        }
         "commandExecution" => Some(ConversationMessage::new(
             ConversationMessageKind::Tool,
             format_command_execution_summary(&item),
@@ -807,6 +1035,17 @@ pub(super) fn to_conversation_message(item: Value) -> Option<ConversationMessage
             item.get("id").and_then(Value::as_str).map(str::to_string),
         )),
         _ => None,
+    }
+}
+
+fn permits_completed_item_side_effect(
+    kind: &ConversationItemKind,
+    outcome: &ConversationItemOutcome,
+) -> bool {
+    match kind {
+        ConversationItemKind::AgentMessage | ConversationItemKind::CommandExecution => true,
+        ConversationItemKind::FileChange => matches!(outcome, ConversationItemOutcome::Completed),
+        _ => false,
     }
 }
 
@@ -1256,6 +1495,7 @@ mod terminal_receipt_tests {
             "params": {
                 "threadId": THREAD_ID,
                 "turnId": TURN_ID,
+                "completedAtMs": 1,
                 "item": {
                     "id": "agent-1",
                     "type": "agentMessage",
@@ -1276,7 +1516,7 @@ mod terminal_receipt_tests {
             handle_turn_notification(&notification, THREAD_ID, TURN_ID, &mut state, &sender)
                 .expect_err("a completed message that cannot be projected must fail closed");
 
-        assert!(error.to_string().contains("item/agentMessage/completed"));
+        assert!(error.to_string().contains("item/completed/lifecycle"));
         assert!(state.terminal_receipt().is_none());
     }
 
@@ -1556,7 +1796,7 @@ mod terminal_receipt_tests {
     }
 
     #[test]
-    fn delta_and_completed_item_require_both_active_ids() {
+    fn delta_and_completed_item_distinguish_stale_from_missing_active_ids() {
         let invalid_notifications = [
             json!({
                 "method": "item/agentMessage/delta",
@@ -1578,15 +1818,9 @@ mod terminal_receipt_tests {
             json!({
                 "method": "item/completed",
                 "params": {
-                    "threadId": THREAD_ID,
-                    "item": { "id": "agent-1", "type": "agentMessage", "text": "missing turn" }
-                }
-            }),
-            json!({
-                "method": "item/completed",
-                "params": {
                     "threadId": "thread-stale",
                     "turnId": TURN_ID,
+                    "completedAtMs": 1,
                     "item": { "id": "agent-1", "type": "agentMessage", "text": "stale thread" }
                 }
             }),
@@ -1605,6 +1839,26 @@ mod terminal_receipt_tests {
             assert!(receiver.try_recv().is_err());
             assert!(state.changed_planning_file_paths().is_empty());
         }
+
+        let missing_turn = AppServerNotification::from_value(json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": THREAD_ID,
+                "completedAtMs": 1,
+                "item": { "id": "agent-1", "type": "agentMessage", "text": "missing turn" }
+            }
+        }))
+        .expect("missing-turn completion fixture");
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+
+        let error =
+            handle_turn_notification(&missing_turn, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect_err("missing completion identity must fail the active stream");
+
+        assert!(error.to_string().contains("lifecycle correlation identity"));
+        assert!(receiver.try_recv().is_err());
+        assert!(state.changed_planning_file_paths().is_empty());
     }
 
     #[test]
