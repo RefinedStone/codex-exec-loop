@@ -7,7 +7,9 @@ use crate::domain::conversation_item_lifecycle::{
     MAX_CONVERSATION_ITEM_SUMMARY_BYTES,
 };
 
+// Runtime classification reads wire_type; the remaining fields are executable schema metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ItemProjectionManifestRow {
     pub wire_type: &'static str,
     pub required_fields: &'static [&'static str],
@@ -322,20 +324,12 @@ fn classify_item(
     item: &Value,
     wire_type: &str,
 ) -> Result<(ConversationItemKind, ConversationItemOutcome, String), ItemLifecycleParseError> {
-    let Some(decision) = ITEM_PROJECTION_MANIFEST
+    if !ITEM_PROJECTION_MANIFEST
         .iter()
-        .find(|decision| decision.wire_type == wire_type)
-    else {
+        .any(|decision| decision.wire_type == wire_type)
+    {
         return Ok(unknown_item_classification(wire_type));
-    };
-    let _declared_field_count = decision
-        .preserved_fields
-        .len()
-        .saturating_add(decision.bounded_redacted_fields.len())
-        .saturating_add(decision.ignored_fields.len());
-    let _declared_outcome_count = decision.outcome_statuses.len();
-    let _required_field_count = decision.required_fields.len();
-    let _open_outcome_status = decision.open_outcome_status;
+    }
 
     match wire_type {
         "userMessage" => {
@@ -595,11 +589,6 @@ fn required_identifier<'a>(
     field: &'static str,
 ) -> Result<&'a str, ItemLifecycleParseError> {
     let identifier = required_string(value, field)?;
-    if identifier.is_empty() {
-        return Err(ItemLifecycleParseError::InvalidObservation(
-            ConversationItemLifecycleRejection::MissingIdentity { field },
-        ));
-    }
     validate_identifier(identifier, field)?;
     Ok(identifier)
 }

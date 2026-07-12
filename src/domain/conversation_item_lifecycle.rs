@@ -283,20 +283,30 @@ impl ConversationItemLifecycleProjection {
         &self,
         observation: &ConversationItemLifecycleObservation,
     ) -> ConversationItemLifecycleConsistency {
-        let prior = self.state.records.iter().rev().filter(|record| {
+        let mut kind_mismatch = false;
+        let mut timestamp_regression = false;
+        let mut started_seen = false;
+        let mut completed_seen = false;
+        for record in self.state.records.iter().rev().filter(|record| {
             record.observation.thread_id == observation.thread_id
                 && record.observation.turn_id == observation.turn_id
                 && record.observation.item_id == observation.item_id
-        });
-        let prior = prior.collect::<Vec<_>>();
+        }) {
+            kind_mismatch |= record.observation.kind != observation.kind;
+            timestamp_regression |= observation.observed_at_ms.is_some_and(|observed_at_ms| {
+                record
+                    .observation
+                    .observed_at_ms
+                    .is_some_and(|prior_timestamp| prior_timestamp > observed_at_ms)
+            });
+            started_seen |= record.observation.phase == ConversationItemLifecyclePhase::Started;
+            completed_seen |= record.observation.phase == ConversationItemLifecyclePhase::Completed;
+        }
 
-        if prior
-            .iter()
-            .any(|record| record.observation.kind != observation.kind)
-        {
+        if kind_mismatch {
             return ConversationItemLifecycleConsistency::KindMismatch;
         }
-        if timestamp_regressed(prior.as_slice(), observation) {
+        if timestamp_regression {
             return ConversationItemLifecycleConsistency::TimestampRegression;
         }
 
@@ -305,26 +315,18 @@ impl ConversationItemLifecycleProjection {
                 ConversationItemLifecycleConsistency::SnapshotObserved
             }
             ConversationItemLifecyclePhase::Started => {
-                if prior.iter().any(|record| {
-                    record.observation.phase == ConversationItemLifecyclePhase::Started
-                }) {
+                if started_seen {
                     ConversationItemLifecycleConsistency::DuplicateStart
-                } else if prior.iter().any(|record| {
-                    record.observation.phase == ConversationItemLifecyclePhase::Completed
-                }) {
+                } else if completed_seen {
                     ConversationItemLifecycleConsistency::StartAfterCompletion
                 } else {
                     ConversationItemLifecycleConsistency::Accepted
                 }
             }
             ConversationItemLifecyclePhase::Completed => {
-                if prior.iter().any(|record| {
-                    record.observation.phase == ConversationItemLifecyclePhase::Completed
-                }) {
+                if completed_seen {
                     ConversationItemLifecycleConsistency::DuplicateCompletion
-                } else if prior.iter().any(|record| {
-                    record.observation.phase == ConversationItemLifecyclePhase::Started
-                }) {
+                } else if started_seen {
                     ConversationItemLifecycleConsistency::Accepted
                 } else {
                     ConversationItemLifecycleConsistency::CompletionWithoutStart
@@ -445,21 +447,6 @@ fn validate_identifier(
         return Err(ConversationItemLifecycleRejection::IdentifierTooLong { field });
     }
     Ok(())
-}
-
-fn timestamp_regressed(
-    prior: &[&ConversationItemLifecycleRecord],
-    observation: &ConversationItemLifecycleObservation,
-) -> bool {
-    let Some(observed_at_ms) = observation.observed_at_ms else {
-        return false;
-    };
-    prior.iter().any(|record| {
-        record
-            .observation
-            .observed_at_ms
-            .is_some_and(|prior_timestamp| prior_timestamp > observed_at_ms)
-    })
 }
 
 #[cfg(test)]
