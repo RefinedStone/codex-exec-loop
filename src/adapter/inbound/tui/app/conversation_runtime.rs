@@ -725,7 +725,16 @@ fn latest_agent_draft_for_update(
         .filter(|record| {
             record.last_sequence() >= first_sequence && record.last_sequence() <= last_sequence
         })
-        .filter_map(|record| {
+        .filter(|record| {
+            matches!(
+                &record.observation().payload,
+                crate::domain::conversation_progressive_activity::ConversationProgressiveActivityPayload::AgentMessageDelta {
+                    ..
+                }
+            )
+        })
+        .max_by_key(|record| record.last_sequence())
+        .and_then(|record| {
             let crate::domain::conversation_progressive_activity::ConversationProgressiveActivityPayload::AgentMessageDelta {
                 phase,
                 text,
@@ -735,14 +744,11 @@ fn latest_agent_draft_for_update(
                 return None;
             };
             Some((
-                record.last_sequence(),
                 record.observation().item_id.clone().unwrap_or_default(),
                 phase.clone(),
                 text.clone(),
             ))
         })
-        .max_by_key(|(sequence, ..)| *sequence)
-        .map(|(_, item_id, phase, text)| (item_id, phase, text))
 }
 
 const fn progressive_activity_requires_runtime_notice(
