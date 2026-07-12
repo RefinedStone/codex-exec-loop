@@ -1393,6 +1393,57 @@ mod tests {
     }
 
     #[test]
+    fn turn_plan_preserves_step_status_after_the_text_budget_is_exhausted() {
+        let explanation = "x".repeat(MAX_PROGRESSIVE_PLAN_DETAIL_BYTES);
+        let params = json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "explanation": explanation,
+            "plan": [
+                {"step": "first", "status": "pending"},
+                {"step": "", "status": "completed"}
+            ]
+        });
+
+        let ProgressiveActivityNotificationHandling::Activity(parsed) =
+            parse_progressive_activity_notification("turn/plan/updated", &params, 1)
+        else {
+            panic!("turn plan should parse");
+        };
+        let observation = parsed.batch.records()[0].observation();
+        let ConversationProgressiveActivityPayload::TurnPlan {
+            steps,
+            omitted_step_count,
+            source_bytes,
+            truncated_bytes,
+            ..
+        } = &observation.payload
+        else {
+            panic!("turn plan should retain typed plan state");
+        };
+
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps[0].status,
+            ConversationProgressivePlanStepStatus::Pending
+        );
+        assert_eq!(steps[0].text, "");
+        assert_eq!(
+            steps[1].status,
+            ConversationProgressivePlanStepStatus::Completed
+        );
+        assert_eq!(steps[1].text, "");
+        assert_eq!(*omitted_step_count, 0);
+        assert_eq!(
+            *source_bytes,
+            (MAX_PROGRESSIVE_PLAN_DETAIL_BYTES + "first".len()) as u64
+        );
+        assert_eq!(*truncated_bytes, "first".len() as u64);
+        assert_eq!(parsed.batch.payload_truncation_count(), 1);
+        assert!(parsed.batch.history_incomplete());
+    }
+
+    #[test]
     fn all_reported_identities_must_be_nonempty_and_at_most_four_kib() {
         let base = json!({
             "threadId": "thread-1",
