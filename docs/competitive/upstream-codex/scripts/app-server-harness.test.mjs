@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
@@ -16,6 +19,19 @@ test("decodeCanonicalBase64 rejects malformed success payload fields", () => {
   assert.equal(decodeCanonicalBase64("", "result.dataBase64").byteLength, 0);
   for (const value of [undefined, "%%%", "YQ", "YR=="]) {
     assert.throws(() => decodeCanonicalBase64(value, "result.dataBase64"));
+  }
+});
+
+test("Linux sampler fails closed when task children inventory is unavailable", async () => {
+  const procRoot = await mkdtemp(join(tmpdir(), "akra-proc-fixture-"));
+  try {
+    await mkdir(join(procRoot, "4242", "task", "4242"), { recursive: true });
+    await assert.rejects(
+      sampleLinuxProcessTree(4242, procRoot),
+      /task children inventory is unavailable/,
+    );
+  } finally {
+    await rm(procRoot, { recursive: true, force: true });
   }
 });
 
