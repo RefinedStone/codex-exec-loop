@@ -52,6 +52,12 @@ adoption decision.
 
 - [competitive/README.md](competitive/README.md): evidence rules, coverage index, comparison
   dimensions, and refresh order
+- [competitive/upstream-codex/analysis.md](competitive/upstream-codex/analysis.md): OpenAI Codex
+  v0.144.1 official runtime, typed in-process TUI, protocol, safety, performance, and authority audit
+- [competitive/upstream-codex/evidence.md](competitive/upstream-codex/evidence.md): immutable source
+  and release identity, schema/handshake probes, direct app-server samples, tests, and audit limits
+- [competitive/upstream-codex/gap-matrix.md](competitive/upstream-codex/gap-matrix.md): terminal-truth
+  correction, typed projection, capability, recovery, security, and delivery-boundary decisions
 - [competitive/jcode/analysis.md](competitive/jcode/analysis.md): jcode v0.43.0 product and
   architecture deep dive
 - [competitive/jcode/evidence.md](competitive/jcode/evidence.md): immutable source ledger,
