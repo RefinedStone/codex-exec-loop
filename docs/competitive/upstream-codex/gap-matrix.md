@@ -16,13 +16,12 @@ Upstream Codex is both a dependency and a reference client. The matrix therefore
 
 ## Immediate Finding
 
-The next implementation slice should correct terminal truth. At `226e4794`, every matching
-`turn/completed` discards failed/interrupted status and becomes generic Akra success; interrupted
-turns therefore take the false-success path, and retrying upstream errors terminate Akra's stream.
-Any completion-dependent continuation, archive, validation, or delivery work rests on that
-incorrect premise. This is an amendment to the existing
-[Protocol-Native Live Execution Rail](../jcode/gap-matrix.md#p0-protocol-native-live-execution-rail),
-not a competing P0.
+P0-A terminal truth is present on `prerelease` at `5a9d342f`: current live paths preserve typed
+completed, failed, interrupted, and unknown outcomes instead of collapsing matching
+`turn/completed` notifications to generic success. This atomic slice implements the P0-B applied
+envelope contract below. After it lands, the next reviewable protocol slice is P0-C1 closed item
+identity. Durable recovery, validation/delivery projection, and broader surface rendering remain
+separate owners rather than implied consequences of P0-A or P0-B.
 
 ## Authority Boundary
 
@@ -407,6 +406,37 @@ sub-slices.
 - prove current main, resumed, planning, and parallel paths; Recovery and later review-response
   owners add their own rows when those paths land.
 
+**Implementation evidence in this atomic slice**
+
+- [`conversation_runtime_envelope.rs`](../../../src/domain/conversation_runtime_envelope.rs) owns
+  requested, applied, rerouted, observation provenance, and explicit projection-gap semantics;
+- [`runtime_envelope.rs`](../../../src/adapter/outbound/app_server/protocol/runtime_envelope.rs) and
+  its checked-in
+  [`runtime_envelopes.json`](../../../src/adapter/outbound/app_server/protocol/fixtures/runtime_envelopes.json)
+  fixture fail closed on malformed stable responses while preserving missing, null, defaulted,
+  unavailable, bounded unknown, and closed source values;
+- [`conversation_runtime_event.rs`](../../../src/application/service/conversation_runtime_event.rs)
+  provides the shared application projection used by planning and parallel paths, while the Core
+  reducer owns current main/resume state without reparsing app-server wire values;
+- pre-thread-response settings are discarded at the response chronology boundary, later
+  settings/reroute/status observations use exact thread/turn correlation, and observable loss is
+  represented as a projection gap before terminal delivery can be confirmed;
+- all four current paths require the stable applied cwd to equal the protected requested workspace;
+  both the planning adapter and application orchestration independently block authority mutation
+  when the envelope is missing, rejected, or has an unresolved projection gap, while parallel
+  completion enforces the same fail-closed contract;
+- adapter-local response extras use a redacted `Debug`; provider metadata, collaboration settings,
+  raw instruction sources, and free-form config warning bodies do not enter the public envelope,
+  prompt output, or parallel trace projection.
+
+This slice retains envelope state for later presentation but adds no applied-envelope TUI surface;
+the existing bounded thread-status copy now projects accepted typed status observations. It does
+not add Admin, CLI, Telegram, persistence, restart recovery, or released-app-server capture.
+Observation sequence is local to the live adapter stream rather than durable authority. Existing
+opt-in prompt logging still records the protected workspace cwd and explicit skill input paths,
+including the bundled planning-worker skill path; it does not record raw response
+`instructionSources` or the runtime envelope.
+
 **Required proof**
 
 - start/resume response fixtures for requested-equals-applied, upstream override, missing/unknown
@@ -747,10 +777,10 @@ inseparable. Later rows may begin only after their prerequisite semantic contrac
 | 20 | Session catalog/provenance/fork | P2 existing | recovery and application identity | cursor/filter/lineage/fork TUI then Admin |
 | 21 | File approval/forms/additional inputs | P2 existing | row 16 and canary invariant | bounded typed UI and source-to-sink proof |
 
-The current documentation slice does not implement these rows. The first code row is live terminal
-classification, typed receipt delivery, and current false-success gates only. Durable readback,
-child-loss CAS, validation/delivery/Admin projection, model UI, daemon topology, and broad event
-rendering remain with their later owners.
+Rows 1 and 2 are implemented as separate atomic slices: P0-A is already on `prerelease`, and this
+slice carries P0-B code and evidence together. Row 3, closed item identity, is next. Durable
+readback, child-loss CAS, validation/delivery/Admin projection, model UI, daemon topology, and broad
+event rendering remain with their later owners.
 
 ## Success Audit
 
