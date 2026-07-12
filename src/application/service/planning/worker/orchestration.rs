@@ -1589,6 +1589,59 @@ mod tests {
     }
 
     #[test]
+    fn invalid_worker_runtime_envelope_reconciles_files_without_mutating_authority() {
+        let workspace = workspace("invalid-runtime-envelope");
+        let repo = Arc::new(NoopPlanningTaskRepositoryPort);
+        seed_authority(repo.as_ref(), &workspace);
+        let original_result = "# Result Output\n- Preserve accepted content.";
+        let workspace_port = Arc::new(RecordingPlanningWorkspacePort::new_with_worker_candidate(
+            original_result,
+            "# Result Output\n- Worker attempted overwrite.",
+        ));
+        let worker_message = r#"Worker returned an untrusted task command.
+
+```json
+{"planning_task_commands":{"version":1,"commands":[{"op":"create_task","title":"Must not commit","description":"An invalid runtime envelope cannot authorize task mutation.","direction_relation_note":"invalid runtime proof"}]}}
+```"#;
+        let worker = Arc::new(RecordingPlanningWorkerPort::new(PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread-invalid".to_string()),
+            turn_id: Some("worker-turn-invalid".to_string()),
+            runtime_envelope: None,
+            final_agent_message: Some(worker_message.to_string()),
+            changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
+        }));
+        let service = orchestration_service(worker, workspace_port.clone(), repo.clone());
+
+        let error = service
+            .refresh_queue_from_reply(PlanningQueueRefreshRequest {
+                workspace_directory: &workspace,
+                parent_thread_id: Some("parent-thread-invalid"),
+                completed_turn_id: "parent-turn-invalid",
+                latest_user_message: Some("continue"),
+                latest_main_reply: "done",
+                previous_handoff_task: None,
+                mode: PlanningQueueRefreshMode::FromLatestMainReply,
+            })
+            .expect_err("invalid runtime truth must fail before task mutation");
+
+        assert!(error.to_string().contains("runtime envelope"));
+        assert_eq!(
+            workspace_port
+                .current_record()
+                .result_output_markdown
+                .as_deref(),
+            Some(original_result)
+        );
+        assert_eq!(workspace_port.commits().len(), 1);
+        let task_snapshot = repo
+            .load_task_authority_snapshot(&workspace)
+            .expect("task snapshot should load")
+            .expect("task snapshot should remain present");
+        assert!(task_snapshot.task_authority.tasks.is_empty());
+    }
+
+    #[test]
     fn refresh_worker_commits_task_commands_and_restores_protected_files() {
         let workspace = workspace("command-commit");
         let repo = Arc::new(NoopPlanningTaskRepositoryPort);
