@@ -233,6 +233,73 @@ fn inline_main_buffer_viewport_replay_keeps_recent_transcript_while_streaming() 
 }
 
 #[test]
+fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
+    let secret = "AKRA_RENDER_PROGRESSIVE_SECRET";
+    let mut wide_app = make_test_app();
+    wide_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    wide_app.show_startup_ascii_art = false;
+    tui_testkit::set_progressive_command_activity(
+        &mut wide_app,
+        &format!("{secret}\nsecond line"),
+        false,
+    );
+
+    let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 80, 24);
+    assert!(
+        wide.contains(
+            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00%"
+        )
+    );
+    assert!(!wide.contains(secret));
+    assert_snapshot!("inline_progressive_activity_rail_wide", wide);
+
+    let mut narrow_app = make_test_app();
+    narrow_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    narrow_app.show_startup_ascii_art = false;
+    tui_testkit::set_progressive_command_activity(
+        &mut narrow_app,
+        &format!("{secret}\nsecond line"),
+        false,
+    );
+
+    let narrow = tui_testkit::render_inline_snapshot(&mut narrow_app, 48, 10);
+    assert!(narrow.contains("notice: activity: cmd:2 lines | active:command"));
+    assert!(!narrow.contains("diff:"));
+    assert!(!narrow.contains("ctx:"));
+    assert!(!narrow.contains(secret));
+    assert!(
+        narrow
+            .lines()
+            .all(|line| line.trim_matches('"').chars().count() <= 48),
+        "{narrow:?}"
+    );
+    assert_snapshot!("inline_progressive_activity_rail_narrow", narrow);
+}
+
+#[test]
+fn vt100_progressive_activity_rail_is_transient_and_payload_free() {
+    let secret = "AKRA_VT100_PROGRESSIVE_SECRET";
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_startup_ascii_art = false;
+    tui_testkit::set_progressive_command_activity(
+        &mut app,
+        &format!("{secret}\nsecond line"),
+        false,
+    );
+
+    let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
+
+    assert!(
+        rendered.contains(
+            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00%"
+        )
+    );
+    assert!(!rendered.contains(secret));
+    assert_snapshot!("vt100_progressive_activity_rail", rendered);
+}
+
+#[test]
 fn vt100_ready_shell_matches_snapshot() {
     /*
      * vt100 backend snapshot은 real terminal escape output을 통과한 결과를 본다.

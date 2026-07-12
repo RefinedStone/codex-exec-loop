@@ -37,6 +37,7 @@ pub(super) fn build_inline_tail_lines_with_context(
     app: &NativeTuiApp,
     context: &ShellCorePresentationContext<'_>,
     github_review_recent_changes_summary: Option<String>,
+    notice_detail_limit: usize,
 ) -> Vec<Line<'static>> {
     /*
     Planning projection is computed before state branching because both the ready
@@ -197,6 +198,7 @@ pub(super) fn build_inline_tail_lines_with_context(
                 github_review_recent_changes_summary.as_deref(),
                 conversation,
                 INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+                notice_detail_limit,
             ) {
                 lines.push(Line::from(format!("notice: {notice_line}")));
             }
@@ -707,6 +709,7 @@ mod coverage_tests {
             app,
             &context,
             recent_changes.map(str::to_string),
+            INLINE_TAIL_NOTICE_DETAIL_LIMIT,
         ))
     }
 

@@ -34,6 +34,7 @@ use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommand
 #[cfg(test)]
 use super::auto_follow::AutoFollowDecision;
 use super::auto_follow::{AutoFollowSkipReason, AutoFollowState};
+use super::progressive_activity::ProgressiveActivityState;
 use super::turn_activity::TurnActivityState;
 
 const MAX_BASE_WARNINGS: usize = 128;
@@ -146,6 +147,7 @@ pub(crate) struct ConversationViewModel {
     // Rendering and post-turn worker context must read the core snapshot instead.
     reducer_event_projection_cache: PlanningRuntimeProjection,
     pub(crate) turn_activity: TurnActivityState,
+    pub(crate) progressive_activity: ProgressiveActivityState,
     // Approval review is tied to the currently streaming turn and cleared on a new turn.
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) pending_approval_request: Option<ConversationApprovalRequest>,
@@ -194,6 +196,7 @@ impl ConversationViewModel {
             auto_follow_state: AutoFollowState::new(),
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
+            progressive_activity: ProgressiveActivityState::default(),
             approval_review: None,
             pending_approval_request: None,
             pending_approval_resolution: None,
@@ -269,6 +272,7 @@ impl ConversationViewModel {
             auto_follow_state: AutoFollowState::new(),
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
+            progressive_activity: ProgressiveActivityState::default(),
             approval_review: None,
             pending_approval_request: None,
             pending_approval_resolution: None,
@@ -397,6 +401,7 @@ impl ConversationViewModel {
     }
     pub(crate) fn record_thread_prepared(&mut self, thread_id: String, title: String, cwd: String) {
         // Thread preparation upgrades a draft into an app-server backed conversation.
+        self.progressive_activity.reset();
         let reattached_same_thread = self.thread_id == thread_id && self.has_active_thread();
         self.thread_id = thread_id;
         self.title = title.clone();
@@ -407,6 +412,7 @@ impl ConversationViewModel {
         }
     }
     pub(crate) fn record_turn_started(&mut self, turn_id: String) {
+        self.progressive_activity.reset();
         self.mark_turn_started(turn_id);
         self.live_agent_message = None;
         // Auto-follow has its own phase text, but still shares the transcript status rail.
@@ -601,6 +607,7 @@ impl ConversationViewModel {
             .register_changed_planning_file_paths(changed_planning_file_paths);
         self.turn_activity.complete_turn(turn_id);
         self.mark_turn_finished();
+        self.progressive_activity.reset();
 
         workspace_directory
     }
@@ -610,6 +617,7 @@ impl ConversationViewModel {
         self.flush_buffered_tool_messages();
         self.auto_follow_state.clear_runtime_phase();
         self.mark_turn_finished();
+        self.progressive_activity.reset();
         self.status_text = "turn failed".to_string();
         self.append_status_message(message);
     }

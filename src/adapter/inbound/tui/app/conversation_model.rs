@@ -12,6 +12,8 @@ pub(super) use crate::domain::conversation::{ConversationMessage, ConversationMe
 // follow-up 정책, 현재 turn activity, renderer-facing view model로 나눠 둔다.
 #[path = "conversation_model/auto_follow.rs"]
 mod auto_follow;
+#[path = "conversation_model/progressive_activity.rs"]
+mod progressive_activity;
 #[path = "conversation_model/turn_activity.rs"]
 mod turn_activity;
 #[path = "conversation_model/view_model.rs"]
@@ -24,6 +26,7 @@ pub(crate) use auto_follow::AutoFollowDecision;
 pub(crate) use auto_follow::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, StopKeywordRule,
 };
+pub(crate) use progressive_activity::{ProgressiveActivityItemKind, ProgressiveActivityState};
 // shell은 conversation state, input state, planning-repair state를 이 surface에서
 // 가져오고, 실제 mapping logic은 `view_model.rs` 안에 남긴다.
 #[cfg(test)]

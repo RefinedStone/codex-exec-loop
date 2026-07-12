@@ -1,0 +1,28 @@
+---
+source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+expression: wide
+---
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"Akra  |  thread: Progressive activity  |  turn: working  |  input: streaming    "
+"status: turn started                                                            "
+"◦ Working (0s • waiting for response / interrupt runtime-...)                   "
+"notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00%     "
+">                                                                               "
+"prompt: turn running  |  type now, Enter when idle                              "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

@@ -1,11 +1,13 @@
 use super::super::prompt_composer::{build_prompt_cursor_offset, wrapped_row_count};
 use super::super::{
-    INLINE_TAIL_NOTICE_DETAIL_LIMIT, Line, NativeTuiApp, ShellConversationState,
-    ShellCorePresentationContext, ShellOverlay,
+    Line, NativeTuiApp, ShellConversationState, ShellCorePresentationContext, ShellOverlay,
 };
 use super::tail_copy::{
     build_inline_tail_lines_with_context, build_inline_tail_prompt_lines_with_context,
 };
+
+const INLINE_TAIL_NOTICE_PREFIX_WIDTH: usize = "notice: ".len();
+const INLINE_TAIL_MAX_NOTICE_DETAIL_LIMIT: usize = 160;
 
 // InlineTailView is the renderer-facing plan for the live status tail.
 // It keeps text lines, cursor placement, and startup anchoring together so rendering uses one coherent snapshot.
@@ -24,10 +26,14 @@ pub(crate) struct InlineTailView {
 pub(crate) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> InlineTailView {
     // The context narrows NativeTuiApp to the shell state needed by both tail copy and cursor layout.
     let context = ShellCorePresentationContext::from_app(app);
+    let notice_detail_limit = usize::from(content_width)
+        .saturating_sub(INLINE_TAIL_NOTICE_PREFIX_WIDTH)
+        .min(INLINE_TAIL_MAX_NOTICE_DETAIL_LIMIT);
     let mut lines = build_inline_tail_lines_with_context(
         app,
         &context,
-        app.github_review_recent_changes_summary(INLINE_TAIL_NOTICE_DETAIL_LIMIT),
+        app.github_review_recent_changes_summary(notice_detail_limit),
+        notice_detail_limit,
     );
     lines = compact_inspection_tail_lines(app, &context, content_width, lines);
 

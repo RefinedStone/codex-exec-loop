@@ -16,6 +16,18 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, Write};
 
+use crate::domain::conversation_item_lifecycle::{
+    ConversationItemKind, ConversationItemLifecycleConsistency,
+    ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
+    ConversationItemLifecycleSource, ConversationItemOutcome,
+};
+use crate::domain::conversation_progressive_activity::{
+    ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
+    ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
+    ConversationProgressiveActivityProjection, ConversationProgressiveTokenUsage,
+    ConversationProgressiveTokenUsageBreakdown,
+};
+
 // VT100-backed helpers keep a larger scrollback than the visible viewport so
 // inline rendering tests can assert both host scrollback and current-screen text.
 const DEFAULT_VT100_SCROLLBACK_ROWS: usize = 256;
@@ -317,6 +329,138 @@ pub(super) fn set_live_agent_message(app: &mut NativeTuiApp, text: &str) {
         Some("agent-1".to_string()),
     ));
 }
+
+pub(super) fn set_progressive_command_activity(
+    app: &mut NativeTuiApp,
+    command_tail: &str,
+    bounded_history: bool,
+) {
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    if !conversation.has_active_thread() {
+        conversation.record_thread_prepared(
+            "thread-rail".to_string(),
+            "Progressive activity".to_string(),
+            "/tmp/progressive-activity".to_string(),
+        );
+    }
+    conversation.record_turn_started("turn-rail".to_string());
+    conversation.progressive_activity.observe_item_lifecycle(
+        &ConversationItemLifecycleObservation {
+            thread_id: conversation.thread_id.clone(),
+            turn_id: "turn-rail".to_string(),
+            item_id: "command-rail".to_string(),
+            kind: ConversationItemKind::CommandExecution,
+            phase: ConversationItemLifecyclePhase::Started,
+            source: ConversationItemLifecycleSource::Live,
+            observed_at_ms: Some(1),
+            outcome: ConversationItemOutcome::InProgress,
+            summary: "command running".to_string(),
+        },
+        Some(ConversationItemLifecycleConsistency::Accepted),
+    );
+
+    let newline_count = command_tail
+        .as_bytes()
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count() as u64;
+    let mut command_batch =
+        ConversationProgressiveActivityBatch::single(ConversationProgressiveActivityObservation {
+            sequence: 0,
+            thread_id: conversation.thread_id.clone(),
+            turn_id: Some("turn-rail".to_string()),
+            item_id: Some("command-rail".to_string()),
+            kind: ConversationProgressiveActivityKind::CommandOutput,
+            payload: ConversationProgressiveActivityPayload::CommandOutput {
+                tail: command_tail.to_string(),
+                chunk_count: 1,
+                source_bytes: command_tail.len() as u64,
+                newline_count,
+                ends_with_newline: command_tail.ends_with('\n'),
+                truncated_bytes: 0,
+            },
+        })
+        .expect("progressive command fixture should be valid");
+    if bounded_history {
+        command_batch.set_incomplete_counters_for_test(0, 1, 0, 0);
+    }
+    let mut projection = ConversationProgressiveActivityProjection::default();
+    projection
+        .apply_batch_correlated(
+            Some(conversation.thread_id.as_str()),
+            Some("turn-rail"),
+            command_batch,
+        )
+        .expect("progressive command fixture should project");
+    projection
+        .apply_batch_correlated(
+            Some(conversation.thread_id.as_str()),
+            Some("turn-rail"),
+            ConversationProgressiveActivityBatch::single(
+                ConversationProgressiveActivityObservation {
+                    sequence: 1,
+                    thread_id: conversation.thread_id.clone(),
+                    turn_id: Some("turn-rail".to_string()),
+                    item_id: None,
+                    kind: ConversationProgressiveActivityKind::TurnDiff,
+                    payload: ConversationProgressiveActivityPayload::TurnDiff {
+                        detail: command_tail.to_string(),
+                        source_bytes: command_tail.len() as u64,
+                        line_count: 3,
+                        addition_count: 1,
+                        deletion_count: 1,
+                        hunk_count: 1,
+                        truncated_bytes: 0,
+                    },
+                },
+            )
+            .expect("progressive diff fixture should be valid"),
+        )
+        .expect("progressive diff fixture should project");
+    let token_breakdown = ConversationProgressiveTokenUsageBreakdown {
+        cached_input_tokens: 0,
+        input_tokens: 75,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        total_tokens: 75,
+    };
+    projection
+        .apply_batch_correlated(
+            Some(conversation.thread_id.as_str()),
+            Some("turn-rail"),
+            ConversationProgressiveActivityBatch::single(
+                ConversationProgressiveActivityObservation {
+                    sequence: 2,
+                    thread_id: conversation.thread_id.clone(),
+                    turn_id: Some("turn-rail".to_string()),
+                    item_id: None,
+                    kind: ConversationProgressiveActivityKind::TokenUsage,
+                    payload: ConversationProgressiveActivityPayload::TokenUsage {
+                        usage: ConversationProgressiveTokenUsage {
+                            last: token_breakdown,
+                            total: token_breakdown,
+                            model_context_window: Some(100),
+                        },
+                    },
+                },
+            )
+            .expect("progressive token fixture should be valid"),
+        )
+        .expect("progressive token fixture should project");
+    let snapshot = projection.snapshot();
+    conversation.progressive_activity.apply_projection_update(
+        snapshot.as_ref(),
+        Some(0),
+        Some(2),
+        u64::from(bounded_history),
+        0,
+        0,
+        0,
+    );
+}
+
 pub(super) struct Vt100Screen {
     parser: vt100::Parser,
     width: u16,

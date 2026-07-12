@@ -108,6 +108,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/conversation_intents.rs`
 - `src/adapter/inbound/tui/app/conversation_lifecycle.rs`
 - `src/adapter/inbound/tui/app/conversation_model/auto_follow_decision.rs`
+- `src/adapter/inbound/tui/app/conversation_model/progressive_activity_tests.rs`
 - `src/adapter/inbound/tui/app/conversation_model/view_model.rs`
 - `src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs`
 - `src/adapter/inbound/tui/app/conversation_model_tests.rs`
@@ -156,6 +157,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/parallel_working_copy.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/plan_indicator.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/transcript_copy.rs`
 - `src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs`
 - `src/adapter/inbound/tui/app/shell_rendering/inline_layout.rs`

@@ -387,27 +387,35 @@ pub(super) fn reduce_conversation_runtime(
                             "ignored item lifecycle observation: {}",
                             rejection.notice_label()
                         )]);
-                    } else if matches!(
-                        consistency,
-                        Some(
-                            crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::DuplicateStart
-                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::DuplicateCompletion
-                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::StartAfterCompletion
-                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::KindMismatch
-                                | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::TimestampRegression
-                        )
-                    ) {
-                        state.extend_runtime_notices([format!(
-                            "app-server item lifecycle anomaly for {}",
-                            observation.item_id
-                        )]);
-                    } else if let crate::domain::conversation_item_lifecycle::ConversationItemKind::Unknown(
-                        wire_type,
-                    ) = &observation.kind
-                    {
-                        state.extend_runtime_notices([format!(
-                            "app-server reported an unclassified item kind: {wire_type}"
-                        )]);
+                    } else {
+                        let lifecycle_anomaly = matches!(
+                            consistency,
+                            Some(
+                                crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::DuplicateStart
+                                    | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::DuplicateCompletion
+                                    | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::StartAfterCompletion
+                                    | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::KindMismatch
+                                    | crate::domain::conversation_item_lifecycle::ConversationItemLifecycleConsistency::TimestampRegression
+                            )
+                        );
+                        state
+                            .progressive_activity
+                            .observe_item_lifecycle(&observation, consistency);
+                        if lifecycle_anomaly {
+                            state.extend_runtime_notices([format!(
+                                "app-server item lifecycle anomaly for {}",
+                                observation.item_id
+                            )]);
+                        } else {
+                            if let crate::domain::conversation_item_lifecycle::ConversationItemKind::Unknown(
+                                wire_type,
+                            ) = &observation.kind
+                            {
+                                state.extend_runtime_notices([format!(
+                                    "app-server reported an unclassified item kind: {wire_type}"
+                                )]);
+                            }
+                        }
                     }
                 }
                 TurnStreamUpdate::ProgressiveActivityObserved {
@@ -420,10 +428,18 @@ pub(super) fn reduce_conversation_runtime(
                             rejection.notice_label()
                         )]);
                     } else {
-                        if let Some((item_id, phase, text)) = latest_agent_draft_for_update(
+                        state.progressive_activity.apply_projection_update(
                             progressive_activity.as_ref(),
-                            &activity,
-                        ) {
+                            activity.first_sequence,
+                            activity.last_sequence,
+                            activity.payload_truncation_count,
+                            activity.dropped_observation_count,
+                            activity.invalid_observation_count,
+                            activity.unknown_observation_count,
+                        );
+                        if let Some((item_id, phase, text)) =
+                            latest_agent_draft_for_update(progressive_activity.as_ref(), &activity)
+                        {
                             state.sync_live_agent_draft(item_id, phase, text);
                         }
                         if progressive_activity_requires_runtime_notice(&activity) {
@@ -890,6 +906,10 @@ mod tests {
         ConversationApprovalReviewStatus, ConversationMessage, ConversationMessageKind,
         ConversationToolActivity, ConversationToolActivityKind,
     };
+    use crate::domain::conversation_item_lifecycle::{
+        ConversationItemKind, ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
+        ConversationItemLifecycleSource, ConversationItemOutcome,
+    };
     use crate::domain::conversation_progressive_activity::{
         ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
         ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
@@ -937,6 +957,17 @@ mod tests {
                     );
                 }
             }
+            ConversationStreamEvent::ItemLifecycleObserved { observation } => {
+                stream_state.seed_loaded_thread_identity(
+                    observation.thread_id.clone(),
+                    "Test thread",
+                    "/tmp/workspace",
+                );
+                stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+                    turn_id: observation.turn_id.clone(),
+                    runtime_request: Box::default(),
+                });
+            }
             _ => {}
         }
         ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
@@ -965,6 +996,51 @@ mod tests {
             },
         })
         .expect("progressive agent test event should be valid")
+    }
+
+    fn progressive_command_event(tail: &str) -> ConversationStreamEvent {
+        let newline_count = tail
+            .as_bytes()
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count() as u64;
+        let batch = ConversationProgressiveActivityBatch::single(
+            ConversationProgressiveActivityObservation {
+                sequence: 0,
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                item_id: Some("command-1".to_string()),
+                kind: ConversationProgressiveActivityKind::CommandOutput,
+                payload: ConversationProgressiveActivityPayload::CommandOutput {
+                    tail: tail.to_string(),
+                    chunk_count: 1,
+                    source_bytes: tail.len() as u64,
+                    newline_count,
+                    ends_with_newline: tail.ends_with('\n'),
+                    truncated_bytes: 0,
+                },
+            },
+        )
+        .expect("progressive command test event should be valid");
+        ConversationStreamEvent::ProgressiveActivityObserved {
+            batch: Box::new(batch),
+        }
+    }
+
+    fn command_started_event() -> ConversationStreamEvent {
+        ConversationStreamEvent::ItemLifecycleObserved {
+            observation: Box::new(ConversationItemLifecycleObservation {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "command-1".to_string(),
+                kind: ConversationItemKind::CommandExecution,
+                phase: ConversationItemLifecyclePhase::Started,
+                source: ConversationItemLifecycleSource::Live,
+                observed_at_ms: Some(1),
+                outcome: ConversationItemOutcome::InProgress,
+                summary: "command running".to_string(),
+            }),
+        }
     }
 
     fn coalesced_progressive_agent_event() -> ConversationStreamEvent {
@@ -1444,6 +1520,39 @@ mod tests {
                 .iter()
                 .all(|notice| !notice.contains("progressive activity was bounded"))
         );
+        assert!(!reduction.state.progressive_activity.bounded_history());
+    }
+
+    #[test]
+    fn progressive_command_projects_only_counts_and_clears_on_failure() {
+        let secret = "AKRA_RAIL_RAW_COMMAND_SECRET";
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.record_thread_prepared(
+            "thread-1".to_string(),
+            "Runtime thread".to_string(),
+            "/tmp/workspace".to_string(),
+        );
+        state.mark_turn_submitting("/tmp/workspace".to_string());
+        state.record_turn_started("turn-1".to_string());
+
+        let started =
+            reduce_conversation_runtime(state, stream_snapshot_event(command_started_event()));
+        let projected = reduce_conversation_runtime(
+            started.state,
+            stream_snapshot_event(progressive_command_event(&format!("first line\n{secret}"))),
+        );
+
+        assert_eq!(projected.state.progressive_activity.command_line_count(), 2);
+        assert!(!format!("{:?}", projected.state.progressive_activity).contains(secret));
+
+        let failed = reduce_conversation_runtime(
+            projected.state,
+            stream_snapshot_event(ConversationStreamEvent::Failed {
+                message: "provider failed".to_string(),
+            }),
+        );
+        assert_eq!(failed.state.progressive_activity.command_line_count(), 0);
+        assert_eq!(failed.state.progressive_activity.active_item_kind(), None);
     }
 
     #[test]

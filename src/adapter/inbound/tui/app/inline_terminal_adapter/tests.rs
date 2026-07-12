@@ -66,6 +66,118 @@ fn host_history_sync_keeps_live_agent_delta_out_of_inserted_history() {
     assert!(live_frame.contains("live answer stays in tail"));
 }
 
+#[test]
+fn host_history_sync_keeps_progressive_activity_rail_transient() {
+    let secret = "AKRA_PROGRESSIVE_SCROLLBACK_SECRET";
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    append_history_message(&mut app, "committed history remains durable");
+    tui_testkit::set_progressive_command_activity(
+        &mut app,
+        &format!("{secret}\nsecond line"),
+        false,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_viewport = InlineTerminalState::default();
+    let mut frames = tui_testkit::InlineFrameRecorder::default();
+
+    frames.draw_and_record(
+        "wide-live",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_viewport,
+    );
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 48, 10);
+    frames.draw_and_record(
+        "narrow-live",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_viewport,
+    );
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 24);
+    frames.draw_and_record(
+        "restored-live",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_viewport,
+    );
+
+    for label in ["wide-live", "narrow-live", "restored-live"] {
+        let frame = frames.frame(label);
+        assert!(frame.screen_text.contains("notice: activity:"), "{label}");
+        assert!(frame.screen_text.contains("cmd:2"), "{label}");
+        assert!(frame.screen_text.contains("active:command"), "{label}");
+        assert!(!frame.screen_text.contains(secret), "{label}");
+        assert!(!frame.host_scrollback_text.contains("activity:"), "{label}");
+        assert!(!frame.host_scrollback_text.contains(secret), "{label}");
+    }
+    assert!(
+        frames
+            .frame("wide-live")
+            .terminal_history_text
+            .contains("committed history remains durable")
+    );
+
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.fail_turn("command failed".to_string());
+    frames.draw_and_record("cleared", &mut terminal, &mut runtime, &mut inline_viewport);
+    let cleared = frames.frame("cleared");
+    assert!(!cleared.screen_text.contains("activity:"));
+    assert!(!cleared.screen_text.contains("active:command"));
+    assert!(!cleared.terminal_history_text.contains("activity:"));
+    assert!(!cleared.terminal_history_text.contains(secret));
+}
+
+#[test]
+fn vt100_progressive_activity_rail_stays_transient_across_resize() {
+    let secret = "AKRA_PROGRESSIVE_VT100_SECRET";
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    append_history_message(&mut app, "committed VT100 history remains durable");
+    tui_testkit::set_progressive_command_activity(
+        &mut app,
+        &format!("{secret}\nsecond line"),
+        false,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    for (width, height) in [(80, 24), (48, 10), (80, 24)] {
+        tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, width, height);
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("progressive VT100 draw transaction");
+        let screen = tui_testkit::screen_text(&terminal);
+        assert!(screen.contains("notice: activity:"), "{width}x{height}");
+        assert!(screen.contains("cmd:2"), "{width}x{height}");
+        assert!(screen.contains("active:command"), "{width}x{height}");
+        assert!(!screen.contains(secret), "{width}x{height}");
+        let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+        assert!(!host_scrollback.contains("activity:"), "{width}x{height}");
+        assert!(!host_scrollback.contains(secret), "{width}x{height}");
+    }
+
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.fail_turn("command failed".to_string());
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("cleared progressive VT100 draw transaction");
+    let screen = tui_testkit::screen_text(&terminal);
+    assert!(!screen.contains("activity:"));
+    assert!(!screen.contains("active:command"));
+    let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    assert!(!host_scrollback.contains("activity:"));
+    assert!(!host_scrollback.contains(secret));
+}
+
 // Any direct history insertion invalidates ratatui's back buffer. The next
 // frame draw must rebuild the buffer before incremental diffs are trusted.
 #[test]
