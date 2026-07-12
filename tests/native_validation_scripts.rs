@@ -2551,6 +2551,244 @@ printf '200'
 }
 
 #[test]
+fn gh_akra_review_reply_uses_scoped_endpoint_and_rejects_invalid_ids() {
+    let source = fs::read_to_string(repo_root().join("scripts/gh-akra.sh"))
+        .expect("gh-akra source should be readable");
+    let api_endpoint =
+        "\"/repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies\"";
+    assert_eq!(source.matches(api_endpoint).count(), 1);
+    assert!(!source.contains("pulls/comments/${comment_id}/replies"));
+    assert!(!source.contains("reply_review_comment_with_gh"));
+    assert!(!source.contains("-f \"body=${body}\""));
+
+    let root = make_records_dir();
+    let repo = root.join("repo");
+    let bin_dir = root.join("bin");
+    let curl_log = root.join("curl.log");
+    let body_file = root.join("reply.md");
+    fs::create_dir(&repo).expect("review reply repo should be created");
+    fs::create_dir(&bin_dir).expect("review reply bin should be created");
+    fs::write(&body_file, "review \"quoted\" \\ path\nnext line\n")
+        .expect("review reply body should be written");
+
+    assert_success(
+        &Command::new("git")
+            .arg("init")
+            .arg(&repo)
+            .output()
+            .expect("git init should run"),
+        "git init",
+    );
+    assert_success(
+        &run_git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        ),
+        "configure origin",
+    );
+    assert_success(
+        &run_git(&repo, &["config", "akra.githubLogin", "akra"]),
+        "configure GitHub write identity",
+    );
+
+    for command in ["cat", "git", "mktemp", "python3", "rm", "sed"] {
+        link_path_command(&bin_dir, command);
+    }
+    assert!(
+        !bin_dir.join("gh").exists(),
+        "the review reply fixture must use the direct API fallback"
+    );
+    write_executable_file(
+        &bin_dir.join("curl"),
+        r#"#!/bin/sh
+set -eu
+config=$(cat)
+output_file=$(printf '%s\n' "$config" | sed -n 's/^output = "\(.*\)"$/\1/p')
+url=$(printf '%s\n' "$config" | sed -n 's/^url = "\(.*\)"$/\1/p')
+printf '%s\n' "$url" >> "${AKRA_GITHUB_CURL_LOG}"
+case "$url" in
+  'https://api.github.com/user')
+    printf '{"login":"akra"}' > "$output_file"
+    printf '200'
+    ;;
+  'https://api.github.com/repos/acme/widgets/pulls/42/comments/9001/replies')
+    printf '%s' "$config" | python3 -c '
+import json
+import sys
+
+values = {}
+for line in sys.stdin.read().splitlines():
+    if " = " in line:
+        key, value = line.split(" = ", 1)
+        values[key] = value
+if json.loads(values["request"]) != "POST":
+    raise SystemExit("review reply request method must be POST")
+payload = json.loads(json.loads(values["data"]))
+if payload != {"body": "review \"quoted\" \\ path\nnext line"}:
+    raise SystemExit("review reply request body did not match the body file")
+'
+    printf '{}' > "$output_file"
+    printf '201'
+    ;;
+  *)
+    printf 'unexpected GitHub API URL: %s\n' "$url" >&2
+    exit 64
+    ;;
+esac
+"#,
+    );
+
+    let run_reply = |pr_number: &str, comment_id: &str| {
+        Command::new("/bin/bash")
+            .arg(repo_root().join("scripts/gh-akra.sh"))
+            .args([
+                "review-reply",
+                "--pr",
+                pr_number,
+                "--comment-id",
+                comment_id,
+            ])
+            .arg("--body-file")
+            .arg(&body_file)
+            .current_dir(&repo)
+            .env("PATH", bin_dir.display().to_string())
+            .env("PYTHONOPTIMIZE", "2")
+            .env("AKRA_GITHUB_CURL_LOG", &curl_log)
+            .env("AKRA_GITHUB_TOKEN", "fixture-token-must-not-leak")
+            .env("GH_TOKEN", "")
+            .env("GITHUB_TOKEN", "")
+            .env_remove("AKRA_GITHUB_LOGIN")
+            .output()
+            .expect("gh-akra review reply should run")
+    };
+
+    let output = run_reply("42", "9001");
+
+    assert_success(&output, "gh-akra review reply API fallback");
+    let curl_calls = fs::read_to_string(&curl_log).expect("review reply URLs should be recorded");
+    assert!(curl_calls.contains("https://api.github.com/user\n"));
+    assert!(
+        curl_calls
+            .contains("https://api.github.com/repos/acme/widgets/pulls/42/comments/9001/replies\n")
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-token-must-not-leak"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-token-must-not-leak"));
+
+    for option in ["--pr", "--comment-id"] {
+        for invalid_id in [
+            "0", "042", "+42", "-42", " 42", "42 ", "../42", "42/7", "42?x=1",
+        ] {
+            let _ = fs::remove_file(&curl_log);
+            let invalid_output = if option == "--pr" {
+                run_reply(invalid_id, "9001")
+            } else {
+                run_reply("42", invalid_id)
+            };
+            assert!(
+                !invalid_output.status.success(),
+                "{option} value {invalid_id:?} must be rejected"
+            );
+            let stderr = String::from_utf8_lossy(&invalid_output.stderr);
+            assert!(
+                stderr.contains(&format!(
+                    "gh-akra: review-reply {option} must be a positive decimal integer"
+                )),
+                "unexpected validation error for {option} value {invalid_id:?}: {stderr}"
+            );
+            assert!(
+                !curl_log.exists(),
+                "invalid {option} value {invalid_id:?} must fail before curl"
+            );
+        }
+    }
+
+    let run_mixed_body_options = |body_first: bool| {
+        let mut command = Command::new("/bin/bash");
+        command.arg(repo_root().join("scripts/gh-akra.sh")).args([
+            "review-reply",
+            "--pr",
+            "42",
+            "--comment-id",
+            "9001",
+        ]);
+        if body_first {
+            command.args(["--body", "argv-secret-must-not-leak", "--body-file"]);
+            command.arg(&body_file);
+        } else {
+            command
+                .arg("--body-file")
+                .arg(&body_file)
+                .args(["--body", "argv-secret-must-not-leak"]);
+        }
+        command
+            .current_dir(&repo)
+            .env("PATH", bin_dir.display().to_string())
+            .env("AKRA_GITHUB_CURL_LOG", &curl_log)
+            .env("AKRA_GITHUB_TOKEN", "fixture-token-must-not-leak")
+            .env("GH_TOKEN", "")
+            .env("GITHUB_TOKEN", "")
+            .env_remove("AKRA_GITHUB_LOGIN")
+            .output()
+            .expect("mixed review reply body options should run")
+    };
+    for body_first in [true, false] {
+        let _ = fs::remove_file(&curl_log);
+        let mixed_output = run_mixed_body_options(body_first);
+        assert!(!mixed_output.status.success());
+        let stderr = String::from_utf8_lossy(&mixed_output.stderr);
+        assert!(stderr.contains(
+            "gh-akra: review-reply accepts only --body-file for privacy-safe invocation"
+        ));
+        assert!(!stderr.contains("argv-secret-must-not-leak"));
+        assert!(
+            !String::from_utf8_lossy(&mixed_output.stdout).contains("argv-secret-must-not-leak")
+        );
+        assert!(
+            !curl_log.exists(),
+            "mixed body options must fail before curl"
+        );
+    }
+
+    let _ = fs::remove_file(&curl_log);
+    let equals_body_output = Command::new("/bin/bash")
+        .arg(repo_root().join("scripts/gh-akra.sh"))
+        .args(["review-reply", "--pr", "42", "--comment-id", "9001"])
+        .arg("--body-file")
+        .arg(&body_file)
+        .arg("--body=argv-secret-must-not-leak")
+        .current_dir(&repo)
+        .env("PATH", bin_dir.display().to_string())
+        .env("AKRA_GITHUB_CURL_LOG", &curl_log)
+        .env("AKRA_GITHUB_TOKEN", "fixture-token-must-not-leak")
+        .env("GH_TOKEN", "")
+        .env("GITHUB_TOKEN", "")
+        .env_remove("AKRA_GITHUB_LOGIN")
+        .output()
+        .expect("equals review reply body option should run");
+    assert!(!equals_body_output.status.success());
+    let stderr = String::from_utf8_lossy(&equals_body_output.stderr);
+    assert!(
+        stderr
+            .contains("gh-akra: review-reply accepts only --body-file for privacy-safe invocation")
+    );
+    assert!(!stderr.contains("argv-secret-must-not-leak"));
+    assert!(
+        !String::from_utf8_lossy(&equals_body_output.stdout).contains("argv-secret-must-not-leak")
+    );
+    assert!(
+        !curl_log.exists(),
+        "equals body option must fail before curl"
+    );
+
+    fs::remove_dir_all(root).expect("review reply fixture should be removed");
+}
+
+#[test]
 fn gh_akra_api_fallback_enriches_required_pull_request_gate_fields_without_gh() {
     let root = make_records_dir();
     let repo = root.join("repo");

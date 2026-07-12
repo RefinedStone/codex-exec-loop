@@ -1118,10 +1118,8 @@ parse_review_reply_args() {
         comment_id="$2"
         shift 2
         ;;
-      --body)
-        require_value "$1" "${2-}"
-        body="$2"
-        shift 2
+      --body|--body=*)
+        usage_error "review-reply accepts only --body-file for privacy-safe invocation"
         ;;
       --body-file)
         body="$(read_option_file "$1" "${2-}")"
@@ -1135,38 +1133,23 @@ parse_review_reply_args() {
   done
 
   if [[ -z "${pr_number}" || -z "${comment_id}" || -z "${body}" ]]; then
-    usage_error "review-reply requires --pr, --comment-id, and --body"
+    usage_error "review-reply requires --pr, --comment-id, and --body-file"
+  fi
+  if [[ ! "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+    usage_error "review-reply --pr must be a positive decimal integer"
+  fi
+  if [[ ! "${comment_id}" =~ ^[1-9][0-9]*$ ]]; then
+    usage_error "review-reply --comment-id must be a positive decimal integer"
   fi
   if [[ "${body_from_file}" != "true" ]]; then
     usage_error "review-reply requires --body-file for privacy-safe invocation"
   fi
 }
 
-reply_review_comment_with_gh() {
-  parse_review_reply_args "$@"
-  if [[ -n "${gh_exec_token:-}" ]]; then
-    GH_TOKEN="${gh_exec_token}" GH_HOST=github.com gh api \
-      -X POST \
-      "repos/${repo_full_name}/pulls/comments/${comment_id}/replies" \
-      -f "body=${body}" >/dev/null
-  elif [[ -n "${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" ]]; then
-    GH_TOKEN="${AKRA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}" GH_HOST=github.com gh api \
-      -X POST \
-      "repos/${repo_full_name}/pulls/comments/${comment_id}/replies" \
-      -f "body=${body}" >/dev/null
-  else
-    GH_HOST=github.com gh api \
-      -X POST \
-      "repos/${repo_full_name}/pulls/comments/${comment_id}/replies" \
-      -f "body=${body}" >/dev/null
-  fi
-}
-
-reply_review_comment_with_api() {
+send_review_comment_reply_with_api() {
   local payload
-  parse_review_reply_args "$@"
   payload=$(printf '{"body":"%s"}' "$(json_escape "${body}")")
-  api_request POST "/repos/${repo_full_name}/pulls/comments/${comment_id}/replies" "${payload}" >/dev/null
+  api_request POST "/repos/${repo_full_name}/pulls/${pr_number}/comments/${comment_id}/replies" "${payload}" >/dev/null
 }
 
 repo_visibility_with_api() {
@@ -1213,6 +1196,10 @@ if [[ "${1-}:${2-}" == "auth:write-status" ]]; then
   verify_write_identity
   printf 'GitHub write identity verified as %s\n' "${desired_login}"
   exit 0
+fi
+
+if [[ "${1-}" == "review-reply" ]]; then
+  parse_review_reply_args "${@:2}"
 fi
 
 if ! github_command_is_read_only "$@"; then
@@ -1277,8 +1264,7 @@ if command -v gh >/dev/null 2>&1; then
     if [[ -z "${token}" ]]; then
       usage_error "review-reply requires a GitHub token from $(credential_source_help)"
     fi
-    shift
-    reply_review_comment_with_api "$@"
+    send_review_comment_reply_with_api
     exit 0
   fi
   if [[ "${1-}" == "pr" && "${2-}" == "create" ]]; then
@@ -1345,8 +1331,7 @@ case "${1-}:${2-}" in
     ;;
   review-reply:*)
     verify_api_login_if_requested
-    shift
-    reply_review_comment_with_api "$@"
+    send_review_comment_reply_with_api
     ;;
   *)
     usage_error "gh is not installed and direct fallback supports 'auth status', 'repo visibility', 'pr create', 'pr list', 'pr view', 'pr close', 'pr merge', and 'review-reply'"
