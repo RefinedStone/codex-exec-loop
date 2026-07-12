@@ -136,7 +136,10 @@ pub(in crate::adapter::outbound::app_server) fn status_observation(
                     ConversationRuntimeMalformedValue::InvalidObject,
                 );
             };
-            active_thread_status(flags)
+            match active_thread_status(flags) {
+                Ok(status) => status,
+                Err(issue) => return ConversationRuntimeObservedValue::Malformed(issue),
+            }
         }
         _ => ConversationRuntimeThreadStatus::Unknown(status_type),
     };
@@ -418,27 +421,32 @@ fn thread_status_observation(
     status_observation(Some(&Value::Object(value)))
 }
 
-fn active_thread_status(flags: &[Value]) -> ConversationRuntimeThreadStatus {
+fn active_thread_status(
+    flags: &[Value],
+) -> std::result::Result<ConversationRuntimeThreadStatus, ConversationRuntimeMalformedValue> {
     let mut waiting_on_approval = false;
     let mut waiting_on_user_input = false;
     let mut unknown_flags = Vec::new();
-    for flag in flags.iter().take(32) {
-        let Some(flag) = flag.as_str() else {
-            unknown_flags.push("malformed".to_string());
-            continue;
+    let mut unknown_flags_truncated = false;
+    for flag in flags {
+        let Some(flag) = flag.as_str().filter(|flag| !flag.is_empty()) else {
+            return Err(ConversationRuntimeMalformedValue::ExpectedString);
         };
         match flag {
             "waitingOnApproval" => waiting_on_approval = true,
             "waitingOnUserInput" => waiting_on_user_input = true,
-            _ => unknown_flags.push(bounded_text(flag, MAX_STREAM_IDENTIFIER_BYTES)),
+            _ if unknown_flags.len() < 32 => {
+                unknown_flags.push(bounded_text(flag, MAX_STREAM_IDENTIFIER_BYTES));
+            }
+            _ => unknown_flags_truncated = true,
         }
     }
-    ConversationRuntimeThreadStatus::Active {
+    Ok(ConversationRuntimeThreadStatus::Active {
         waiting_on_approval,
         waiting_on_user_input,
         unknown_flags,
-        unknown_flags_truncated: flags.len() > 32,
-    }
+        unknown_flags_truncated,
+    })
 }
 
 fn nonempty_bounded_string(value: &Value, max_bytes: usize) -> Option<String> {
@@ -477,11 +485,13 @@ fn optional_bounded_string_array(
         return Err(ConversationRuntimeMalformedValue::ExpectedArray);
     };
     let mut bounded = Vec::with_capacity(values.len().min(max_items));
-    for value in values.iter().take(max_items) {
+    for (index, value) in values.iter().enumerate() {
         let Some(value) = value.as_str().filter(|value| !value.is_empty()) else {
             return Err(ConversationRuntimeMalformedValue::ExpectedString);
         };
-        bounded.push(bounded_text(value, max_item_bytes));
+        if index < max_items {
+            bounded.push(bounded_text(value, max_item_bytes));
+        }
     }
     Ok(Some((bounded, values.len() > max_items)))
 }
@@ -1010,5 +1020,64 @@ mod tests {
                 }
             ) if unknown_flags.len() == 32
         ));
+    }
+
+    #[test]
+    fn sandbox_roots_reject_malformed_values_after_the_projection_limit() {
+        let mut roots = (0..MAX_SANDBOX_WRITABLE_ROOTS)
+            .map(|index| Value::String(format!("/repo/root-{index}")))
+            .collect::<Vec<_>>();
+        roots.push(Value::Bool(false));
+
+        assert_eq!(
+            observed_sandbox_policy(Some(&json!({
+                "type": "workspaceWrite",
+                "writableRoots": roots
+            }))),
+            ConversationRuntimeObservedValue::Malformed(
+                ConversationRuntimeMalformedValue::ExpectedString
+            )
+        );
+    }
+
+    #[test]
+    fn active_flags_scan_known_values_after_the_unknown_projection_limit() {
+        let mut flags = (0..33)
+            .map(|index| Value::String(format!("futureFlag{index}")))
+            .collect::<Vec<_>>();
+        flags.push(Value::String("waitingOnApproval".to_string()));
+
+        assert!(matches!(
+            status_observation(Some(&json!({
+                "type": "active",
+                "activeFlags": flags
+            }))),
+            ConversationRuntimeObservedValue::Observed(
+                ConversationRuntimeThreadStatus::Active {
+                    waiting_on_approval: true,
+                    ref unknown_flags,
+                    unknown_flags_truncated: true,
+                    ..
+                }
+            ) if unknown_flags.len() == 32
+        ));
+    }
+
+    #[test]
+    fn active_flags_reject_malformed_values_after_the_projection_limit() {
+        let mut flags = (0..32)
+            .map(|index| Value::String(format!("futureFlag{index}")))
+            .collect::<Vec<_>>();
+        flags.push(Value::Bool(false));
+
+        assert_eq!(
+            status_observation(Some(&json!({
+                "type": "active",
+                "activeFlags": flags
+            }))),
+            ConversationRuntimeObservedValue::Malformed(
+                ConversationRuntimeMalformedValue::ExpectedString
+            )
+        );
     }
 }
