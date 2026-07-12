@@ -1898,16 +1898,17 @@ mod tests {
     };
     use super::{
         AppServerEventSender, AppServerPromptOutputCapture, CodexAppServerAdapter,
-        ConversationTurnApplicationDelivery, ConversationTurnTerminalOutcome,
-        ConversationTurnTerminalReceipt, MAX_STREAM_CHANGED_PATHS,
-        MAX_STREAM_COMPLETED_MESSAGE_BYTES, MAX_STREAM_DELTA_BYTES,
-        PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_MODEL,
-        PLANNING_WORKER_SERVICE_NAME, PlanningWorkerContinuationWatcher, STREAM_TRUNCATION_MARKER,
+        ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
+        MAX_STREAM_CHANGED_PATHS, MAX_STREAM_COMPLETED_MESSAGE_BYTES, MAX_STREAM_DELTA_BYTES,
+        PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
+        PlanningWorkerContinuationWatcher, STREAM_TRUNCATION_MARKER,
         bounded_app_server_stream_event, codex_raw_trust_key, finish_stream_result,
         persisted_error_summary, prompt_log_input_records, prompt_log_output_record,
         prompt_log_stream_forwarder, prompt_log_terminal_error, prompt_log_terminal_status,
         protected_thread_workspace, reasoning_effort_label,
     };
+    #[cfg(unix)]
+    use super::{ConversationTurnTerminalOutcome, PLANNING_WORKER_MODEL};
     #[cfg(unix)]
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot,
@@ -1934,11 +1935,14 @@ mod tests {
     #[cfg(unix)]
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeApprovalPolicy, ConversationRuntimeApprovalsReviewer,
-        ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
-        ConversationRuntimeEnvelopeObservation, ConversationRuntimeModelRerouteReason,
-        ConversationRuntimeObservedValue, ConversationRuntimeProcessEnvironment,
-        ConversationRuntimeRequestedValue, ConversationRuntimeSandboxPolicy,
-        ConversationRuntimeShellEnvironment, ConversationRuntimeThreadStatus,
+        ConversationRuntimeConfigurationRequest, ConversationRuntimeModelRerouteReason,
+        ConversationRuntimeProcessEnvironment, ConversationRuntimeRequestedValue,
+        ConversationRuntimeSandboxPolicy, ConversationRuntimeShellEnvironment,
+        ConversationRuntimeThreadStatus,
+    };
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeEnvelope, ConversationRuntimeEnvelopeObservation,
+        ConversationRuntimeObservedValue,
     };
     #[cfg(unix)]
     use crate::domain::recent_sessions::{
