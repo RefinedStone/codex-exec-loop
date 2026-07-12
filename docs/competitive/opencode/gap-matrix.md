@@ -252,7 +252,7 @@ new product P0 or an alternate Codex tool sandbox.
 - fail the matrix check on missing expected captures, scanner errors, unknown public DTO fields, or any
   forbidden match; never report green from an empty artifact directory;
 - delete canary state after the run and verify source/worktree Git config and process environment
-  contain no residue.
+  contain no residue;
 - after every disposable DB writer shuts down, scan the main SQLite file including free pages and
   bounded `-journal`, `-wal`, `-shm`, temporary, and backup candidates as raw bytes without opening
   or mutating them. Active-row queries and physical-file scans are separate evidence; a write/delete
