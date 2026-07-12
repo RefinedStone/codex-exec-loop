@@ -9,6 +9,7 @@ const AKRA_BIN: &str = env!("CARGO_BIN_EXE_akra");
 const ADMIN_BIN: &str = env!("CARGO_BIN_EXE_akra-admin");
 const TELEGRAM_BIN: &str = env!("CARGO_BIN_EXE_akra-telegram");
 const TEST_ADMIN_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const ADMIN_INTERRUPT_READINESS_ATTEMPTS: usize = 10;
 
 #[test]
 fn default_binary_and_akra_wrapper_share_help_and_error_contracts() {
@@ -27,13 +28,19 @@ fn default_binary_and_akra_wrapper_share_help_and_error_contracts() {
 
 #[test]
 fn admin_binary_reports_actual_ephemeral_port_and_exits_on_interrupt() {
+    for attempt in 1..=ADMIN_INTERRUPT_READINESS_ATTEMPTS {
+        assert_admin_binary_exits_on_immediate_interrupt(attempt);
+    }
+}
+
+fn assert_admin_binary_exits_on_immediate_interrupt(attempt: usize) {
     let mut child = Command::new(ADMIN_BIN)
         .args(["--port", "0"])
         .env("AKRA_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("admin binary should spawn");
+        .unwrap_or_else(|error| panic!("admin binary should spawn on attempt {attempt}: {error}"));
 
     let stdout = child.stdout.take().expect("admin stdout should be piped");
     let stderr = child.stderr.take().expect("admin stderr should be piped");
@@ -63,7 +70,7 @@ fn admin_binary_reports_actual_ephemeral_port_and_exits_on_interrupt() {
 
     assert!(
         status.success(),
-        "admin process should shut down cleanly after interrupt; status={status:?}, stderr={stderr}"
+        "admin process should shut down cleanly after immediate interrupt on attempt {attempt}; status={status:?}, stderr={stderr}"
     );
 }
 
