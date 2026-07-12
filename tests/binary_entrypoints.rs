@@ -1,14 +1,23 @@
+use std::process::{Command, Output};
+
+#[cfg(unix)]
 use std::io::{self, BufRead, BufReader, Read};
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+#[cfg(unix)]
+use std::process::{Child, ExitStatus, Stdio};
+#[cfg(unix)]
 use std::sync::mpsc;
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 const DEFAULT_BIN: &str = env!("CARGO_BIN_EXE_codex-exec-loop-native");
 const AKRA_BIN: &str = env!("CARGO_BIN_EXE_akra");
 const ADMIN_BIN: &str = env!("CARGO_BIN_EXE_akra-admin");
 const TELEGRAM_BIN: &str = env!("CARGO_BIN_EXE_akra-telegram");
+#[cfg(unix)]
 const TEST_ADMIN_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+#[cfg(unix)]
 const ADMIN_INTERRUPT_READINESS_ATTEMPTS: usize = 10;
 
 #[test]
@@ -26,6 +35,7 @@ fn default_binary_and_akra_wrapper_share_help_and_error_contracts() {
     assert_contains(&unsupported.stderr, "unsupported command: not-a-command");
 }
 
+#[cfg(unix)]
 #[test]
 fn admin_binary_reports_actual_ephemeral_port_and_exits_on_interrupt() {
     for attempt in 1..=ADMIN_INTERRUPT_READINESS_ATTEMPTS {
@@ -33,6 +43,7 @@ fn admin_binary_reports_actual_ephemeral_port_and_exits_on_interrupt() {
     }
 }
 
+#[cfg(unix)]
 fn assert_admin_binary_exits_on_immediate_interrupt(attempt: usize) {
     let mut child = Command::new(ADMIN_BIN)
         .args(["--port", "0"])
@@ -138,6 +149,7 @@ fn assert_contains(haystack: &[u8], needle: &str) {
     );
 }
 
+#[cfg(unix)]
 fn read_first_line_with_timeout(stdout: impl Read + Send + 'static, timeout: Duration) -> String {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -151,6 +163,7 @@ fn read_first_line_with_timeout(stdout: impl Read + Send + 'static, timeout: Dur
         .expect("admin server startup line should be readable")
 }
 
+#[cfg(unix)]
 fn read_to_string(stderr: impl Read) -> String {
     let mut body = String::new();
     let mut reader = BufReader::new(stderr);
@@ -160,25 +173,20 @@ fn read_to_string(stderr: impl Read) -> String {
     body
 }
 
+#[cfg(unix)]
 fn interrupt_child(child: &mut Child) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        let status = Command::new("kill")
-            .args(["-INT", &child.id().to_string()])
-            .status()?;
-        if !status.success() {
-            return Err(io::Error::other(format!(
-                "kill -INT failed with status {status:?}"
-            )));
-        }
-        Ok(())
+    let status = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "kill -INT failed with status {status:?}"
+        )));
     }
-    #[cfg(not(unix))]
-    {
-        child.kill()
-    }
+    Ok(())
 }
 
+#[cfg(unix)]
 fn wait_for_child(child: &mut Child, timeout: Duration) -> io::Result<Option<ExitStatus>> {
     let deadline = Instant::now() + timeout;
     loop {
