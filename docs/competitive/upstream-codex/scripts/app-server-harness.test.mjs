@@ -1,10 +1,62 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 
-import { sampleLinuxProcessTree } from "./app-server-harness.mjs";
+import {
+  AppServerClient,
+  decodeCanonicalBase64,
+  sampleLinuxProcessTree,
+} from "./app-server-harness.mjs";
+
+test("decodeCanonicalBase64 rejects malformed success payload fields", () => {
+  assert.equal(decodeCanonicalBase64("YQ==", "result.dataBase64").toString(), "a");
+  assert.equal(decodeCanonicalBase64("", "result.dataBase64").byteLength, 0);
+  for (const value of [undefined, "%%%", "YQ", "YR=="]) {
+    assert.throws(() => decodeCanonicalBase64(value, "result.dataBase64"));
+  }
+});
+
+test(
+  "close does not write to a child that already exited by signal",
+  { skip: process.platform === "win32", timeout: 5_000 },
+  async () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const client = new AppServerClient(child, 1_000);
+    let stdinEndCalls = 0;
+    const stdinEnd = child.stdin.end;
+    child.stdin.end = function (...args) {
+      stdinEndCalls += 1;
+      return stdinEnd.apply(this, args);
+    };
+
+    try {
+      await once(child, "spawn");
+      assert.equal(child.kill("SIGTERM"), true);
+      const exit = await Promise.race([
+        client.exit,
+        delay(1_000).then(() => {
+          throw new Error("signal-terminated child did not exit within 1 second");
+        }),
+      ]);
+      assert.equal(exit.code, null);
+      assert.equal(exit.signal, "SIGTERM");
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, "SIGTERM");
+
+      assert.deepEqual(await client.close(), exit);
+      assert.equal(stdinEndCalls, 0);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+    }
+  },
+);
 
 test(
   "Linux sampler finds a process spawned from a non-leader thread",

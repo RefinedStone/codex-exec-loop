@@ -21,6 +21,17 @@ export function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+export function decodeCanonicalBase64(value, label) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} must be a string`);
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) {
+    throw new TypeError(`${label} must be canonical standard Base64`);
+  }
+  return decoded;
+}
+
 export async function createIsolatedCodexHome() {
   return mkdtemp(join(tmpdir(), "akra-codex-v01441-"));
 }
@@ -104,7 +115,11 @@ export class AppServerClient {
   }
 
   async close() {
-    if (this.spawnFailed || this.child.exitCode !== null) {
+    if (
+      this.spawnFailed ||
+      this.child.exitCode !== null ||
+      this.child.signalCode !== null
+    ) {
       return this.exit;
     }
     this.child.stdin.end();

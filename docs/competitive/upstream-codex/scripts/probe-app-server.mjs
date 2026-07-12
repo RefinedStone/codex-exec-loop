@@ -7,6 +7,7 @@ import { stat } from "node:fs/promises";
 import {
   AppServerClient,
   createIsolatedCodexHome,
+  decodeCanonicalBase64,
   delay,
   removeIsolatedCodexHome,
 } from "./app-server-harness.mjs";
@@ -185,7 +186,10 @@ const stableBoundary = await initializedClient({ experimentalApi: false }, async
       ? responseOutcome(read)
       : {
           result: true,
-          decodedBytes: Buffer.from(read.result.dataBase64 ?? "", "base64").byteLength,
+          decodedBytes: decodeCanonicalBase64(
+            read.result?.dataBase64,
+            "fs/readFile result.dataBase64",
+          ).byteLength,
         },
     processSpawn: responseOutcome(spawn),
   };
