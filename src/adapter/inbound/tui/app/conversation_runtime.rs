@@ -23,6 +23,10 @@ use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalResolution, ConversationApprovalReview,
     ConversationMessage, ConversationMessageKind,
 };
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservedValue,
+    ConversationRuntimeThreadStatus,
+};
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 use serde_json::json;
@@ -320,196 +324,220 @@ pub(super) fn reduce_conversation_runtime(
                 prompt_origin: origin,
             });
         }
-        ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => match snapshot.update {
-            TurnStreamUpdate::AttachmentObserved { profile } => {
-                // Attachment information is a runtime notice, not a transcript
-                // row, because it describes bridge recovery rather than model
-                // conversation content.
-                state.extend_runtime_notices([attachment_runtime_notice(profile)]);
-            }
-            TurnStreamUpdate::ThreadPrepared {
-                thread_id,
-                title,
-                cwd,
-                status_text: _,
-            } => {
-                // Thread preparation binds provider identity and cwd to the
-                // conversation before turn events start appending transcript.
-                state.record_thread_prepared(thread_id, title, cwd);
-            }
-            TurnStreamUpdate::TurnStarted {
-                turn_id,
-                status_text: _,
-            } => {
-                // Turn id is later used by TurnCompleted and auto-follow
-                // provenance, so it is recorded as soon as the provider reports
-                // start.
-                let resend_pending_interrupt = state.interrupt_request_pending;
-                state.record_turn_started(turn_id);
-                if resend_pending_interrupt {
-                    effects.push(ConversationRuntimeEffect::ResendPendingInterrupt);
+        ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => {
+            match take_stream_snapshot_update(&mut state, snapshot) {
+                TurnStreamUpdate::AttachmentObserved { profile } => {
+                    // Attachment information is a runtime notice, not a transcript
+                    // row, because it describes bridge recovery rather than model
+                    // conversation content.
+                    state.extend_runtime_notices([attachment_runtime_notice(profile)]);
                 }
-            }
-            TurnStreamUpdate::StatusUpdated { text } => {
-                // Provider status copy owns the main status line while a turn is
-                // active, but it does not become durable transcript history.
-                state.status_text = text;
-            }
-            TurnStreamUpdate::AgentMessageDelta {
-                item_id,
-                phase,
-                delta,
-            } => {
-                // Deltas stay in the live buffer until completion, preserving
-                // streaming responsiveness without committing partial transcript
-                // rows as final history.
-                state.push_live_agent_delta(item_id, phase, delta);
-            }
-            TurnStreamUpdate::AgentMessageCompleted {
-                item_id,
-                phase,
-                text,
-            } => {
-                // Completion either flushes the live buffer or patches the final
-                // transcript row for the provider item.
-                state.complete_live_agent_message(item_id, phase, text);
-            }
-            TurnStreamUpdate::ToolActivity { activity } => {
-                // Tool activity feeds both compact live counters and ordered
-                // transcript notices so shell tail and transcript agree.
-                state.turn_activity.register_tool_activity(&activity);
-                state.buffer_tool_message(activity.text);
-            }
-            TurnStreamUpdate::ApprovalReviewUpdated { review } => {
-                // Some provider statuses require approval outside the visible
-                // shell. Add a runtime notice before updating the stored review
-                // so footer/status panes can explain the handoff.
-                if let Some(notice) = approval_review_manual_client_action_notice(
-                    &review,
-                    state.turn_control_truth().approval,
-                ) {
-                    state.extend_runtime_notices([notice]);
+                TurnStreamUpdate::ThreadPrepared {
+                    thread_id,
+                    title,
+                    cwd,
+                    status_text: _,
+                } => {
+                    // Thread preparation binds provider identity and cwd to the
+                    // conversation before turn events start appending transcript.
+                    state.record_thread_prepared(thread_id, title, cwd);
                 }
-                if state.has_active_thread() {
-                    effects.push(ConversationRuntimeEffect::PersistApprovalReview {
-                        workspace_directory: state
-                            .active_turn_workspace_directory
-                            .clone()
-                            .unwrap_or_else(|| state.planning_workspace_directory().to_string()),
-                        thread_id: state.thread_id.clone(),
-                        review: review.clone(),
-                    });
+                TurnStreamUpdate::TurnStarted {
+                    turn_id,
+                    status_text: _,
+                } => {
+                    // Turn id is later used by TurnCompleted and auto-follow
+                    // provenance, so it is recorded as soon as the provider reports
+                    // start.
+                    let resend_pending_interrupt = state.interrupt_request_pending;
+                    state.record_turn_started(turn_id);
+                    if resend_pending_interrupt {
+                        effects.push(ConversationRuntimeEffect::ResendPendingInterrupt);
+                    }
                 }
-                state.update_approval_review(review);
-            }
-            TurnStreamUpdate::ApprovalRequested { request } => {
-                state.status_text =
-                    "approval required / Y to accept / N or Esc to decline".to_string();
-                state.set_pending_approval_request(request);
-                effects.push(ConversationRuntimeEffect::ShowApprovalOverlay);
-            }
-            TurnStreamUpdate::ApprovalResolved {
-                approval_id,
-                resolution,
-            } => {
-                let resolves_current_request = state
-                    .pending_approval_request
-                    .as_ref()
-                    .is_some_and(|request| request.approval_id == approval_id);
-                if resolves_current_request {
-                    state.clear_pending_approval_request(&approval_id);
-                    state.status_text = approval_resolution_status(resolution).to_string();
-                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                TurnStreamUpdate::RuntimeEnvelopeObserved {
+                    observation,
+                    rejection,
+                } => {
+                    if let Some(rejection) = rejection {
+                        state.extend_runtime_notices([format!(
+                            "ignored runtime envelope observation: {}",
+                            rejection.notice_label()
+                        )]);
+                    } else if let ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                        status,
+                        ..
+                    } = observation.as_ref()
+                    {
+                        state.status_text = format!(
+                            "thread status: {}",
+                            conversation_runtime_thread_status_label(status)
+                        );
+                    }
                 }
-            }
-            TurnStreamUpdate::TurnInterruptRequestFailed { message } => {
-                state.clear_interrupt_request();
-                state.status_text = message;
-            }
-            TurnStreamUpdate::TurnRetrying {
-                error,
-                correlation_failure,
-                status_text,
-                ..
-            } => {
-                if correlation_failure.is_none() {
+                TurnStreamUpdate::StatusUpdated { text } => {
+                    // Provider status copy owns the main status line while a turn is
+                    // active, but it does not become durable transcript history.
+                    state.status_text = text;
+                }
+                TurnStreamUpdate::AgentMessageDelta {
+                    item_id,
+                    phase,
+                    delta,
+                } => {
+                    // Deltas stay in the live buffer until completion, preserving
+                    // streaming responsiveness without committing partial transcript
+                    // rows as final history.
+                    state.push_live_agent_delta(item_id, phase, delta);
+                }
+                TurnStreamUpdate::AgentMessageCompleted {
+                    item_id,
+                    phase,
+                    text,
+                } => {
+                    // Completion either flushes the live buffer or patches the final
+                    // transcript row for the provider item.
+                    state.complete_live_agent_message(item_id, phase, text);
+                }
+                TurnStreamUpdate::ToolActivity { activity } => {
+                    // Tool activity feeds both compact live counters and ordered
+                    // transcript notices so shell tail and transcript agree.
+                    state.turn_activity.register_tool_activity(&activity);
+                    state.buffer_tool_message(activity.text);
+                }
+                TurnStreamUpdate::ApprovalReviewUpdated { review } => {
+                    // Some provider statuses require approval outside the visible
+                    // shell. Add a runtime notice before updating the stored review
+                    // so footer/status panes can explain the handoff.
+                    if let Some(notice) = approval_review_manual_client_action_notice(
+                        &review,
+                        state.turn_control_truth().approval,
+                    ) {
+                        state.extend_runtime_notices([notice]);
+                    }
+                    if state.has_active_thread() {
+                        effects.push(ConversationRuntimeEffect::PersistApprovalReview {
+                            workspace_directory: state
+                                .active_turn_workspace_directory
+                                .clone()
+                                .unwrap_or_else(|| {
+                                    state.planning_workspace_directory().to_string()
+                                }),
+                            thread_id: state.thread_id.clone(),
+                            review: review.clone(),
+                        });
+                    }
+                    state.update_approval_review(review);
+                }
+                TurnStreamUpdate::ApprovalRequested { request } => {
+                    state.status_text =
+                        "approval required / Y to accept / N or Esc to decline".to_string();
+                    state.set_pending_approval_request(request);
+                    effects.push(ConversationRuntimeEffect::ShowApprovalOverlay);
+                }
+                TurnStreamUpdate::ApprovalResolved {
+                    approval_id,
+                    resolution,
+                } => {
+                    let resolves_current_request = state
+                        .pending_approval_request
+                        .as_ref()
+                        .is_some_and(|request| request.approval_id == approval_id);
+                    if resolves_current_request {
+                        state.clear_pending_approval_request(&approval_id);
+                        state.status_text = approval_resolution_status(resolution).to_string();
+                        effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                    }
+                }
+                TurnStreamUpdate::TurnInterruptRequestFailed { message } => {
                     state.clear_interrupt_request();
-                    state.status_text = status_text;
-                    state.extend_runtime_notices([format!(
-                        "app-server retrying active turn: {}",
-                        error.summary()
-                    )]);
-                } else {
-                    state.extend_runtime_notices([format!(
-                        "ignored retry notification outside the active turn: {}",
-                        error.summary()
-                    )]);
+                    state.status_text = message;
                 }
-            }
-            TurnStreamUpdate::TurnCompleted {
-                turn_id,
-                changed_planning_file_paths,
-                execution_snapshot_capture,
-                status_text: _,
-            } => {
-                // Turn completion closes the provider stream but does not decide
-                // whether to auto-follow. That policy needs fresh planning state,
-                // so it is emitted as an effect after the model enters evaluating
-                // state.
-                let approval_was_pending = state.pending_approval_request.is_some();
-                queue_post_turn_evaluation(
-                    &mut state,
-                    &mut effects,
+                TurnStreamUpdate::TurnRetrying {
+                    error,
+                    correlation_failure,
+                    status_text,
+                    ..
+                } => {
+                    if correlation_failure.is_none() {
+                        state.clear_interrupt_request();
+                        state.status_text = status_text;
+                        state.extend_runtime_notices([format!(
+                            "app-server retrying active turn: {}",
+                            error.summary()
+                        )]);
+                    } else {
+                        state.extend_runtime_notices([format!(
+                            "ignored retry notification outside the active turn: {}",
+                            error.summary()
+                        )]);
+                    }
+                }
+                TurnStreamUpdate::TurnCompleted {
                     turn_id,
                     changed_planning_file_paths,
                     execution_snapshot_capture,
-                );
-                if approval_was_pending {
-                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                    status_text: _,
+                } => {
+                    // Turn completion closes the provider stream but does not decide
+                    // whether to auto-follow. That policy needs fresh planning state,
+                    // so it is emitted as an effect after the model enters evaluating
+                    // state.
+                    let approval_was_pending = state.pending_approval_request.is_some();
+                    queue_post_turn_evaluation(
+                        &mut state,
+                        &mut effects,
+                        turn_id,
+                        changed_planning_file_paths,
+                        execution_snapshot_capture,
+                    );
+                    if approval_was_pending {
+                        effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                    }
+                }
+                TurnStreamUpdate::TurnTerminal {
+                    receipt,
+                    status_text,
+                    ..
+                } => {
+                    let approval_was_pending = state.pending_approval_request.is_some();
+                    state.fail_turn(receipt.status_error_summary());
+                    state.status_text = status_text;
+                    if approval_was_pending {
+                        effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                    }
+                }
+                TurnStreamUpdate::TurnTerminalIgnored { receipt, reason } => {
+                    state.extend_runtime_notices([format!(
+                        "ignored terminal receipt for {}: {reason:?}",
+                        receipt.turn_id
+                    )]);
+                }
+                TurnStreamUpdate::Failed {
+                    message,
+                    status_text: _,
+                } => {
+                    // Failure ends the active turn locally. No post-turn evaluation
+                    // is scheduled because planning side effects may be incomplete.
+                    let approval_was_pending = state.pending_approval_request.is_some();
+                    state.fail_turn(message);
+                    if approval_was_pending {
+                        effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                    }
+                }
+                TurnStreamUpdate::RuntimeFailureIgnored { message } => {
+                    state.extend_runtime_notices([format!(
+                        "ignored runtime failure after terminal receipt: {message}"
+                    )]);
+                }
+                TurnStreamUpdate::RuntimeNotice { notice } => {
+                    // Execution-layer notices come from effect runners, not provider
+                    // stream events. They are still runtime notices so the user can see
+                    // background execution failures in the same place.
+                    state.extend_runtime_notices([notice]);
                 }
             }
-            TurnStreamUpdate::TurnTerminal {
-                receipt,
-                status_text,
-                ..
-            } => {
-                let approval_was_pending = state.pending_approval_request.is_some();
-                state.fail_turn(receipt.status_error_summary());
-                state.status_text = status_text;
-                if approval_was_pending {
-                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
-                }
-            }
-            TurnStreamUpdate::TurnTerminalIgnored { receipt, reason } => {
-                state.extend_runtime_notices([format!(
-                    "ignored terminal receipt for {}: {reason:?}",
-                    receipt.turn_id
-                )]);
-            }
-            TurnStreamUpdate::Failed {
-                message,
-                status_text: _,
-            } => {
-                // Failure ends the active turn locally. No post-turn evaluation
-                // is scheduled because planning side effects may be incomplete.
-                let approval_was_pending = state.pending_approval_request.is_some();
-                state.fail_turn(message);
-                if approval_was_pending {
-                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
-                }
-            }
-            TurnStreamUpdate::RuntimeFailureIgnored { message } => {
-                state.extend_runtime_notices([format!(
-                    "ignored runtime failure after terminal receipt: {message}"
-                )]);
-            }
-            TurnStreamUpdate::RuntimeNotice { notice } => {
-                // Execution-layer notices come from effect runners, not provider
-                // stream events. They are still runtime notices so the user can see
-                // background execution failures in the same place.
-                state.extend_runtime_notices([notice]);
-            }
-        },
+        }
         ConversationRuntimeEvent::ApprovalDecisionSubmitted {
             approval_id,
             decision,
@@ -611,6 +639,35 @@ pub(super) fn reduce_conversation_runtime(
     }
 
     ConversationRuntimeReduction { state, effects }
+}
+
+fn take_stream_snapshot_update(
+    state: &mut ConversationViewModel,
+    snapshot: Box<TurnStreamSnapshot>,
+) -> TurnStreamUpdate {
+    let snapshot = *snapshot;
+    state.runtime_envelope = snapshot.runtime_envelope.map(|envelope| *envelope);
+    snapshot.update
+}
+
+fn conversation_runtime_thread_status_label(
+    status: &ConversationRuntimeObservedValue<ConversationRuntimeThreadStatus>,
+) -> &str {
+    match status {
+        ConversationRuntimeObservedValue::Observed(status)
+        | ConversationRuntimeObservedValue::Defaulted(status) => match status {
+            ConversationRuntimeThreadStatus::NotLoaded => "notLoaded",
+            ConversationRuntimeThreadStatus::Idle => "idle",
+            ConversationRuntimeThreadStatus::SystemError => "systemError",
+            ConversationRuntimeThreadStatus::Active { .. } => "active",
+            ConversationRuntimeThreadStatus::Unknown(label) => label,
+        },
+        ConversationRuntimeObservedValue::Null
+        | ConversationRuntimeObservedValue::Missing
+        | ConversationRuntimeObservedValue::Malformed(_)
+        | ConversationRuntimeObservedValue::UnavailableOnStableResponse
+        | ConversationRuntimeObservedValue::UnavailableAfterObservationGap => "unknown",
+    }
 }
 
 fn apply_auto_follow_skip(
@@ -723,6 +780,12 @@ mod tests {
         ConversationApprovalReviewStatus, ConversationMessage, ConversationMessageKind,
         ConversationToolActivity, ConversationToolActivityKind,
     };
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeConfigurationObservation, ConversationRuntimeConfigurationRequest,
+        ConversationRuntimeEnvelope, ConversationRuntimeLaunchEnvironment,
+        ConversationRuntimeObservedValue, ConversationRuntimeRequestedValue,
+        ConversationRuntimeThreadStatus,
+    };
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
 
@@ -736,6 +799,7 @@ mod tests {
             );
             stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
                 turn_id: receipt.turn_id.clone(),
+                runtime_request: Box::default(),
             });
         }
         ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
@@ -753,6 +817,25 @@ mod tests {
             crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
         );
         ConversationStreamEvent::TurnTerminal { receipt }
+    }
+
+    fn runtime_envelope_with_models(
+        requested_model: &str,
+        applied_model: &str,
+    ) -> ConversationRuntimeEnvelope {
+        ConversationRuntimeEnvelope::prepared(
+            ConversationRuntimeConfigurationRequest {
+                model: ConversationRuntimeRequestedValue::Value(requested_model.to_string()),
+                ..ConversationRuntimeConfigurationRequest::default()
+            },
+            ConversationRuntimeConfigurationObservation {
+                model: ConversationRuntimeObservedValue::Observed(applied_model.to_string()),
+                cwd: ConversationRuntimeObservedValue::Observed("/tmp/workspace".to_string()),
+                ..ConversationRuntimeConfigurationObservation::default()
+            },
+            ConversationRuntimeLaunchEnvironment::unknown(),
+            ConversationRuntimeObservedValue::Observed(ConversationRuntimeThreadStatus::Idle),
+        )
     }
 
     fn terminal_stream_event(
@@ -855,6 +938,7 @@ mod tests {
             state,
             stream_snapshot_event(ConversationStreamEvent::TurnStarted {
                 turn_id: "turn-after-stop".to_string(),
+                runtime_request: Box::default(),
             }),
         );
 
@@ -1056,6 +1140,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 title: "Runtime thread".to_string(),
                 cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
             }),
         );
         assert_eq!(reduction.state.thread_id, "thread-1");
@@ -1171,6 +1256,111 @@ mod tests {
     }
 
     #[test]
+    fn same_thread_reattach_replaces_envelope_without_duplicate_open_status() {
+        let mut reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            stream_snapshot_event(ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Runtime thread".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::new(runtime_envelope_with_models(
+                    "requested-a",
+                    "applied-a",
+                )),
+            }),
+        );
+        let opened_status_count = reduction
+            .state
+            .messages
+            .iter()
+            .filter(|message| {
+                message.kind == ConversationMessageKind::Status
+                    && message.text == "thread opened / Runtime thread"
+            })
+            .count();
+        assert_eq!(opened_status_count, 1);
+
+        reduction = reduce_conversation_runtime(
+            reduction.state,
+            stream_snapshot_event(ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Runtime thread renamed".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::new(runtime_envelope_with_models(
+                    "requested-b",
+                    "applied-b",
+                )),
+            }),
+        );
+
+        assert_eq!(reduction.state.title, "Runtime thread renamed");
+        assert_eq!(
+            reduction
+                .state
+                .runtime_envelope
+                .as_ref()
+                .map(|envelope| &envelope.applied.model),
+            Some(&ConversationRuntimeObservedValue::Observed(
+                "applied-b".to_string()
+            ))
+        );
+        assert_eq!(
+            reduction
+                .state
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.kind == ConversationMessageKind::Status
+                        && message.text.starts_with("thread opened / ")
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn accepted_typed_thread_status_keeps_existing_tui_status_copy() {
+        let mut stream_state = TurnStreamState::new();
+        stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::ThreadPrepared {
+            thread_id: "thread-1".to_string(),
+            title: "Runtime thread".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            runtime_envelope: Box::new(runtime_envelope_with_models(
+                "requested-model",
+                "applied-model",
+            )),
+        });
+        stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        let snapshot = stream_state.apply_stream_event(
+            crate::core::app::TurnStreamEvent::RuntimeEnvelopeObserved {
+                observation: Box::new(
+                    ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                        thread_id: "thread-1".to_string(),
+                        status: ConversationRuntimeObservedValue::Observed(
+                            ConversationRuntimeThreadStatus::Active {
+                                waiting_on_approval: true,
+                                waiting_on_user_input: false,
+                                unknown_flags: Vec::new(),
+                                unknown_flags_truncated: false,
+                            },
+                        ),
+                    },
+                ),
+            },
+        );
+
+        let reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/workspace".to_string()),
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(snapshot)),
+        );
+
+        assert_eq!(reduction.state.status_text, "thread status: active");
+    }
+
+    #[test]
     fn auto_follow_turn_completion_advances_done_progress() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.thread_id = "thread-1".to_string();
@@ -1196,6 +1386,7 @@ mod tests {
             reduction.state,
             stream_snapshot_event(ConversationStreamEvent::TurnStarted {
                 turn_id: "turn-auto-1".to_string(),
+                runtime_request: Box::default(),
             }),
         );
         assert!(

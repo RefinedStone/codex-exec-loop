@@ -967,6 +967,7 @@ mod tests {
     };
     use crate::application::port::outbound::planning_worker_port::{
         NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
+        test_planning_worker_runtime_envelope,
     };
     use crate::application::service::parallel_mode::ParallelModeService;
     use crate::application::service::planning::{
@@ -2998,6 +2999,7 @@ mod tests {
                 operation: request.operation,
                 thread_id: None,
                 turn_id: None,
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
                 final_agent_message: Some("late worker result".to_string()),
                 changed_planning_file_paths: Vec::new(),
             })
@@ -3031,6 +3033,7 @@ mod tests {
                 operation: request.operation,
                 thread_id: None,
                 turn_id: None,
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
                 final_agent_message: Some("counted".to_string()),
                 changed_planning_file_paths: Vec::new(),
             })
@@ -3079,6 +3082,7 @@ mod tests {
                 operation: request.operation,
                 thread_id: Some("replacement-worker-thread".to_string()),
                 turn_id: Some("replacement-worker-turn".to_string()),
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
                 final_agent_message: Some("planning worker disabled".to_string()),
                 changed_planning_file_paths: Vec::new(),
             })
@@ -3115,6 +3119,7 @@ mod tests {
                 operation: request.operation,
                 thread_id: Some("worker-thread-1".to_string()),
                 turn_id: Some("worker-turn-1".to_string()),
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
                 final_agent_message: Some(self.final_agent_message.to_string()),
                 changed_planning_file_paths: Vec::new(),
             })
@@ -3148,6 +3153,7 @@ mod tests {
                 operation: request.operation,
                 thread_id: Some("worker-thread-1".to_string()),
                 turn_id: Some("worker-turn-1".to_string()),
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
                 final_agent_message: Some(final_agent_message.to_string()),
                 changed_planning_file_paths: Vec::new(),
             })

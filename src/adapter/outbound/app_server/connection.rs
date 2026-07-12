@@ -24,6 +24,10 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalResolution,
 };
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeLaunchEnvironment, ConversationRuntimeProcessEnvironment,
+    ConversationRuntimeShellEnvironment,
+};
 use crate::domain::turn_terminal::{
     ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
     ConversationTurnError, ConversationTurnItemsView, ConversationTurnObservations,
@@ -259,6 +263,23 @@ impl Default for AppServerConnectionConfig {
 }
 
 impl AppServerConnectionConfig {
+    pub(super) const fn runtime_launch_environment(&self) -> ConversationRuntimeLaunchEnvironment {
+        let process_environment = match self.process_environment_policy {
+            ProcessEnvironmentPolicy::Scrubbed => ConversationRuntimeProcessEnvironment::Scrubbed,
+            ProcessEnvironmentPolicy::All => ConversationRuntimeProcessEnvironment::InheritedAll,
+        };
+        let shell_environment = match self.shell_environment_inherit {
+            ShellEnvironmentInherit::None => ConversationRuntimeShellEnvironment::None,
+            ShellEnvironmentInherit::Core => ConversationRuntimeShellEnvironment::Core,
+            ShellEnvironmentInherit::All => ConversationRuntimeShellEnvironment::All,
+        };
+        ConversationRuntimeLaunchEnvironment {
+            process_environment,
+            shell_environment,
+            api_key_auth: self.api_key_auth,
+        }
+    }
+
     pub(super) fn from_environment() -> Self {
         // 운영 override는 response timeout만 열어두고, poll/drain 간격은 stream responsiveness 기준으로 고정한다.
         let mut config = Self::from_response_timeout_secs_value(
@@ -1317,7 +1338,12 @@ impl AppServerConnection {
                 event_sender,
                 &mut non_retry_error_candidate,
             )? {
-                return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                return Ok(self.deliver_terminal_receipt(
+                    receipt,
+                    thread_id,
+                    &mut notification_state,
+                    event_sender,
+                ));
             }
             if !self.pending_notifications.is_empty() {
                 self.advance_turn_interrupt_state(
@@ -1342,7 +1368,12 @@ impl AppServerConnection {
                     &mut non_retry_error_candidate,
                     interrupt_completion_deadline,
                 )? {
-                    return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                    return Ok(self.deliver_terminal_receipt(
+                        receipt,
+                        thread_id,
+                        &mut notification_state,
+                        event_sender,
+                    ));
                 }
                 self.ensure_transport_healthy()?;
             }
@@ -1355,7 +1386,12 @@ impl AppServerConnection {
                     &mut non_retry_error_candidate,
                     interrupt_completion_deadline,
                 )? {
-                    return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                    return Ok(self.deliver_terminal_receipt(
+                        receipt,
+                        thread_id,
+                        &mut notification_state,
+                        event_sender,
+                    ));
                 }
                 return Err(self.error_with_diagnostics(format!(
                     "app-server exited before the turn completed: {status}"
@@ -1388,7 +1424,12 @@ impl AppServerConnection {
                     &mut non_retry_error_candidate,
                     interrupt_completion_deadline,
                 )? {
-                    return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                    return Ok(self.deliver_terminal_receipt(
+                        receipt,
+                        thread_id,
+                        &mut notification_state,
+                        event_sender,
+                    ));
                 }
                 // The recovery scan and its no-UI response share the interrupt
                 // deadline. Re-check it before synthesizing Unknown so an explicit
@@ -1417,7 +1458,12 @@ impl AppServerConnection {
                     error,
                     notification_state.changed_planning_file_paths().to_vec(),
                 );
-                return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                return Ok(self.deliver_terminal_receipt(
+                    receipt,
+                    thread_id,
+                    &mut notification_state,
+                    event_sender,
+                ));
             }
 
             let now = Instant::now();
@@ -1443,7 +1489,12 @@ impl AppServerConnection {
                     if let Some(receipt) = self
                         .apply_turn_notification_progress(progress, &mut non_retry_error_candidate)
                     {
-                        return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                        return Ok(self.deliver_terminal_receipt(
+                            receipt,
+                            thread_id,
+                            &mut notification_state,
+                            event_sender,
+                        ));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => self.ensure_transport_healthy()?,
@@ -1589,6 +1640,13 @@ impl AppServerConnection {
         self.diagnostics
             .record_warnings(self.pending_notifications.drain_warning_texts());
         self.diagnostics.take_warnings()
+    }
+
+    pub(super) fn discard_notifications_before_turn_binding(&mut self) {
+        let warnings = self.pending_notifications.drain_warning_texts_with_context(
+            "before active turn binding; the later thread response remains authoritative",
+        );
+        self.diagnostics.record_warnings(warnings);
     }
 
     fn ensure_initialized(&self) -> Result<()> {
@@ -2862,6 +2920,8 @@ impl AppServerConnection {
          * reject non-stream notifications, retain diagnostics, and decide when the
          * outer wait loop can stop.
          */
+        self.try_flush_runtime_envelope_gap(thread_id, notification_state, event_sender);
+
         if !notification.should_defer_to_turn_stream() {
             self.diagnostics
                 .record_warning(notification.warning_text("while streaming the active turn"));
@@ -2898,6 +2958,26 @@ impl AppServerConnection {
         }
     }
 
+    fn try_flush_runtime_envelope_gap(
+        &mut self,
+        thread_id: &str,
+        notification_state: &mut ActiveTurnNotificationState,
+        event_sender: &dyn AppServerEventSender,
+    ) {
+        let Some(observation) = notification_state.runtime_envelope_gap_observation(thread_id)
+        else {
+            return;
+        };
+        if event_sender
+            .try_send(ConversationStreamEvent::RuntimeEnvelopeObserved {
+                observation: Box::new(observation),
+            })
+            .is_ok()
+        {
+            notification_state.clear_runtime_envelope_gap();
+        }
+    }
+
     fn apply_turn_notification_progress(
         &self,
         progress: TurnStreamNotificationProgress,
@@ -2919,6 +2999,8 @@ impl AppServerConnection {
     fn deliver_terminal_receipt(
         &mut self,
         receipt: ConversationTurnTerminalReceipt,
+        thread_id: &str,
+        notification_state: &mut ActiveTurnNotificationState,
         event_sender: &dyn AppServerEventSender,
     ) -> ConversationTurnTerminalReceipt {
         let receipt = bounded_terminal_receipt(receipt);
@@ -2928,6 +3010,64 @@ impl AppServerConnection {
         let delivery_deadline = Instant::now() + self.config.terminal_delivery_timeout;
 
         loop {
+            if let Some(observation) =
+                notification_state.runtime_envelope_gap_observation(thread_id)
+            {
+                match event_sender.try_send_prebounded(
+                    ConversationStreamEvent::RuntimeEnvelopeObserved {
+                        observation: Box::new(observation),
+                    },
+                ) {
+                    Ok(()) => {
+                        notification_state.clear_runtime_envelope_gap();
+                        continue;
+                    }
+                    Err(AppServerEventTrySendError::Disconnected) => {
+                        self.diagnostics.record_warning(
+                            "runtime-envelope gap marker application sink disconnected before terminal acknowledgement"
+                                .to_string(),
+                        );
+                        return receipt.with_application_delivery(
+                            ConversationTurnApplicationDelivery::Unconfirmed(
+                                ConversationTurnApplicationDeliveryFailure::Disconnected,
+                            ),
+                        );
+                    }
+                    Err(AppServerEventTrySendError::Full)
+                        if self.config.terminal_delivery_timeout.is_zero() =>
+                    {
+                        self.diagnostics.record_warning(
+                            "runtime-envelope gap marker application sink was full before terminal acknowledgement"
+                                .to_string(),
+                        );
+                        return receipt.with_application_delivery(
+                            ConversationTurnApplicationDelivery::Unconfirmed(
+                                ConversationTurnApplicationDeliveryFailure::Full,
+                            ),
+                        );
+                    }
+                    Err(AppServerEventTrySendError::Full) => {
+                        let now = Instant::now();
+                        if now >= delivery_deadline {
+                            self.diagnostics.record_warning(
+                                "runtime-envelope gap marker application sink remained full through the terminal delivery deadline"
+                                    .to_string(),
+                            );
+                            return receipt.with_application_delivery(
+                                ConversationTurnApplicationDelivery::Unconfirmed(
+                                    ConversationTurnApplicationDeliveryFailure::DeadlineExceeded,
+                                ),
+                            );
+                        }
+                        thread::sleep(
+                            self.config
+                                .terminal_delivery_retry_interval
+                                .min(delivery_deadline.saturating_duration_since(now)),
+                        );
+                        continue;
+                    }
+                }
+            }
             match event_sender.try_send_prebounded(ConversationStreamEvent::TurnTerminal {
                 receipt: confirmed_receipt.clone(),
             }) {
@@ -3324,6 +3464,10 @@ mod tests {
     use crate::domain::conversation::{
         ConversationApprovalDecision, ConversationApprovalResolution,
     };
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservationGap,
+        ConversationRuntimeObservedValue, ConversationRuntimeThreadStatus,
+    };
     use crate::domain::turn_terminal::{
         ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
         ConversationTurnItemsView, ConversationTurnTerminalOutcome,
@@ -3380,7 +3524,11 @@ mod tests {
             &self,
             event: ConversationStreamEvent,
         ) -> std::result::Result<(), AppServerEventTrySendError> {
-            if matches!(event, ConversationStreamEvent::StatusUpdated { .. }) {
+            if matches!(
+                event,
+                ConversationStreamEvent::StatusUpdated { .. }
+                    | ConversationStreamEvent::RuntimeEnvelopeObserved { .. }
+            ) {
                 let should_release = {
                     let mut remaining = self
                         .statuses_before_release
@@ -3397,6 +3545,58 @@ mod tests {
                         .take()
                 {
                     let _ = release_terminal.send(());
+                }
+            }
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(event);
+            Ok(())
+        }
+    }
+
+    struct RuntimeGapPressureEventSender {
+        rejected_initial_observation: Mutex<bool>,
+        events: Mutex<Vec<ConversationStreamEvent>>,
+    }
+
+    impl RuntimeGapPressureEventSender {
+        fn new() -> Self {
+            Self {
+                rejected_initial_observation: Mutex::new(false),
+                events: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn events(&self) -> Vec<ConversationStreamEvent> {
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    impl AppServerEventSender for RuntimeGapPressureEventSender {
+        fn try_send_prebounded(
+            &self,
+            event: ConversationStreamEvent,
+        ) -> std::result::Result<(), AppServerEventTrySendError> {
+            let reject_initial = matches!(
+                &event,
+                ConversationStreamEvent::RuntimeEnvelopeObserved { observation }
+                    if !matches!(
+                        observation.as_ref(),
+                        ConversationRuntimeEnvelopeObservation::ProjectionGap { .. }
+                    )
+            );
+            if reject_initial {
+                let mut rejected = self
+                    .rejected_initial_observation
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !*rejected {
+                    *rejected = true;
+                    return Err(AppServerEventTrySendError::Full);
                 }
             }
             self.events
@@ -4315,6 +4515,7 @@ mod tests {
     #[test]
     fn send_request_matches_response_and_preserves_transport_warnings() {
         let mut harness = TestConnection::new(true);
+        let config_secret = "AKRA_TEST_SECRET_CANARY_CONFIG_WARNING";
         harness.send_stderr("workspace prompt missing");
         harness.send_stdout(json!({
             "id": 99,
@@ -4325,7 +4526,7 @@ mod tests {
         harness.send_stdout(json!({
             "method": "configWarning",
             "params": {
-                "summary": "schema config warning"
+                "summary": config_secret
             }
         }));
         harness.send_stdout(json!({
@@ -4360,7 +4561,12 @@ mod tests {
         let warnings = harness.connection.take_warnings();
         assert_contains_warning(&warnings, "workspace prompt missing");
         assert_contains_warning(&warnings, "response id=99 while waiting for id=1");
-        assert_contains_warning(&warnings, "schema config warning");
+        assert_contains_warning(&warnings, "configuration warning");
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.contains(config_secret))
+        );
         assert_contains_warning(
             &warnings,
             "after the response completed without a turn stream consumer",
@@ -5268,6 +5474,7 @@ mod tests {
     #[test]
     fn turn_stream_reduces_stdout_notifications_and_records_loose_messages() {
         let mut harness = TestConnection::new(true);
+        let config_secret = "AKRA_TEST_SECRET_CANARY_STREAM_CONFIG_WARNING";
         harness.send_stdout(json!({
             "id": 55,
             "result": {
@@ -5287,7 +5494,7 @@ mod tests {
         harness.send_stdout(json!({
             "method": "configWarning",
             "params": {
-                "summary": "stream config warning"
+                "summary": config_secret
             }
         }));
         harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
@@ -5307,8 +5514,15 @@ mod tests {
         assert_eq!(
             event_receiver.try_iter().collect::<Vec<_>>(),
             vec![
-                ConversationStreamEvent::StatusUpdated {
-                    text: "thread status: running".to_string(),
+                ConversationStreamEvent::RuntimeEnvelopeObserved {
+                    observation: Box::new(
+                        ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                            thread_id: "thread-1".to_string(),
+                            status: ConversationRuntimeObservedValue::Observed(
+                                ConversationRuntimeThreadStatus::Unknown("running".to_string()),
+                            ),
+                        },
+                    ),
                 },
                 ConversationStreamEvent::TurnTerminal {
                     receipt: confirmed_completed_receipt("thread-1", "turn-1", Vec::new()),
@@ -5319,7 +5533,12 @@ mod tests {
         let warnings = harness.connection.take_warnings();
         assert_contains_warning(&warnings, "non-notification JSON message");
         assert_contains_warning(&warnings, "stream side warning");
-        assert_contains_warning(&warnings, "stream config warning");
+        assert_contains_warning(&warnings, "configuration warning");
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.contains(config_secret))
+        );
     }
 
     #[test]
@@ -6012,8 +6231,15 @@ mod tests {
         assert_eq!(
             event_sender.events(),
             vec![
-                ConversationStreamEvent::StatusUpdated {
-                    text: "thread status: busy".to_string(),
+                ConversationStreamEvent::RuntimeEnvelopeObserved {
+                    observation: Box::new(
+                        ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                            thread_id: "thread-1".to_string(),
+                            status: ConversationRuntimeObservedValue::Observed(
+                                ConversationRuntimeThreadStatus::Unknown("busy".to_string()),
+                            ),
+                        },
+                    ),
                 },
                 ConversationStreamEvent::TurnTerminal {
                     receipt: receipt.clone(),
@@ -6399,10 +6625,71 @@ mod tests {
         );
         assert_eq!(
             event_receiver.try_iter().collect::<Vec<_>>(),
-            vec![ConversationStreamEvent::StatusUpdated {
-                text: "thread status: first".to_string(),
+            vec![ConversationStreamEvent::RuntimeEnvelopeObserved {
+                observation: Box::new(
+                    ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                        thread_id: "thread-1".to_string(),
+                        status: ConversationRuntimeObservedValue::Observed(
+                            ConversationRuntimeThreadStatus::Unknown("first".to_string()),
+                        ),
+                    },
+                ),
             }]
         );
+    }
+
+    #[test]
+    fn rejected_runtime_observation_delivers_gap_before_confirmed_terminal() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "method": "thread/settings/updated",
+            "params": {
+                "threadId": "thread-1",
+                "threadSettings": {
+                    "model": "gpt-settings",
+                    "modelProvider": "openai",
+                    "effort": "medium",
+                    "serviceTier": null,
+                    "cwd": "/repo",
+                    "approvalPolicy": "on-request",
+                    "approvalsReviewer": "user",
+                    "sandboxPolicy": { "type": "readOnly" },
+                    "activePermissionProfile": null,
+                    "collaborationMode": {}
+                }
+            }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let event_sender = RuntimeGapPressureEventSender::new();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("gap and terminal should retain typed delivery");
+
+        assert!(receipt.is_completed_and_confirmed());
+        let events = event_sender.events();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            ConversationStreamEvent::RuntimeEnvelopeObserved { observation }
+                if matches!(
+                    observation.as_ref(),
+                    ConversationRuntimeEnvelopeObservation::ProjectionGap { gap, .. }
+                        if *gap == ConversationRuntimeObservationGap::settings()
+                )
+        ));
+        assert!(matches!(
+            &events[1],
+            ConversationStreamEvent::TurnTerminal { receipt }
+                if receipt.is_completed_and_confirmed()
+        ));
     }
 
     #[test]
@@ -6494,10 +6781,14 @@ mod tests {
         );
         let mut harness = TestConnection::new(true);
         let (event_sender, event_receiver) = mpsc::channel();
+        let mut notification_state = super::ActiveTurnNotificationState::new();
 
-        let receipt = harness
-            .connection
-            .deliver_terminal_receipt(upstream_receipt, &event_sender);
+        let receipt = harness.connection.deliver_terminal_receipt(
+            upstream_receipt,
+            &oversized_thread_id,
+            &mut notification_state,
+            &event_sender,
+        );
         let ConversationStreamEvent::TurnTerminal {
             receipt: projected_receipt,
         } = event_receiver

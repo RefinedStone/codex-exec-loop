@@ -25,6 +25,8 @@ const HANDLED_NOTIFICATION_METHODS: &[&str] = &[
     "item/autoApprovalReview/completed",
     "item/autoApprovalReview/started",
     "item/completed",
+    "model/rerouted",
+    "thread/settings/updated",
     "thread/status/changed",
     "turn/completed",
     "turn/started",
@@ -64,7 +66,6 @@ const DIAGNOSTIC_ONLY_NOTIFICATION_METHODS: &[&str] = &[
     "hook/started",
     "mcpServer/oauthLogin/completed",
     "mcpServer/startupStatus/updated",
-    "model/rerouted",
     "model/safetyBuffering/updated",
     "model/verification",
     "process/exited",
@@ -94,7 +95,6 @@ const IGNORED_NOTIFICATION_METHODS: &[&str] = &[
     "thread/realtime/started",
     "thread/realtime/transcript/delta",
     "thread/realtime/transcript/done",
-    "thread/settings/updated",
     "thread/started",
     "thread/unarchived",
 ];
@@ -213,9 +213,6 @@ fn live_turn_notification_sequence_reduces_to_stream_events() {
     assert_eq!(
         outcome.events,
         vec![
-            ConversationStreamEvent::TurnStarted {
-                turn_id: "turn-live".to_string(),
-            },
             ConversationStreamEvent::AgentMessageDelta {
                 item_id: "agent-live".to_string(),
                 phase: Some("commentary".to_string()),

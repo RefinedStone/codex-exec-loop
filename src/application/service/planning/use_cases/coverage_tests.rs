@@ -14,6 +14,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
 };
 use crate::application::port::outbound::planning_worker_port::{
     NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
+    test_planning_worker_runtime_envelope,
 };
 use crate::application::service::planning::PlanningServices;
 use crate::domain::planning::{
@@ -50,6 +51,7 @@ impl PlanningWorkerPort for CancelAfterFirstWorkerPort {
             operation: request.operation,
             thread_id: Some("worker-thread".to_string()),
             turn_id: Some("worker-turn".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some(self.message.to_string()),
             changed_planning_file_paths: Vec::new(),
         })
@@ -97,6 +99,7 @@ impl PlanningWorkerPort for ScriptedWorkerPort {
                 operation: request.operation,
                 thread_id: Some("worker-thread".to_string()),
                 turn_id: Some("worker-turn".to_string()),
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
                 final_agent_message: Some(message.to_string()),
                 changed_planning_file_paths: Vec::new(),
             }),

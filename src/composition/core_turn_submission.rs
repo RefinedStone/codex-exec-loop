@@ -284,13 +284,22 @@ fn turn_stream_event_from_application(event: ConversationStreamEvent) -> TurnStr
             thread_id,
             title,
             cwd,
+            runtime_envelope,
         } => TurnStreamEvent::ThreadPrepared {
             thread_id,
             title,
             cwd,
+            runtime_envelope,
         },
-        ConversationStreamEvent::TurnStarted { turn_id } => {
-            TurnStreamEvent::TurnStarted { turn_id }
+        ConversationStreamEvent::TurnStarted {
+            turn_id,
+            runtime_request,
+        } => TurnStreamEvent::TurnStarted {
+            turn_id,
+            runtime_request,
+        },
+        ConversationStreamEvent::RuntimeEnvelopeObserved { observation } => {
+            TurnStreamEvent::RuntimeEnvelopeObserved { observation }
         }
         ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
         ConversationStreamEvent::AgentMessageDelta {

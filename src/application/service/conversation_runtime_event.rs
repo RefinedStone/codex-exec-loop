@@ -14,6 +14,68 @@ pub fn conversation_stream_channel() -> (ConversationStreamSender, ConversationS
     sync_channel(CONVERSATION_STREAM_CHANNEL_CAPACITY)
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConversationRuntimeEnvelopeProjection {
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub runtime_envelope:
+        Option<crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope>,
+    pub last_rejection: Option<ConversationRuntimeEnvelopeProjectionRejection>,
+}
+
+impl ConversationRuntimeEnvelopeProjection {
+    pub fn apply_event(&mut self, event: &ConversationStreamEvent) {
+        match event {
+            ConversationStreamEvent::ThreadPrepared {
+                thread_id,
+                runtime_envelope,
+                ..
+            } => {
+                self.thread_id = Some(thread_id.clone());
+                self.turn_id = None;
+                self.runtime_envelope = Some((**runtime_envelope).clone());
+            }
+            ConversationStreamEvent::TurnStarted {
+                turn_id,
+                runtime_request,
+            } => {
+                self.turn_id = Some(turn_id.clone());
+                if let Some(envelope) = self.runtime_envelope.as_mut() {
+                    envelope.record_turn_request((**runtime_request).clone());
+                } else {
+                    self.last_rejection =
+                        Some(ConversationRuntimeEnvelopeProjectionRejection::EnvelopeNotPrepared);
+                }
+            }
+            ConversationStreamEvent::RuntimeEnvelopeObserved { observation } => {
+                let Some(envelope) = self.runtime_envelope.as_mut() else {
+                    self.last_rejection =
+                        Some(ConversationRuntimeEnvelopeProjectionRejection::EnvelopeNotPrepared);
+                    return;
+                };
+                if let Err(rejection) = envelope.apply_correlated_observation(
+                    self.thread_id.as_deref(),
+                    self.turn_id.as_deref(),
+                    observation,
+                ) {
+                    self.last_rejection = Some(
+                        ConversationRuntimeEnvelopeProjectionRejection::Observation(rejection),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConversationRuntimeEnvelopeProjectionRejection {
+    EnvelopeNotPrepared,
+    Observation(
+        crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelopeObservationRejection,
+    ),
+}
+
 #[cfg(test)]
 pub(crate) fn confirmed_test_terminal_receipt()
 -> crate::domain::turn_terminal::ConversationTurnTerminalReceipt {
@@ -31,6 +93,9 @@ pub(crate) fn emit_confirmed_test_terminal_receipt(
     thread_id: &str,
     cwd: &str,
 ) -> anyhow::Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
+    };
     use crate::domain::turn_terminal::{
         ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
     };
@@ -41,11 +106,13 @@ pub(crate) fn emit_confirmed_test_terminal_receipt(
             thread_id: thread_id.to_string(),
             title: "Test thread".to_string(),
             cwd: cwd.to_string(),
+            runtime_envelope: Box::new(ConversationRuntimeEnvelope::unobserved()),
         })
         .map_err(|_| anyhow::anyhow!("test stream event receiver disconnected"))?;
     event_sender
         .send(ConversationStreamEvent::TurnStarted {
             turn_id: turn_id.to_string(),
+            runtime_request: Box::new(ConversationRuntimeConfigurationRequest::default()),
         })
         .map_err(|_| anyhow::anyhow!("test stream event receiver disconnected"))?;
     let receipt = ConversationTurnTerminalReceipt::completed(thread_id, turn_id, Vec::new())
@@ -63,11 +130,15 @@ mod tests {
     use std::sync::mpsc::TrySendError;
 
     use super::{
-        CONVERSATION_STREAM_CHANNEL_CAPACITY, ConversationStreamEvent, conversation_stream_channel,
-        emit_confirmed_test_terminal_receipt,
+        CONVERSATION_STREAM_CHANNEL_CAPACITY, ConversationRuntimeEnvelopeProjection,
+        ConversationRuntimeEnvelopeProjectionRejection, ConversationStreamEvent,
+        conversation_stream_channel, emit_confirmed_test_terminal_receipt,
     };
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
+    };
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
     };
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
@@ -162,7 +233,7 @@ mod tests {
         ));
         assert!(matches!(
             receiver.recv().expect("turn event should arrive"),
-            ConversationStreamEvent::TurnStarted { ref turn_id } if turn_id == "test-turn"
+            ConversationStreamEvent::TurnStarted { ref turn_id, .. } if turn_id == "test-turn"
         ));
         assert_eq!(
             receiver.recv().expect("terminal event should arrive"),
@@ -171,5 +242,31 @@ mod tests {
             }
         );
         assert!(returned.is_completed_and_confirmed());
+    }
+
+    #[test]
+    fn projection_keeps_out_of_order_turn_rejection_after_late_thread_preparation() {
+        let mut projection = ConversationRuntimeEnvelopeProjection::default();
+        projection.apply_event(&ConversationStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::new(ConversationRuntimeConfigurationRequest::default()),
+        });
+        projection.apply_event(&ConversationStreamEvent::ThreadPrepared {
+            thread_id: "thread-1".to_string(),
+            title: "Planning worker".to_string(),
+            cwd: "/tmp/workspace".to_string(),
+            runtime_envelope: Box::new(ConversationRuntimeEnvelope::unobserved()),
+        });
+
+        assert_eq!(
+            projection.last_rejection,
+            Some(ConversationRuntimeEnvelopeProjectionRejection::EnvelopeNotPrepared)
+        );
+        assert!(
+            projection
+                .runtime_envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.turn_request.is_none())
+        );
     }
 }

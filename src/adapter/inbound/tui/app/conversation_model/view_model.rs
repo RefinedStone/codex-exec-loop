@@ -27,6 +27,7 @@ use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
     ConversationSnapshot,
 };
+use crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope;
 use crate::domain::planning::PlanningRepairRequestSnapshot;
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
@@ -122,6 +123,9 @@ pub(crate) struct ConversationViewModel {
     pub(crate) warnings: Vec<String>,
     // Runtime notices are de-duplicated so repeated recovery probes do not spam the footer.
     pub(crate) runtime_notices: Vec<String>,
+    // Headless core owns correlation and applied-state reduction. The TUI retains
+    // the resulting envelope for later P0-D presentation without reparsing wire data.
+    pub(crate) runtime_envelope: Option<ConversationRuntimeEnvelope>,
     pub(crate) input_buffer: String,
     input_cursor_byte_index: Option<usize>,
     pub(crate) inline_shell_command_palette_state: InlineShellCommandPaletteState,
@@ -176,6 +180,7 @@ impl ConversationViewModel {
             base_warnings: Vec::new(),
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
+            runtime_envelope: None,
             input_buffer: String::new(),
             input_cursor_byte_index: None,
             inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
@@ -250,6 +255,7 @@ impl ConversationViewModel {
             base_warnings,
             warnings,
             runtime_notices,
+            runtime_envelope: None,
             input_buffer: String::new(),
             input_cursor_byte_index: None,
             inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
@@ -391,11 +397,14 @@ impl ConversationViewModel {
     }
     pub(crate) fn record_thread_prepared(&mut self, thread_id: String, title: String, cwd: String) {
         // Thread preparation upgrades a draft into an app-server backed conversation.
+        let reattached_same_thread = self.thread_id == thread_id && self.has_active_thread();
         self.thread_id = thread_id;
         self.title = title.clone();
         self.cwd = cwd;
-        self.status_text = "thread started".to_string();
-        self.append_status_message("thread opened / ".to_string() + &title);
+        if !reattached_same_thread {
+            self.status_text = "thread started".to_string();
+            self.append_status_message("thread opened / ".to_string() + &title);
+        }
     }
     pub(crate) fn record_turn_started(&mut self, turn_id: String) {
         self.mark_turn_started(turn_id);

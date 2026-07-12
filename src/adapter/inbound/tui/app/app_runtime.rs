@@ -124,13 +124,22 @@ pub(super) fn core_turn_stream_event_from_application(
             thread_id,
             title,
             cwd,
+            runtime_envelope,
         } => TurnStreamEvent::ThreadPrepared {
             thread_id,
             title,
             cwd,
+            runtime_envelope,
         },
-        ConversationStreamEvent::TurnStarted { turn_id } => {
-            TurnStreamEvent::TurnStarted { turn_id }
+        ConversationStreamEvent::TurnStarted {
+            turn_id,
+            runtime_request,
+        } => TurnStreamEvent::TurnStarted {
+            turn_id,
+            runtime_request,
+        },
+        ConversationStreamEvent::RuntimeEnvelopeObserved { observation } => {
+            TurnStreamEvent::RuntimeEnvelopeObserved { observation }
         }
         ConversationStreamEvent::StatusUpdated { text } => TurnStreamEvent::StatusUpdated { text },
         ConversationStreamEvent::AgentMessageDelta {
@@ -254,19 +263,23 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     title: "Title".to_string(),
                     cwd: "/repo".to_string(),
+                    runtime_envelope: Box::default(),
                 },
                 TurnStreamEvent::ThreadPrepared {
                     thread_id: "thread-1".to_string(),
                     title: "Title".to_string(),
                     cwd: "/repo".to_string(),
+                    runtime_envelope: Box::default(),
                 },
             ),
             (
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-1".to_string(),
+                    runtime_request: Box::default(),
                 },
                 TurnStreamEvent::TurnStarted {
                     turn_id: "turn-1".to_string(),
+                    runtime_request: Box::default(),
                 },
             ),
             (
@@ -633,6 +646,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     title: "Thread".to_string(),
                     cwd: "/tmp/root".to_string(),
+                    runtime_envelope: Box::default(),
                 }),
             ),
         ));
@@ -640,6 +654,7 @@ mod tests {
             Box::new(
                 stream_state.apply_stream_event(TurnStreamEvent::TurnStarted {
                     turn_id: "turn-1".to_string(),
+                    runtime_request: Box::default(),
                 }),
             ),
         ));

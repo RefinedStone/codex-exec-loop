@@ -411,7 +411,17 @@ impl ParallelModeTurnService {
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
         event: &ConversationStreamEvent,
     ) -> ParallelTurnStreamEventOutcome {
-        if let ConversationStreamEvent::ThreadPrepared { thread_id, .. } = event {
+        if let ConversationStreamEvent::ThreadPrepared { thread_id, cwd, .. } = event {
+            if cwd != workspace_directory {
+                return ParallelTurnStreamEventOutcome {
+                    runtime_notice: Some(
+                        "slot lease thread-prepared cwd did not match the expected worktree"
+                            .to_string(),
+                    ),
+                    invalidate_supervisor_snapshot: false,
+                    turn_started_observed: false,
+                };
+            }
             /*
             ThreadPrepared는 lease가 아직 Running이 되기 전의 식별자 결합 단계다.
             같은 workspace가 slot worktree가 아니면 service가 Ok(None)을 돌려주므로,
@@ -1976,10 +1986,12 @@ mod tests {
                     thread_id: receipt.thread_id.clone(),
                     title: format!("Terminal {label}"),
                     cwd: lease.worktree_path.clone(),
+                    runtime_envelope: Box::default(),
                 });
             assert!(thread_prepared.invalidate_supervisor_snapshot);
             let turn_started = lifecycle.observe_event(&ConversationStreamEvent::TurnStarted {
                 turn_id: receipt.turn_id.clone(),
+                runtime_request: Box::default(),
             });
             assert!(turn_started.invalidate_supervisor_snapshot);
             assert!(lifecycle.saw_turn_started);
@@ -2041,6 +2053,7 @@ mod tests {
         let mut lifecycle = turn_service.stream_lifecycle_for_lease(lease.clone());
         lifecycle.observe_event(&ConversationStreamEvent::TurnStarted {
             turn_id: "turn-producer-return-failure".to_string(),
+            runtime_request: Box::default(),
         });
 
         let completion = lifecycle.finalize_after_stream_completion(true);
@@ -2087,6 +2100,7 @@ mod tests {
             &workspace.root,
             &ConversationStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
             },
         );
 
@@ -2104,6 +2118,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 title: "Temp".to_string(),
                 cwd: workspace.root.clone(),
+                runtime_envelope: Box::default(),
             },
         );
 

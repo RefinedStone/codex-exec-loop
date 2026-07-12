@@ -2,6 +2,10 @@ use crate::domain::conversation::{
     ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
     ConversationToolActivity,
 };
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
+    ConversationRuntimeEnvelopeObservation, ConversationRuntimeEnvelopeObservationRejection,
+};
 use crate::domain::planning::{PostTurnExecution, TurnSnapshotCapture};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 use crate::domain::turn_terminal::{
@@ -15,6 +19,7 @@ pub struct TurnStreamState {
     thread_id: Option<String>,
     title: Option<String>,
     cwd: Option<String>,
+    runtime_envelope: Option<ConversationRuntimeEnvelope>,
     active_turn_id: Option<String>,
     status_text: Option<String>,
     terminal: Option<TurnStreamTerminalSnapshot>,
@@ -28,6 +33,7 @@ impl TurnStreamState {
             thread_id: None,
             title: None,
             cwd: None,
+            runtime_envelope: None,
             active_turn_id: None,
             status_text: None,
             terminal: None,
@@ -44,6 +50,7 @@ impl TurnStreamState {
         self.thread_id = Some(thread_id.into());
         self.title = Some(title.into());
         self.cwd = Some(cwd.into());
+        self.runtime_envelope = None;
         self.active_turn_id = None;
         self.status_text = None;
         self.terminal = None;
@@ -66,10 +73,12 @@ impl TurnStreamState {
                 thread_id,
                 title,
                 cwd,
+                runtime_envelope,
             } => {
                 self.thread_id = Some(thread_id.clone());
                 self.title = Some(title.clone());
                 self.cwd = Some(cwd.clone());
+                self.runtime_envelope = Some(*runtime_envelope);
                 self.active_turn_id = None;
                 self.terminal = None;
                 self.last_applied_post_turn_evaluation_id = None;
@@ -81,8 +90,14 @@ impl TurnStreamState {
                     status_text: "thread started".to_string(),
                 }
             }
-            TurnStreamEvent::TurnStarted { turn_id } => {
+            TurnStreamEvent::TurnStarted {
+                turn_id,
+                runtime_request,
+            } => {
                 self.active_turn_id = Some(turn_id.clone());
+                self.runtime_envelope
+                    .get_or_insert_with(ConversationRuntimeEnvelope::unobserved)
+                    .record_turn_request(*runtime_request);
                 self.terminal = None;
                 self.last_applied_post_turn_evaluation_id = None;
                 self.status_text = Some("turn started".to_string());
@@ -90,6 +105,9 @@ impl TurnStreamState {
                     turn_id,
                     status_text: "turn started".to_string(),
                 }
+            }
+            TurnStreamEvent::RuntimeEnvelopeObserved { observation } => {
+                self.runtime_envelope_observed_update(*observation)
             }
             TurnStreamEvent::StatusUpdated { text } => {
                 self.status_text = Some(text.clone());
@@ -235,6 +253,27 @@ impl TurnStreamState {
         }
     }
 
+    fn runtime_envelope_observed_update(
+        &mut self,
+        observation: ConversationRuntimeEnvelopeObservation,
+    ) -> TurnStreamUpdate {
+        let rejection = match self.runtime_envelope.as_mut() {
+            Some(envelope) => envelope
+                .apply_correlated_observation(
+                    self.thread_id.as_deref(),
+                    self.active_turn_id.as_deref(),
+                    &observation,
+                )
+                .err()
+                .map(TurnStreamRuntimeEnvelopeRejection::from),
+            None => Some(TurnStreamRuntimeEnvelopeRejection::EnvelopeNotPrepared),
+        };
+        TurnStreamUpdate::RuntimeEnvelopeObserved {
+            observation: Box::new(observation),
+            rejection,
+        }
+    }
+
     fn turn_terminal_update(
         &mut self,
         receipt: ConversationTurnTerminalReceipt,
@@ -310,6 +349,7 @@ impl TurnStreamState {
             thread_id: self.thread_id.clone(),
             title: self.title.clone(),
             cwd: self.cwd.clone(),
+            runtime_envelope: self.runtime_envelope.clone().map(Box::new),
             active_turn_id: self.active_turn_id.clone(),
             status_text: self.status_text.clone(),
             terminal: self.terminal.clone(),
@@ -330,6 +370,7 @@ pub struct TurnStreamSnapshot {
     pub thread_id: Option<String>,
     pub title: Option<String>,
     pub cwd: Option<String>,
+    pub runtime_envelope: Option<Box<ConversationRuntimeEnvelope>>,
     pub active_turn_id: Option<String>,
     pub status_text: Option<String>,
     pub terminal: Option<TurnStreamTerminalSnapshot>,
@@ -345,9 +386,14 @@ pub enum TurnStreamEvent {
         thread_id: String,
         title: String,
         cwd: String,
+        runtime_envelope: Box<ConversationRuntimeEnvelope>,
     },
     TurnStarted {
         turn_id: String,
+        runtime_request: Box<ConversationRuntimeConfigurationRequest>,
+    },
+    RuntimeEnvelopeObserved {
+        observation: Box<ConversationRuntimeEnvelopeObservation>,
     },
     StatusUpdated {
         text: String,
@@ -416,6 +462,10 @@ pub enum TurnStreamUpdate {
     TurnStarted {
         turn_id: String,
         status_text: String,
+    },
+    RuntimeEnvelopeObserved {
+        observation: Box<ConversationRuntimeEnvelopeObservation>,
+        rejection: Option<TurnStreamRuntimeEnvelopeRejection>,
     },
     StatusUpdated {
         text: String,
@@ -487,6 +537,36 @@ pub enum TurnStreamTerminalRejection {
     TerminalAlreadyApplied,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnStreamRuntimeEnvelopeRejection {
+    EnvelopeNotPrepared,
+    ThreadMismatch { expected_thread_id: Option<String> },
+    TurnMismatch { expected_turn_id: Option<String> },
+}
+
+impl TurnStreamRuntimeEnvelopeRejection {
+    pub const fn notice_label(&self) -> &'static str {
+        match self {
+            Self::EnvelopeNotPrepared => "envelope not prepared",
+            Self::ThreadMismatch { .. } => "thread mismatch",
+            Self::TurnMismatch { .. } => "turn mismatch",
+        }
+    }
+}
+
+impl From<ConversationRuntimeEnvelopeObservationRejection> for TurnStreamRuntimeEnvelopeRejection {
+    fn from(rejection: ConversationRuntimeEnvelopeObservationRejection) -> Self {
+        match rejection {
+            ConversationRuntimeEnvelopeObservationRejection::Thread { expected_thread_id } => {
+                Self::ThreadMismatch { expected_thread_id }
+            }
+            ConversationRuntimeEnvelopeObservationRejection::Turn { expected_turn_id } => {
+                Self::TurnMismatch { expected_turn_id }
+            }
+        }
+    }
+}
+
 fn terminal_status_text(receipt: &ConversationTurnTerminalReceipt) -> &'static str {
     if receipt.application_delivery != ConversationTurnApplicationDelivery::Confirmed {
         return "turn recovery pending";
@@ -507,6 +587,13 @@ mod tests {
         ConversationApprovalResolution, ConversationApprovalReview,
         ConversationApprovalReviewStatus, ConversationToolActivity, ConversationToolActivityKind,
     };
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeConfigurationObservation, ConversationRuntimeLaunchEnvironment,
+        ConversationRuntimeModelReroute, ConversationRuntimeModelRerouteReason,
+        ConversationRuntimeObservationGap, ConversationRuntimeObservedValue,
+        ConversationRuntimeRequestedValue, ConversationRuntimeThreadSource,
+        ConversationRuntimeThreadStatus,
+    };
     use crate::domain::planning::{ExecutionSnapshot, TurnSnapshotCapture};
     use crate::domain::turn_terminal::{
         ConversationTurnApplicationDeliveryFailure, ConversationTurnTerminalUncertainty,
@@ -518,9 +605,47 @@ mod tests {
             thread_id: "thread-1".to_string(),
             title: "Core stream".to_string(),
             cwd: "/tmp/workspace".to_string(),
+            runtime_envelope: Box::default(),
         });
         state.apply_stream_event(TurnStreamEvent::TurnStarted {
             turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        state
+    }
+
+    fn runtime_envelope_with_applied_model(model: &str) -> ConversationRuntimeEnvelope {
+        ConversationRuntimeEnvelope::prepared(
+            ConversationRuntimeConfigurationRequest::default(),
+            crate::domain::conversation_runtime_envelope::ConversationRuntimeConfigurationObservation {
+                model: ConversationRuntimeObservedValue::Observed(model.to_string()),
+                source: ConversationRuntimeObservedValue::Observed(
+                    ConversationRuntimeThreadSource::AppServer,
+                ),
+                ..Default::default()
+            },
+            ConversationRuntimeLaunchEnvironment::unknown(),
+            ConversationRuntimeObservedValue::Observed(ConversationRuntimeThreadStatus::Idle),
+        )
+    }
+
+    fn prepared_runtime_envelope_state(
+        applied_model: &str,
+        requested_model: &str,
+    ) -> TurnStreamState {
+        let mut state = TurnStreamState::new();
+        state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
+            thread_id: "thread-envelope".to_string(),
+            title: "Envelope".to_string(),
+            cwd: "/repo".to_string(),
+            runtime_envelope: Box::new(runtime_envelope_with_applied_model(applied_model)),
+        });
+        state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-envelope".to_string(),
+            runtime_request: Box::new(ConversationRuntimeConfigurationRequest {
+                model: ConversationRuntimeRequestedValue::Value(requested_model.to_string()),
+                ..Default::default()
+            }),
         });
         state
     }
@@ -540,6 +665,7 @@ mod tests {
             thread_id: "thread-1".to_string(),
             title: "Core stream".to_string(),
             cwd: "/tmp/workspace".to_string(),
+            runtime_envelope: Box::default(),
         });
 
         assert_eq!(snapshot.revision, 1);
@@ -578,6 +704,7 @@ mod tests {
 
         let snapshot = state.apply_stream_event(TurnStreamEvent::TurnStarted {
             turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
         });
 
         assert_eq!(snapshot.active_turn_id.as_deref(), Some("turn-1"));
@@ -588,6 +715,344 @@ mod tests {
                 turn_id: "turn-1".to_string(),
                 status_text: "turn started".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn turn_request_never_overwrites_applied_thread_envelope() {
+        let state = prepared_runtime_envelope_state("applied-model", "requested-model");
+        let snapshot = state
+            .runtime_envelope
+            .expect("envelope should remain prepared");
+
+        assert_eq!(
+            snapshot.applied.model,
+            ConversationRuntimeObservedValue::Observed("applied-model".to_string())
+        );
+        assert_eq!(
+            snapshot
+                .turn_request
+                .as_ref()
+                .and_then(|request| request.model.as_value())
+                .map(String::as_str),
+            Some("requested-model")
+        );
+        assert_eq!(snapshot.observation_sequence, 0);
+    }
+
+    #[test]
+    fn correlated_settings_and_status_apply_in_fifo_order() {
+        let mut state = prepared_runtime_envelope_state("applied-model", "requested-model");
+        let settings = crate::domain::conversation_runtime_envelope::ConversationRuntimeConfigurationObservation {
+            model: ConversationRuntimeObservedValue::Observed("settings-model".to_string()),
+            source: ConversationRuntimeObservedValue::Missing,
+            ..Default::default()
+        };
+
+        let settings_snapshot =
+            state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+                observation: Box::new(ConversationRuntimeEnvelopeObservation::SettingsUpdated {
+                    thread_id: "thread-envelope".to_string(),
+                    settings: Box::new(settings),
+                }),
+            });
+        assert!(matches!(
+            settings_snapshot.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: None,
+                ..
+            }
+        ));
+        let status_snapshot = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(
+                ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                    thread_id: "thread-envelope".to_string(),
+                    status: ConversationRuntimeObservedValue::Observed(
+                        ConversationRuntimeThreadStatus::Active {
+                            waiting_on_approval: true,
+                            waiting_on_user_input: false,
+                            unknown_flags: Vec::new(),
+                            unknown_flags_truncated: false,
+                        },
+                    ),
+                },
+            ),
+        });
+        let envelope = status_snapshot
+            .runtime_envelope
+            .expect("accepted observations should retain envelope");
+        assert_eq!(
+            envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed("settings-model".to_string())
+        );
+        assert!(matches!(
+            envelope.thread_status,
+            ConversationRuntimeObservedValue::Observed(ConversationRuntimeThreadStatus::Active {
+                waiting_on_approval: true,
+                ..
+            })
+        ));
+        assert_eq!(envelope.observation_sequence, 2);
+    }
+
+    #[test]
+    fn reroute_accepts_correlated_authority_and_rejects_only_stale_turn_identity() {
+        let mut state = prepared_runtime_envelope_state("thread-default", "requested-model");
+        let reroute = ConversationRuntimeEnvelopeObservation::ModelRerouted {
+            thread_id: "thread-envelope".to_string(),
+            turn_id: "turn-envelope".to_string(),
+            reroute: ConversationRuntimeModelReroute {
+                from_model: "requested-model".to_string(),
+                to_model: "rerouted-model".to_string(),
+                reason: ConversationRuntimeModelRerouteReason::HighRiskCyberActivity,
+            },
+        };
+
+        let accepted = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(reroute.clone()),
+        });
+        assert!(matches!(
+            accepted.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            accepted
+                .runtime_envelope
+                .as_ref()
+                .map(|envelope| &envelope.applied.model),
+            Some(&ConversationRuntimeObservedValue::Observed(
+                "rerouted-model".to_string()
+            ))
+        );
+
+        let duplicate = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(reroute),
+        });
+        assert!(matches!(
+            duplicate.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            duplicate
+                .runtime_envelope
+                .as_ref()
+                .map(|envelope| envelope.observation_sequence),
+            Some(2)
+        );
+
+        let stale_turn = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                thread_id: "thread-envelope".to_string(),
+                turn_id: "turn-stale".to_string(),
+                reroute: ConversationRuntimeModelReroute {
+                    from_model: "rerouted-model".to_string(),
+                    to_model: "stale-model".to_string(),
+                    reason: ConversationRuntimeModelRerouteReason::Unknown("future".to_string()),
+                },
+            }),
+        });
+        assert!(matches!(
+            stale_turn.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: Some(TurnStreamRuntimeEnvelopeRejection::TurnMismatch { .. }),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn reroute_from_turn_model_survives_a_later_thread_settings_model() {
+        let mut state = prepared_runtime_envelope_state("turn-model", "turn-model");
+        state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(ConversationRuntimeEnvelopeObservation::SettingsUpdated {
+                thread_id: "thread-envelope".to_string(),
+                settings: Box::new(ConversationRuntimeConfigurationObservation {
+                    model: ConversationRuntimeObservedValue::Observed(
+                        "later-settings-model".to_string(),
+                    ),
+                    ..ConversationRuntimeConfigurationObservation::default()
+                }),
+            }),
+        });
+
+        let snapshot = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                thread_id: "thread-envelope".to_string(),
+                turn_id: "turn-envelope".to_string(),
+                reroute: ConversationRuntimeModelReroute {
+                    from_model: "turn-model".to_string(),
+                    to_model: "rerouted-model".to_string(),
+                    reason: ConversationRuntimeModelRerouteReason::HighRiskCyberActivity,
+                },
+            }),
+        });
+
+        assert!(matches!(
+            snapshot.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: None,
+                ..
+            }
+        ));
+        let envelope = snapshot
+            .runtime_envelope
+            .expect("correlated reroute should remain authoritative");
+        assert_eq!(
+            envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed("rerouted-model".to_string())
+        );
+        assert_eq!(
+            envelope
+                .last_model_reroute
+                .as_ref()
+                .map(|reroute| reroute.from_model.as_str()),
+            Some("turn-model")
+        );
+    }
+
+    #[test]
+    fn new_turn_resets_reroute_provenance_and_rejects_prior_turn_observations() {
+        let mut state = prepared_runtime_envelope_state("thread-default", "turn-one-model");
+        state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                thread_id: "thread-envelope".to_string(),
+                turn_id: "turn-envelope".to_string(),
+                reroute: ConversationRuntimeModelReroute {
+                    from_model: "turn-one-model".to_string(),
+                    to_model: "turn-one-rerouted".to_string(),
+                    reason: ConversationRuntimeModelRerouteReason::HighRiskCyberActivity,
+                },
+            }),
+        });
+
+        let started = state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-two".to_string(),
+            runtime_request: Box::new(ConversationRuntimeConfigurationRequest {
+                model: ConversationRuntimeRequestedValue::Value("turn-two-model".to_string()),
+                ..Default::default()
+            }),
+        });
+        assert_eq!(
+            started
+                .runtime_envelope
+                .as_ref()
+                .and_then(|envelope| envelope.last_model_reroute.as_ref()),
+            None
+        );
+
+        let stale = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                thread_id: "thread-envelope".to_string(),
+                turn_id: "turn-envelope".to_string(),
+                reroute: ConversationRuntimeModelReroute {
+                    from_model: "turn-one-rerouted".to_string(),
+                    to_model: "stale-model".to_string(),
+                    reason: ConversationRuntimeModelRerouteReason::Unknown("stale".to_string()),
+                },
+            }),
+        });
+        assert!(matches!(
+            stale.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: Some(TurnStreamRuntimeEnvelopeRejection::TurnMismatch { .. }),
+                ..
+            }
+        ));
+
+        let current = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                thread_id: "thread-envelope".to_string(),
+                turn_id: "turn-two".to_string(),
+                reroute: ConversationRuntimeModelReroute {
+                    from_model: "turn-two-model".to_string(),
+                    to_model: "turn-two-rerouted".to_string(),
+                    reason: ConversationRuntimeModelRerouteReason::HighRiskCyberActivity,
+                },
+            }),
+        });
+        assert!(matches!(
+            current.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            current
+                .runtime_envelope
+                .as_ref()
+                .map(|envelope| &envelope.applied.model),
+            Some(&ConversationRuntimeObservedValue::Observed(
+                "turn-two-rerouted".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn thread_scoped_observation_rejects_wrong_thread_without_mutation() {
+        let mut state = prepared_runtime_envelope_state("applied-model", "requested-model");
+
+        let snapshot = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(
+                ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                    thread_id: "thread-other".to_string(),
+                    status: ConversationRuntimeObservedValue::Observed(
+                        ConversationRuntimeThreadStatus::SystemError,
+                    ),
+                },
+            ),
+        });
+
+        assert!(matches!(
+            snapshot.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: Some(TurnStreamRuntimeEnvelopeRejection::ThreadMismatch { .. }),
+                ..
+            }
+        ));
+        assert_eq!(
+            snapshot
+                .runtime_envelope
+                .as_ref()
+                .map(|envelope| envelope.observation_sequence),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn correlated_projection_gap_marks_applied_truth_unavailable() {
+        let mut state = prepared_runtime_envelope_state("applied-model", "requested-model");
+
+        let snapshot = state.apply_stream_event(TurnStreamEvent::RuntimeEnvelopeObserved {
+            observation: Box::new(ConversationRuntimeEnvelopeObservation::ProjectionGap {
+                thread_id: "thread-envelope".to_string(),
+                gap: ConversationRuntimeObservationGap::settings(),
+            }),
+        });
+
+        assert!(matches!(
+            snapshot.update,
+            TurnStreamUpdate::RuntimeEnvelopeObserved {
+                rejection: None,
+                ..
+            }
+        ));
+        let envelope = snapshot
+            .runtime_envelope
+            .expect("gap should remain in the core snapshot");
+        assert_eq!(
+            envelope.applied.model,
+            ConversationRuntimeObservedValue::UnavailableAfterObservationGap
+        );
+        assert_eq!(
+            envelope.projection_gap,
+            Some(ConversationRuntimeObservationGap::settings())
         );
     }
 
@@ -962,6 +1427,7 @@ mod tests {
         let mut state = TurnStreamState::new();
         state.apply_stream_event(TurnStreamEvent::TurnStarted {
             turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
         });
 
         let snapshot = state.apply_stream_event(TurnStreamEvent::Failed {

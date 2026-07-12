@@ -42,8 +42,8 @@ use self::planning_worker_skill::PlanningWorkerSkillAdapter;
 use self::protocol::{
     ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
     ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputItem, TurnStartParams,
-    initialize_detail, sort_and_dedup_warnings, thread_title, to_conversation_snapshot,
-    to_session_summary,
+    initialize_detail, runtime_configuration_request, sort_and_dedup_warnings, thread_title,
+    to_conversation_snapshot, to_runtime_envelope, to_session_summary,
 };
 use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
@@ -70,6 +70,9 @@ use crate::diagnostics::event_log;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalReviewStatus,
     ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
+};
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeEnvelope, ConversationRuntimeEnvelopeObservation,
 };
 use crate::domain::planning::PostTurnContinuationPermit;
 use crate::domain::recent_sessions::{
@@ -139,6 +142,22 @@ fn protected_thread_workspace(cwd: &str) -> Result<ProtectedThreadWorkspace> {
         cwd: normalized_cwd,
         config: BTreeMap::from([("projects".to_string(), Value::Object(projects))]),
     })
+}
+
+fn exact_applied_workspace_cwd(
+    envelope: &ConversationRuntimeEnvelope,
+    requested_cwd: &str,
+    response_method: &str,
+) -> Result<String> {
+    let applied_cwd = envelope
+        .applied_cwd()
+        .ok_or_else(|| anyhow!("{response_method} applied envelope omitted required cwd"))?;
+    if applied_cwd != requested_cwd {
+        return Err(anyhow!(
+            "{response_method} applied cwd did not match the protected requested workspace"
+        ));
+    }
+    Ok(applied_cwd.to_string())
 }
 
 fn insert_untrusted_project_key(projects: &mut Map<String, Value>, key: String) {
@@ -300,14 +319,56 @@ fn bounded_app_server_stream_event(event: ConversationStreamEvent) -> Conversati
             thread_id,
             title,
             cwd,
+            runtime_envelope,
         } => ConversationStreamEvent::ThreadPrepared {
             thread_id: bounded_stream_text(thread_id, MAX_STREAM_IDENTIFIER_BYTES),
             title: bounded_stream_text(title, MAX_STREAM_METADATA_BYTES),
             cwd: bounded_stream_text(cwd, MAX_STREAM_METADATA_BYTES),
+            runtime_envelope,
         },
-        ConversationStreamEvent::TurnStarted { turn_id } => ConversationStreamEvent::TurnStarted {
+        ConversationStreamEvent::TurnStarted {
+            turn_id,
+            runtime_request,
+        } => ConversationStreamEvent::TurnStarted {
             turn_id: bounded_stream_text(turn_id, MAX_STREAM_IDENTIFIER_BYTES),
+            runtime_request,
         },
+        ConversationStreamEvent::RuntimeEnvelopeObserved { observation } => {
+            let observation = match *observation {
+                ConversationRuntimeEnvelopeObservation::SettingsUpdated {
+                    thread_id,
+                    settings,
+                } => ConversationRuntimeEnvelopeObservation::SettingsUpdated {
+                    thread_id: bounded_stream_text(thread_id, MAX_STREAM_IDENTIFIER_BYTES),
+                    settings,
+                },
+                ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                    thread_id,
+                    turn_id,
+                    reroute,
+                } => ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                    thread_id: bounded_stream_text(thread_id, MAX_STREAM_IDENTIFIER_BYTES),
+                    turn_id: bounded_stream_text(turn_id, MAX_STREAM_IDENTIFIER_BYTES),
+                    reroute,
+                },
+                ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                    thread_id,
+                    status,
+                } => ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                    thread_id: bounded_stream_text(thread_id, MAX_STREAM_IDENTIFIER_BYTES),
+                    status,
+                },
+                ConversationRuntimeEnvelopeObservation::ProjectionGap { thread_id, gap } => {
+                    ConversationRuntimeEnvelopeObservation::ProjectionGap {
+                        thread_id: bounded_stream_text(thread_id, MAX_STREAM_IDENTIFIER_BYTES),
+                        gap,
+                    }
+                }
+            };
+            ConversationStreamEvent::RuntimeEnvelopeObserved {
+                observation: Box::new(observation),
+            }
+        }
         ConversationStreamEvent::StatusUpdated { text } => ConversationStreamEvent::StatusUpdated {
             text: bounded_stream_text(text, MAX_STREAM_METADATA_BYTES),
         },
@@ -616,6 +677,15 @@ impl CodexAppServerAdapter {
             let model = options.model.as_deref();
             let effort = options.reasoning_effort.map(ReasoningEffortValue::from);
             let workspace = protected_thread_workspace(cwd)?;
+            let requested_cwd = workspace.cwd.clone();
+            let thread_request = runtime_configuration_request(
+                None,
+                None,
+                Some(&requested_cwd),
+                Some(self.execution_policy.approval_policy),
+                self.execution_policy.approvals_reviewer,
+                Some(SandboxModeValue::ReadOnly),
+            );
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
@@ -625,6 +695,18 @@ impl CodexAppServerAdapter {
                 ..ThreadStartParams::default()
             })?;
             let thread_id = thread_response.thread.id.clone();
+            if thread_id.is_empty() {
+                anyhow::bail!("thread/start response omitted a nonempty thread id");
+            }
+            let runtime_envelope = to_runtime_envelope(
+                thread_request,
+                &thread_response.runtime_envelope_fields,
+                &thread_response.thread,
+                self.connection_config.runtime_launch_environment(),
+            )?;
+            connection.discard_notifications_before_turn_binding();
+            let applied_cwd =
+                exact_applied_workspace_cwd(&runtime_envelope, &requested_cwd, "thread/start")?;
             send_required_app_server_event(
                 &event_sender,
                 ConversationStreamEvent::codex_app_server_launch_attachment(),
@@ -635,7 +717,8 @@ impl CodexAppServerAdapter {
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: thread_id.clone(),
                     title: thread_title(&thread_response.thread),
-                    cwd: thread_response.thread.cwd.clone(),
+                    cwd: applied_cwd,
+                    runtime_envelope: Box::new(runtime_envelope),
                 },
                 "thread/prepared",
             )?;
@@ -701,6 +784,15 @@ impl CodexAppServerAdapter {
                 );
             }
             let workspace = protected_thread_workspace(workspace_directory)?;
+            let requested_cwd = workspace.cwd.clone();
+            let thread_request = runtime_configuration_request(
+                Some(PLANNING_WORKER_MODEL),
+                None,
+                Some(&requested_cwd),
+                Some(ApprovalPolicyValue::Never),
+                None,
+                Some(SandboxModeValue::ReadOnly),
+            );
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(ApprovalPolicyValue::Never),
@@ -713,6 +805,18 @@ impl CodexAppServerAdapter {
                 ephemeral: Some(true),
             })?;
             let thread_id = thread_response.thread.id.clone();
+            if thread_id.is_empty() {
+                anyhow::bail!("thread/start response omitted a nonempty thread id");
+            }
+            let runtime_envelope = to_runtime_envelope(
+                thread_request,
+                &thread_response.runtime_envelope_fields,
+                &thread_response.thread,
+                self.connection_config.runtime_launch_environment(),
+            )?;
+            connection.discard_notifications_before_turn_binding();
+            let applied_cwd =
+                exact_applied_workspace_cwd(&runtime_envelope, &requested_cwd, "thread/start")?;
             send_required_app_server_event(
                 &event_sender,
                 ConversationStreamEvent::codex_app_server_launch_attachment(),
@@ -723,7 +827,8 @@ impl CodexAppServerAdapter {
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: thread_id.clone(),
                     title: thread_title(&thread_response.thread),
-                    cwd: thread_response.thread.cwd.clone(),
+                    cwd: applied_cwd,
+                    runtime_envelope: Box::new(runtime_envelope),
                 },
                 "thread/prepared",
             )?;
@@ -1051,6 +1156,14 @@ impl CodexAppServerAdapter {
         let started_at = prompt_logging_enabled.then(|| Utc::now().to_rfc3339());
         let mut input_records = prompt_logging_enabled.then(|| prompt_log_input_records(&input));
         let trace_thread_id = prompt_trace_context.thread_id.clone();
+        let runtime_request = runtime_configuration_request(
+            model,
+            effort,
+            None,
+            Some(approval_policy),
+            approvals_reviewer,
+            Some(sandbox_mode),
+        );
         let turn_response = match connection.start_turn_with_event_sender(
             TurnStartParams {
                 thread_id: trace_thread_id.clone(),
@@ -1101,6 +1214,7 @@ impl CodexAppServerAdapter {
             event_sender,
             ConversationStreamEvent::TurnStarted {
                 turn_id: turn_response.turn.id.clone(),
+                runtime_request: Box::new(runtime_request),
             },
             "turn/started",
         )?;
@@ -1377,7 +1491,19 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
             // Resume does not carry a caller-owned cwd, so read the persisted thread
             // record before applying the project-trust override.
             let thread = connection.read_thread(thread_id, false)?.thread;
+            if thread.id != thread_id {
+                anyhow::bail!("thread/read response identity did not match requested thread");
+            }
             let workspace = protected_thread_workspace(&thread.cwd)?;
+            let requested_cwd = workspace.cwd.clone();
+            let thread_request = runtime_configuration_request(
+                None,
+                None,
+                Some(&requested_cwd),
+                Some(self.execution_policy.approval_policy),
+                self.execution_policy.approvals_reviewer,
+                Some(SandboxModeValue::ReadOnly),
+            );
             let resume_response = connection.resume_thread(ThreadResumeParams {
                 thread_id: thread_id.to_string(),
                 cwd: Some(workspace.cwd),
@@ -1386,10 +1512,32 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
                 sandbox: Some(SandboxModeValue::ReadOnly),
                 config: Some(workspace.config),
             })?;
+            if resume_response.thread.id != thread_id {
+                anyhow::bail!("thread/resume response identity did not match requested thread");
+            }
+            let runtime_envelope = to_runtime_envelope(
+                thread_request,
+                &resume_response.runtime_envelope_fields,
+                &resume_response.thread,
+                self.connection_config.runtime_launch_environment(),
+            )?;
+            connection.discard_notifications_before_turn_binding();
+            let applied_cwd =
+                exact_applied_workspace_cwd(&runtime_envelope, &requested_cwd, "thread/resume")?;
             send_required_app_server_event(
                 &event_sender,
                 ConversationStreamEvent::codex_app_server_reattach_attachment(),
                 "attachment/reattach",
+            )?;
+            send_required_app_server_event(
+                &event_sender,
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: resume_response.thread.id.clone(),
+                    title: thread_title(&resume_response.thread),
+                    cwd: applied_cwd.clone(),
+                    runtime_envelope: Box::new(runtime_envelope),
+                },
+                "thread/prepared",
             )?;
             self.start_turn_and_wait_for_stream(
                 connection,
@@ -1398,7 +1546,7 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
                 effort,
                 &event_sender,
                 AppServerPromptTraceContext {
-                    workspace_dir: resume_response.thread.cwd,
+                    workspace_dir: applied_cwd,
                     session_kind: "main".to_string(),
                     operation: "resumed_thread_turn".to_string(),
                     service_name: None,
@@ -1444,6 +1592,15 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
         // Parallel worker sessions use isolated processes but persist app-server threads so `:peek` can read them later.
         let result = self.with_isolated_streaming_runtime(|connection| {
             let workspace = protected_thread_workspace(request.cwd)?;
+            let requested_cwd = workspace.cwd.clone();
+            let thread_request = runtime_configuration_request(
+                None,
+                None,
+                Some(&requested_cwd),
+                Some(self.execution_policy.approval_policy),
+                self.execution_policy.approvals_reviewer,
+                Some(SandboxModeValue::ReadOnly),
+            );
             let thread_response = connection.start_thread(ThreadStartParams {
                 cwd: Some(workspace.cwd),
                 approval_policy: Some(self.execution_policy.approval_policy),
@@ -1456,6 +1613,18 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 ephemeral: Some(false),
             })?;
             let thread_id = thread_response.thread.id.clone();
+            if thread_id.is_empty() {
+                anyhow::bail!("thread/start response omitted a nonempty thread id");
+            }
+            let runtime_envelope = to_runtime_envelope(
+                thread_request,
+                &thread_response.runtime_envelope_fields,
+                &thread_response.thread,
+                self.connection_config.runtime_launch_environment(),
+            )?;
+            connection.discard_notifications_before_turn_binding();
+            let applied_cwd =
+                exact_applied_workspace_cwd(&runtime_envelope, &requested_cwd, "thread/start")?;
             send_required_app_server_event(
                 &event_sender,
                 ConversationStreamEvent::codex_app_server_launch_attachment(),
@@ -1466,7 +1635,8 @@ impl ParallelAgentWorkerPort for CodexAppServerAdapter {
                 ConversationStreamEvent::ThreadPrepared {
                     thread_id: thread_id.clone(),
                     title: thread_title(&thread_response.thread),
-                    cwd: thread_response.thread.cwd.clone(),
+                    cwd: applied_cwd,
+                    runtime_envelope: Box::new(runtime_envelope),
                 },
                 "thread/prepared",
             )?;
@@ -1731,8 +1901,8 @@ mod tests {
         ConversationTurnApplicationDelivery, ConversationTurnTerminalOutcome,
         ConversationTurnTerminalReceipt, MAX_STREAM_CHANGED_PATHS,
         MAX_STREAM_COMPLETED_MESSAGE_BYTES, MAX_STREAM_DELTA_BYTES,
-        PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_SERVICE_NAME,
-        PlanningWorkerContinuationWatcher, STREAM_TRUNCATION_MARKER,
+        PLANNING_WORKER_DEVELOPER_INSTRUCTIONS, PLANNING_WORKER_MODEL,
+        PLANNING_WORKER_SERVICE_NAME, PlanningWorkerContinuationWatcher, STREAM_TRUNCATION_MARKER,
         bounded_app_server_stream_event, codex_raw_trust_key, finish_stream_result,
         persisted_error_summary, prompt_log_input_records, prompt_log_output_record,
         prompt_log_stream_forwarder, prompt_log_terminal_error, prompt_log_terminal_status,
@@ -1761,6 +1931,15 @@ mod tests {
     };
     #[cfg(unix)]
     use crate::domain::conversation::{ConversationReasoningEffort, ConversationTurnOptions};
+    #[cfg(unix)]
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeApprovalPolicy, ConversationRuntimeApprovalsReviewer,
+        ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
+        ConversationRuntimeEnvelopeObservation, ConversationRuntimeModelRerouteReason,
+        ConversationRuntimeObservedValue, ConversationRuntimeProcessEnvironment,
+        ConversationRuntimeRequestedValue, ConversationRuntimeSandboxPolicy,
+        ConversationRuntimeShellEnvironment, ConversationRuntimeThreadStatus,
+    };
     #[cfg(unix)]
     use crate::domain::recent_sessions::{
         SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
@@ -1926,6 +2105,50 @@ mod tests {
         assert!(has_launch_attachment(&new_events));
         assert!(has_thread_prepared(&new_events, "started-thread"));
         assert!(has_turn_completed(&new_events));
+        let new_envelope = prepared_runtime_envelope(&new_events, "started-thread");
+        assert_eq!(
+            new_envelope.thread_request.model,
+            ConversationRuntimeRequestedValue::Omitted
+        );
+        assert_eq!(
+            new_envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed("gpt-applied".to_string())
+        );
+        assert_eq!(
+            new_envelope.applied.reasoning_effort,
+            ConversationRuntimeObservedValue::Observed("medium".to_string())
+        );
+        assert_eq!(
+            new_envelope.applied.permission_profile,
+            ConversationRuntimeObservedValue::UnavailableOnStableResponse
+        );
+        assert_eq!(
+            new_envelope.launch_environment.process_environment,
+            ConversationRuntimeProcessEnvironment::Scrubbed
+        );
+        assert_eq!(
+            new_envelope.launch_environment.shell_environment,
+            ConversationRuntimeShellEnvironment::Core
+        );
+        assert!(!new_envelope.launch_environment.api_key_auth);
+        let new_turn_request = started_runtime_request(&new_events);
+        assert_eq!(
+            new_turn_request.model.as_value().map(String::as_str),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            new_turn_request
+                .reasoning_effort
+                .as_value()
+                .map(String::as_str),
+            Some("high")
+        );
+        assert!(matches!(
+            new_turn_request.sandbox,
+            ConversationRuntimeRequestedValue::Value(
+                ConversationRuntimeSandboxPolicy::WorkspaceWrite { .. }
+            )
+        ));
 
         let (resume_tx, resume_rx) = conversation_stream_channel();
         adapter
@@ -1938,7 +2161,28 @@ mod tests {
             .expect("existing thread stream should complete");
         let resume_events = resume_rx.try_iter().collect::<Vec<_>>();
         assert!(has_reattach_attachment(&resume_events));
+        assert!(has_thread_prepared(&resume_events, "resume-thread"));
         assert!(has_turn_completed(&resume_events));
+        let resume_envelope = prepared_runtime_envelope(&resume_events, "resume-thread");
+        assert_eq!(
+            resume_envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed("gpt-resumed".to_string())
+        );
+        assert_eq!(
+            resume_envelope
+                .thread_request
+                .cwd
+                .as_value()
+                .map(String::as_str),
+            Some("/repo")
+        );
+        assert_eq!(
+            started_runtime_request(&resume_events)
+                .model
+                .as_value()
+                .map(String::as_str),
+            Some("gpt-5.5")
+        );
 
         let methods = fake_codex.logged_methods();
         assert_eq!(
@@ -2035,6 +2279,170 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn early_settings_reroute_and_status_replay_after_turn_start_in_fifo_order() {
+        let fake_codex =
+            FakeCodex::install_with_scenario("early-runtime-envelope", "early_runtime_envelope");
+        let adapter = test_adapter_with_fake(&fake_codex);
+        let (event_sender, event_receiver) = conversation_stream_channel();
+
+        let receipt = adapter
+            .run_new_thread_stream(
+                "/repo",
+                "observe runtime envelope",
+                ConversationTurnOptions::default(),
+                event_sender,
+            )
+            .expect("early typed observations should not prevent terminal completion");
+        assert!(receipt.is_completed_and_confirmed());
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        let turn_started_index = events
+            .iter()
+            .position(|event| matches!(event, ConversationStreamEvent::TurnStarted { .. }))
+            .expect("turn/start response should emit the accepted request envelope");
+        let first_observation_index = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    ConversationStreamEvent::RuntimeEnvelopeObserved { .. }
+                )
+            })
+            .expect("deferred runtime observations should replay");
+        assert!(turn_started_index < first_observation_index);
+        let observations = events
+            .iter()
+            .filter_map(|event| match event {
+                ConversationStreamEvent::RuntimeEnvelopeObserved { observation } => {
+                    Some(observation.as_ref())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(observations.len(), 3);
+        assert!(matches!(
+            observations[0],
+            ConversationRuntimeEnvelopeObservation::SettingsUpdated { settings, .. }
+                if settings.model
+                    == ConversationRuntimeObservedValue::Observed("gpt-5.5".to_string())
+        ));
+        assert!(matches!(
+            observations[1],
+            ConversationRuntimeEnvelopeObservation::ModelRerouted { reroute, .. }
+                if reroute.from_model == "gpt-5.5"
+                    && reroute.to_model == "gpt-rerouted"
+                    && reroute.reason
+                        == ConversationRuntimeModelRerouteReason::HighRiskCyberActivity
+        ));
+        assert!(matches!(
+            observations[2],
+            ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                status: ConversationRuntimeObservedValue::Observed(
+                    ConversationRuntimeThreadStatus::Active {
+                        waiting_on_approval: true,
+                        ..
+                    }
+                ),
+                ..
+            }
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(ConversationStreamEvent::TurnTerminal { receipt })
+                if receipt.is_completed_and_confirmed()
+        ));
+        let mut application_projection = crate::application::service::conversation_runtime_event::ConversationRuntimeEnvelopeProjection::default();
+        for event in &events {
+            application_projection.apply_event(event);
+        }
+        assert!(application_projection.last_rejection.is_none());
+        let envelope = application_projection
+            .runtime_envelope
+            .expect("application reducer should retain the observed envelope");
+        assert_eq!(
+            envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed("gpt-rerouted".to_string())
+        );
+        assert!(matches!(
+            envelope.thread_status,
+            ConversationRuntimeObservedValue::Observed(ConversationRuntimeThreadStatus::Active {
+                waiting_on_approval: true,
+                ..
+            })
+        ));
+        assert_eq!(envelope.observation_sequence, 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_thread_response_settings_cannot_override_later_start_or_resume_envelope() {
+        let start_fake =
+            FakeCodex::install_with_scenario("pre-start-settings", "pre_thread_response_settings");
+        let start_adapter = test_adapter_with_fake(&start_fake);
+        let (start_sender, start_receiver) = conversation_stream_channel();
+        start_adapter
+            .run_new_thread_stream(
+                "/repo",
+                "start after stale settings",
+                ConversationTurnOptions::default(),
+                start_sender,
+            )
+            .expect("later thread/start response should remain authoritative");
+        let start_events = start_receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(
+            prepared_runtime_envelope(&start_events, "started-thread")
+                .applied
+                .model,
+            ConversationRuntimeObservedValue::Observed("gpt-applied".to_string())
+        );
+        assert!(!start_events.iter().any(|event| matches!(
+            event,
+            ConversationStreamEvent::RuntimeEnvelopeObserved { observation }
+                if matches!(
+                    observation.as_ref(),
+                    ConversationRuntimeEnvelopeObservation::SettingsUpdated { settings, .. }
+                        if settings.model
+                            == ConversationRuntimeObservedValue::Observed(
+                                "stale-before-response".to_string()
+                            )
+                )
+        )));
+
+        let resume_fake =
+            FakeCodex::install_with_scenario("pre-resume-settings", "pre_thread_response_settings");
+        let resume_adapter = test_adapter_with_fake(&resume_fake);
+        let (resume_sender, resume_receiver) = conversation_stream_channel();
+        resume_adapter
+            .run_turn_stream(
+                "resume-thread",
+                "resume after stale settings",
+                ConversationTurnOptions::default(),
+                resume_sender,
+            )
+            .expect("later thread/resume response should remain authoritative");
+        let resume_events = resume_receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(
+            prepared_runtime_envelope(&resume_events, "resume-thread")
+                .applied
+                .model,
+            ConversationRuntimeObservedValue::Observed("gpt-resumed".to_string())
+        );
+        assert!(!resume_events.iter().any(|event| matches!(
+            event,
+            ConversationStreamEvent::RuntimeEnvelopeObserved { observation }
+                if matches!(
+                    observation.as_ref(),
+                    ConversationRuntimeEnvelopeObservation::SettingsUpdated { settings, .. }
+                        if settings.model
+                            == ConversationRuntimeObservedValue::Observed(
+                                "stale-before-response".to_string()
+                            )
+                )
+        )));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn hidden_planning_stays_ephemeral_while_parallel_threads_are_readable_for_peek() {
         let fake_codex = FakeCodex::install("isolated-workers");
         let adapter = test_adapter_with_fake(&fake_codex);
@@ -2046,6 +2454,31 @@ mod tests {
         let planning_events = planning_rx.try_iter().collect::<Vec<_>>();
         assert!(has_thread_prepared(&planning_events, "started-thread"));
         assert!(has_turn_completed(&planning_events));
+        let planning_envelope = prepared_runtime_envelope(&planning_events, "started-thread");
+        assert_eq!(
+            planning_envelope
+                .thread_request
+                .model
+                .as_value()
+                .map(String::as_str),
+            Some(PLANNING_WORKER_MODEL)
+        );
+        assert_eq!(
+            planning_envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed(PLANNING_WORKER_MODEL.to_string())
+        );
+        let planning_turn_request = started_runtime_request(&planning_events);
+        assert_eq!(
+            planning_turn_request
+                .reasoning_effort
+                .as_value()
+                .map(String::as_str),
+            Some("medium")
+        );
+        assert_eq!(
+            planning_turn_request.approval_policy,
+            ConversationRuntimeRequestedValue::Value(ConversationRuntimeApprovalPolicy::Never)
+        );
 
         let (parallel_tx, parallel_rx) = conversation_stream_channel();
         adapter
@@ -2062,6 +2495,28 @@ mod tests {
         let parallel_events = parallel_rx.try_iter().collect::<Vec<_>>();
         assert!(has_thread_prepared(&parallel_events, "started-thread"));
         assert!(has_turn_completed(&parallel_events));
+        let parallel_envelope = prepared_runtime_envelope(&parallel_events, "started-thread");
+        assert_eq!(
+            parallel_envelope.thread_request.model,
+            ConversationRuntimeRequestedValue::Omitted
+        );
+        assert_eq!(
+            parallel_envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed("gpt-applied".to_string())
+        );
+        let parallel_turn_request = started_runtime_request(&parallel_events);
+        assert_eq!(
+            parallel_turn_request.model,
+            ConversationRuntimeRequestedValue::Omitted
+        );
+        assert_eq!(
+            parallel_turn_request.reasoning_effort,
+            ConversationRuntimeRequestedValue::Omitted
+        );
+        assert_eq!(
+            parallel_turn_request.approvals_reviewer,
+            ConversationRuntimeRequestedValue::Value(ConversationRuntimeApprovalsReviewer::User)
+        );
 
         let requests = fake_codex.logged_requests();
         let thread_starts = requests
@@ -2611,6 +3066,36 @@ mod tests {
             receipt.observations.changed_planning_file_paths.len(),
             MAX_STREAM_CHANGED_PATHS
         );
+
+        let runtime_observation = bounded_app_server_stream_event(
+            ConversationStreamEvent::RuntimeEnvelopeObserved {
+                observation: Box::new(
+                    crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                        thread_id: "t".repeat(super::MAX_STREAM_IDENTIFIER_BYTES + 1),
+                        turn_id: "u".repeat(super::MAX_STREAM_IDENTIFIER_BYTES + 1),
+                        reroute: crate::domain::conversation_runtime_envelope::ConversationRuntimeModelReroute {
+                            from_model: "gpt-a".to_string(),
+                            to_model: "gpt-b".to_string(),
+                            reason: crate::domain::conversation_runtime_envelope::ConversationRuntimeModelRerouteReason::HighRiskCyberActivity,
+                        },
+                    },
+                ),
+            },
+        );
+        let ConversationStreamEvent::RuntimeEnvelopeObserved { observation } = runtime_observation
+        else {
+            panic!("runtime observation should remain the same event kind");
+        };
+        let crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelopeObservation::ModelRerouted {
+            thread_id,
+            turn_id,
+            ..
+        } = observation.as_ref()
+        else {
+            panic!("runtime observation should retain reroute semantics");
+        };
+        assert!(thread_id.ends_with(STREAM_TRUNCATION_MARKER));
+        assert!(turn_id.ends_with(STREAM_TRUNCATION_MARKER));
     }
 
     #[test]
@@ -2754,6 +3239,21 @@ mod tests {
         assert!(error.to_string().contains("must be absolute"));
     }
 
+    #[test]
+    fn applied_workspace_cwd_mismatch_fails_without_reflecting_paths() {
+        let requested = "/private/requested-workspace";
+        let observed = "/private/provider-override";
+        let mut envelope = ConversationRuntimeEnvelope::unobserved();
+        envelope.applied.cwd = ConversationRuntimeObservedValue::Observed(observed.to_string());
+
+        let error = super::exact_applied_workspace_cwd(&envelope, requested, "thread/start")
+            .expect_err("applied cwd outside the protected workspace must fail closed");
+
+        assert!(error.to_string().contains("did not match"));
+        assert!(!error.to_string().contains(requested));
+        assert!(!error.to_string().contains(observed));
+    }
+
     #[cfg(windows)]
     #[test]
     fn protected_thread_workspace_preserves_case_while_lowercasing_windows_trust_keys() {
@@ -2804,6 +3304,33 @@ mod tests {
         assert!(
             prompt_log_output_record(&ConversationStreamEvent::TurnTerminal {
                 receipt: crate::application::service::conversation_runtime_event::confirmed_test_terminal_receipt(),
+            })
+            .is_none()
+        );
+        assert!(
+            prompt_log_output_record(&ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-secret".to_string(),
+                title: "ignored envelope".to_string(),
+                cwd: "/tmp/ignored".to_string(),
+                runtime_envelope: Box::default(),
+            })
+            .is_none()
+        );
+        assert!(
+            prompt_log_output_record(&ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-secret".to_string(),
+                runtime_request: Box::default(),
+            })
+            .is_none()
+        );
+        assert!(
+            prompt_log_output_record(&ConversationStreamEvent::RuntimeEnvelopeObserved {
+                observation: Box::new(
+                    ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                        thread_id: "thread-secret".to_string(),
+                        status: ConversationRuntimeObservedValue::Missing,
+                    },
+                ),
             })
             .is_none()
         );
@@ -3022,6 +3549,39 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn prepared_runtime_envelope<'a>(
+        events: &'a [ConversationStreamEvent],
+        thread_id: &str,
+    ) -> &'a ConversationRuntimeEnvelope {
+        events
+            .iter()
+            .find_map(|event| match event {
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: observed,
+                    runtime_envelope,
+                    ..
+                } if observed == thread_id => Some(runtime_envelope.as_ref()),
+                _ => None,
+            })
+            .expect("stream should contain the requested thread runtime envelope")
+    }
+
+    #[cfg(unix)]
+    fn started_runtime_request(
+        events: &[ConversationStreamEvent],
+    ) -> &ConversationRuntimeConfigurationRequest {
+        events
+            .iter()
+            .find_map(|event| match event {
+                ConversationStreamEvent::TurnStarted {
+                    runtime_request, ..
+                } => Some(runtime_request.as_ref()),
+                _ => None,
+            })
+            .expect("stream should contain a turn runtime request")
+    }
+
+    #[cfg(unix)]
     fn has_turn_completed(events: &[ConversationStreamEvent]) -> bool {
         events.iter().any(|event| {
             matches!(
@@ -3202,6 +3762,43 @@ def thread_record(thread_id, params=None):
         "turns": [],
     }
 
+def runtime_envelope(params, default_model):
+    sandbox_type = {
+        "read-only": "readOnly",
+        "workspace-write": "workspaceWrite",
+        "danger-full-access": "dangerFullAccess",
+    }.get(params.get("sandbox"), "readOnly")
+    return {
+        "approvalPolicy": params.get("approvalPolicy") or "on-request",
+        "approvalsReviewer": params.get("approvalsReviewer") or "user",
+        "cwd": params.get("cwd") or "/repo",
+        "model": params.get("model") or default_model,
+        "modelProvider": "openai",
+        "reasoningEffort": "medium",
+        "sandbox": {"type": sandbox_type},
+        "serviceTier": None,
+    }
+
+def send_settings(thread_id, model, cwd):
+    send({
+        "method": "thread/settings/updated",
+        "params": {
+            "threadId": thread_id,
+            "threadSettings": {
+                "model": model,
+                "modelProvider": "openai",
+                "effort": "medium",
+                "serviceTier": None,
+                "cwd": cwd,
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "sandboxPolicy": {"type": "readOnly"},
+                "activePermissionProfile": None,
+                "collaborationMode": {},
+            },
+        },
+    })
+
 for line in sys.stdin:
     request = json.loads(line)
     log_request(request)
@@ -3258,17 +3855,23 @@ for line in sys.stdin:
             },
         })
     elif method == "thread/start":
+        if scenario == "pre_thread_response_settings":
+            send_settings("started-thread", "stale-before-response", params.get("cwd") or "/repo")
         send({
             "id": request_id,
             "result": {
                 "thread": thread_record("started-thread", params),
+                **runtime_envelope(params, "gpt-applied"),
             },
         })
     elif method == "thread/resume":
+        if scenario == "pre_thread_response_settings":
+            send_settings(params.get("threadId", "resumed-thread"), "stale-before-response", params.get("cwd") or "/repo")
         send({
             "id": request_id,
             "result": {
                 "thread": thread_record(params.get("threadId", "resumed-thread")),
+                **runtime_envelope(params, "gpt-resumed"),
             },
         })
     elif method == "turn/start":
@@ -3277,6 +3880,46 @@ for line in sys.stdin:
             continue
         thread_id = params.get("threadId", "started-thread")
         turn_id = "turn-" + str(request_id)
+        if scenario == "early_runtime_envelope":
+            requested_model = params.get("model") or "gpt-applied"
+            send({
+                "method": "thread/settings/updated",
+                "params": {
+                    "threadId": thread_id,
+                    "threadSettings": {
+                        "model": requested_model,
+                        "modelProvider": "openai",
+                        "effort": params.get("effort"),
+                        "serviceTier": None,
+                        "cwd": "/repo",
+                        "approvalPolicy": params.get("approvalPolicy") or "on-request",
+                        "approvalsReviewer": params.get("approvalsReviewer") or "user",
+                        "sandboxPolicy": params.get("sandboxPolicy") or {"type": "readOnly"},
+                        "activePermissionProfile": None,
+                        "collaborationMode": {},
+                    },
+                },
+            })
+            send({
+                "method": "model/rerouted",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "fromModel": requested_model,
+                    "toModel": "gpt-rerouted",
+                    "reason": "highRiskCyberActivity",
+                },
+            })
+            send({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": thread_id,
+                    "status": {
+                        "type": "active",
+                        "activeFlags": ["waitingOnApproval"],
+                    },
+                },
+            })
         send({
             "id": request_id,
             "result": {
@@ -3285,28 +3928,29 @@ for line in sys.stdin:
                 },
             },
         })
-        send({
-            "method": "item/agentMessage/delta",
-            "params": {
-                "threadId": thread_id,
-                "turnId": turn_id,
-                "itemId": "agent-1",
-                "delta": "fake delta",
-            },
-        })
-        send({
-            "method": "item/completed",
-            "params": {
-                "threadId": thread_id,
-                "turnId": turn_id,
-                "item": {
-                    "type": "agentMessage",
-                    "id": "agent-1",
-                    "phase": "final",
-                    "text": "fake final response",
+        if scenario != "early_runtime_envelope":
+            send({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "itemId": "agent-1",
+                    "delta": "fake delta",
                 },
-            },
-        })
+            })
+            send({
+                "method": "item/completed",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "item": {
+                        "type": "agentMessage",
+                        "id": "agent-1",
+                        "phase": "final",
+                        "text": "fake final response",
+                    },
+                },
+            })
         if scenario == "terminal_retry_completed":
             send({
                 "method": "error",

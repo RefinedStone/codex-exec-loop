@@ -7,6 +7,7 @@ use crate::application::port::outbound::planning_worker_port::{
     PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::application::service::conversation_runtime_event::{
+    ConversationRuntimeEnvelopeProjection, ConversationRuntimeEnvelopeProjectionRejection,
     ConversationStreamEvent, ConversationStreamSender, conversation_stream_channel,
 };
 use crate::diagnostics::event_log;
@@ -98,12 +99,14 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let mut captured_thread_id = None;
         let mut captured_turn_id = None;
         let mut observed_terminal_receipt = None;
+        let mut runtime_projection = ConversationRuntimeEnvelopeProjection::default();
 
         // The producer runs concurrently because the stream queue is bounded.
         // Stop receiving at the first terminal event, then disconnect the queue
         // before joining so a buggy producer cannot deadlock the join by sending
         // post-terminal events.
         for event in rx.iter() {
+            runtime_projection.apply_event(&event);
             let terminal = matches!(
                 event,
                 ConversationStreamEvent::TurnTerminal { .. }
@@ -132,10 +135,11 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 ConversationStreamEvent::ThreadPrepared { thread_id, .. } => {
                     captured_thread_id = Some(thread_id);
                 }
-                ConversationStreamEvent::TurnStarted { turn_id } => {
+                ConversationStreamEvent::TurnStarted { turn_id, .. } => {
                     captured_turn_id = Some(turn_id);
                 }
                 ConversationStreamEvent::AttachmentObserved { .. }
+                | ConversationStreamEvent::RuntimeEnvelopeObserved { .. }
                 | ConversationStreamEvent::StatusUpdated { .. }
                 | ConversationStreamEvent::AgentMessageDelta { .. }
                 | ConversationStreamEvent::ToolActivity { .. }
@@ -223,6 +227,32 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
                 "planning worker terminal receipt did not match a started turn"
             ));
         }
+        if let Some(rejection) = runtime_projection.last_rejection.as_ref() {
+            let rejection = match rejection {
+                ConversationRuntimeEnvelopeProjectionRejection::EnvelopeNotPrepared => {
+                    "envelope not prepared"
+                }
+                ConversationRuntimeEnvelopeProjectionRejection::Observation(_) => {
+                    "correlation mismatch"
+                }
+            };
+            return Err(anyhow!(
+                "planning worker runtime envelope projection was rejected: {rejection}"
+            ));
+        }
+        let Some(runtime_envelope) = runtime_projection.runtime_envelope.as_ref() else {
+            return Err(anyhow!("planning worker runtime envelope was not prepared"));
+        };
+        if runtime_envelope.turn_request.is_none() {
+            return Err(anyhow!(
+                "planning worker runtime envelope omitted the started turn request"
+            ));
+        }
+        if runtime_envelope.projection_gap.is_some() {
+            return Err(anyhow!(
+                "planning worker runtime envelope has an observation gap"
+            ));
+        }
 
         event_log::emit_lazy("planning_worker_session_reduced", || {
             json!({
@@ -242,6 +272,7 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
             operation: request.operation,
             thread_id: captured_thread_id,
             turn_id: captured_turn_id,
+            runtime_envelope: runtime_projection.runtime_envelope,
             final_agent_message,
             changed_planning_file_paths,
         })
@@ -267,6 +298,12 @@ mod tests {
         PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
     };
     use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+    use crate::domain::conversation_runtime_envelope::{
+        ConversationRuntimeConfigurationObservation, ConversationRuntimeConfigurationRequest,
+        ConversationRuntimeEnvelope, ConversationRuntimeLaunchEnvironment,
+        ConversationRuntimeObservedValue, ConversationRuntimeRequestedValue,
+        ConversationRuntimeThreadStatus,
+    };
     use crate::domain::turn_terminal::{
         ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
         ConversationTurnError, ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
@@ -326,11 +363,31 @@ mod tests {
             .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed)
     }
 
+    fn planning_runtime_envelope() -> ConversationRuntimeEnvelope {
+        ConversationRuntimeEnvelope::prepared(
+            ConversationRuntimeConfigurationRequest {
+                model: ConversationRuntimeRequestedValue::Value(
+                    "planning-thread-requested".to_string(),
+                ),
+                ..ConversationRuntimeConfigurationRequest::default()
+            },
+            ConversationRuntimeConfigurationObservation {
+                model: ConversationRuntimeObservedValue::Observed(
+                    "planning-thread-applied".to_string(),
+                ),
+                cwd: ConversationRuntimeObservedValue::Observed("/tmp/workspace".to_string()),
+                ..ConversationRuntimeConfigurationObservation::default()
+            },
+            ConversationRuntimeLaunchEnvironment::unknown(),
+            ConversationRuntimeObservedValue::Observed(ConversationRuntimeThreadStatus::Idle),
+        )
+    }
+
     #[test]
     fn run_planning_session_collects_completed_message_and_changed_paths() {
         /*
          * 정상 stream test는 hidden planning thread가 여러 UI-facing event를 보내도 port response에는
-         * final message와 changed planning path만 남는다는 축약 계약을 고정한다.
+         * 상관된 runtime envelope, final message, changed planning path만 남는다는 축약 계약을 고정한다.
          */
         let receipt =
             completed_receipt("thread-1", "turn-1", vec!["DB task authority".to_string()]);
@@ -341,6 +398,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     title: "Planning Worker".to_string(),
                     cwd: "/tmp/workspace".to_string(),
+                    runtime_envelope: Box::new(planning_runtime_envelope()),
                 },
                 ConversationStreamEvent::AgentMessageCompleted {
                     item_id: "item-1".to_string(),
@@ -349,6 +407,12 @@ mod tests {
                 },
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-1".to_string(),
+                    runtime_request: Box::new(ConversationRuntimeConfigurationRequest {
+                        model: ConversationRuntimeRequestedValue::Value(
+                            "planning-turn-requested".to_string(),
+                        ),
+                        ..ConversationRuntimeConfigurationRequest::default()
+                    }),
                 },
                 ConversationStreamEvent::TurnRetrying {
                     thread_id: "thread-1".to_string(),
@@ -384,6 +448,30 @@ mod tests {
         );
         assert_eq!(result.thread_id.as_deref(), Some("thread-1"));
         assert_eq!(result.turn_id.as_deref(), Some("turn-1"));
+        let runtime_envelope = result
+            .runtime_envelope
+            .as_ref()
+            .expect("planning response should retain application runtime truth");
+        assert_eq!(
+            runtime_envelope
+                .thread_request
+                .model
+                .as_value()
+                .map(String::as_str),
+            Some("planning-thread-requested")
+        );
+        assert_eq!(
+            runtime_envelope.applied.model,
+            ConversationRuntimeObservedValue::Observed("planning-thread-applied".to_string())
+        );
+        assert_eq!(
+            runtime_envelope
+                .turn_request
+                .as_ref()
+                .and_then(|request| request.model.as_value())
+                .map(String::as_str),
+            Some("planning-turn-requested")
+        );
         assert_eq!(
             fake_launcher
                 .calls
@@ -430,6 +518,42 @@ mod tests {
     }
 
     #[test]
+    fn run_planning_session_rejects_turn_started_before_thread_preparation() {
+        let receipt = completed_receipt("thread-1", "turn-1", Vec::new());
+        let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
+            events: vec![
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: "turn-1".to_string(),
+                    runtime_request: Box::new(ConversationRuntimeConfigurationRequest::default()),
+                },
+                ConversationStreamEvent::ThreadPrepared {
+                    thread_id: "thread-1".to_string(),
+                    title: "Planning Worker".to_string(),
+                    cwd: "/tmp/workspace".to_string(),
+                    runtime_envelope: Box::new(planning_runtime_envelope()),
+                },
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: receipt.clone(),
+                },
+            ],
+            producer_receipt: receipt,
+            producer_error: None,
+            calls: Mutex::new(Vec::new()),
+        }));
+
+        let error = adapter
+            .run_planning_session(PlanningWorkerRequest {
+                operation: PlanningWorkerOperation::RefreshQueue,
+                workspace_directory: "/tmp/workspace".to_string(),
+                prompt: "refresh".to_string(),
+                continuation_permit: None,
+            })
+            .expect_err("out-of-order runtime envelope events must fail closed");
+
+        assert!(error.to_string().contains("envelope not prepared"));
+    }
+
+    #[test]
     fn run_planning_session_returns_error_when_stream_reports_failure() {
         /*
          * Failed events are promoted to anyhow errors instead of being mixed into
@@ -462,6 +586,7 @@ mod tests {
         let adapter = AppServerPlanningWorkerAdapter::new(Arc::new(FakePlanningThreadLauncher {
             events: vec![ConversationStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
             }],
             producer_receipt: ConversationTurnTerminalReceipt::completed(
                 "thread-1",

@@ -10,6 +10,9 @@ use crate::domain::conversation::{
     ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
     ConversationMessageKind, ConversationToolActivity, ConversationToolActivityKind,
 };
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservationGap,
+};
 use crate::domain::turn_terminal::{
     ConversationTurnError, ConversationTurnErrorInfo, ConversationTurnItemsView,
     ConversationTurnObservations, ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
@@ -65,6 +68,8 @@ impl AppServerNotification {
          */
         self.method == "error"
             || self.method == "thread/status/changed"
+            || self.method == "thread/settings/updated"
+            || self.method == "model/rerouted"
             || self.method.starts_with("turn/")
             || self.method.starts_with("item/")
     }
@@ -77,12 +82,9 @@ impl AppServerNotification {
          * drift.
          */
         match self.method.as_str() {
-            "configWarning" => self
-                .params
-                .get("summary")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("app-server sent a config warning {context}")),
+            "configWarning" => format!(
+                "app-server sent a configuration warning {context}; provider details were redacted"
+            ),
             "error" => format!(
                 "app-server reported an error {context}: {}",
                 self.params
@@ -127,6 +129,7 @@ pub(in crate::adapter::outbound::app_server) enum TurnNotificationHandling {
 pub(in crate::adapter::outbound::app_server) struct ActiveTurnNotificationState {
     changed_planning_file_paths: Vec<String>,
     terminal_receipt: Option<ConversationTurnTerminalReceipt>,
+    runtime_envelope_observation_gap: ConversationRuntimeObservationGap,
 }
 
 impl ActiveTurnNotificationState {
@@ -138,6 +141,39 @@ impl ActiveTurnNotificationState {
         &self,
     ) -> &[String] {
         &self.changed_planning_file_paths
+    }
+
+    pub(in crate::adapter::outbound::app_server) fn runtime_envelope_gap_observation(
+        &self,
+        thread_id: &str,
+    ) -> Option<ConversationRuntimeEnvelopeObservation> {
+        (!self.runtime_envelope_observation_gap.is_empty()).then(|| {
+            ConversationRuntimeEnvelopeObservation::ProjectionGap {
+                thread_id: thread_id.to_string(),
+                gap: self.runtime_envelope_observation_gap,
+            }
+        })
+    }
+
+    pub(in crate::adapter::outbound::app_server) fn clear_runtime_envelope_gap(&mut self) {
+        self.runtime_envelope_observation_gap = ConversationRuntimeObservationGap::default();
+    }
+
+    fn record_runtime_envelope_gap(&mut self, gap: ConversationRuntimeObservationGap) {
+        self.runtime_envelope_observation_gap =
+            self.runtime_envelope_observation_gap.merged_with(gap);
+    }
+
+    fn resolve_runtime_envelope_gap(&mut self, observation: ConversationRuntimeObservationGap) {
+        if observation.settings_may_be_stale {
+            self.runtime_envelope_observation_gap.settings_may_be_stale = false;
+            self.runtime_envelope_observation_gap.model_may_be_stale = false;
+        } else if observation.model_may_be_stale {
+            self.runtime_envelope_observation_gap.model_may_be_stale = false;
+        }
+        if observation.status_may_be_stale {
+            self.runtime_envelope_observation_gap.status_may_be_stale = false;
+        }
     }
 
     #[cfg(test)]
@@ -200,23 +236,74 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
                 ),
             ))
         }
-        "thread/status/changed" => {
-            // Status updates are coarse UI copy; missing status type is tolerated so the stream keeps moving.
+        "thread/settings/updated" => {
             if params.get("threadId").and_then(Value::as_str) != Some(thread_id) {
                 return Ok(TurnNotificationHandling::Dropped(
                     notification.warning_text("that did not match the active turn stream"),
                 ));
             }
 
-            let status = params
-                .get("status")
-                .and_then(|value| value.get("type"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let _ = event_sender.send(ConversationStreamEvent::StatusUpdated {
-                text: format!("thread status: {status}"),
-            });
-            Ok(TurnNotificationHandling::Consumed)
+            let settings = match super::settings_observation(params) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    state
+                        .record_runtime_envelope_gap(ConversationRuntimeObservationGap::settings());
+                    return Ok(TurnNotificationHandling::Dropped(
+                        notification
+                            .warning_text(&format!("with an invalid settings envelope ({error})")),
+                    ));
+                }
+            };
+            Ok(send_runtime_envelope_observation(
+                event_sender,
+                ConversationRuntimeEnvelopeObservation::SettingsUpdated {
+                    thread_id: thread_id.to_string(),
+                    settings: Box::new(settings),
+                },
+                notification,
+                state,
+            ))
+        }
+        "model/rerouted" => {
+            if !matches_active_turn(params, thread_id, turn_id) {
+                return Ok(TurnNotificationHandling::Dropped(
+                    notification.warning_text("that did not match the active turn stream"),
+                ));
+            }
+            let Some(reroute) = super::model_reroute(params) else {
+                state.record_runtime_envelope_gap(ConversationRuntimeObservationGap::model());
+                return Ok(TurnNotificationHandling::Dropped(
+                    notification.warning_text("with a malformed model reroute envelope"),
+                ));
+            };
+
+            Ok(send_runtime_envelope_observation(
+                event_sender,
+                ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                    thread_id: thread_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                    reroute,
+                },
+                notification,
+                state,
+            ))
+        }
+        "thread/status/changed" => {
+            if params.get("threadId").and_then(Value::as_str) != Some(thread_id) {
+                return Ok(TurnNotificationHandling::Dropped(
+                    notification.warning_text("that did not match the active turn stream"),
+                ));
+            }
+
+            Ok(send_runtime_envelope_observation(
+                event_sender,
+                ConversationRuntimeEnvelopeObservation::ThreadStatusChanged {
+                    thread_id: thread_id.to_string(),
+                    status: super::status_observation(params.get("status")),
+                },
+                notification,
+                state,
+            ))
         }
         "turn/started" => {
             // The nested turn id is authoritative; missing identity must never be filled from caller-owned state.
@@ -226,13 +313,9 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
                 ));
             }
 
-            send_required_app_server_event(
-                event_sender,
-                ConversationStreamEvent::TurnStarted {
-                    turn_id: turn_id.to_string(),
-                },
-                "turn/started",
-            )?;
+            // turn/start response already emitted the required TurnStarted event
+            // together with the exact request envelope. The notification confirms
+            // correlation but must not replace that request with inferred defaults.
             Ok(TurnNotificationHandling::Consumed)
         }
         "item/agentMessage/delta" => {
@@ -354,6 +437,40 @@ pub(in crate::adapter::outbound::app_server) fn handle_turn_notification(
         _ => Ok(TurnNotificationHandling::Dropped(
             notification.warning_text("that has no adapter translation for the active turn stream"),
         )),
+    }
+}
+
+fn send_runtime_envelope_observation(
+    event_sender: &dyn AppServerEventSender,
+    observation: ConversationRuntimeEnvelopeObservation,
+    notification: &AppServerNotification,
+    state: &mut ActiveTurnNotificationState,
+) -> TurnNotificationHandling {
+    let gap = match &observation {
+        ConversationRuntimeEnvelopeObservation::SettingsUpdated { .. } => {
+            ConversationRuntimeObservationGap::settings()
+        }
+        ConversationRuntimeEnvelopeObservation::ModelRerouted { .. } => {
+            ConversationRuntimeObservationGap::model()
+        }
+        ConversationRuntimeEnvelopeObservation::ThreadStatusChanged { .. } => {
+            ConversationRuntimeObservationGap::status()
+        }
+        ConversationRuntimeEnvelopeObservation::ProjectionGap { gap, .. } => *gap,
+    };
+    match event_sender.send(ConversationStreamEvent::RuntimeEnvelopeObserved {
+        observation: Box::new(observation),
+    }) {
+        Ok(()) => {
+            state.resolve_runtime_envelope_gap(gap);
+            TurnNotificationHandling::Consumed
+        }
+        Err(failure) => {
+            state.record_runtime_envelope_gap(gap);
+            TurnNotificationHandling::Dropped(notification.warning_text(&format!(
+                "whose typed runtime-envelope projection was not admitted ({failure:?})"
+            )))
+        }
     }
 }
 
@@ -1180,11 +1297,9 @@ mod terminal_receipt_tests {
                 .expect("matching start should reduce"),
             TurnNotificationHandling::Consumed
         );
-        assert_eq!(
-            receiver.recv().expect("matching start should be emitted"),
-            ConversationStreamEvent::TurnStarted {
-                turn_id: TURN_ID.to_string(),
-            }
+        assert!(
+            receiver.try_recv().is_err(),
+            "turn/start response owns the single request-bearing start event"
         );
 
         let invalid_cases = [
@@ -1248,6 +1363,196 @@ mod terminal_receipt_tests {
             );
             assert!(receiver.try_recv().is_err(), "case: {label}");
         }
+    }
+
+    #[test]
+    fn runtime_envelope_notifications_require_exact_scope_and_valid_settings() {
+        let settings = AppServerNotification::from_value(json!({
+            "method": "thread/settings/updated",
+            "params": valid_settings_params(THREAD_ID),
+        }))
+        .expect("settings notification");
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+
+        assert_eq!(
+            handle_turn_notification(&settings, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("valid settings should reduce"),
+            TurnNotificationHandling::Consumed
+        );
+        assert!(matches!(
+            receiver.recv().expect("settings event should be emitted"),
+            ConversationStreamEvent::RuntimeEnvelopeObserved { observation }
+                if matches!(
+                    observation.as_ref(),
+                    ConversationRuntimeEnvelopeObservation::SettingsUpdated { thread_id, .. }
+                        if thread_id == THREAD_ID
+                )
+        ));
+
+        let stale = AppServerNotification::from_value(json!({
+            "method": "thread/settings/updated",
+            "params": valid_settings_params("thread-stale"),
+        }))
+        .expect("stale settings notification");
+        let (sender, receiver) = channel();
+        assert!(matches!(
+            handle_turn_notification(&stale, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("stale settings should be diagnostic"),
+            TurnNotificationHandling::Dropped(_)
+        ));
+        assert!(receiver.try_recv().is_err());
+
+        let malformed = AppServerNotification::from_value(json!({
+            "method": "thread/settings/updated",
+            "params": {
+                "threadId": THREAD_ID,
+                "threadSettings": {
+                    "model": "gpt-next",
+                    "modelProvider": "openai"
+                }
+            }
+        }))
+        .expect("malformed settings notification");
+        let (sender, receiver) = channel();
+        assert!(matches!(
+            handle_turn_notification(&malformed, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("malformed settings should be diagnostic"),
+            TurnNotificationHandling::Dropped(ref warning)
+                if warning.contains("invalid settings envelope")
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn model_reroute_requires_exact_thread_and_turn_identity() {
+        let valid = AppServerNotification::from_value(json!({
+            "method": "model/rerouted",
+            "params": {
+                "threadId": THREAD_ID,
+                "turnId": TURN_ID,
+                "fromModel": "gpt-a",
+                "toModel": "gpt-b",
+                "reason": "highRiskCyberActivity"
+            }
+        }))
+        .expect("reroute notification");
+        let (sender, receiver) = channel();
+        let mut state = ActiveTurnNotificationState::new();
+        assert_eq!(
+            handle_turn_notification(&valid, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("valid reroute should reduce"),
+            TurnNotificationHandling::Consumed
+        );
+        assert!(matches!(
+            receiver.recv().expect("reroute event should be emitted"),
+            ConversationStreamEvent::RuntimeEnvelopeObserved { observation }
+                if matches!(
+                    observation.as_ref(),
+                    ConversationRuntimeEnvelopeObservation::ModelRerouted {
+                        thread_id,
+                        turn_id,
+                        ..
+                    } if thread_id == THREAD_ID && turn_id == TURN_ID
+                )
+        ));
+
+        for (thread_id, turn_id) in [("thread-stale", TURN_ID), (THREAD_ID, "turn-stale")] {
+            let stale = AppServerNotification::from_value(json!({
+                "method": "model/rerouted",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "fromModel": "gpt-a",
+                    "toModel": "gpt-b",
+                    "reason": "highRiskCyberActivity"
+                }
+            }))
+            .expect("stale reroute notification");
+            let (sender, receiver) = channel();
+            assert!(matches!(
+                handle_turn_notification(&stale, THREAD_ID, TURN_ID, &mut state, &sender)
+                    .expect("stale reroute should be diagnostic"),
+                TurnNotificationHandling::Dropped(_)
+            ));
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn full_sink_records_envelope_gap_without_losing_terminal_truth() {
+        let settings = AppServerNotification::from_value(json!({
+            "method": "thread/settings/updated",
+            "params": valid_settings_params(THREAD_ID),
+        }))
+        .expect("settings notification");
+        let (sender, receiver) = sync_channel(1);
+        sender
+            .try_send(ConversationStreamEvent::StatusUpdated {
+                text: "occupy application sink".to_string(),
+            })
+            .expect("fixture should fill the sink");
+        let mut state = ActiveTurnNotificationState::new();
+
+        assert!(matches!(
+            handle_turn_notification(&settings, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("nonterminal projection pressure must not abort the stream"),
+            TurnNotificationHandling::Dropped(ref warning)
+                if warning.contains("not admitted")
+        ));
+        assert!(matches!(
+            state.runtime_envelope_gap_observation(THREAD_ID),
+            Some(ConversationRuntimeEnvelopeObservation::ProjectionGap { gap, .. })
+                if gap == ConversationRuntimeObservationGap::settings()
+        ));
+        receiver.recv().expect("fixture entry should drain");
+        let handling = reduce(
+            terminal_notification(json!({
+                "id": TURN_ID,
+                "items": [],
+                "status": "completed"
+            })),
+            &mut state,
+        );
+        assert!(matches!(
+            terminal_receipt(handling).outcome,
+            ConversationTurnTerminalOutcome::Completed
+        ));
+    }
+
+    #[test]
+    fn later_successful_settings_snapshot_clears_a_pending_settings_gap() {
+        let settings = AppServerNotification::from_value(json!({
+            "method": "thread/settings/updated",
+            "params": valid_settings_params(THREAD_ID),
+        }))
+        .expect("settings notification");
+        let (sender, receiver) = sync_channel(1);
+        sender
+            .try_send(ConversationStreamEvent::StatusUpdated {
+                text: "occupy application sink".to_string(),
+            })
+            .expect("fixture should fill the sink");
+        let mut state = ActiveTurnNotificationState::new();
+
+        assert!(matches!(
+            handle_turn_notification(&settings, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("first settings observation should remain nonterminal"),
+            TurnNotificationHandling::Dropped(_)
+        ));
+        receiver.recv().expect("fixture entry should drain");
+        assert_eq!(
+            handle_turn_notification(&settings, THREAD_ID, TURN_ID, &mut state, &sender)
+                .expect("later complete settings snapshot should recover projection truth"),
+            TurnNotificationHandling::Consumed
+        );
+        assert!(matches!(
+            receiver
+                .recv()
+                .expect("recovery snapshot should be emitted"),
+            ConversationStreamEvent::RuntimeEnvelopeObserved { .. }
+        ));
+        assert!(state.runtime_envelope_gap_observation(THREAD_ID).is_none());
     }
 
     #[test]
@@ -1795,6 +2100,24 @@ mod terminal_receipt_tests {
             }
         }))
         .expect("notification")
+    }
+
+    fn valid_settings_params(thread_id: &str) -> Value {
+        json!({
+            "threadId": thread_id,
+            "threadSettings": {
+                "model": "gpt-next",
+                "modelProvider": "openai",
+                "effort": "ultra",
+                "serviceTier": null,
+                "cwd": "/repo",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "sandboxPolicy": { "type": "workspaceWrite" },
+                "activePermissionProfile": null,
+                "collaborationMode": {}
+            }
+        })
     }
 
     fn error_notification(will_retry: bool, error: Value) -> AppServerNotification {

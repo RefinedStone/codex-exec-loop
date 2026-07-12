@@ -2,6 +2,10 @@ use crate::domain::conversation::{
     ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
     ConversationToolActivity,
 };
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
+    ConversationRuntimeEnvelopeObservation,
+};
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 use crate::domain::turn_terminal::{ConversationTurnError, ConversationTurnTerminalReceipt};
 
@@ -14,9 +18,14 @@ pub enum ConversationStreamEvent {
         thread_id: String,
         title: String,
         cwd: String,
+        runtime_envelope: Box<ConversationRuntimeEnvelope>,
     },
     TurnStarted {
         turn_id: String,
+        runtime_request: Box<ConversationRuntimeConfigurationRequest>,
+    },
+    RuntimeEnvelopeObserved {
+        observation: Box<ConversationRuntimeEnvelopeObservation>,
     },
     StatusUpdated {
         text: String,

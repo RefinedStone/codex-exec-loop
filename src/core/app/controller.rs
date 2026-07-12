@@ -804,12 +804,14 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 title: "Recovery pending".to_string(),
                 cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
             },
         ));
         controller.handle_input(test_turn_stream_input(
             correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
             },
         ));
         let receipt = crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
@@ -1194,12 +1196,14 @@ mod tests {
                 thread_id: "thread-draft".to_string(),
                 title: "New draft".to_string(),
                 cwd: "/tmp/new".to_string(),
+                runtime_envelope: Box::default(),
             },
         ));
         controller.handle_input(test_turn_stream_input(
             turn_correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: "turn-new".to_string(),
+                runtime_request: Box::default(),
             },
         ));
 
@@ -1290,6 +1294,7 @@ mod tests {
                 thread_id: None,
                 title: None,
                 cwd: None,
+                runtime_envelope: None,
                 active_turn_id: None,
                 status_text: Some("thinking".to_string()),
                 terminal: None,
@@ -1311,12 +1316,14 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 title: "Typed terminal".to_string(),
                 cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
             },
         ));
         controller.handle_input(test_turn_stream_input(
             turn_correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
             },
         ));
         let execution_snapshot_capture = TurnSnapshotCapture::capture_failed(
@@ -1371,6 +1378,7 @@ mod tests {
                 thread_id: None,
                 title: None,
                 cwd: None,
+                runtime_envelope: None,
                 active_turn_id: None,
                 status_text: None,
                 terminal: None,
@@ -1392,6 +1400,7 @@ mod tests {
                 thread_id: "old-thread".to_string(),
                 title: "Old Thread".to_string(),
                 cwd: "/tmp/old".to_string(),
+                runtime_envelope: Box::default(),
             },
         ));
         controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
@@ -1416,6 +1425,7 @@ mod tests {
                 thread_id: Some("thread-1".to_string()),
                 title: Some("Core runtime".to_string()),
                 cwd: Some("/tmp/workspace".to_string()),
+                runtime_envelope: None,
                 active_turn_id: None,
                 status_text: None,
                 terminal: None,
@@ -1445,6 +1455,7 @@ mod tests {
             turn_correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
             },
         ));
         controller.handle_input(test_turn_stream_input(
@@ -1733,12 +1744,14 @@ mod tests {
                 thread_id: thread_id.to_string(),
                 title: "Core runtime".to_string(),
                 cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
             },
         ));
         controller.handle_input(test_turn_stream_input(
             turn_correlation,
             TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
+                runtime_request: Box::default(),
             },
         ));
         controller.handle_input(test_turn_stream_input(

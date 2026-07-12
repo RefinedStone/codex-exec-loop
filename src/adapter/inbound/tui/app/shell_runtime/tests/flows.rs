@@ -174,9 +174,11 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
                 thread_id: format!("flow-thread-{launch_index}"),
                 title: format!("Flow Worker {launch_index}"),
                 cwd: request.cwd.to_string(),
+                runtime_envelope: Box::default(),
             });
             let _ = event_sender.send(ConversationStreamEvent::TurnStarted {
                 turn_id: format!("flow-turn-{launch_index}"),
+                runtime_request: Box::default(),
             });
 
             let mut state = self

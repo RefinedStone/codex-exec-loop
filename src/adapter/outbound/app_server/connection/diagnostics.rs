@@ -60,6 +60,12 @@ impl PendingNotifications {
     }
 
     pub(super) fn drain_warning_texts(&mut self) -> Vec<String> {
+        self.drain_warning_texts_with_context(
+            "after the response completed without a turn stream consumer",
+        )
+    }
+
+    pub(super) fn drain_warning_texts_with_context(&mut self, context: &str) -> Vec<String> {
         /*
          * response가 끝났는데 consumer가 없던 notification은 정상 turn delta로 해석할 곳이 없다.
          * 버리면 원인 추적이 어려워지므로 protocol helper의 warning copy로 바꿔 diagnostics에 합류시킨다.
@@ -67,10 +73,7 @@ impl PendingNotifications {
         self.encoded_bytes = 0;
         self.entries
             .drain(..)
-            .map(|(notification, _)| {
-                notification
-                    .warning_text("after the response completed without a turn stream consumer")
-            })
+            .map(|(notification, _)| notification.warning_text(context))
             .collect()
     }
 }

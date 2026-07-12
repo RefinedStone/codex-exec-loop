@@ -1,0 +1,151 @@
+{
+  "thread": {
+    "id": "thread-envelope",
+    "name": "Applied envelope fixture",
+    "preview": "",
+    "cwd": "/repo",
+    "source": "appServer",
+    "modelProvider": "openai",
+    "updatedAt": 1,
+    "path": "/tmp/thread-envelope.jsonl",
+    "status": {
+      "type": "idle"
+    },
+    "gitInfo": null,
+    "turns": []
+  },
+  "startEqualsRequest": {
+    "model": "gpt-equal",
+    "modelProvider": "openai",
+    "reasoningEffort": "max",
+    "serviceTier": "flex",
+    "cwd": "/repo",
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "user",
+    "sandbox": {
+      "type": "workspaceWrite",
+      "networkAccess": false,
+      "writableRoots": [
+        "/repo",
+        "/tmp/akra"
+      ],
+      "excludeTmpdirEnvVar": true,
+      "excludeSlashTmp": false
+    }
+  },
+  "resumeOverrideResponse": {
+    "model": "gpt-applied",
+    "modelProvider": "provider-applied",
+    "reasoningEffort": null,
+    "cwd": "/applied",
+    "approvalPolicy": "never",
+    "approvalsReviewer": "auto_review",
+    "sandbox": {
+      "type": "readOnly"
+    },
+    "activePermissionProfile": {
+      "id": ":experimental-only",
+      "extends": null
+    }
+  },
+  "optionalMissingResponse": {
+    "model": "gpt-missing-optionals",
+    "modelProvider": "openai",
+    "cwd": "/repo",
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "user",
+    "sandbox": {
+      "type": "readOnly"
+    }
+  },
+  "optionalNullResponse": {
+    "model": "gpt-null-optionals",
+    "modelProvider": "openai",
+    "reasoningEffort": null,
+    "serviceTier": null,
+    "cwd": "/repo",
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "user",
+    "sandbox": {
+      "type": "readOnly"
+    }
+  },
+  "unknownResponse": {
+    "model": "gpt-future",
+    "modelProvider": "provider-future",
+    "reasoningEffort": "ultra",
+    "serviceTier": "future-tier",
+    "cwd": "/repo",
+    "approvalPolicy": "future-policy",
+    "approvalsReviewer": "future-reviewer",
+    "sandbox": {
+      "type": "futureSandbox",
+      "credential": "AKRA_TEST_SECRET_CANARY_RUNTIME_ENVELOPE"
+    },
+    "providerMetadata": {
+      "apiKey": "AKRA_TEST_SECRET_CANARY_RUNTIME_ENVELOPE"
+    },
+    "instructionSources": [{
+      "path": "AKRA_TEST_SECRET_CANARY_RUNTIME_ENVELOPE",
+      "content": "AKRA_TEST_SECRET_CANARY_RUNTIME_ENVELOPE"
+    }]
+  },
+  "malformedRequiredResponse": {
+    "modelProvider": "openai",
+    "cwd": "/repo",
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "user",
+    "sandbox": "read-only"
+  },
+  "settingsUpdated": {
+    "threadId": "thread-envelope",
+    "threadSettings": {
+      "model": "gpt-settings",
+      "modelProvider": "openai",
+      "effort": "ultra",
+      "serviceTier": null,
+      "cwd": "/settings",
+      "approvalPolicy": {
+        "granular": {
+          "sandbox_approval": true,
+          "rules": false,
+          "mcp_elicitations": true,
+          "request_permissions": true
+        }
+      },
+      "approvalsReviewer": "guardian_subagent",
+      "sandboxPolicy": {
+        "type": "workspaceWrite"
+      },
+      "activePermissionProfile": {
+        "id": ":workspace",
+        "extends": ":default"
+      },
+      "collaborationMode": {
+        "mode": "future-mode",
+        "settings": {
+          "providerCredential": "AKRA_TEST_SECRET_CANARY_RUNTIME_ENVELOPE"
+        }
+      },
+      "summary": "AKRA_TEST_SECRET_CANARY_RUNTIME_ENVELOPE",
+      "personality": "AKRA_TEST_SECRET_CANARY_RUNTIME_ENVELOPE"
+    }
+  },
+  "modelRerouted": {
+    "threadId": "thread-envelope",
+    "turnId": "turn-envelope",
+    "fromModel": "gpt-settings",
+    "toModel": "gpt-rerouted",
+    "reason": "futureReason"
+  },
+  "statusChanged": {
+    "threadId": "thread-envelope",
+    "status": {
+      "type": "active",
+      "activeFlags": [
+        "waitingOnApproval",
+        "futureFlag"
+      ]
+    }
+  }
+}

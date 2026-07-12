@@ -15,6 +15,7 @@ use crate::application::port::outbound::planning_authority_port::{
 };
 use crate::application::port::outbound::planning_worker_port::{
     NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
+    test_planning_worker_runtime_envelope,
 };
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::parallel_agent_profile::{
@@ -167,9 +168,11 @@ impl ParallelAgentWorkerPort for CompletingParallelAgentWorkerPort {
             thread_id: "worker-thread-1".to_string(),
             title: "Completed parallel worker".to_string(),
             cwd: request.cwd.to_string(),
+            runtime_envelope: Box::default(),
         })?;
         event_sender.send(ConversationStreamEvent::TurnStarted {
             turn_id: "worker-turn-1".to_string(),
+            runtime_request: Box::default(),
         })?;
         event_sender.send(ConversationStreamEvent::AgentMessageCompleted {
             item_id: "item-final".to_string(),
@@ -202,9 +205,11 @@ impl ParallelAgentWorkerPort for MissingTerminalUnconfirmedParallelAgentWorkerPo
             thread_id: "worker-thread-unconfirmed".to_string(),
             title: "Unconfirmed parallel worker".to_string(),
             cwd: request.cwd.to_string(),
+            runtime_envelope: Box::default(),
         })?;
         event_sender.send(ConversationStreamEvent::TurnStarted {
             turn_id: "worker-turn-unconfirmed".to_string(),
+            runtime_request: Box::default(),
         })?;
         Ok(ConversationTurnTerminalReceipt::completed(
             "worker-thread-unconfirmed",
@@ -598,6 +603,7 @@ impl PlanningWorkerPort for RepairRequestPlanningWorkerPort {
             operation: request.operation,
             thread_id: Some("repair-worker-thread".to_string()),
             turn_id: Some("repair-worker-turn".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some(
                 r#"```json
 {"planning_task_commands":{"version":1,"commands":[{"create_task":{"title":"Missing op"}}]}}

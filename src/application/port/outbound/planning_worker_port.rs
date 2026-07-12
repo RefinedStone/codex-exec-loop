@@ -36,8 +36,9 @@ pub struct PlanningWorkerRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // `PlanningWorkerResponse`는 worker session stream을 application orchestration이 다시 쓰기 쉬운
-// 형태로 줄인 값이다. adapter는 `ConversationStreamEvent`들을 수집해 최종 agent message와
-// planning 파일 변경 목록만 이 구조로 반환하고, 파일 검증과 ledger 반영은 caller 쪽 use case가 담당한다.
+// 형태로 줄인 값이다. adapter는 `ConversationStreamEvent`들을 수집해 상관된 runtime envelope,
+// 최종 agent message, planning 파일 변경 목록을 반환하고, 파일 검증과 ledger 반영은 caller 쪽
+// use case가 담당한다.
 pub struct PlanningWorkerResponse {
     // 요청 operation을 response에도 보존해 async orchestration 로그와 후속 분기에서 같은 작업으로 식별한다.
     pub operation: PlanningWorkerOperation,
@@ -45,10 +46,22 @@ pub struct PlanningWorkerResponse {
     pub thread_id: Option<String>,
     // hidden worker turn id다. task mutation source_turn_id와 generic provenance turn_id로 연결된다.
     pub turn_id: Option<String>,
+    // app-server wire JSON이 아니라 application reducer가 상관한 requested/applied snapshot이다.
+    pub runtime_envelope:
+        Option<crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope>,
     // worker가 마지막으로 완료한 assistant message이다. stream이 tool-only로 끝날 수 있어 optional이다.
     pub final_agent_message: Option<String>,
     // worker turn이 수정했다고 보고한 planning 파일 경로이다. repair/refresh 후 검증과 UI 알림에 연결된다.
     pub changed_planning_file_paths: Vec<String>,
+}
+
+#[cfg(test)]
+pub(crate) fn test_planning_worker_runtime_envelope()
+-> crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope {
+    let mut envelope =
+        crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope::unobserved();
+    envelope.record_turn_request(Default::default());
+    envelope
 }
 
 // `PlanningWorkerPort`는 planning orchestration이 "별도 agent session을 실행해 planning 작업을
@@ -86,8 +99,9 @@ impl PlanningWorkerPort for NoopPlanningWorkerPort {
         }
         Ok(PlanningWorkerResponse {
             operation: request.operation,
-            thread_id: None,
-            turn_id: None,
+            thread_id: Some("test-planning-worker-thread".to_string()),
+            turn_id: Some("test-planning-worker-turn".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             // 사람이 로그나 test failure에서 비활성 fallback을 알아볼 수 있는 고정 메시지이다.
             final_agent_message: Some("planning worker disabled".to_string()),
             // 실제 worker가 돌지 않았으므로 변경된 planning 파일은 없다.

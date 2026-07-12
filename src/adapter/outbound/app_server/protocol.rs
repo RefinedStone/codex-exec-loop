@@ -1,10 +1,16 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod runtime_envelope;
 mod turn_notifications;
 
+pub(super) use self::runtime_envelope::{
+    model_reroute, runtime_configuration_request, settings_observation, status_observation,
+    to_runtime_envelope,
+};
 use self::turn_notifications::to_conversation_message;
 pub(super) use self::turn_notifications::{
     ActiveTurnNotificationState, AppServerNotification, TurnNotificationHandling,
@@ -16,6 +22,7 @@ use super::{
     bounded_stream_text,
 };
 use crate::domain::conversation::{ConversationReasoningEffort, ConversationSnapshot};
+use crate::domain::conversation_runtime_envelope::ConversationRuntimeThreadSource;
 use crate::domain::session_summary::SessionSummary;
 
 /*
@@ -54,7 +61,7 @@ pub(super) fn to_session_summary(thread_record: ThreadRecord) -> SessionSummary 
             .map(|name| bounded_stream_text(name, MAX_STREAM_METADATA_BYTES)),
         preview: bounded_stream_text(thread_record.preview, MAX_STREAM_METADATA_BYTES),
         cwd: bounded_stream_text(thread_record.cwd, MAX_STREAM_METADATA_BYTES),
-        source: bounded_stream_text(thread_record.source, MAX_STREAM_IDENTIFIER_BYTES),
+        source: thread_record.source.label().to_string(),
         model_provider: bounded_stream_text(
             thread_record.model_provider,
             MAX_STREAM_IDENTIFIER_BYTES,
@@ -374,6 +381,69 @@ impl From<ConversationReasoningEffort> for ReasoningEffortValue {
     }
 }
 
+impl ReasoningEffortValue {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
+}
+
+impl ApprovalPolicyValue {
+    pub(super) const fn runtime_policy(
+        self,
+    ) -> crate::domain::conversation_runtime_envelope::ConversationRuntimeApprovalPolicy {
+        use crate::domain::conversation_runtime_envelope::ConversationRuntimeApprovalPolicy;
+
+        match self {
+            Self::Untrusted => ConversationRuntimeApprovalPolicy::Untrusted,
+            Self::OnRequest => ConversationRuntimeApprovalPolicy::OnRequest,
+            Self::Never => ConversationRuntimeApprovalPolicy::Never,
+        }
+    }
+}
+
+impl ApprovalsReviewerValue {
+    pub(super) const fn runtime_reviewer(
+        self,
+    ) -> crate::domain::conversation_runtime_envelope::ConversationRuntimeApprovalsReviewer {
+        use crate::domain::conversation_runtime_envelope::ConversationRuntimeApprovalsReviewer;
+
+        match self {
+            Self::User => ConversationRuntimeApprovalsReviewer::User,
+            Self::AutoReview => ConversationRuntimeApprovalsReviewer::AutoReview,
+            Self::GuardianSubagent => ConversationRuntimeApprovalsReviewer::GuardianSubagent,
+        }
+    }
+}
+
+impl SandboxModeValue {
+    pub(super) const fn runtime_policy(
+        self,
+    ) -> crate::domain::conversation_runtime_envelope::ConversationRuntimeSandboxPolicy {
+        use crate::domain::conversation_runtime_envelope::ConversationRuntimeSandboxPolicy;
+
+        match self {
+            Self::ReadOnly => ConversationRuntimeSandboxPolicy::ReadOnly {
+                network_access: None,
+            },
+            Self::WorkspaceWrite => ConversationRuntimeSandboxPolicy::WorkspaceWrite {
+                network_access: None,
+                writable_roots: None,
+                writable_roots_truncated: false,
+                exclude_tmpdir_env_var: None,
+                exclude_slash_tmp: None,
+            },
+            Self::DangerFullAccess => ConversationRuntimeSandboxPolicy::DangerFullAccess,
+        }
+    }
+}
+
 // ThreadStartParams creates new app-server threads, including hidden planning/parallel worker threads.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -492,14 +562,48 @@ pub(super) struct ThreadReadResponse {
     pub(super) thread: ThreadRecord,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+// Raw flattened response extras remain adapter-local. The custom Debug below
+// exposes only structural counts so provider metadata or instruction paths cannot enter logs.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct ThreadStartResponse {
     pub(super) thread: ThreadRecord,
+    #[serde(flatten)]
+    pub(super) runtime_envelope_fields: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl fmt::Debug for ThreadStartResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ThreadStartResponse")
+            .field("thread_id_nonempty", &!self.thread.id.is_empty())
+            .field(
+                "runtime_envelope_field_count",
+                &self.runtime_envelope_fields.len(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct ThreadResumeResponse {
     pub(super) thread: ThreadRecord,
+    #[serde(flatten)]
+    pub(super) runtime_envelope_fields: BTreeMap<String, Value>,
+}
+
+impl fmt::Debug for ThreadResumeResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ThreadResumeResponse")
+            .field("thread_id_nonempty", &!self.thread.id.is_empty())
+            .field(
+                "runtime_envelope_field_count",
+                &self.runtime_envelope_fields.len(),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -531,7 +635,7 @@ pub(super) struct ThreadRecord {
     pub(super) name: Option<String>,
     pub(super) preview: String,
     pub(super) cwd: String,
-    pub(super) source: String,
+    pub(super) source: SessionSourceValue,
     pub(super) model_provider: String,
     pub(super) updated_at: i64,
     /*
@@ -547,6 +651,106 @@ pub(super) struct ThreadRecord {
     pub(super) turns: Vec<ThreadTurnRecord>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SessionSourceValue {
+    Cli,
+    Vscode,
+    Exec,
+    AppServer,
+    Custom,
+    SubAgentReview,
+    SubAgentCompact,
+    SubAgentMemoryConsolidation,
+    SubAgentThreadSpawn,
+    SubAgentOther,
+    Unknown,
+}
+
+impl SessionSourceValue {
+    fn from_wire_value(value: Value) -> Self {
+        if let Some(source) = value.as_str() {
+            return match source {
+                "cli" => Self::Cli,
+                "vscode" => Self::Vscode,
+                "exec" => Self::Exec,
+                "appServer" => Self::AppServer,
+                "unknown" => Self::Unknown,
+                _ => Self::Unknown,
+            };
+        }
+        let Some(source) = value.as_object() else {
+            return Self::Unknown;
+        };
+        if source.get("custom").is_some_and(Value::is_string) {
+            return Self::Custom;
+        }
+        let Some(sub_agent) = source.get("subAgent") else {
+            return Self::Unknown;
+        };
+        if let Some(sub_agent) = sub_agent.as_str() {
+            return match sub_agent {
+                "review" => Self::SubAgentReview,
+                "compact" => Self::SubAgentCompact,
+                "memory_consolidation" => Self::SubAgentMemoryConsolidation,
+                _ => Self::SubAgentOther,
+            };
+        }
+        let Some(sub_agent) = sub_agent.as_object() else {
+            return Self::Unknown;
+        };
+        if sub_agent.contains_key("thread_spawn") {
+            Self::SubAgentThreadSpawn
+        } else if sub_agent.get("other").is_some_and(Value::is_string) {
+            Self::SubAgentOther
+        } else {
+            Self::Unknown
+        }
+    }
+
+    pub(super) const fn runtime_source(self) -> ConversationRuntimeThreadSource {
+        match self {
+            Self::Cli => ConversationRuntimeThreadSource::Cli,
+            Self::Vscode => ConversationRuntimeThreadSource::Vscode,
+            Self::Exec => ConversationRuntimeThreadSource::Exec,
+            Self::AppServer => ConversationRuntimeThreadSource::AppServer,
+            Self::Custom => ConversationRuntimeThreadSource::Custom,
+            Self::SubAgentReview => ConversationRuntimeThreadSource::SubAgentReview,
+            Self::SubAgentCompact => ConversationRuntimeThreadSource::SubAgentCompact,
+            Self::SubAgentMemoryConsolidation => {
+                ConversationRuntimeThreadSource::SubAgentMemoryConsolidation
+            }
+            Self::SubAgentThreadSpawn => ConversationRuntimeThreadSource::SubAgentThreadSpawn,
+            Self::SubAgentOther => ConversationRuntimeThreadSource::SubAgentOther,
+            Self::Unknown => ConversationRuntimeThreadSource::Unknown,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Cli => "cli",
+            Self::Vscode => "vscode",
+            Self::Exec => "exec",
+            Self::AppServer => "appServer",
+            Self::Custom => "custom",
+            Self::SubAgentReview => "subAgentReview",
+            Self::SubAgentCompact => "subAgentCompact",
+            Self::SubAgentMemoryConsolidation => "subAgentMemoryConsolidation",
+            Self::SubAgentThreadSpawn => "subAgentThreadSpawn",
+            Self::SubAgentOther => "subAgentOther",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionSourceValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(Self::from_wire_value)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ThreadTurnRecord {
     // item schemas are varied and evolving, so raw Value is parsed by turn_notifications::to_conversation_message.
@@ -558,6 +762,8 @@ pub(super) struct ThreadTurnRecord {
 pub(super) struct ThreadStatus {
     #[serde(rename = "type")]
     pub(super) status_type: String,
+    #[serde(rename = "activeFlags", default)]
+    pub(super) active_flags: Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -574,32 +780,66 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ThreadReadResponse, ThreadStartResponse, to_conversation_snapshot, to_session_summary,
+        SessionSourceValue, ThreadReadResponse, ThreadStartResponse, to_conversation_snapshot,
+        to_session_summary,
     };
 
     #[test]
     fn thread_start_response_accepts_ephemeral_thread_with_null_path() {
+        let secret = "AKRA_TEST_SECRET_CANARY_RESPONSE_DEBUG";
         let response = serde_json::from_value::<ThreadStartResponse>(json!({
             "thread": {
                 "id": "thread-1",
                 "name": null,
                 "preview": "",
                 "cwd": "/repo",
-                "source": "vscode",
+                "source": { "custom": secret },
                 "modelProvider": "openai",
                 "updatedAt": 1777910591,
                 "path": null,
                 "status": { "type": "idle" },
                 "gitInfo": null,
                 "turns": []
-            }
+            },
+            "providerMetadata": {
+                "apiKey": secret
+            },
+            "instructionSources": [{
+                "path": secret,
+                "content": secret
+            }]
         }))
         .expect("ephemeral thread/start response with null path should deserialize");
 
         assert!(response.thread.path.is_none());
+        let debug = format!("{response:?}");
+        assert!(!debug.contains(secret));
+        assert!(!debug.contains("providerMetadata"));
+        assert!(!debug.contains("instructionSources"));
 
         let summary = to_session_summary(response.thread);
         assert_eq!(summary.path, "");
+        assert_eq!(summary.source, "custom");
+    }
+
+    #[test]
+    fn session_source_union_classifies_subagent_without_retaining_nested_metadata() {
+        let secret = "AKRA_TEST_SECRET_CANARY_SUBAGENT_SOURCE";
+        let source = serde_json::from_value::<SessionSourceValue>(json!({
+            "subAgent": {
+                "thread_spawn": {
+                    "depth": 2,
+                    "parent_thread_id": secret,
+                    "agent_nickname": secret,
+                    "agent_role": secret,
+                    "agent_path": null
+                }
+            }
+        }))
+        .expect("stable subagent source should deserialize");
+
+        assert_eq!(source, SessionSourceValue::SubAgentThreadSpawn);
+        assert!(!format!("{source:?}").contains(secret));
     }
 
     #[test]

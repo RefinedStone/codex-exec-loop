@@ -623,6 +623,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
                 thread_id: thread_id.to_string(),
                 title: "Post-turn test".to_string(),
                 cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
             },
         });
     runtime
@@ -632,6 +633,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
             correlation,
             event: TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
+                runtime_request: Box::default(),
             },
         });
     runtime

@@ -18,7 +18,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
 };
 
 use crate::application::port::outbound::planning_worker_port::{
-    PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest,
+    PlanningWorkerOperation, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
 };
 use crate::application::service::planning::repair::reconciliation::{
     PlanningReconciliationResult, PlanningRepairPromptHandoff, PlanningRepairRequest,
@@ -702,6 +702,15 @@ impl PlanningWorkerOrchestrationService {
             )?;
             return Err(error);
         }
+        if let Err(error) = validate_planning_worker_runtime_envelope(&worker_response, operation) {
+            self.runtime_facade.reconcile_after_turn(
+                workspace_directory,
+                orchestration_id,
+                &worker_response.changed_planning_file_paths,
+                &execution_snapshot,
+            )?;
+            return Err(error);
+        }
         #[cfg(test)]
         if let Some(hook) = self.before_result_application.as_ref() {
             hook();
@@ -996,6 +1005,39 @@ impl PlanningWorkerOrchestrationService {
     }
 }
 
+fn validate_planning_worker_runtime_envelope(
+    response: &PlanningWorkerResponse,
+    expected_operation: PlanningWorkerOperation,
+) -> Result<()> {
+    if response.operation != expected_operation {
+        anyhow::bail!("planning worker response operation did not match its request");
+    }
+    if response
+        .thread_id
+        .as_deref()
+        .is_none_or(|thread_id| thread_id.is_empty())
+    {
+        anyhow::bail!("planning worker response omitted its prepared thread identity");
+    }
+    if response
+        .turn_id
+        .as_deref()
+        .is_none_or(|turn_id| turn_id.is_empty())
+    {
+        anyhow::bail!("planning worker response omitted its started turn identity");
+    }
+    let Some(envelope) = response.runtime_envelope.as_ref() else {
+        anyhow::bail!("planning worker response omitted its runtime envelope");
+    };
+    if envelope.turn_request.is_none() {
+        anyhow::bail!("planning worker response omitted its runtime turn request");
+    }
+    if envelope.projection_gap.is_some() {
+        anyhow::bail!("planning worker response retained a runtime envelope observation gap");
+    }
+    Ok(())
+}
+
 fn authority_load_status<T>(result: Result<Option<T>>) -> String {
     // compact status string은 prompt에 직접 들어간다. worker는 authority가 loaded/missing/unavailable 중 무엇인지 알아야 한다.
     match result {
@@ -1193,7 +1235,7 @@ mod tests {
         PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
     };
     use crate::application::port::outbound::planning_worker_port::{
-        PlanningWorkerRequest, PlanningWorkerResponse,
+        PlanningWorkerRequest, PlanningWorkerResponse, test_planning_worker_runtime_envelope,
     };
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
@@ -1508,6 +1550,45 @@ mod tests {
     }
 
     #[test]
+    fn application_rejects_missing_incomplete_and_gapped_worker_runtime_envelopes() {
+        let response = |runtime_envelope| PlanningWorkerResponse {
+            operation: PlanningWorkerOperation::RefreshQueue,
+            thread_id: Some("worker-thread".to_string()),
+            turn_id: Some("worker-turn".to_string()),
+            runtime_envelope,
+            final_agent_message: Some("must not be trusted".to_string()),
+            changed_planning_file_paths: Vec::new(),
+        };
+
+        let missing = validate_planning_worker_runtime_envelope(
+            &response(None),
+            PlanningWorkerOperation::RefreshQueue,
+        )
+        .expect_err("missing runtime truth must fail closed");
+        assert!(missing.to_string().contains("runtime envelope"));
+
+        let incomplete = validate_planning_worker_runtime_envelope(
+            &response(Some(
+                crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope::unobserved(),
+            )),
+            PlanningWorkerOperation::RefreshQueue,
+        )
+        .expect_err("missing turn request must fail closed");
+        assert!(incomplete.to_string().contains("turn request"));
+
+        let mut gapped = test_planning_worker_runtime_envelope();
+        gapped.apply_observation_gap(
+            crate::domain::conversation_runtime_envelope::ConversationRuntimeObservationGap::settings(),
+        );
+        let gap = validate_planning_worker_runtime_envelope(
+            &response(Some(gapped)),
+            PlanningWorkerOperation::RefreshQueue,
+        )
+        .expect_err("unresolved projection gap must fail closed");
+        assert!(gap.to_string().contains("observation gap"));
+    }
+
+    #[test]
     fn refresh_worker_commits_task_commands_and_restores_protected_files() {
         let workspace = workspace("command-commit");
         let repo = Arc::new(NoopPlanningTaskRepositoryPort);
@@ -1525,6 +1606,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: Some("worker-thread-1".to_string()),
             turn_id: Some("worker-turn-1".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some(worker_message.to_string()),
             changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
         }));
@@ -1629,6 +1711,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: Some("stale-worker-thread".to_string()),
             turn_id: Some("stale-worker-turn".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some(worker_message.to_string()),
             changed_planning_file_paths: Vec::new(),
         }));
@@ -1699,6 +1782,7 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 thread_id: Some("late-worker-thread".to_string()),
                 turn_id: Some("late-worker-turn".to_string()),
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
                 final_agent_message: Some("late worker result".to_string()),
                 changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
             },
@@ -1756,6 +1840,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: Some("worker-thread-2".to_string()),
             turn_id: Some("worker-turn-2".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some(worker_message.to_string()),
             changed_planning_file_paths: Vec::new(),
         }));
@@ -1840,6 +1925,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: Some("worker-thread-validation".to_string()),
             turn_id: Some("worker-turn-validation".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some(worker_message.to_string()),
             changed_planning_file_paths: Vec::new(),
         }));
@@ -1897,6 +1983,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: Some("worker-thread-delivery".to_string()),
             turn_id: Some("worker-turn-delivery".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some(worker_message.to_string()),
             changed_planning_file_paths: Vec::new(),
         }));
@@ -1954,6 +2041,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: Some("worker-thread-completed".to_string()),
             turn_id: Some("worker-turn-completed".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some("should not run".to_string()),
             changed_planning_file_paths: Vec::new(),
         }));
@@ -2000,6 +2088,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: None,
             turn_id: None,
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: None,
             changed_planning_file_paths: Vec::new(),
         }));
@@ -2057,6 +2146,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: None,
             turn_id: None,
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: None,
             changed_planning_file_paths: Vec::new(),
         }));
@@ -2114,6 +2204,7 @@ mod tests {
             operation: PlanningWorkerOperation::RefreshQueue,
             thread_id: Some("worker-thread-retry".to_string()),
             turn_id: Some("worker-turn-retry".to_string()),
+            runtime_envelope: Some(test_planning_worker_runtime_envelope()),
             final_agent_message: Some("official refresh applied".to_string()),
             changed_planning_file_paths: Vec::new(),
         }));

@@ -3,6 +3,7 @@ use crate::application::port::outbound::parallel_agent_worker_port::{
 };
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelWorkerCommitDisposition;
 use crate::application::service::conversation_runtime_event::{
+    ConversationRuntimeEnvelopeProjection, ConversationRuntimeEnvelopeProjectionRejection,
     ConversationStreamEvent, conversation_stream_channel,
 };
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileConfig;
@@ -680,6 +681,7 @@ struct ParallelDispatchWorkerStreamState {
      */
     turn_completed: Option<ParallelDispatchTurnCompleted>,
     terminal_receipt: Option<ConversationTurnTerminalReceipt>,
+    runtime_projection: ConversationRuntimeEnvelopeProjection,
     // main reply는 official completion prompt의 증거 문맥으로 쓰되, slot 성공 판정 자체는 typed receipt가 맡는다.
     latest_main_reply: Option<String>,
 }
@@ -1031,6 +1033,7 @@ fn emit_parallel_worker_stream_event(
             thread_id,
             title,
             cwd,
+            ..
         } => event_log::emit_lazy("parallel_worker_stream_event", || {
             serde_json::json!({
                 "event": "thread_prepared",
@@ -1041,7 +1044,7 @@ fn emit_parallel_worker_stream_event(
                 "cwd": cwd,
             })
         }),
-        ConversationStreamEvent::TurnStarted { turn_id } => {
+        ConversationStreamEvent::TurnStarted { turn_id, .. } => {
             event_log::emit_lazy("parallel_worker_stream_event", || {
                 serde_json::json!({
                     "event": "turn_started",
@@ -1093,6 +1096,38 @@ fn sync_parallel_dispatch_worker_event(
     stream_state: &mut ParallelDispatchWorkerStreamState,
 ) -> Vec<String> {
     let mut notices = Vec::new();
+    if let ConversationStreamEvent::ThreadPrepared { cwd, .. } = event
+        && cwd != &request.expected_lease.worktree_path
+    {
+        stream_state.saw_failed_event = true;
+        stream_state.saw_failed_before_turn_started = true;
+        notices.push(format!(
+            "parallel worker applied cwd did not match the leased worktree / task: {}",
+            request.handoff_task.task_title
+        ));
+        return notices;
+    }
+
+    stream_state.runtime_projection.apply_event(event);
+    if let Some(rejection) = stream_state.runtime_projection.last_rejection.take() {
+        stream_state.saw_failed_event = true;
+        if !stream_state.saw_turn_started {
+            stream_state.saw_failed_before_turn_started = true;
+        }
+        let rejection = match rejection {
+            ConversationRuntimeEnvelopeProjectionRejection::EnvelopeNotPrepared => {
+                "envelope not prepared"
+            }
+            ConversationRuntimeEnvelopeProjectionRejection::Observation(_) => {
+                "correlation mismatch"
+            }
+        };
+        notices.push(format!(
+            "parallel worker runtime envelope projection was rejected ({rejection}) / task: {}",
+            request.handoff_task.task_title
+        ));
+    }
+
     let outcome = turn_service.sync_stream_event_for_lease(&request.expected_lease, event);
     stream_state.saw_turn_started |= outcome.turn_started_observed;
     if let Some(notice) = outcome.runtime_notice {
@@ -1103,7 +1138,7 @@ fn sync_parallel_dispatch_worker_event(
         ConversationStreamEvent::ThreadPrepared { thread_id, .. } => {
             stream_state.prepared_thread_id = Some(thread_id.clone());
         }
-        ConversationStreamEvent::TurnStarted { turn_id } => {
+        ConversationStreamEvent::TurnStarted { turn_id, .. } => {
             stream_state.started_turn_id = Some(turn_id.clone());
         }
         ConversationStreamEvent::AgentMessageCompleted { text, .. } => {
@@ -1124,7 +1159,29 @@ fn sync_parallel_dispatch_worker_event(
              * official completion validation summary for this slot.
              */
             stream_state.terminal_receipt = Some(receipt.clone());
-            if receipt.is_completed_and_confirmed() {
+            let runtime_ready = stream_state
+                .runtime_projection
+                .runtime_envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.turn_request.is_some());
+            let runtime_gap = stream_state
+                .runtime_projection
+                .runtime_envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.projection_gap.is_some());
+            if !runtime_ready {
+                stream_state.saw_failed_event = true;
+                notices.push(format!(
+                    "parallel worker terminal arrived without a prepared runtime envelope and turn request / task: {}",
+                    request.handoff_task.task_title
+                ));
+            } else if runtime_gap {
+                stream_state.saw_failed_event = true;
+                notices.push(format!(
+                    "parallel worker runtime envelope has an observation gap / task: {}",
+                    request.handoff_task.task_title
+                ));
+            } else if receipt.is_completed_and_confirmed() {
                 stream_state.turn_completed =
                     ParallelDispatchTurnCompleted::from_receipt(receipt.clone());
             } else {
@@ -1962,6 +2019,15 @@ mod tests {
         .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed)
     }
 
+    fn scripted_thread_prepared() -> ConversationStreamEvent {
+        ConversationStreamEvent::ThreadPrepared {
+            thread_id: "thread-scripted".to_string(),
+            title: "Scripted worker".to_string(),
+            cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+            runtime_envelope: Box::default(),
+        }
+    }
+
     fn run_scripted_worker(
         events: Vec<ConversationStreamEvent>,
         exit: WorkerExit,
@@ -2231,9 +2297,13 @@ mod tests {
     #[test]
     fn scripted_worker_run_keeps_started_failures_as_stream_failures() {
         let result = run_scripted_worker(
-            vec![ConversationStreamEvent::TurnStarted {
-                turn_id: "turn-started".to_string(),
-            }],
+            vec![
+                scripted_thread_prepared(),
+                ConversationStreamEvent::TurnStarted {
+                    turn_id: "turn-started".to_string(),
+                    runtime_request: Box::default(),
+                },
+            ],
             WorkerExit::Err,
         );
 
@@ -2291,8 +2361,10 @@ mod tests {
         for receipt in receipts {
             let result = run_scripted_worker(
                 vec![
+                    scripted_thread_prepared(),
                     ConversationStreamEvent::TurnStarted {
                         turn_id: receipt.turn_id.clone(),
+                        runtime_request: Box::default(),
                     },
                     ConversationStreamEvent::TurnTerminal {
                         receipt: receipt.clone(),
@@ -2321,8 +2393,10 @@ mod tests {
         let observed = completed_receipt("turn-observed", Vec::new());
         let result = run_scripted_worker_with_producer_receipt(
             vec![
+                scripted_thread_prepared(),
                 ConversationStreamEvent::TurnStarted {
                     turn_id: observed.turn_id.clone(),
+                    runtime_request: Box::default(),
                 },
                 ConversationStreamEvent::TurnTerminal { receipt: observed },
             ],
@@ -2352,9 +2426,11 @@ mod tests {
                     thread_id: "thread-other".to_string(),
                     title: "Prepared slot".to_string(),
                     cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                    runtime_envelope: Box::default(),
                 },
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-other".to_string(),
+                    runtime_request: Box::default(),
                 },
                 ConversationStreamEvent::TurnTerminal { receipt },
             ],
@@ -2384,9 +2460,11 @@ mod tests {
                     thread_id: receipt.thread_id.clone(),
                     title: "Prepared slot".to_string(),
                     cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                    runtime_envelope: Box::default(),
                 },
                 ConversationStreamEvent::TurnStarted {
                     turn_id: receipt.turn_id.clone(),
+                    runtime_request: Box::default(),
                 },
                 ConversationStreamEvent::TurnRetrying {
                     thread_id: receipt.thread_id.clone(),
@@ -2422,9 +2500,11 @@ mod tests {
                     thread_id: "thread-scripted".to_string(),
                     title: "Prepared slot".to_string(),
                     cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                    runtime_envelope: Box::default(),
                 },
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-lease-missing".to_string(),
+                    runtime_request: Box::default(),
                 },
                 ConversationStreamEvent::AgentMessageCompleted {
                     item_id: "item-final".to_string(),
@@ -2458,6 +2538,7 @@ mod tests {
         let mut request = worker_request_with_secret_bodies();
         request.planning_workspace_directory = workspace.path().to_string();
         request.worktree_directory = workspace.path().to_string();
+        request.expected_lease.worktree_path = workspace.path().to_string();
 
         let result = run_scripted_worker_with_request(
             request,
@@ -2466,9 +2547,11 @@ mod tests {
                     thread_id: "thread-scripted".to_string(),
                     title: "Prepared slot".to_string(),
                     cwd: workspace.path().to_string(),
+                    runtime_envelope: Box::default(),
                 },
                 ConversationStreamEvent::TurnStarted {
                     turn_id: "turn-no-lease".to_string(),
+                    runtime_request: Box::default(),
                 },
                 ConversationStreamEvent::TurnTerminal {
                     receipt: completed_receipt("turn-no-lease", Vec::new()),
@@ -2500,9 +2583,11 @@ mod tests {
                         thread_id: "thread-prepared".to_string(),
                         title: "Prepared slot".to_string(),
                         cwd: "/tmp/workspace/.akra-pool/slot-1".to_string(),
+                        runtime_envelope: Box::default(),
                     },
                     ConversationStreamEvent::TurnStarted {
                         turn_id: "turn-started".to_string(),
+                        runtime_request: Box::default(),
                     },
                     ConversationStreamEvent::AgentMessageCompleted {
                         item_id: "item-final".to_string(),
@@ -2572,8 +2657,10 @@ mod tests {
         let result = with_test_event_logging(|| {
             run_scripted_worker(
                 vec![
+                    scripted_thread_prepared(),
                     ConversationStreamEvent::TurnStarted {
                         turn_id: "turn-completed-before-port-error".to_string(),
+                        runtime_request: Box::default(),
                     },
                     ConversationStreamEvent::AgentMessageCompleted {
                         item_id: "item-final".to_string(),
@@ -2618,6 +2705,40 @@ mod tests {
         let turn_service = test_turn_service();
         let request = worker_request_with_secret_bodies();
         let mut stream_state = ParallelDispatchWorkerStreamState::default();
+        let mut runtime_envelope =
+            crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope::unobserved();
+        runtime_envelope.applied.model =
+            crate::domain::conversation_runtime_envelope::ConversationRuntimeObservedValue::Observed(
+                "parallel-applied".to_string(),
+            );
+
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-scripted".to_string(),
+                title: "Parallel worker".to_string(),
+                cwd: request.expected_lease.worktree_path.clone(),
+                runtime_envelope: Box::new(runtime_envelope),
+            },
+            &mut stream_state,
+        );
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::new(
+                    crate::domain::conversation_runtime_envelope::ConversationRuntimeConfigurationRequest {
+                        model: crate::domain::conversation_runtime_envelope::ConversationRuntimeRequestedValue::Value(
+                            "parallel-requested".to_string(),
+                        ),
+                        ..Default::default()
+                    },
+                ),
+            },
+            &mut stream_state,
+        );
 
         assert!(
             sync_parallel_dispatch_worker_event(
@@ -2665,6 +2786,25 @@ mod tests {
             .as_ref()
             .expect("turn completed should be captured");
         assert_eq!(turn_completed.receipt.turn_id, "turn-1");
+        let runtime_envelope = stream_state
+            .runtime_projection
+            .runtime_envelope
+            .as_ref()
+            .expect("parallel stream state should retain runtime envelope");
+        assert_eq!(
+            runtime_envelope.applied.model,
+            crate::domain::conversation_runtime_envelope::ConversationRuntimeObservedValue::Observed(
+                "parallel-applied".to_string()
+            )
+        );
+        assert_eq!(
+            runtime_envelope
+                .turn_request
+                .as_ref()
+                .and_then(|request| request.model.as_value())
+                .map(String::as_str),
+            Some("parallel-requested")
+        );
         assert_eq!(
             turn_completed
                 .receipt
@@ -2689,8 +2829,20 @@ mod tests {
         sync_parallel_dispatch_worker_event(
             &turn_service,
             &request,
+            &ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-scripted".to_string(),
+                title: "Parallel worker".to_string(),
+                cwd: request.expected_lease.worktree_path.clone(),
+                runtime_envelope: Box::default(),
+            },
+            &mut failed_after_start,
+        );
+        sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
             &ConversationStreamEvent::TurnStarted {
                 turn_id: "turn-2".to_string(),
+                runtime_request: Box::default(),
             },
             &mut failed_after_start,
         );
@@ -2705,6 +2857,35 @@ mod tests {
         assert!(failed_after_start.saw_turn_started);
         assert!(failed_after_start.saw_failed_event);
         assert!(!failed_after_start.saw_failed_before_turn_started);
+    }
+
+    #[test]
+    fn sync_worker_event_rejects_applied_cwd_outside_the_leased_worktree() {
+        let turn_service = test_turn_service();
+        let request = worker_request_with_secret_bodies();
+        let mut stream_state = ParallelDispatchWorkerStreamState::default();
+
+        let notices = sync_parallel_dispatch_worker_event(
+            &turn_service,
+            &request,
+            &ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-wrong-cwd".to_string(),
+                title: "Wrong workspace".to_string(),
+                cwd: "/tmp/not-the-leased-worktree".to_string(),
+                runtime_envelope: Box::default(),
+            },
+            &mut stream_state,
+        );
+
+        assert!(stream_state.saw_failed_event);
+        assert!(stream_state.saw_failed_before_turn_started);
+        assert!(stream_state.prepared_thread_id.is_none());
+        assert!(stream_state.runtime_projection.runtime_envelope.is_none());
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("applied cwd did not match"))
+        );
     }
 
     #[test]
