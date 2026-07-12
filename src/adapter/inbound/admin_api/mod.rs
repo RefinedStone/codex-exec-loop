@@ -68,6 +68,48 @@ struct AdminServerArgs {
     port: u16,
 }
 
+struct AdminShutdownSignal {
+    #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    hangup: tokio::signal::unix::Signal,
+}
+
+impl AdminShutdownSignal {
+    fn install() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+
+            Ok(Self {
+                interrupt: signal(SignalKind::interrupt())?,
+                terminate: signal(SignalKind::terminate())?,
+                hangup: signal(SignalKind::hangup())?,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait(mut self) {
+        tokio::select! {
+            _ = self.interrupt.recv() => {}
+            _ = self.terminate.recv() => {}
+            _ = self.hangup.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    async fn wait(self) {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 pub async fn run_from_env() -> Result<()> {
     run_with_args(std::env::args().skip(1)).await
 }
@@ -104,6 +146,9 @@ where
             "AKRA_ADMIN_TOKEN is required when the admin server is not attached to an interactive terminal"
         );
     }
+    // Process supervisors may interrupt as soon as readiness is visible.
+    let shutdown_signal = AdminShutdownSignal::install()
+        .context("failed to install admin server shutdown signal handlers")?;
     let public_origin = security.config.public_origin();
     let workspace_dir = workspace_dir.display().to_string();
     let state = build_admin_state(workspace_dir, security.config);
@@ -122,7 +167,7 @@ where
     }
 
     axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal.wait())
         .await
         .context("admin server exited unexpectedly")?;
     Ok(())
@@ -405,28 +450,4 @@ where
         }
     }
     Ok(parsed)
-}
-
-#[cfg(unix)]
-async fn shutdown_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-
-    let Ok(mut terminate) = signal(SignalKind::terminate()) else {
-        let _ = tokio::signal::ctrl_c().await;
-        return;
-    };
-    let Ok(mut hangup) = signal(SignalKind::hangup()) else {
-        let _ = tokio::signal::ctrl_c().await;
-        return;
-    };
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = terminate.recv() => {}
-        _ = hangup.recv() => {}
-    }
-}
-
-#[cfg(not(unix))]
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
 }
