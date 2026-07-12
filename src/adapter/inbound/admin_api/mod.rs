@@ -68,45 +68,55 @@ struct AdminServerArgs {
     port: u16,
 }
 
-struct AdminShutdownSignal {
+enum AdminShutdownSignal {
     #[cfg(unix)]
-    interrupt: tokio::signal::unix::Signal,
-    #[cfg(unix)]
-    terminate: tokio::signal::unix::Signal,
-    #[cfg(unix)]
-    hangup: tokio::signal::unix::Signal,
+    Unix {
+        interrupt: tokio::signal::unix::Signal,
+        terminate: tokio::signal::unix::Signal,
+        hangup: tokio::signal::unix::Signal,
+    },
+    Fallback,
 }
 
 impl AdminShutdownSignal {
-    fn install() -> std::io::Result<Self> {
+    fn install() -> Self {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{SignalKind, signal};
 
-            Ok(Self {
-                interrupt: signal(SignalKind::interrupt())?,
-                terminate: signal(SignalKind::terminate())?,
-                hangup: signal(SignalKind::hangup())?,
-            })
+            if let (Ok(interrupt), Ok(terminate), Ok(hangup)) = (
+                signal(SignalKind::interrupt()),
+                signal(SignalKind::terminate()),
+                signal(SignalKind::hangup()),
+            ) {
+                return Self::Unix {
+                    interrupt,
+                    terminate,
+                    hangup,
+                };
+            }
         }
-        #[cfg(not(unix))]
-        {
-            Ok(Self {})
-        }
+        Self::Fallback
     }
 
-    #[cfg(unix)]
-    async fn wait(mut self) {
-        tokio::select! {
-            _ = self.interrupt.recv() => {}
-            _ = self.terminate.recv() => {}
-            _ = self.hangup.recv() => {}
-        }
-    }
-
-    #[cfg(not(unix))]
     async fn wait(self) {
-        let _ = tokio::signal::ctrl_c().await;
+        match self {
+            #[cfg(unix)]
+            Self::Unix {
+                mut interrupt,
+                mut terminate,
+                mut hangup,
+            } => {
+                tokio::select! {
+                    _ = interrupt.recv() => {}
+                    _ = terminate.recv() => {}
+                    _ = hangup.recv() => {}
+                }
+            }
+            Self::Fallback => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
     }
 }
 
@@ -147,8 +157,7 @@ where
         );
     }
     // Process supervisors may interrupt as soon as readiness is visible.
-    let shutdown_signal = AdminShutdownSignal::install()
-        .context("failed to install admin server shutdown signal handlers")?;
+    let shutdown_signal = AdminShutdownSignal::install();
     let public_origin = security.config.public_origin();
     let workspace_dir = workspace_dir.display().to_string();
     let state = build_admin_state(workspace_dir, security.config);
