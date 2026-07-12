@@ -23,6 +23,7 @@ use crate::domain::conversation::{
     ConversationApprovalReview, ConversationRuntimeControlTruth, ConversationSnapshot,
     ConversationTurnOptions,
 };
+use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedConversationThreadSnapshot {
@@ -217,7 +218,7 @@ impl ConversationService {
         // event_sender는 호출자가 만든 수신 루프와 짝을 이룬다. 소유권을 넘기는 이유는
         // runtime worker가 thread 종료까지 이 sender를 들고 스트림 이벤트를 계속 보낼 수 있어야 하기 때문이다.
         event_sender: ConversationStreamSender,
-    ) -> Result<()> {
+    ) -> Result<ConversationTurnTerminalReceipt> {
         self.interactive_turn_runtime_port
             // 새 thread 생성, app-server launch/reattach, protocol notification 해석은 모두 outbound 구현 책임이다.
             .run_new_thread_stream(cwd, prompt, options, event_sender)
@@ -236,7 +237,7 @@ impl ConversationService {
         options: ConversationTurnOptions,
         // 같은 `ConversationStreamEvent` 채널을 사용해 delta, 도구 활동, 승인 상태, 완료/실패를 돌려받는다.
         event_sender: ConversationStreamSender,
-    ) -> Result<()> {
+    ) -> Result<ConversationTurnTerminalReceipt> {
         self.interactive_turn_runtime_port
             // 기존 thread에서의 turn 실행도 service가 직접 구현하지 않는다.
             // port 경계를 통과시켜 app-server adapter가 프로토콜과 세션 저장 책임을 계속 소유하게 한다.
@@ -362,22 +363,30 @@ mod tests {
 
         fn run_new_thread_stream(
             &self,
-            _cwd: &str,
+            cwd: &str,
             _prompt: &str,
             _options: ConversationTurnOptions,
-            _event_sender: ConversationStreamSender,
-        ) -> Result<()> {
-            Ok(())
+            event_sender: ConversationStreamSender,
+        ) -> Result<ConversationTurnTerminalReceipt> {
+            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+                &event_sender,
+                "test-thread",
+                cwd,
+            )
         }
 
         fn run_turn_stream(
             &self,
-            _thread_id: &str,
+            thread_id: &str,
             _prompt: &str,
             _options: ConversationTurnOptions,
-            _event_sender: ConversationStreamSender,
-        ) -> Result<()> {
-            Ok(())
+            event_sender: ConversationStreamSender,
+        ) -> Result<ConversationTurnTerminalReceipt> {
+            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+                &event_sender,
+                thread_id,
+                "/tmp/test-workspace",
+            )
         }
     }
 

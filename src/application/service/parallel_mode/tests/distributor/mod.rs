@@ -1583,10 +1583,20 @@ fn official_completion_success_orchestrator_tick_uses_dedicated_integration_work
         crate::application::service::parallel_mode::turn::ParallelModeTurnService::new(
             service.clone(),
         );
-    let notices = turn_service.finalize_official_completion_success(
+    let finalize_outcome = turn_service.finalize_official_completion_success(
         &lease.worktree_path,
         "official ledger refresh succeeded: canonical tick approved",
     );
+    let notices = match finalize_outcome {
+        crate::application::service::parallel_mode::turn::ParallelOfficialCompletionFinalizeOutcome::Durable {
+            notices,
+            ..
+        } => notices,
+        crate::application::service::parallel_mode::turn::ParallelOfficialCompletionFinalizeOutcome::Failed {
+            notices,
+            stage,
+        } => panic!("official completion should finalize durably, not fail at {stage:?}: {notices:?}"),
+    };
 
     assert!(
         notices
@@ -1670,10 +1680,20 @@ fn official_completion_ignores_canonical_checkout_branch() {
         crate::application::service::parallel_mode::turn::ParallelModeTurnService::new(
             service.clone(),
         );
-    let notices = turn_service.finalize_official_completion_success(
+    let finalize_outcome = turn_service.finalize_official_completion_success(
         &lease.worktree_path,
         "official ledger refresh succeeded: distributor delivery approved",
     );
+    let notices = match finalize_outcome {
+        crate::application::service::parallel_mode::turn::ParallelOfficialCompletionFinalizeOutcome::Durable {
+            notices,
+            ..
+        } => notices,
+        crate::application::service::parallel_mode::turn::ParallelOfficialCompletionFinalizeOutcome::Failed {
+            notices,
+            stage,
+        } => panic!("official completion should finalize durably, not fail at {stage:?}: {notices:?}"),
+    };
 
     assert!(
         notices

@@ -63,6 +63,22 @@ fn install_runtime_insert_failure(repo: &TempGitRepo, trigger_name: &str, table_
         .expect("authority write failure trigger should install");
 }
 
+fn delete_authoritative_session_detail(repo: &TempGitRepo, session_key: &str) {
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let location = authority
+        .resolve_authority_location(&repo.workspace_dir())
+        .expect("authority location should resolve before deleting the session fixture");
+    let connection = rusqlite::Connection::open(&location.authority_store_path)
+        .expect("authority store should open for session fixture deletion");
+    let deleted = connection
+        .execute(
+            "DELETE FROM runtime_session_details WHERE session_key = ?1",
+            [session_key],
+        )
+        .expect("authority session fixture should be deleted");
+    assert_eq!(deleted, 1);
+}
+
 // readiness snapshot이 없거나 repository 상태를 읽을 수 없는 board는 모든 slot을
 // unavailable로 표시해야 하지만, 이것이 "pool capacity를 모두 소진했다"는 뜻은
 // 아니다. exhausted는 사용 가능한 pool 안에서 더 배정할 자리가 없을 때만 켜진다.
@@ -465,7 +481,7 @@ fn failed_start_block_survives_session_detail_authority_failure_and_allows_updat
 }
 
 #[test]
-fn failed_start_block_survives_session_detail_mirror_failure() {
+fn failed_start_cleanup_treats_session_detail_mirror_as_output_only() {
     let repo = TempGitRepo::new("failed-start-detail-mirror-failure");
     let service = test_parallel_mode_service();
     let lease = service
@@ -478,10 +494,11 @@ fn failed_start_block_survives_session_detail_mirror_failure() {
     fs::remove_file(&detail_path).expect("assigned detail mirror should be removable");
     fs::create_dir(&detail_path).expect("directory collision should block mirror rename");
 
-    let error = service
+    let released = service
         .release_workspace_slot_lease_after_failed_start(&lease.worktree_path)
-        .expect_err("session detail mirror failure should remain observable after cleanup");
-    assert!(error.contains("failed to persist agent session detail"));
+        .expect("authority-backed failed-start cleanup should ignore mirror projection failure")
+        .expect("failed-start cleanup should release the slot");
+    assert!(released.same_generation_as(&lease));
     assert!(!repo.slot_lease_path(1).exists());
     assert!(!repo.branch_exists(&lease.branch_name));
 
@@ -492,6 +509,140 @@ fn failed_start_block_survives_session_detail_mirror_failure() {
     assert_eq!(runtime_projection.task_dispatch_blocks[0].task_id, "task-1");
     assert_eq!(runtime_projection.session_details.len(), 1);
     assert_eq!(runtime_projection.session_details[0].state_label, "failed");
+}
+
+#[test]
+fn legacy_session_mirror_seeds_only_the_matching_lease_identity() {
+    #[derive(Clone, Copy)]
+    enum MirrorFixture {
+        SanitizerCollision,
+        SameKeyDifferentIdentity,
+        ValidLegacy,
+    }
+
+    for (fixture_name, fixture) in [
+        (
+            "legacy-session-sanitizer-collision",
+            MirrorFixture::SanitizerCollision,
+        ),
+        (
+            "legacy-session-same-key-wrong-identity",
+            MirrorFixture::SameKeyDifferentIdentity,
+        ),
+        ("legacy-session-valid-bootstrap", MirrorFixture::ValidLegacy),
+    ] {
+        let repo = TempGitRepo::new(fixture_name);
+        let service = test_parallel_mode_service();
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+
+        let session_key = lease.session_key();
+        let mirror_path = repo.session_detail_path(&session_key);
+        let mut legacy = read_agent_session_detail_record(
+            &test_parallel_runtime(),
+            &repo.pool_root(),
+            &session_key,
+        )
+        .expect("running session mirror should exist before authority deletion");
+        delete_authoritative_session_detail(&repo, &session_key);
+
+        match fixture {
+            MirrorFixture::SanitizerCollision => {
+                legacy.session_key = session_key.replacen('@', "/", 1);
+                legacy.slot_id = "foreign-slot".to_string();
+                legacy.agent_id = "foreign-agent".to_string();
+                legacy.task_id = "foreign-task".to_string();
+                legacy.task_title = "Foreign Task".to_string();
+                legacy.branch_name = "foreign-branch".to_string();
+                legacy.worktree_path = "/tmp/foreign-worktree".to_string();
+                legacy.lease_started_at = "1999-01-01T00:00:00Z".to_string();
+                legacy.validation_summary = "foreign validation must not persist".to_string();
+                assert_eq!(
+                    agent_session_detail_record_path(&repo.pool_root(), &legacy.session_key),
+                    mirror_path,
+                    "the foreign session key should collide only after filename sanitization"
+                );
+            }
+            MirrorFixture::SameKeyDifferentIdentity => {
+                legacy.agent_id = "foreign-agent".to_string();
+                legacy.validation_summary = "foreign validation must not persist".to_string();
+            }
+            MirrorFixture::ValidLegacy => {
+                legacy.validation_summary = "valid legacy validation is preserved".to_string();
+                let mut marker = legacy
+                    .history
+                    .last()
+                    .cloned()
+                    .expect("running legacy detail should have history");
+                marker.state_label = "legacy_marker".to_string();
+                marker.summary = "valid legacy history is preserved".to_string();
+                legacy.history.push(marker);
+            }
+        }
+        fs::write(
+            &mirror_path,
+            serde_json::to_string_pretty(&legacy).expect("legacy mirror should serialize"),
+        )
+        .expect("legacy mirror fixture should be installed");
+
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "authority accepted the identity-checked completion",
+            )
+            .expect("identity-checked commit-ready should persist")
+            .expect("running lease should transition to commit-ready");
+
+        let projection =
+            SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+                .expect("authority projection should load after commit-ready");
+        assert_eq!(projection.session_details.len(), 1);
+        let detail = &projection.session_details[0];
+        assert_eq!(detail.session_key, session_key);
+        assert_eq!(detail.slot_id, lease.slot_id);
+        assert_eq!(detail.agent_id, lease.agent_id);
+        assert_eq!(detail.task_id, lease.task_id);
+        assert_eq!(detail.task_title, lease.task_title);
+        assert_eq!(detail.branch_name, lease.branch_name);
+        assert_eq!(detail.worktree_path, lease.worktree_path);
+        assert_eq!(detail.lease_started_at, lease.leased_at);
+        assert_eq!(detail.state_label, "commit_ready");
+        assert_eq!(
+            detail.authority_refresh_outcome,
+            "authority accepted the identity-checked completion"
+        );
+        match fixture {
+            MirrorFixture::ValidLegacy => {
+                assert_eq!(
+                    detail.validation_summary,
+                    "valid legacy validation is preserved"
+                );
+                assert!(detail.history.iter().any(|entry| {
+                    entry.state_label == "legacy_marker"
+                        && entry.summary == "valid legacy history is preserved"
+                }));
+            }
+            MirrorFixture::SanitizerCollision | MirrorFixture::SameKeyDifferentIdentity => {
+                assert_ne!(
+                    detail.validation_summary,
+                    "foreign validation must not persist"
+                );
+                assert!(
+                    detail
+                        .history
+                        .iter()
+                        .all(|entry| !entry.summary.contains("foreign"))
+                );
+            }
+        }
+    }
 }
 
 #[test]

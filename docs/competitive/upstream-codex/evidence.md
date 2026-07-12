@@ -630,6 +630,44 @@ attempted reachability work. Class: `verified/local`.
 The probe supports considering doctor output as bounded diagnostic input. It does not establish a
 stable API, offline behavior, low latency, or safety for automatic periodic Admin polling.
 
+## P0-A Live Terminal Receipt Evidence
+
+The P0-A implementation adds a closed terminal receipt with separate upstream outcome,
+side-band observations, and application-delivery acknowledgement. The notification reducer parses
+the four official statuses, nested typed errors, retry intent, item-view completeness, timestamps,
+and duration. The connection owns non-retry grace, first-terminal compare-and-set, and bounded
+terminal delivery. Current main, planning, parallel, prompt-log, and archive consumers accept only
+`completed + confirmed` for completion-derived work.
+
+Deterministic proof covers retry-then-success, all four statuses, missing and contradictory fields,
+correlation mismatch, duplicate/out-of-order terminal notifications, changed-file non-promotion,
+non-retry grace expiry, full/deadline/disconnected/recovered sinks, producer/event receipt mismatch,
+and every current completion consumer. The checked-in tests also parse the released capture so a
+missing or reclassified artifact fails the protocol contract suite.
+
+The authenticated released-binary capture was produced with:
+
+```bash
+CODEX_APP_SERVER=/tmp/akra-upstream-codex-v0.144.1-bin/codex-app-server-x86_64-unknown-linux-musl \
+CODEX_AUTH_FILE="$HOME/.codex/auth.json" \
+TERMINAL_CAPTURE_MODEL=gpt-5.3-codex-spark \
+node docs/competitive/upstream-codex/scripts/capture-terminal-truth.mjs
+```
+
+The harness verifies owner-only auth-file permissions, copies auth into a disposable `CODEX_HOME`,
+uses disposable workspaces, and independently removes both on every exit path. It never emits
+transcript text, error messages, credentials, thread IDs, or turn IDs. The sanitized
+[`terminal-truth-v0.144.1-linux.json`](captures/terminal-truth-v0.144.1-linux.json) records the
+released binary digest and authenticated `completed` plus exact-turn-ID `interrupted` wire shapes.
+The interrupt identity came from a non-empty `turn/started` notification and was checked against the
+`turn/start` response before the terminal was accepted. Both terminal objects contained the full
+status/error/items-view/timestamp/duration field set; the captured statuses remained mutually
+exclusive.
+
+This authenticated run did not emit an `error` notification or a failed terminal. Retry and failed
+error-field handling therefore remains schema-and-fixture verified rather than released-runtime
+verified; the capture does not overstate that branch as live evidence.
+
 ## Akra Baseline Evidence
 
 All links below use Akra commit `226e4794b84107704378ecc1ea65f7d5c27750e5`.

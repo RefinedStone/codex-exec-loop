@@ -52,7 +52,10 @@ use self::branch_names::{sanitize_task_slug, short_branch_slug_hash};
 use self::control_plane::ParallelModeControlPlaneWake;
 use self::distributor::ParallelModeDistributorService;
 #[cfg(test)]
-use self::distributor::install_before_distributor_cleanup_lock_hook;
+use self::distributor::{
+    install_after_distributor_enqueue_pool_busy_hook,
+    install_after_distributor_enqueue_preflight_hook, install_before_distributor_cleanup_lock_hook,
+};
 use self::orchestration::{
     inspect_akra_integration_worktree_blocker, parallel_dispatch_excluded_task_ids,
     parallel_failed_start_dispatch_blockers,
@@ -1257,6 +1260,14 @@ impl ParallelModeService {
         trigger: ParallelModeOrchestratorTrigger,
     ) -> Result<ParallelModeOrchestratorTickResult, String> {
         self.run_orchestrator_tick_with_permit(workspace_dir, trigger, None)
+    }
+
+    pub(crate) fn pending_commit_ready_recovery_signature(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<Option<String>, String> {
+        self.distributor_service
+            .pending_commit_ready_recovery_signature(workspace_dir)
     }
 
     pub(crate) fn run_orchestrator_tick_guarded(

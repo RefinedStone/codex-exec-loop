@@ -5,9 +5,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::{
-    AccountReadResponse, AppServerNotification, InitializeResponse, ThreadListResponse,
-    ThreadReadResponse, TurnNotificationHandling, handle_turn_notification, initialize_detail,
-    to_conversation_snapshot, to_session_summary,
+    AccountReadResponse, ActiveTurnNotificationState, AppServerNotification, InitializeResponse,
+    ThreadListResponse, ThreadReadResponse, TurnNotificationHandling, handle_turn_notification,
+    initialize_detail, to_conversation_snapshot, to_session_summary,
 };
 use crate::application::port::outbound::startup_probe_port::AppServerStartupContext;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
@@ -17,6 +17,7 @@ use crate::domain::conversation::{
     ConversationToolActivity, ConversationToolActivityKind,
 };
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+use crate::domain::turn_terminal::{ConversationTurnItemsView, ConversationTurnTerminalOutcome};
 
 const HANDLED_NOTIFICATION_METHODS: &[&str] = &[
     "error",
@@ -248,12 +249,102 @@ fn live_turn_notification_sequence_reduces_to_stream_events() {
                     rationale: Some("allowed by test fixture".to_string()),
                 },
             },
-            ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-live".to_string(),
-                changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
-            },
         ]
     );
+    let receipt = outcome
+        .terminal_receipt
+        .expect("fixture should preserve its terminal receipt");
+    assert_eq!(receipt.turn_id, "turn-live");
+    assert!(matches!(
+        receipt.outcome,
+        ConversationTurnTerminalOutcome::Completed
+    ));
+    assert_eq!(receipt.items_view, ConversationTurnItemsView::NotLoaded);
+    assert_eq!(receipt.started_at, Some(1_783_842_000));
+    assert_eq!(receipt.completed_at, Some(1_783_842_002));
+    assert_eq!(receipt.duration_ms, Some(2_500));
+    assert_eq!(
+        receipt.observations.changed_planning_file_paths,
+        vec![RESULT_OUTPUT_FILE_PATH.to_string()]
+    );
+}
+
+#[test]
+fn released_authenticated_terminal_capture_preserves_completed_and_interrupted_shapes() {
+    let capture: Value = serde_json::from_str(include_str!(
+        "../../../../../docs/competitive/upstream-codex/captures/terminal-truth-v0.144.1-linux.json"
+    ))
+    .expect("released terminal capture should remain valid JSON");
+
+    assert_eq!(
+        capture["binary"]["sha256"],
+        "b68de8340b2ccb8aeb23b6f33a4b4dff4f203ff84f6d82b6feedf334aba9a4fb"
+    );
+    assert_eq!(
+        capture["binary"]["name"],
+        "codex-app-server-x86_64-unknown-linux-musl"
+    );
+    assert_eq!(capture["binary"]["bytes"], 248_062_016);
+    assert_eq!(capture["authenticatedAccountPresent"], true);
+    assert_eq!(capture["captureVersion"], 1);
+    assert_eq!(capture["platform"], "linux");
+    assert_eq!(capture["architecture"], "x64");
+    assert_eq!(capture["model"], "gpt-5.3-codex-spark");
+    assert_eq!(capture["interruptMode"], "exact-turn-id");
+    assert_eq!(
+        capture["initializedResultFields"],
+        json!(["codexHome", "platformFamily", "platformOs", "userAgent"])
+    );
+    assert_eq!(capture["errorNotifications"], json!([]));
+    assert_eq!(capture["completed"]["status"], "completed");
+    assert_eq!(capture["interrupted"]["status"], "interrupted");
+    for terminal in ["completed", "interrupted"] {
+        assert_eq!(capture[terminal]["method"], "turn/completed");
+        assert_eq!(
+            capture[terminal]["paramsFields"],
+            json!(["threadId", "turn"])
+        );
+        assert_eq!(capture[terminal]["threadIdPresent"], true);
+        assert_eq!(capture[terminal]["turnIdPresent"], true);
+        assert_eq!(
+            capture[terminal]["turnFields"],
+            json!([
+                "completedAt",
+                "durationMs",
+                "error",
+                "id",
+                "items",
+                "itemsView",
+                "startedAt",
+                "status"
+            ])
+        );
+        assert_eq!(capture[terminal]["itemsView"], "notLoaded");
+        assert_eq!(capture[terminal]["itemCount"], 0);
+        assert_eq!(capture[terminal]["startedAtType"], "number");
+        assert_eq!(capture[terminal]["completedAtType"], "number");
+        assert_eq!(capture[terminal]["durationMsType"], "number");
+        assert!(capture[terminal]["error"].is_null());
+    }
+
+    let encoded = serde_json::to_string(&capture).expect("capture should serialize");
+    for forbidden in [
+        "\"threadId\":",
+        "\"turnId\":",
+        "\"id\":",
+        "\"account\":",
+        "\"auth\":",
+        "\"token\":",
+        "\"message\":",
+        "Bearer ",
+        "access_token",
+        "refresh_token",
+    ] {
+        assert!(
+            !encoded.contains(forbidden),
+            "released capture leaked forbidden raw field or credential marker: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -270,44 +361,45 @@ fn stale_and_malformed_notifications_do_not_leak_into_active_stream() {
     );
     assert_eq!(
         outcome.events,
-        vec![
-            ConversationStreamEvent::AgentMessageCompleted {
-                item_id: "agent-after-malformed".to_string(),
-                phase: Some("final_answer".to_string()),
-                text: "active stream survived malformed item".to_string(),
-            },
-            ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-live".to_string(),
-                changed_planning_file_paths: Vec::new(),
-            },
-        ]
+        vec![ConversationStreamEvent::AgentMessageCompleted {
+            item_id: "agent-after-malformed".to_string(),
+            phase: Some("final_answer".to_string()),
+            text: "active stream survived malformed item".to_string(),
+        },]
     );
+    assert!(outcome.terminal_receipt.is_some());
 }
 
 #[test]
-fn error_notification_is_the_stream_failure_boundary() {
+fn non_retry_error_is_a_typed_terminal_candidate() {
     let notification = notification_from_value(json!({
         "method": "error",
         "params": {
-            "message": "fatal app-server stream error"
+            "threadId": "thread-live",
+            "turnId": "turn-live",
+            "willRetry": false,
+            "error": {
+                "message": "fatal app-server stream error"
+            }
         }
     }));
     let (sender, receiver) = channel();
-    let mut changed_planning_file_paths = Vec::new();
+    let mut state = ActiveTurnNotificationState::new();
 
-    let result = handle_turn_notification(
+    let handling = handle_turn_notification(
         &notification,
         "thread-live",
         "turn-live",
-        &mut changed_planning_file_paths,
+        &mut state,
         &sender,
-    );
-    let error = match result {
-        Ok(_) => panic!("error notification should terminate the reducer"),
-        Err(error) => error,
-    };
+    )
+    .expect("typed error candidate should not fail the transport reducer");
 
-    assert_eq!(error.to_string(), "fatal app-server stream error");
+    assert!(matches!(
+        handling,
+        TurnNotificationHandling::NonRetryErrorCandidate { error }
+            if error.message == "fatal app-server stream error"
+    ));
     assert!(receiver.try_iter().next().is_none());
 }
 
@@ -475,29 +567,35 @@ struct ReducedSequence {
     events: Vec<ConversationStreamEvent>,
     warnings: Vec<String>,
     completed: bool,
+    terminal_receipt: Option<crate::domain::turn_terminal::ConversationTurnTerminalReceipt>,
 }
 
 fn reduce_notification_sequence(path: &str, stop_on_completion: bool) -> ReducedSequence {
     let notifications = notifications_fixture(path);
     let (sender, receiver) = channel();
-    let mut changed_planning_file_paths = Vec::new();
+    let mut state = ActiveTurnNotificationState::new();
     let mut warnings = Vec::new();
     let mut completed = false;
+    let mut terminal_receipt = None;
 
     for notification in notifications {
         let handling = handle_turn_notification(
             &notification,
             "thread-live",
             "turn-live",
-            &mut changed_planning_file_paths,
+            &mut state,
             &sender,
         )
         .expect("fixture notification should reduce without fatal stream error");
 
         match handling {
-            TurnNotificationHandling::Consumed => {}
-            TurnNotificationHandling::Completed => {
+            TurnNotificationHandling::Consumed | TurnNotificationHandling::RetryObserved { .. } => {
+            }
+            TurnNotificationHandling::NonRetryErrorCandidate { .. } => {}
+            TurnNotificationHandling::Terminal { receipt }
+            | TurnNotificationHandling::DuplicateTerminal { receipt } => {
                 completed = true;
+                terminal_receipt = Some(receipt);
                 if stop_on_completion {
                     break;
                 }
@@ -510,6 +608,7 @@ fn reduce_notification_sequence(path: &str, stop_on_completion: bool) -> Reduced
         events: collect_events(receiver),
         warnings,
         completed,
+        terminal_receipt,
     }
 }
 

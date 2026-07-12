@@ -28,6 +28,11 @@ use super::{
     pool_baseline_branch_for_repo,
 };
 
+pub(crate) struct ParallelModeCommitReadyPersistenceOutcome {
+    pub(crate) lease: ParallelModeSlotLeaseSnapshot,
+    pub(crate) notices: Vec<String>,
+}
+
 // 이 impl 조각은 parallel slot이 "작업 실행 완료"에서 "ledger 반영, queue 통합, cleanup"으로
 // 넘어가는 완료 파이프라인을 담당한다. lease 상태와 session detail projection을 함께 움직이는 것이 핵심이다.
 impl ParallelModeService {
@@ -297,13 +302,13 @@ impl ParallelModeService {
     `enqueue_workspace_commit_ready_result`를 호출해 queue record를 만든다.
     */
     // official ledger refresh 성공 후 slot session을 commit_ready로 표시한다.
-    pub fn mark_workspace_commit_ready(
+    pub(crate) fn mark_workspace_commit_ready(
         &self,
         // commit_ready 상태로 표시할 parallel slot workspace이다.
         workspace_dir: &str,
         // planning authority refresh가 어떤 결과로 끝났는지 session history에 남길 문장이다.
         authority_refresh_outcome: &str,
-    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+    ) -> Result<Option<ParallelModeCommitReadyPersistenceOutcome>, String> {
         self.mark_workspace_commit_ready_inner(workspace_dir, None, authority_refresh_outcome)
     }
 
@@ -311,7 +316,7 @@ impl ParallelModeService {
         &self,
         expected_lease: &ParallelModeSlotLeaseSnapshot,
         authority_refresh_outcome: &str,
-    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+    ) -> Result<Option<ParallelModeCommitReadyPersistenceOutcome>, String> {
         self.mark_workspace_commit_ready_inner(
             &expected_lease.worktree_path,
             Some(expected_lease),
@@ -324,7 +329,7 @@ impl ParallelModeService {
         workspace_dir: &str,
         expected_lease: Option<&ParallelModeSlotLeaseSnapshot>,
         authority_refresh_outcome: &str,
-    ) -> Result<Option<ParallelModeAgentSessionDetailSnapshot>, String> {
+    ) -> Result<Option<ParallelModeCommitReadyPersistenceOutcome>, String> {
         let mutation_lock =
             acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)?;
         /*
@@ -362,8 +367,12 @@ impl ParallelModeService {
             &resolution.lease,
             authority_refresh_outcome,
         )
-        // session detail helper의 Result를 그대로 올리되, 성공 값은 Option으로 감싸 facade 계약을 유지한다.
-        .map(Some)
+        .map(|outcome| {
+            Some(ParallelModeCommitReadyPersistenceOutcome {
+                lease: resolution.lease,
+                notices: outcome.mirror_warning.into_iter().collect(),
+            })
+        })
     }
 
     /*
@@ -394,14 +403,14 @@ impl ParallelModeService {
             .enqueue_workspace_commit_ready_result_for_lease(expected_lease)
     }
 
-    pub(crate) fn enqueue_workspace_commit_ready_result_guarded(
+    pub(crate) fn enqueue_workspace_commit_ready_result_for_lease_guarded(
         &self,
-        workspace_dir: &str,
+        expected_lease: &ParallelModeSlotLeaseSnapshot,
         permit: &super::ParallelModeAutomationPermit,
     ) -> Result<Option<crate::domain::parallel_mode::ParallelModeDistributorQueueItem>, String>
     {
         self.distributor_service
-            .enqueue_workspace_commit_ready_result_guarded(workspace_dir, permit)
+            .enqueue_workspace_commit_ready_result_for_lease_guarded(expected_lease, permit)
     }
 
     /*

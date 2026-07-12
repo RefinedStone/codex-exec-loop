@@ -55,6 +55,10 @@ impl PendingNotifications {
         Some(notification)
     }
 
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub(super) fn drain_warning_texts(&mut self) -> Vec<String> {
         /*
          * response가 끝났는데 consumer가 없던 notification은 정상 turn delta로 해석할 곳이 없다.

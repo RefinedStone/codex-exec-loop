@@ -1,0 +1,73 @@
+{
+  "captureVersion": 1,
+  "capturedAt": "2026-07-12T05:25:28.267Z",
+  "platform": "linux",
+  "architecture": "x64",
+  "binary": {
+    "name": "codex-app-server-x86_64-unknown-linux-musl",
+    "bytes": 248062016,
+    "sha256": "b68de8340b2ccb8aeb23b6f33a4b4dff4f203ff84f6d82b6feedf334aba9a4fb"
+  },
+  "authenticatedAccountPresent": true,
+  "model": "gpt-5.3-codex-spark",
+  "interruptMode": "exact-turn-id",
+  "initializedResultFields": [
+    "codexHome",
+    "platformFamily",
+    "platformOs",
+    "userAgent"
+  ],
+  "completed": {
+    "method": "turn/completed",
+    "paramsFields": [
+      "threadId",
+      "turn"
+    ],
+    "threadIdPresent": true,
+    "turnFields": [
+      "completedAt",
+      "durationMs",
+      "error",
+      "id",
+      "items",
+      "itemsView",
+      "startedAt",
+      "status"
+    ],
+    "turnIdPresent": true,
+    "status": "completed",
+    "itemsView": "notLoaded",
+    "itemCount": 0,
+    "startedAtType": "number",
+    "completedAtType": "number",
+    "durationMsType": "number",
+    "error": null
+  },
+  "interrupted": {
+    "method": "turn/completed",
+    "paramsFields": [
+      "threadId",
+      "turn"
+    ],
+    "threadIdPresent": true,
+    "turnFields": [
+      "completedAt",
+      "durationMs",
+      "error",
+      "id",
+      "items",
+      "itemsView",
+      "startedAt",
+      "status"
+    ],
+    "turnIdPresent": true,
+    "status": "interrupted",
+    "itemsView": "notLoaded",
+    "itemCount": 0,
+    "startedAtType": "number",
+    "completedAtType": "number",
+    "durationMsType": "number",
+    "error": null
+  },
+  "errorNotifications": []
+}

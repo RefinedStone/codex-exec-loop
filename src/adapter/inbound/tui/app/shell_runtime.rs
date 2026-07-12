@@ -4,6 +4,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::Print;
 
+#[cfg(test)]
 use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
 #[cfg(test)]
 use crate::core::app::CoreEffectCompletion;
@@ -133,22 +134,12 @@ impl ShellRuntime {
                     self.app
                         .apply_correlated_conversation_snapshot(Some(correlation), snapshot);
                 }
-                BackgroundMessage::ConversationStream(event) => {
+                #[cfg(test)]
+                BackgroundMessage::ConversationStream { correlation, event } => {
                     self.app
-                        .dispatch_core_input(CoreInput::ConversationStreamUpdated(
-                            core_turn_stream_event_from_application(event),
-                        ));
-                }
-                BackgroundMessage::ConversationTurnCompleted {
-                    turn_id,
-                    changed_planning_file_paths,
-                    execution_snapshot_capture,
-                } => {
-                    self.app
-                        .dispatch_core_input(CoreInput::ConversationTurnCompleted {
-                            turn_id,
-                            changed_planning_file_paths,
-                            execution_snapshot_capture,
+                        .dispatch_core_input(CoreInput::ConversationStreamUpdated {
+                            correlation,
+                            event: core_turn_stream_event_from_application(event),
                         });
                 }
                 BackgroundMessage::ConversationRuntimeNotice(notice) => {

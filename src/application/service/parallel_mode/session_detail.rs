@@ -13,7 +13,8 @@ pub(super) use self::store::agent_session_detail_record_path;
 #[cfg(test)]
 pub(super) use self::store::read_agent_session_detail_record;
 use self::store::{
-    push_session_history, update_agent_session_detail_record, write_agent_session_detail_record,
+    AgentSessionDetailStoreWriteOutcome, push_session_history, update_agent_session_detail_record,
+    update_agent_session_detail_record_with_outcome, write_agent_session_detail_record,
 };
 pub(super) fn default_validation_summary() -> &'static str {
     "validation summary is not recorded in runtime yet"
@@ -59,14 +60,21 @@ pub(super) fn record_assigned_session_detail(
     // 최초 lease record와 session detail record를 같은 시점에 맞춘다. 이후 상태 전이는
     // 모두 이 record를 update하면서 history만 추가하므로, missing detail 복구의 기준점이다.
     let detail = build_assigned_session_detail(lease);
-    write_agent_session_detail_record(
+    match write_agent_session_detail_record(
         planning_authority,
         runtime,
         workspace_dir,
         pool_root,
         &detail,
-    )?;
-    Ok(detail)
+    ) {
+        AgentSessionDetailStoreWriteOutcome::AuthorityRejected { error } => Err(error),
+        AgentSessionDetailStoreWriteOutcome::AuthorityCommitted { mirror_warning } => {
+            if let Some(warning) = mirror_warning {
+                tracing::warn!(warning = %warning, "assigned session detail mirror projection failed");
+            }
+            Ok(detail)
+        }
+    }
 }
 
 /*
@@ -239,8 +247,8 @@ pub(super) fn record_commit_ready_session_detail(
     pool_root: &Path,
     lease: &ParallelModeSlotLeaseSnapshot,
     authority_refresh_outcome: &str,
-) -> Result<ParallelModeAgentSessionDetailSnapshot, String> {
-    update_agent_session_detail_record(
+) -> Result<CommitReadySessionDetailRecordOutcome, String> {
+    let outcome = update_agent_session_detail_record_with_outcome(
         planning_authority,
         runtime,
         workspace_dir,
@@ -265,7 +273,18 @@ pub(super) fn record_commit_ready_session_detail(
             );
             detail
         },
-    )
+    )?;
+    Ok(CommitReadySessionDetailRecordOutcome {
+        mirror_warning: outcome.mirror_warning.map(|warning| {
+            format!(
+                "commit-ready authority proof was persisted, but its runtime mirror could not be updated: {warning}"
+            )
+        }),
+    })
+}
+
+pub(super) struct CommitReadySessionDetailRecordOutcome {
+    pub(super) mirror_warning: Option<String>,
 }
 pub(super) fn record_merge_queued_session_detail(
     planning_authority: &dyn PlanningAuthorityPort,

@@ -24,3 +24,5 @@ pub(crate) mod startup_diagnostics;
 pub(crate) mod terminal_bridge_attachment;
 // text는 여러 계층에서 재사용하는 문자열 정규화와 표시 규칙을 담는다.
 pub(crate) mod text;
+// turn_terminal은 app-server terminal truth와 application delivery 결과를 분리해 보존한다.
+pub(crate) mod turn_terminal;

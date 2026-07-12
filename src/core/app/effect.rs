@@ -1,4 +1,7 @@
-use super::{ConversationLoadCorrelation, StartupCheckCorrelation, TurnSubmissionRequest};
+use super::{
+    ConversationLoadCorrelation, StartupCheckCorrelation, TurnSubmissionCorrelation,
+    TurnSubmissionRequest,
+};
 use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +22,9 @@ pub enum CoreEffect {
         thread_id: String,
     },
     PrepareManualPrompt(Box<ManualPromptRequest>),
-    SubmitTurn(TurnSubmissionRequest),
+    SubmitTurn {
+        correlation: TurnSubmissionCorrelation,
+        request: TurnSubmissionRequest,
+    },
     EvaluatePostTurn(Box<PostTurnRequest>),
 }

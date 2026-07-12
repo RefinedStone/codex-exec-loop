@@ -392,6 +392,55 @@ fn utility_effect_ids_inspection_and_reset_tick_signature_cover_process_edges() 
 }
 
 #[test]
+fn unchanged_recovery_signature_dedupes_until_external_state_changes_in_same_epoch() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    open_epoch(&mut runtime);
+    let dirty_signature = "head:none|recovery:slot-2|source:untracked|head:abc";
+    let started = runtime.handle(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+        workspace_directory: WORKSPACE.to_string(),
+        signature: dirty_signature.to_string(),
+    });
+    let tick_id = only_effect_id(&started);
+    let completed = runtime.handle(ParallelModeControlPlaneCommand::OrchestratorTickCompleted {
+        workspace_directory: WORKSPACE.to_string(),
+        epoch_id: 1,
+        effect_id: tick_id,
+        blocked: true,
+    });
+    let refresh_id = completed
+        .effects
+        .iter()
+        .find_map(ParallelModeControlPlaneEffect::effect_id)
+        .expect("blocked recovery should refresh the supervisor");
+    let refreshed = runtime.handle(
+        ParallelModeControlPlaneCommand::SupervisorSnapshotRefreshCompleted {
+            workspace_directory: WORKSPACE.to_string(),
+            epoch_id: 1,
+            effect_id: refresh_id,
+            follow_up_tick_signature: Some(dirty_signature.to_string()),
+        },
+    );
+    assert!(refreshed.effects.iter().all(|effect| !matches!(
+        effect,
+        ParallelModeControlPlaneEffect::RunOrchestratorTick { .. }
+    )));
+    let unchanged = runtime.handle(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+        workspace_directory: WORKSPACE.to_string(),
+        signature: dirty_signature.to_string(),
+    });
+    assert!(unchanged.effects.is_empty());
+
+    let repaired = runtime.handle(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+        workspace_directory: WORKSPACE.to_string(),
+        signature: "head:none|recovery:slot-2|source:clean|head:def".to_string(),
+    });
+    assert!(matches!(
+        repaired.effects.as_slice(),
+        [ParallelModeControlPlaneEffect::RunOrchestratorTick { epoch_id: 1, .. }]
+    ));
+}
+
+#[test]
 fn stale_workspace_and_epoch_commands_return_without_scheduling_effects() {
     let mut runtime = ParallelModeControlPlaneRuntime::new();
     runtime.force_epoch_for_test(WORKSPACE, 7);

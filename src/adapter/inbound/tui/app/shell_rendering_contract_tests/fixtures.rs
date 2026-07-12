@@ -98,24 +98,30 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
 
     fn run_new_thread_stream(
         &self,
-        _cwd: &str,
+        cwd: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
-        // Streaming events are injected directly into app state by tests that need transcript output.
-        Ok(())
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            &event_sender,
+            "test-thread",
+            cwd,
+        )
     }
 
     fn run_turn_stream(
         &self,
-        _thread_id: &str,
+        thread_id: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
-        // Existing-thread turns use the same no-op boundary; rendering tests should not spawn workers.
-        Ok(())
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            &event_sender,
+            thread_id,
+            "/tmp/test-workspace",
+        )
     }
 }
 

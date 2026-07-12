@@ -34,6 +34,10 @@ use crate::domain::parallel_mode::{
     ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection};
+use crate::domain::turn_terminal::{
+    ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
+    ConversationTurnTerminalReceipt,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Barrier, Mutex, mpsc};
@@ -65,12 +69,12 @@ impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
         &self,
         _request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
         self.launch_count.fetch_add(1, Ordering::SeqCst);
         let _ = event_sender.send(ConversationStreamEvent::Failed {
             message: "test worker stops after launch".to_string(),
         });
-        Ok(())
+        Err(anyhow::anyhow!("test worker stops after launch"))
     }
 }
 
@@ -113,7 +117,7 @@ impl ParallelAgentWorkerPort for HoldingParallelAgentWorkerPort {
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
         _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
         self.launches
             .lock()
             .expect("captured launches mutex should not be poisoned")
@@ -127,7 +131,7 @@ impl ParallelAgentWorkerPort for HoldingParallelAgentWorkerPort {
             .lock()
             .expect("release receiver mutex should not be poisoned")
             .recv_timeout(Duration::from_secs(5));
-        Ok(())
+        Err(anyhow::anyhow!("holding test worker was released"))
     }
 }
 
@@ -147,7 +151,7 @@ impl ParallelAgentWorkerPort for CompletingParallelAgentWorkerPort {
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
         let launch_index = self.launch_count.fetch_add(1, Ordering::SeqCst);
         let result_file = format!("worker-result-{launch_index}.txt");
         std::fs::write(
@@ -172,11 +176,44 @@ impl ParallelAgentWorkerPort for CompletingParallelAgentWorkerPort {
             phase: Some("final_answer".to_string()),
             text: "parallel worker finished cleanly".to_string(),
         })?;
-        event_sender.send(ConversationStreamEvent::TurnCompleted {
-            turn_id: "worker-turn-1".to_string(),
-            changed_planning_file_paths: Vec::new(),
+        let receipt = ConversationTurnTerminalReceipt::completed(
+            "worker-thread-1",
+            "worker-turn-1",
+            Vec::new(),
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+        event_sender.send(ConversationStreamEvent::TurnTerminal {
+            receipt: receipt.clone(),
         })?;
-        Ok(())
+        Ok(receipt)
+    }
+}
+
+#[derive(Debug, Default)]
+struct MissingTerminalUnconfirmedParallelAgentWorkerPort;
+
+impl ParallelAgentWorkerPort for MissingTerminalUnconfirmedParallelAgentWorkerPort {
+    fn run_isolated_new_thread_stream(
+        &self,
+        request: ParallelAgentWorkerStreamRequest<'_>,
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> anyhow::Result<ConversationTurnTerminalReceipt> {
+        event_sender.send(ConversationStreamEvent::ThreadPrepared {
+            thread_id: "worker-thread-unconfirmed".to_string(),
+            title: "Unconfirmed parallel worker".to_string(),
+            cwd: request.cwd.to_string(),
+        })?;
+        event_sender.send(ConversationStreamEvent::TurnStarted {
+            turn_id: "worker-turn-unconfirmed".to_string(),
+        })?;
+        Ok(ConversationTurnTerminalReceipt::completed(
+            "worker-thread-unconfirmed",
+            "worker-turn-unconfirmed",
+            Vec::new(),
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Unconfirmed(
+            ConversationTurnApplicationDeliveryFailure::Disconnected,
+        )))
     }
 }
 
@@ -196,6 +233,10 @@ struct FaultyPlanningAuthorityAdapter {
     fail_enqueue: AtomicUsize,
     fail_claim: AtomicUsize,
     fail_update: AtomicUsize,
+    fail_commit_ready_upsert: AtomicUsize,
+    fail_next_runtime_projection_load: AtomicUsize,
+    fault_after_commit_ready_upsert: AtomicUsize,
+    fail_distributor_queue_upsert: AtomicUsize,
     fail_slot_lease_upsert_after: AtomicUsize,
     slot_lease_upsert_calls: AtomicUsize,
 }
@@ -209,6 +250,10 @@ impl FaultyPlanningAuthorityAdapter {
             fail_enqueue: AtomicUsize::new(0),
             fail_claim: AtomicUsize::new(0),
             fail_update: AtomicUsize::new(0),
+            fail_commit_ready_upsert: AtomicUsize::new(0),
+            fail_next_runtime_projection_load: AtomicUsize::new(0),
+            fault_after_commit_ready_upsert: AtomicUsize::new(0),
+            fail_distributor_queue_upsert: AtomicUsize::new(0),
             fail_slot_lease_upsert_after: AtomicUsize::new(Self::DISABLED),
             slot_lease_upsert_calls: AtomicUsize::new(0),
         }
@@ -224,6 +269,20 @@ impl FaultyPlanningAuthorityAdapter {
 
     fn fail_update(&self) {
         self.fail_update.store(1, Ordering::SeqCst);
+    }
+
+    fn fail_commit_ready_upsert(&self) {
+        self.fail_commit_ready_upsert.store(1, Ordering::SeqCst);
+    }
+
+    fn fault_after_commit_ready_upsert(&self) {
+        self.fault_after_commit_ready_upsert
+            .store(1, Ordering::SeqCst);
+    }
+
+    fn fail_distributor_queue_upsert(&self) {
+        self.fail_distributor_queue_upsert
+            .store(1, Ordering::SeqCst);
     }
 
     fn fail_slot_lease_upsert_after(&self, successful_writes: usize) {
@@ -336,6 +395,15 @@ impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
         &self,
         workspace_dir: &str,
     ) -> anyhow::Result<PlanningAuthorityRuntimeProjectionSnapshot> {
+        if self
+            .fail_next_runtime_projection_load
+            .swap(0, Ordering::SeqCst)
+            > 0
+        {
+            return Err(anyhow::anyhow!(
+                "scripted one-shot runtime projection load failure"
+            ));
+        }
         self.inner.load_runtime_projections(workspace_dir)
     }
 
@@ -458,8 +526,43 @@ impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
         workspace_dir: &str,
         detail: &ParallelModeAgentSessionDetailSnapshot,
     ) -> anyhow::Result<()> {
+        if detail.state_label == "commit_ready"
+            && self.fail_commit_ready_upsert.swap(0, Ordering::SeqCst) > 0
+        {
+            return Err(anyhow::anyhow!(
+                "scripted commit-ready session detail upsert failure"
+            ));
+        }
         self.inner
-            .upsert_runtime_session_detail(workspace_dir, detail)
+            .upsert_runtime_session_detail(workspace_dir, detail)?;
+        if detail.state_label == "commit_ready"
+            && self
+                .fault_after_commit_ready_upsert
+                .swap(0, Ordering::SeqCst)
+                > 0
+        {
+            let mirror_path = agent_session_detail_record_path(
+                std::path::Path::new(&detail.worktree_path)
+                    .parent()
+                    .expect("slot worktree should be rooted in the pool"),
+                &detail.session_key,
+            );
+            if mirror_path.is_file() {
+                std::fs::remove_file(&mirror_path)
+                    .expect("pre-commit-ready session detail mirror should be removable");
+            }
+            std::fs::create_dir_all(
+                mirror_path
+                    .parent()
+                    .expect("session detail mirror should have a parent"),
+            )
+            .expect("session detail mirror parent should exist");
+            std::fs::create_dir(&mirror_path)
+                .expect("directory collision should reject the commit-ready mirror write");
+            self.fail_next_runtime_projection_load
+                .store(1, Ordering::SeqCst);
+        }
+        Ok(())
     }
 
     fn upsert_runtime_task_dispatch_block(
@@ -476,6 +579,9 @@ impl PlanningAuthorityPort for FaultyPlanningAuthorityAdapter {
         workspace_dir: &str,
         record: &PlanningAuthorityDistributorQueueRecord,
     ) -> anyhow::Result<()> {
+        if self.fail_distributor_queue_upsert.swap(0, Ordering::SeqCst) > 0 {
+            return Err(anyhow::anyhow!("scripted distributor queue upsert failure"));
+        }
         self.inner
             .upsert_runtime_distributor_queue_record(workspace_dir, record)
     }
@@ -2241,6 +2347,235 @@ fn dispatch_orchestrator_reports_excluded_leased_task_when_idle_slots_remain() {
             .status_detail
             .as_deref()
             .is_some_and(|detail| detail.contains("excluded:"))
+    );
+}
+
+fn run_completed_worker_with_finalize_fault(
+    repo_name: &str,
+    epoch_id: u64,
+    configure_fault: impl FnOnce(&FaultyPlanningAuthorityAdapter),
+) -> (ParallelModeControlPlaneWorkerEventKind, Vec<String>) {
+    let repo = TempGitRepo::new(repo_name);
+    let workspace_dir = repo.workspace_dir();
+    let inner_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let authority = Arc::new(FaultyPlanningAuthorityAdapter::new(inner_authority.clone()));
+    let planning = build_test_planning_services(inner_authority);
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+
+    let service = Arc::new(ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    service
+        .enqueue_dispatch_commands_for_event(
+            &workspace_dir,
+            ParallelModeRuntimeEvent::TaskIntakeCommitted,
+            &planning_projection,
+            Some(epoch_id),
+        )
+        .expect("dispatch command should enqueue");
+    configure_fault(authority.as_ref());
+
+    let worker_port = Arc::new(CompletingParallelAgentWorkerPort::default());
+    let (event_sender, event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir,
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id,
+            enqueue_trigger: None,
+            planning,
+            worker_port,
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
+    let worker_event = match event_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("worker finalization event should arrive")
+    {
+        ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
+        ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice) => {
+            panic!("unexpected runtime notice: {notice}")
+        }
+    };
+    (worker_event.kind, worker_event.notices)
+}
+
+#[test]
+fn completed_worker_stream_does_not_complete_when_commit_ready_persistence_fails() {
+    let (kind, notices) = run_completed_worker_with_finalize_fault(
+        "orchestrator-commit-ready-persistence-failed",
+        237,
+        FaultyPlanningAuthorityAdapter::fail_commit_ready_upsert,
+    );
+
+    assert_eq!(kind, ParallelModeControlPlaneWorkerEventKind::StreamFailed);
+    assert!(
+        notices.iter().any(|notice| {
+            notice.contains("scripted commit-ready session detail upsert failure")
+        })
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("stage: commit_ready_persistence"))
+    );
+}
+
+#[test]
+fn commit_ready_authority_commit_survives_mirror_and_follow_up_projection_failures() {
+    let repo = TempGitRepo::new("commit-ready-authority-proof-with-broken-mirror");
+    let workspace_dir = repo.workspace_dir();
+    let inner_authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let authority = Arc::new(FaultyPlanningAuthorityAdapter::new(inner_authority));
+    let service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    let lease = service
+        .acquire_slot_lease(
+            &workspace_dir,
+            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+        )
+        .expect("slot lease should be acquired");
+    service
+        .mark_workspace_slot_running(&lease.worktree_path)
+        .expect("slot should transition to running");
+    authority.fault_after_commit_ready_upsert();
+
+    let outcome = service
+        .mark_workspace_commit_ready(
+            &lease.worktree_path,
+            "official refresh committed before mirror projection",
+        )
+        .expect("authority commit should make commit-ready durable")
+        .expect("running lease should transition to commit-ready");
+
+    assert!(outcome.notices.iter().any(|notice| {
+        notice.contains("commit-ready authority proof was persisted")
+            && notice.contains("runtime mirror could not be updated")
+    }));
+    let read_error = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect_err("the scripted post-commit projection read should remain unused");
+    assert!(
+        read_error
+            .to_string()
+            .contains("scripted one-shot runtime projection load failure")
+    );
+    let projection = authority
+        .load_runtime_projections(&workspace_dir)
+        .expect("authority projection should recover after the one-shot failure");
+    let detail = projection
+        .session_details
+        .iter()
+        .find(|detail| detail.session_key == lease.session_key())
+        .expect("authority should retain the committed session detail");
+    assert_eq!(detail.state_label, "commit_ready");
+    assert_eq!(detail.completion_state_label, "commit_ready");
+    assert_eq!(
+        detail.authority_refresh_outcome,
+        "official refresh committed before mirror projection"
+    );
+}
+
+#[test]
+fn completed_worker_stream_does_not_complete_when_distributor_enqueue_fails() {
+    let (kind, notices) = run_completed_worker_with_finalize_fault(
+        "orchestrator-distributor-enqueue-failed",
+        238,
+        FaultyPlanningAuthorityAdapter::fail_distributor_queue_upsert,
+    );
+
+    assert_eq!(kind, ParallelModeControlPlaneWorkerEventKind::StreamFailed);
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("scripted distributor queue upsert failure"))
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("stage: distributor_enqueue"))
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| { notice.contains("durable commit-ready result remains available") })
+    );
+}
+
+#[test]
+fn missing_terminal_event_preserves_unconfirmed_producer_receipt_reason() {
+    let repo = TempGitRepo::new("orchestrator-missing-terminal-unconfirmed");
+    let workspace_dir = repo.workspace_dir();
+    let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let planning = build_test_planning_services(authority.clone());
+    bootstrap_planning_workspace(&planning, &workspace_dir);
+    commit_ready_queue_task(&planning, &workspace_dir);
+
+    let service = Arc::new(ParallelModeService::new(
+        authority,
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    ));
+    let planning_projection = planning
+        .runtime
+        .load_runtime_projection_or_invalid(&workspace_dir);
+    service
+        .enqueue_dispatch_commands_for_event(
+            &workspace_dir,
+            ParallelModeRuntimeEvent::TaskIntakeCommitted,
+            &planning_projection,
+            Some(239),
+        )
+        .expect("dispatch command should enqueue");
+
+    let (event_sender, event_receiver) = mpsc::channel::<ParallelModeOrchestratorLoopEvent>();
+    let result =
+        service.run_dispatch_orchestrator_tick(ParallelModeDispatchOrchestratorTickRequest {
+            workspace_directory: workspace_dir,
+            trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+            epoch_id: 239,
+            enqueue_trigger: None,
+            planning,
+            worker_port: Arc::new(MissingTerminalUnconfirmedParallelAgentWorkerPort),
+            turn_service: ParallelModeTurnService::new((*service).clone()),
+            event_sender,
+        });
+
+    assert_eq!(result.outcome.launched_task_ids.len(), 1);
+    let worker_event = match event_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("worker failure event should arrive")
+    {
+        ParallelModeOrchestratorLoopEvent::WorkerEvent(event) => event,
+        ParallelModeOrchestratorLoopEvent::ConversationRuntimeNotice(notice) => {
+            panic!("unexpected runtime notice: {notice}")
+        }
+    };
+    assert_eq!(
+        worker_event.kind,
+        ParallelModeControlPlaneWorkerEventKind::StreamFailed
+    );
+    assert!(worker_event.notices.iter().any(|notice| {
+        notice.contains(
+            "recovery pending: upstream completed; application delivery unconfirmed (disconnected)",
+        )
+    }));
+    assert!(
+        worker_event
+            .notices
+            .iter()
+            .any(|notice| notice.contains("Unconfirmed(Disconnected)"))
     );
 }
 

@@ -102,21 +102,29 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
     }
     fn run_new_thread_stream(
         &self,
-        _cwd: &str,
+        cwd: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
-        Ok(())
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            &event_sender,
+            "test-thread",
+            cwd,
+        )
     }
     fn run_turn_stream(
         &self,
-        _thread_id: &str,
+        thread_id: &str,
         _prompt: &str,
         _options: crate::domain::conversation::ConversationTurnOptions,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
-        Ok(())
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            &event_sender,
+            thread_id,
+            "/tmp/test-workspace",
+        )
     }
 }
 struct FakeGithubReviewPollerPort;
@@ -161,11 +169,15 @@ struct CountingParallelAgentWorkerPort {
 impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
     fn run_isolated_new_thread_stream(
         &self,
-        _request: ParallelAgentWorkerStreamRequest<'_>,
-        _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
+        request: ParallelAgentWorkerStreamRequest<'_>,
+        event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
         self.launch_count.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+            &event_sender,
+            "test-worker-thread",
+            request.cwd,
+        )
     }
 }
 
@@ -601,34 +613,48 @@ fn post_turn_evaluation_completed_message(
 }
 
 fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id: &str) {
+    let correlation = runtime.app_mut().core_runtime.begin_test_turn_submission();
     runtime
         .app_mut()
         .core_runtime
-        .dispatch_input(CoreInput::ConversationStreamUpdated(
-            TurnStreamEvent::ThreadPrepared {
+        .dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::ThreadPrepared {
                 thread_id: thread_id.to_string(),
                 title: "Post-turn test".to_string(),
                 cwd: "/tmp/workspace".to_string(),
             },
-        ));
+        });
     runtime
         .app_mut()
         .core_runtime
-        .dispatch_input(CoreInput::ConversationStreamUpdated(
-            TurnStreamEvent::TurnStarted {
+        .dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
             },
-        ));
+        });
     runtime
         .app_mut()
         .core_runtime
-        .dispatch_input(CoreInput::ConversationTurnCompleted {
-            turn_id: turn_id.to_string(),
-            changed_planning_file_paths: Vec::new(),
-            execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture::capture_failed(
-                "/tmp/workspace",
-                "test capture skipped".to_string(),
-            ),
+        .dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::TurnTerminal {
+                receipt: crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
+                    thread_id,
+                    turn_id,
+                    Vec::new(),
+                )
+                .with_application_delivery(
+                    crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
+                ),
+                execution_snapshot_capture: Some(
+                    PlanningTurnExecutionSnapshotCapture::capture_failed(
+                        "/tmp/workspace",
+                        "test capture skipped".to_string(),
+                    ),
+                ),
+            },
         });
 }
 
@@ -990,15 +1016,17 @@ fn conversation_stream_background_message_is_routed_through_runtime_reducer() {
      */
     let mut runtime = make_test_runtime();
     runtime.take_redraw_request();
+    let correlation = runtime.app.core_runtime.begin_test_turn_submission();
 
     runtime
         .app
         .tx
-        .send(BackgroundMessage::ConversationStream(
-            ConversationStreamEvent::StatusUpdated {
+        .send(BackgroundMessage::ConversationStream {
+            correlation,
+            event: ConversationStreamEvent::StatusUpdated {
                 text: "provider is thinking".to_string(),
             },
-        ))
+        })
         .expect("conversation stream message should enqueue");
 
     runtime.poll_background_messages();

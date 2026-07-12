@@ -1,6 +1,9 @@
 // Parallel slot completion report is the domain contract captured by the supervisor
 // when a worker finishes its assigned task.
 use crate::application::service::parallel_mode::ParallelModeOfficialCompletionReport;
+use crate::application::service::parallel_mode::turn::{
+    ParallelOfficialCompletionFinalizeFailureStage, ParallelOfficialCompletionFinalizeOutcome,
+};
 // Official completion refresh turns that report back into planning ledger state and
 // a runtime projection inbound surfaces can use for follow-up gating.
 use crate::application::service::planning::{
@@ -58,16 +61,31 @@ impl PostTurnEvaluationExecutor {
         } else {
             "turn completed with planning file changes; protected planning files were reconciled before official refresh"
         };
+        let Some(expected_lease) = request.expected_parallel_slot_lease() else {
+            return OfficialCompletionCapture::NotApplicable;
+        };
 
-        match self.parallel_mode_turn_service.begin_official_completion(
-            &request.workspace_directory,
-            &request.completed_turn_id,
-            None,
-            latest_main_reply,
-            Some(validation_summary),
-        ) {
+        match self
+            .parallel_mode_turn_service
+            .begin_official_completion_for_lease(
+                expected_lease,
+                &request.completed_turn_id,
+                None,
+                latest_main_reply,
+                Some(validation_summary),
+            ) {
             Ok(Some(report)) => OfficialCompletionCapture::Captured(Box::new(report)),
-            Ok(None) => OfficialCompletionCapture::NotApplicable,
+            Ok(None) => {
+                let detail =
+                    "parallel completion capture was rejected because the captured slot lease generation is stale"
+                        .to_string();
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RefreshFailed,
+                    &detail,
+                    &context.current_runtime_projection,
+                );
+                OfficialCompletionCapture::Failed { detail }
+            }
             Err(error) => {
                 // Capture failure means the supervisor could not create the
                 // official-completion report; the current runtime projection is
@@ -89,8 +107,9 @@ impl PostTurnEvaluationExecutor {
                     )
                 });
                 let detail = format!("parallel completion capture failed: {error}");
-                self.parallel_mode_turn_service
-                    .mark_official_completion_failed(&request.workspace_directory, &detail);
+                let _ = self
+                    .parallel_mode_turn_service
+                    .mark_official_completion_failed_for_lease_with_notice(expected_lease, &detail);
                 self.record_planning_worker_failure(
                     PlanningWorkerStatus::RefreshFailed,
                     &detail,
@@ -126,6 +145,23 @@ impl PostTurnEvaluationExecutor {
                 runtime_notices: Vec::new(),
             };
         }
+        let Some(expected_lease) = request.expected_parallel_slot_lease() else {
+            let detail =
+                "official completion paused because the captured slot lease is unavailable"
+                    .to_string();
+            self.record_planning_worker_failure(
+                PlanningWorkerStatus::RefreshFailed,
+                &detail,
+                current_projection,
+            );
+            return OfficialCompletionRefreshOutcome {
+                runtime_projection: current_projection
+                    .clone()
+                    .with_auto_follow_pause_reason(&detail),
+                runtime_notices: vec![detail],
+            };
+        };
+        let mut runtime_notices = Vec::new();
         let preparation = self
             .planning_feature
             .worker
@@ -144,21 +180,20 @@ impl PostTurnEvaluationExecutor {
             );
         let prepared = match preparation {
             PlanningPostTurnOfficialCompletionPreparation::Blocked(blocked) => {
-                if request
-                    .continuation_permit
-                    .with_current(|| {
-                        self.parallel_mode_turn_service
-                            .mark_official_completion_failed(
-                                &request.workspace_directory,
-                                &blocked.failure_detail,
-                            )
-                    })
-                    .is_none()
-                {
+                let Some(failure_notice) = request.continuation_permit.with_current(|| {
+                    self.parallel_mode_turn_service
+                        .mark_official_completion_failed_for_lease_with_notice(
+                            expected_lease,
+                            &blocked.failure_detail,
+                        )
+                }) else {
                     return OfficialCompletionRefreshOutcome {
                         runtime_projection: current_projection.clone(),
-                        runtime_notices: Vec::new(),
+                        runtime_notices,
                     };
+                };
+                if let Some(notice) = failure_notice {
+                    runtime_notices.push(notice);
                 }
                 event_log::emit_lazy("official_completion_refresh_blocked", || {
                     post_turn_event_detail(
@@ -183,7 +218,7 @@ impl PostTurnEvaluationExecutor {
                 );
                 return OfficialCompletionRefreshOutcome {
                     runtime_projection: blocked.failure_projection,
-                    runtime_notices: Vec::new(),
+                    runtime_notices,
                 };
             }
             PlanningPostTurnOfficialCompletionPreparation::Ready(prepared) => prepared,
@@ -197,10 +232,9 @@ impl PostTurnEvaluationExecutor {
 
         // Supervisor may emit a runtime notice when the reservation moves into
         // refreshing; preserve that notice so shell status reflects the state change.
-        let mut runtime_notices = Vec::new();
         let Some(refreshing_notice) = request.continuation_permit.with_current(|| {
             self.parallel_mode_turn_service
-                .mark_official_completion_refreshing(&request.workspace_directory)
+                .mark_official_completion_refreshing_for_lease(expected_lease)
         }) else {
             return OfficialCompletionRefreshOutcome {
                 runtime_projection: current_projection.clone(),
@@ -208,7 +242,22 @@ impl PostTurnEvaluationExecutor {
             };
         };
         if let Some(notice) = refreshing_notice {
-            runtime_notices.push(notice);
+            runtime_notices.push(notice.clone());
+            if notice.contains("captured slot lease generation is stale") {
+                let runtime_projection = prepared
+                    .planning_workspace_projection()
+                    .clone()
+                    .with_auto_follow_pause_reason(&notice);
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RefreshFailed,
+                    &notice,
+                    &runtime_projection,
+                );
+                return OfficialCompletionRefreshOutcome {
+                    runtime_projection,
+                    runtime_notices,
+                };
+            }
         }
         event_log::emit_lazy("official_completion_refresh_started", || {
             post_turn_event_detail(
@@ -263,18 +312,20 @@ impl PostTurnEvaluationExecutor {
                 // Execution failure leaves the official completion reservation blocked
                 // until an operator or later recovery path repairs planning state.
                 let detail = format!("official completion refresh failed: {error}");
-                if request
-                    .continuation_permit
-                    .with_current(|| {
-                        self.parallel_mode_turn_service
-                            .mark_official_completion_failed(&request.workspace_directory, &detail)
-                    })
-                    .is_none()
-                {
+                let Some(failure_notice) = request.continuation_permit.with_current(|| {
+                    self.parallel_mode_turn_service
+                        .mark_official_completion_failed_for_lease_with_notice(
+                            expected_lease,
+                            &detail,
+                        )
+                }) else {
                     return OfficialCompletionRefreshOutcome {
                         runtime_projection: current_projection.clone(),
                         runtime_notices,
                     };
+                };
+                if let Some(notice) = failure_notice {
+                    runtime_notices.push(notice);
                 }
                 let failure_projection = prepared
                     .planning_workspace_projection()
@@ -438,21 +489,20 @@ impl PostTurnEvaluationExecutor {
             });
         }
         if let Some(failure_detail) = finalization.blocked_failure_detail.as_ref() {
-            if request
-                .continuation_permit
-                .with_current(|| {
-                    self.parallel_mode_turn_service
-                        .mark_official_completion_failed(
-                            &request.workspace_directory,
-                            failure_detail,
-                        )
-                })
-                .is_none()
-            {
+            let Some(failure_notice) = request.continuation_permit.with_current(|| {
+                self.parallel_mode_turn_service
+                    .mark_official_completion_failed_for_lease_with_notice(
+                        expected_lease,
+                        failure_detail,
+                    )
+            }) else {
                 return OfficialCompletionRefreshOutcome {
                     runtime_projection: current_projection.clone(),
                     runtime_notices,
                 };
+            };
+            if let Some(notice) = failure_notice {
+                runtime_notices.push(notice);
             }
             event_log::emit_lazy("official_completion_refresh_blocked", || {
                 post_turn_event_detail(
@@ -489,28 +539,27 @@ impl PostTurnEvaluationExecutor {
             .expect("successful official completion finalization should carry success copy");
         let Some(epoch_id) = context.parallel_automation_epoch_id else {
             let detail = "official completion cannot finalize without the captured parallel automation epoch";
-            if request
-                .continuation_permit
-                .with_current(|| {
-                    self.parallel_mode_turn_service
-                        .mark_official_completion_failed(&request.workspace_directory, detail)
-                })
-                .is_none()
-            {
+            let Some(failure_notice) = request.continuation_permit.with_current(|| {
+                self.parallel_mode_turn_service
+                    .mark_official_completion_failed_for_lease_with_notice(expected_lease, detail)
+            }) else {
                 return OfficialCompletionRefreshOutcome {
                     runtime_projection: current_projection.clone(),
                     runtime_notices,
                 };
+            };
+            if let Some(notice) = failure_notice {
+                runtime_notices.push(notice);
             }
             return OfficialCompletionRefreshOutcome {
                 runtime_projection: runtime_projection.with_auto_follow_pause_reason(detail),
                 runtime_notices,
             };
         };
-        let Some(commit_ready_notices) = request.continuation_permit.with_current(|| {
+        let Some(commit_ready_outcome) = request.continuation_permit.with_current(|| {
             self.parallel_mode_turn_service
-                .mark_official_completion_success_for_post_turn(
-                    &request.workspace_directory,
+                .mark_official_completion_success_for_post_turn_for_lease(
+                    expected_lease,
                     &authority_refresh_outcome,
                 )
         }) else {
@@ -519,16 +568,123 @@ impl PostTurnEvaluationExecutor {
                 runtime_notices,
             };
         };
-        runtime_notices.extend(commit_ready_notices);
-        runtime_notices.extend(
-            self.parallel_mode_turn_service
-                .run_official_completion_delivery_tick_for_post_turn(
-                    &request.workspace_directory,
-                    planning_workspace_directory,
-                    epoch_id,
-                    &request.continuation_permit,
-                ),
-        );
+        let expected_lease = match commit_ready_outcome {
+            ParallelOfficialCompletionFinalizeOutcome::Durable {
+                notices,
+                expected_lease,
+                ..
+            } => {
+                runtime_notices.extend(notices);
+                expected_lease
+            }
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                let detail =
+                    official_completion_durable_finalization_failure_detail(stage, &notices);
+                runtime_notices.extend(notices);
+                let Some(failure_notice) = request.continuation_permit.with_current(|| {
+                    self.parallel_mode_turn_service
+                        .mark_official_completion_failed_for_lease_with_notice(
+                            expected_lease,
+                            &detail,
+                        )
+                }) else {
+                    return OfficialCompletionRefreshOutcome {
+                        runtime_projection: current_projection.clone(),
+                        runtime_notices,
+                    };
+                };
+                if let Some(notice) = failure_notice {
+                    runtime_notices.push(notice);
+                }
+                runtime_projection = runtime_projection.with_auto_follow_pause_reason(&detail);
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RefreshFailed,
+                    &detail,
+                    &runtime_projection,
+                );
+                event_log::emit_lazy("official_completion_refresh_finalization_failed", || {
+                    post_turn_event_detail(
+                        super::post_turn_log_context(context, request),
+                        "official_completion",
+                        "durable_finalization_failed",
+                        Some("pause_auto_follow"),
+                        Some(&runtime_projection),
+                        [
+                            (
+                                "planning_workspace_directory",
+                                json!(planning_workspace_directory),
+                            ),
+                            ("refresh_order", json!(completion_report.refresh_order)),
+                            ("failure_stage", json!(stage.label())),
+                            ("failure_detail", json!(detail)),
+                        ],
+                    )
+                });
+                return OfficialCompletionRefreshOutcome {
+                    runtime_projection,
+                    runtime_notices,
+                };
+            }
+        };
+        let delivery_outcome = self
+            .parallel_mode_turn_service
+            .run_official_completion_delivery_tick_for_post_turn(
+                &expected_lease,
+                planning_workspace_directory,
+                epoch_id,
+                &request.continuation_permit,
+            );
+        let durable_proof = match delivery_outcome {
+            ParallelOfficialCompletionFinalizeOutcome::Durable { notices, proof, .. } => {
+                runtime_notices.extend(notices);
+                proof
+            }
+            ParallelOfficialCompletionFinalizeOutcome::Failed { notices, stage } => {
+                let detail =
+                    official_completion_durable_finalization_failure_detail(stage, &notices);
+                runtime_notices.extend(notices);
+                if !request.continuation_permit.is_current() {
+                    return OfficialCompletionRefreshOutcome {
+                        runtime_projection: current_projection.clone(),
+                        runtime_notices,
+                    };
+                }
+                runtime_projection = runtime_projection.with_auto_follow_pause_reason(&detail);
+                self.record_planning_worker_failure(
+                    PlanningWorkerStatus::RefreshFailed,
+                    &detail,
+                    &runtime_projection,
+                );
+                event_log::emit_lazy("official_completion_refresh_finalization_failed", || {
+                    post_turn_event_detail(
+                        super::post_turn_log_context(context, request),
+                        "official_completion",
+                        "durable_finalization_failed",
+                        Some("pause_auto_follow"),
+                        Some(&runtime_projection),
+                        [
+                            (
+                                "planning_workspace_directory",
+                                json!(planning_workspace_directory),
+                            ),
+                            ("refresh_order", json!(completion_report.refresh_order)),
+                            ("failure_stage", json!(stage.label())),
+                            ("failure_detail", json!(detail)),
+                        ],
+                    )
+                });
+                return OfficialCompletionRefreshOutcome {
+                    runtime_projection,
+                    runtime_notices,
+                };
+            }
+        };
+        if !request.continuation_permit.is_current() {
+            return OfficialCompletionRefreshOutcome {
+                runtime_projection: current_projection.clone(),
+                runtime_notices,
+            };
+        }
         event_log::emit_lazy("official_completion_refresh_finalized", || {
             post_turn_event_detail(
                 super::post_turn_log_context(context, request),
@@ -546,6 +702,7 @@ impl PostTurnEvaluationExecutor {
                         "authority_refresh_outcome_chars",
                         json!(authority_refresh_outcome.chars().count()),
                     ),
+                    ("durable_proof", json!(durable_proof.label())),
                     ("runtime_notices_count", json!(runtime_notices.len())),
                 ],
             )
@@ -556,4 +713,18 @@ impl PostTurnEvaluationExecutor {
             runtime_notices,
         }
     }
+}
+
+fn official_completion_durable_finalization_failure_detail(
+    stage: ParallelOfficialCompletionFinalizeFailureStage,
+    notices: &[String],
+) -> String {
+    let reason = notices
+        .first()
+        .map(String::as_str)
+        .unwrap_or("required durable proof was not recorded");
+    format!(
+        "official completion durable finalization failed at {}: {reason}",
+        stage.label()
+    )
 }

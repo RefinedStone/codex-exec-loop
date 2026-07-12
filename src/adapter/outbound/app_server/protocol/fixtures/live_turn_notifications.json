@@ -93,7 +93,14 @@
     "params": {
       "threadId": "thread-live",
       "turn": {
-        "id": "turn-live"
+        "id": "turn-live",
+        "items": [],
+        "status": "completed",
+        "error": null,
+        "itemsView": "notLoaded",
+        "startedAt": 1783842000,
+        "completedAt": 1783842002,
+        "durationMs": 2500
       }
     }
   }

@@ -24,6 +24,12 @@ use crate::application::service::conversation_runtime_event::ConversationStreamE
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalResolution,
 };
+use crate::domain::turn_terminal::{
+    ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
+    ConversationTurnError, ConversationTurnItemsView, ConversationTurnObservations,
+    ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
+    ConversationTurnTerminalUncertainty,
+};
 use crate::subprocess::{self, ManagedChild};
 
 use super::approval::{
@@ -31,12 +37,13 @@ use super::approval::{
     INTERACTIVE_APPROVAL_METHODS, UNINSPECTABLE_APPROVAL_METHODS, parse_interactive_approval,
 };
 use super::protocol::{
-    AccountReadResponse, AppServerNotification, InitializeResponse, ThreadListParams,
-    ThreadListResponse, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
-    ThreadStartParams, ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse,
-    TurnNotificationHandling, TurnStartParams, TurnStartResponse, handle_turn_notification,
+    AccountReadResponse, ActiveTurnNotificationState, AppServerNotification, InitializeResponse,
+    ThreadListParams, ThreadListResponse, ThreadReadResponse, ThreadResumeParams,
+    ThreadResumeResponse, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
+    TurnInterruptResponse, TurnNotificationHandling, TurnStartParams, TurnStartResponse,
+    handle_turn_notification,
 };
-use super::{AppServerEventSender, AppServerEventTrySendError};
+use super::{AppServerEventSender, AppServerEventTrySendError, bounded_terminal_receipt};
 
 const RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
 const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -51,6 +58,15 @@ const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 const DEFAULT_INTERRUPT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_INTERRUPT_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_INTERRUPT_RETRY_LIMIT: usize = 3;
+const DEFAULT_TERMINAL_GRACE_TIMEOUT: Duration = Duration::from_secs(1);
+const DEFAULT_TERMINAL_DELIVERY_TIMEOUT: Duration = Duration::from_millis(250);
+const DEFAULT_TERMINAL_DELIVERY_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+const MAX_PENDING_TURN_NOTIFICATIONS_PER_POLL: usize = 32;
+const MAX_PENDING_TURN_NOTIFICATION_DRAIN_TIME: Duration = Duration::from_millis(2);
+const MAX_GRACE_RECOVERY_LINES: usize = 16;
+const MAX_GRACE_RECOVERY_TIME: Duration = Duration::from_millis(5);
+const MAX_TRANSPORT_CLOSING_RECOVERY_TIME: Duration = Duration::from_millis(100);
+const MAX_TRANSPORT_CLOSING_RECOVERY_BYTES: usize = MAX_PENDING_NOTIFICATION_BYTES;
 // Keep at most one fully materialized raw line between the pipe readers and the
 // JSON consumer. A larger count-only queue would multiply the 128 MiB history
 // allowance before parsed notification byte accounting can take effect.
@@ -212,6 +228,9 @@ pub(super) struct AppServerConnectionConfig {
     interrupt_total_timeout: Duration,
     interrupt_retry_backoff: Duration,
     interrupt_retry_limit: usize,
+    terminal_grace_timeout: Duration,
+    terminal_delivery_timeout: Duration,
+    terminal_delivery_retry_interval: Duration,
 }
 
 impl Default for AppServerConnectionConfig {
@@ -232,6 +251,9 @@ impl Default for AppServerConnectionConfig {
             interrupt_total_timeout: DEFAULT_INTERRUPT_TOTAL_TIMEOUT,
             interrupt_retry_backoff: DEFAULT_INTERRUPT_RETRY_BACKOFF,
             interrupt_retry_limit: DEFAULT_INTERRUPT_RETRY_LIMIT,
+            terminal_grace_timeout: DEFAULT_TERMINAL_GRACE_TIMEOUT,
+            terminal_delivery_timeout: DEFAULT_TERMINAL_DELIVERY_TIMEOUT,
+            terminal_delivery_retry_interval: DEFAULT_TERMINAL_DELIVERY_RETRY_INTERVAL,
         }
     }
 }
@@ -941,6 +963,71 @@ impl TransportFailure {
     }
 }
 
+enum TurnStreamNotificationProgress {
+    Continue,
+    NonRetryErrorCandidate(ConversationTurnError),
+    Terminal(ConversationTurnTerminalReceipt),
+}
+
+#[derive(Clone, Copy)]
+enum BufferedTurnRecoveryMode {
+    GraceExpired { deadline: Instant },
+    TransportClosing,
+}
+
+impl BufferedTurnRecoveryMode {
+    fn grace_expired(interrupt_completion_deadline: Option<Instant>) -> Self {
+        Self::GraceExpired {
+            deadline: bounded_grace_recovery_deadline(interrupt_completion_deadline),
+        }
+    }
+
+    fn write_deadline(self) -> Option<Instant> {
+        match self {
+            Self::GraceExpired { deadline } => Some(deadline),
+            Self::TransportClosing => None,
+        }
+    }
+
+    fn is_transport_closing(self) -> bool {
+        matches!(self, Self::TransportClosing)
+    }
+}
+
+fn terminal_receipt_after_grace_deadline(
+    thread_id: &str,
+    turn_id: &str,
+    error: ConversationTurnError,
+    changed_planning_file_paths: Vec<String>,
+) -> ConversationTurnTerminalReceipt {
+    ConversationTurnTerminalReceipt::new(
+        thread_id,
+        turn_id,
+        ConversationTurnTerminalOutcome::Unknown {
+            reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+            observed_error: Some(error),
+        },
+    )
+    .with_turn_metadata(ConversationTurnItemsView::NotLoaded, None, None, None)
+    .with_observations(ConversationTurnObservations::new(
+        changed_planning_file_paths,
+    ))
+}
+
+fn bounded_grace_recovery_deadline(interrupt_completion_deadline: Option<Instant>) -> Instant {
+    let recovery_deadline = Instant::now() + MAX_GRACE_RECOVERY_TIME;
+    interrupt_completion_deadline.map_or(recovery_deadline, |interrupt_deadline| {
+        recovery_deadline.min(interrupt_deadline)
+    })
+}
+
+fn bounded_transport_closing_deadline(interrupt_completion_deadline: Option<Instant>) -> Instant {
+    let recovery_deadline = Instant::now() + MAX_TRANSPORT_CLOSING_RECOVERY_TIME;
+    interrupt_completion_deadline.map_or(recovery_deadline, |interrupt_deadline| {
+        recovery_deadline.min(interrupt_deadline)
+    })
+}
+
 pub(super) struct AppServerConnection {
     /*
      * AppServerConnection owns the child handle and stdin writer, while stdout/stderr are moved into reader
@@ -959,6 +1046,7 @@ pub(super) struct AppServerConnection {
     client_version: String,
     initialized: bool,
     config: AppServerConnectionConfig,
+    terminal_recovery_write_deadline: Option<Instant>,
     approval_broker: Arc<AppServerApprovalBroker>,
     approval_mode: AppServerApprovalMode,
     interrupt_signal: AppServerTurnInterruptSignal,
@@ -1031,6 +1119,7 @@ impl AppServerConnection {
             client_version,
             initialized: false,
             config,
+            terminal_recovery_write_deadline: None,
             approval_broker,
             approval_mode,
             interrupt_signal,
@@ -1208,115 +1297,206 @@ impl AppServerConnection {
         interrupt_signal: &AppServerTurnInterruptSignal,
         observed_interrupt_generation: u64,
         event_sender: &dyn AppServerEventSender,
-    ) -> Result<()> {
+    ) -> Result<ConversationTurnTerminalReceipt> {
         /*
          * Turn streaming interleaves three input sources: child process exit, global interrupt generation, and
          * stdout/stderr lines. Pending notifications are drained before blocking on rx so notifications that arrived
          * during `turn/start` response waiting are not delayed until a new line appears.
          */
-        let mut changed_planning_file_paths = Vec::new();
+        let mut notification_state = ActiveTurnNotificationState::new();
+        let mut non_retry_error_candidate = None;
         let mut interrupt_sent = false;
         let mut interrupt_completion_deadline = None;
         let mut last_interrupt_generation_attempted = observed_interrupt_generation;
 
         loop {
-            self.ensure_transport_healthy()?;
-            if let Some(status) = self.child.try_wait()? {
-                return Err(self.error_with_diagnostics(format!(
-                    "app-server exited before the turn completed: {status}"
-                )));
+            if let Some(receipt) = self.drain_pending_turn_notifications(
+                thread_id,
+                turn_id,
+                &mut notification_state,
+                event_sender,
+                &mut non_retry_error_candidate,
+            )? {
+                return Ok(self.deliver_terminal_receipt(receipt, event_sender));
             }
-
-            let interrupt_generation = interrupt_signal.current_generation();
-            if !interrupt_sent
-                && interrupt_generation > observed_interrupt_generation
-                && interrupt_generation > last_interrupt_generation_attempted
-            {
-                /*
-                 * The interrupt signal is process-wide, while this loop owns exactly one
-                 * active turn. After translating the first newer generation into
-                 * `turn/interrupt`, later increments are left as UI intent instead of
-                 * repeatedly sending the same app-server method for this turn id.
-                 */
-                last_interrupt_generation_attempted = interrupt_generation;
-                interrupt_completion_deadline = Some(self.interrupt_active_turn(
+            if !self.pending_notifications.is_empty() {
+                self.advance_turn_interrupt_state(
                     thread_id,
                     turn_id,
                     event_sender,
                     interrupt_signal,
                     observed_interrupt_generation,
-                )?);
-                interrupt_sent = true;
+                    &mut interrupt_sent,
+                    &mut interrupt_completion_deadline,
+                    &mut last_interrupt_generation_attempted,
+                )?;
+                continue;
             }
 
-            if self.process_pending_turn_notification(
+            if self.transport_failure.current().is_some() {
+                if let Some(receipt) = self.drain_transport_closing_turn_lines(
+                    thread_id,
+                    turn_id,
+                    &mut notification_state,
+                    event_sender,
+                    &mut non_retry_error_candidate,
+                    interrupt_completion_deadline,
+                )? {
+                    return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                }
+                self.ensure_transport_healthy()?;
+            }
+            if let Some(status) = self.child.try_wait()? {
+                if let Some(receipt) = self.drain_transport_closing_turn_lines(
+                    thread_id,
+                    turn_id,
+                    &mut notification_state,
+                    event_sender,
+                    &mut non_retry_error_candidate,
+                    interrupt_completion_deadline,
+                )? {
+                    return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                }
+                return Err(self.error_with_diagnostics(format!(
+                    "app-server exited before the turn completed: {status}"
+                )));
+            }
+
+            self.advance_turn_interrupt_state(
                 thread_id,
                 turn_id,
-                &mut changed_planning_file_paths,
                 event_sender,
-            )? {
-                return Ok(());
+                interrupt_signal,
+                observed_interrupt_generation,
+                &mut interrupt_sent,
+                &mut interrupt_completion_deadline,
+                &mut last_interrupt_generation_attempted,
+            )?;
+            if !self.pending_notifications.is_empty() {
+                continue;
             }
 
-            if interrupt_completion_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                let message = "app-server acknowledged the stop request but did not terminate the active turn within the bounded interrupt deadline; terminating the active app-server process tree";
-                return Err(self.fail_closed_interrupt(event_sender, message));
+            let grace_expired = non_retry_error_candidate
+                .as_ref()
+                .is_some_and(|(_, deadline)| Instant::now() >= *deadline);
+            if grace_expired {
+                if let Some(receipt) = self.scan_grace_expired_turn_lines(
+                    thread_id,
+                    turn_id,
+                    &mut notification_state,
+                    event_sender,
+                    &mut non_retry_error_candidate,
+                    interrupt_completion_deadline,
+                )? {
+                    return Ok(self.deliver_terminal_receipt(receipt, event_sender));
+                }
+                // The recovery scan and its no-UI response share the interrupt
+                // deadline. Re-check it before synthesizing Unknown so an explicit
+                // stop cannot be converted into a grace-expired receipt.
+                self.advance_turn_interrupt_state(
+                    thread_id,
+                    turn_id,
+                    event_sender,
+                    interrupt_signal,
+                    observed_interrupt_generation,
+                    &mut interrupt_sent,
+                    &mut interrupt_completion_deadline,
+                    &mut last_interrupt_generation_attempted,
+                )?;
+                if !self.pending_notifications.is_empty() {
+                    continue;
+                }
+                let error = non_retry_error_candidate
+                    .as_ref()
+                    .expect("expired grace candidate remains present after buffered line drain")
+                    .0
+                    .clone();
+                let receipt = terminal_receipt_after_grace_deadline(
+                    thread_id,
+                    turn_id,
+                    error,
+                    notification_state.changed_planning_file_paths().to_vec(),
+                );
+                return Ok(self.deliver_terminal_receipt(receipt, event_sender));
             }
 
-            let receive_timeout = interrupt_completion_deadline
-                .map(|deadline| {
-                    self.config
-                        .poll_interval
-                        .min(deadline.saturating_duration_since(Instant::now()))
-                })
-                .unwrap_or(self.config.poll_interval);
+            let now = Instant::now();
+            let mut receive_timeout = self.config.poll_interval;
+            if let Some(deadline) = interrupt_completion_deadline {
+                receive_timeout = receive_timeout.min(deadline.saturating_duration_since(now));
+            }
+            if let Some((_, deadline)) = non_retry_error_candidate.as_ref() {
+                receive_timeout = receive_timeout.min(deadline.saturating_duration_since(now));
+            }
             let received = self.rx.recv_timeout(receive_timeout);
-            self.ensure_transport_healthy()?;
             match received {
-                Ok(AppServerLine::Stderr(line)) => self.diagnostics.record_stderr(line),
-                Ok(AppServerLine::Stdout(line)) => {
-                    let value = self.parse_json_line(&line)?;
-
-                    if self.handle_server_request(
-                        &value,
-                        Some(event_sender),
-                        Some(BoundApprovalContext {
-                            thread_id,
-                            turn_id,
-                            interrupt: ApprovalInterruptContext {
-                                signal: interrupt_signal,
-                                observed_generation: observed_interrupt_generation,
-                            },
-                        }),
-                    )? {
-                        continue;
-                    }
-
-                    if let Some(notification) = AppServerNotification::from_value(value) {
-                        if self.handle_turn_stream_notification(
-                            notification,
-                            thread_id,
-                            turn_id,
-                            &mut changed_planning_file_paths,
-                            event_sender,
-                        )? {
-                            return Ok(());
-                        }
-                    } else {
-                        self.diagnostics.record_warning(
-                            "app-server sent a non-notification JSON message while streaming the active turn"
-                                .to_string(),
-                        );
+                Ok(line) => {
+                    let progress = self.process_turn_stream_line(
+                        line,
+                        thread_id,
+                        turn_id,
+                        &mut notification_state,
+                        event_sender,
+                        interrupt_signal,
+                        observed_interrupt_generation,
+                    )?;
+                    if let Some(receipt) = self
+                        .apply_turn_notification_progress(progress, &mut non_retry_error_candidate)
+                    {
+                        return Ok(self.deliver_terminal_receipt(receipt, event_sender));
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => self.ensure_transport_healthy()?,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.ensure_transport_healthy()?;
                     return Err(self.error_with_diagnostics(
                         "app-server pipe closed while waiting for turn events",
                     ));
                 }
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn advance_turn_interrupt_state(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        event_sender: &dyn AppServerEventSender,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+        interrupt_sent: &mut bool,
+        interrupt_completion_deadline: &mut Option<Instant>,
+        last_interrupt_generation_attempted: &mut u64,
+    ) -> Result<()> {
+        let interrupt_generation = interrupt_signal.current_generation();
+        if !*interrupt_sent
+            && interrupt_generation > observed_interrupt_generation
+            && interrupt_generation > *last_interrupt_generation_attempted
+        {
+            /*
+             * The interrupt signal is process-wide, while this loop owns exactly one
+             * active turn. After translating the first newer generation into
+             * `turn/interrupt`, later increments are left as UI intent instead of
+             * repeatedly sending the same app-server method for this turn id.
+             */
+            *last_interrupt_generation_attempted = interrupt_generation;
+            *interrupt_completion_deadline = Some(self.interrupt_active_turn(
+                thread_id,
+                turn_id,
+                event_sender,
+                interrupt_signal,
+                observed_interrupt_generation,
+            )?);
+            *interrupt_sent = true;
+        }
+
+        if interrupt_completion_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            let message = "app-server acknowledged the stop request but did not terminate the active turn within the bounded interrupt deadline; terminating the active app-server process tree";
+            return Err(self.fail_closed_interrupt(event_sender, message));
+        }
+
+        Ok(())
     }
 
     fn interrupt_active_turn(
@@ -1545,7 +1725,65 @@ impl AppServerConnection {
     }
 
     fn send_json_line(&mut self, value: Value) -> Result<()> {
+        if let Some(deadline) = self.terminal_recovery_write_deadline {
+            return self.send_json_line_with_terminal_recovery_deadline(value, deadline);
+        }
         self.send_json_line_with_timeout(value, self.config.response_timeout, None, None)
+    }
+
+    fn send_json_line_with_terminal_recovery_deadline(
+        &mut self,
+        value: Value,
+        deadline: Instant,
+    ) -> Result<()> {
+        /*
+         * Terminal recovery must not inherit the normal three-second write cap.
+         * It shares one absolute deadline with the bounded line scan and only
+         * taints the transport on failure. The typed terminal/unknown receipt can
+         * then leave this stack before the next request performs process cleanup.
+         */
+        if let Some(message) = self.transport_failure.current() {
+            return Err(self.error_with_diagnostics(format!(
+                "app-server transport failed during terminal recovery: {message}"
+            )));
+        }
+        let mut frame = serde_json::to_vec(&value)?;
+        frame.push(b'\n');
+        if frame.len() > MAX_APP_SERVER_WRITE_FRAME_BYTES {
+            return Err(self.taint_terminal_recovery_transport(format!(
+                "app-server terminal-recovery JSON-RPC frame exceeded the {MAX_APP_SERVER_WRITE_FRAME_BYTES}-byte limit"
+            )));
+        }
+        let (acknowledgement, receiver) = mpsc::sync_channel(1);
+        match self.stdin_writer.try_send(AppServerWriteRequest {
+            frame,
+            acknowledgement,
+        }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                return Err(self.taint_terminal_recovery_transport(
+                    "app-server stdin writer queue was occupied during terminal recovery",
+                ));
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err(self.taint_terminal_recovery_transport(
+                    "app-server stdin writer disconnected during terminal recovery",
+                ));
+            }
+        }
+
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(self.taint_terminal_recovery_transport(message)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self.taint_terminal_recovery_transport(
+                "app-server did not acknowledge a terminal-recovery JSON-RPC frame before its bounded deadline",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+                self.taint_terminal_recovery_transport(
+                    "app-server stdin writer closed during terminal recovery without acknowledging the frame",
+                ),
+            ),
+        }
     }
 
     fn send_json_line_with_timeout(
@@ -1720,6 +1958,24 @@ impl AppServerConnection {
                 .map_err(ResponseWaitFailure::correlation_unknown)?;
             match received {
                 Ok(AppServerLine::Stderr(line)) => self.diagnostics.record_stderr(line),
+                Ok(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stderr,
+                    termination,
+                }) => self.diagnostics.record_warning(format!(
+                    "app-server stderr reader {} while waiting for a response",
+                    termination.description()
+                )),
+                Ok(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stdout,
+                    termination,
+                }) => {
+                    return Err(ResponseWaitFailure::correlation_unknown(
+                        self.fail_transport(format!(
+                            "app-server stdout reader {} while waiting for response id={request_id}",
+                            termination.description()
+                        )),
+                    ));
+                }
                 Ok(AppServerLine::Stdout(line)) => {
                     let value = self
                         .parse_json_line(&line)
@@ -2286,28 +2542,308 @@ impl AppServerConnection {
         Ok(())
     }
 
-    fn process_pending_turn_notification(
+    fn drain_pending_turn_notifications(
         &mut self,
         thread_id: &str,
         turn_id: &str,
-        changed_planning_file_paths: &mut Vec<String>,
+        notification_state: &mut ActiveTurnNotificationState,
         event_sender: &dyn AppServerEventSender,
-    ) -> Result<bool> {
+        non_retry_error_candidate: &mut Option<(ConversationTurnError, Instant)>,
+    ) -> Result<Option<ConversationTurnTerminalReceipt>> {
         /*
-         * Pending notifications are consumed before blocking on the reader channel so
-         * deltas observed during response waiting are reduced before later stdout
-         * lines. This keeps the stream reducer's changed-file and completion state in
-         * protocol order.
+         * Pending notifications were already received while turn/start was waiting for
+         * its response. Reduce one bounded batch in FIFO order, then return control to
+         * the loop for interrupt deadline checks. Grace and transport classification
+         * remain deferred while entries are left, so a queued authoritative terminal
+         * still wins in a later batch.
          */
-        let Some(notification) = self.pending_notifications.pop_front() else {
-            return Ok(false);
+        let drain_deadline = Instant::now() + MAX_PENDING_TURN_NOTIFICATION_DRAIN_TIME;
+        for _ in 0..MAX_PENDING_TURN_NOTIFICATIONS_PER_POLL {
+            let Some(notification) = self.pending_notifications.pop_front() else {
+                return Ok(None);
+            };
+            let progress = self.handle_turn_stream_notification(
+                notification,
+                thread_id,
+                turn_id,
+                notification_state,
+                event_sender,
+            )?;
+            if let Some(receipt) =
+                self.apply_turn_notification_progress(progress, non_retry_error_candidate)
+            {
+                return Ok(Some(receipt));
+            }
+            if Instant::now() >= drain_deadline {
+                break;
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn drain_transport_closing_turn_lines(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        notification_state: &mut ActiveTurnNotificationState,
+        event_sender: &dyn AppServerEventSender,
+        non_retry_error_candidate: &mut Option<(ConversationTurnError, Instant)>,
+        interrupt_completion_deadline: Option<Instant>,
+    ) -> Result<Option<ConversationTurnTerminalReceipt>> {
+        let recovery_deadline = bounded_transport_closing_deadline(interrupt_completion_deadline);
+        let mut accumulated_bytes = 0usize;
+        let mut terminal_receipt = None;
+
+        loop {
+            let remaining = recovery_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(terminal_receipt);
+            }
+            let line = match self.rx.recv_timeout(remaining) {
+                Ok(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stdout,
+                    ..
+                }) => return Ok(terminal_receipt),
+                Ok(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stderr,
+                    ..
+                }) => continue,
+                Ok(line) => line,
+                Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
+                    return Ok(terminal_receipt);
+                }
+            };
+            let encoded_bytes = line.encoded_size_bytes();
+            if encoded_bytes
+                > MAX_TRANSPORT_CLOSING_RECOVERY_BYTES.saturating_sub(accumulated_bytes)
+            {
+                self.diagnostics.record_warning(format!(
+                    "app-server transport-closing recovery exceeded its {MAX_TRANSPORT_CLOSING_RECOVERY_BYTES}-byte bound"
+                ));
+                return Ok(terminal_receipt);
+            }
+            accumulated_bytes += encoded_bytes;
+            if terminal_receipt.is_some() {
+                continue;
+            }
+
+            let progress = self.process_recovery_turn_line(
+                line,
+                thread_id,
+                turn_id,
+                notification_state,
+                event_sender,
+                BufferedTurnRecoveryMode::TransportClosing,
+            )?;
+            if let Some(receipt) =
+                self.apply_turn_notification_progress(progress, non_retry_error_candidate)
+            {
+                terminal_receipt = Some(receipt);
+            }
+        }
+    }
+
+    fn scan_grace_expired_turn_lines(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        notification_state: &mut ActiveTurnNotificationState,
+        event_sender: &dyn AppServerEventSender,
+        non_retry_error_candidate: &mut Option<(ConversationTurnError, Instant)>,
+        interrupt_completion_deadline: Option<Instant>,
+    ) -> Result<Option<ConversationTurnTerminalReceipt>> {
+        let recovery_mode = BufferedTurnRecoveryMode::grace_expired(interrupt_completion_deadline);
+        let recovery_deadline = recovery_mode
+            .write_deadline()
+            .expect("grace recovery always carries a write deadline");
+        let mut drained_lines = 0;
+        while drained_lines < MAX_GRACE_RECOVERY_LINES {
+            let remaining = recovery_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            let line = match self.rx.recv_timeout(remaining) {
+                Ok(line) => line,
+                Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(self.fail_transport(
+                        "app-server line channel disconnected during grace-expired terminal recovery",
+                    ));
+                }
+            };
+            if let AppServerLine::ReaderFinished {
+                source: AppServerReaderSource::Stdout,
+                termination,
+            } = &line
+            {
+                return Err(self.fail_transport(format!(
+                    "app-server stdout reader {} during grace-expired terminal recovery",
+                    termination.description()
+                )));
+            }
+            if matches!(
+                &line,
+                AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stderr,
+                    ..
+                }
+            ) {
+                continue;
+            }
+            drained_lines += 1;
+            let progress = self.process_recovery_turn_line(
+                line,
+                thread_id,
+                turn_id,
+                notification_state,
+                event_sender,
+                recovery_mode,
+            )?;
+            if let Some(receipt) =
+                self.apply_turn_notification_progress(progress, non_retry_error_candidate)
+            {
+                return Ok(Some(receipt));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn process_recovery_turn_line(
+        &mut self,
+        line: AppServerLine,
+        thread_id: &str,
+        turn_id: &str,
+        notification_state: &mut ActiveTurnNotificationState,
+        event_sender: &dyn AppServerEventSender,
+        recovery_mode: BufferedTurnRecoveryMode,
+    ) -> Result<TurnStreamNotificationProgress> {
+        let line = match line {
+            AppServerLine::Stderr(line) => {
+                self.diagnostics.record_stderr(line);
+                return Ok(TurnStreamNotificationProgress::Continue);
+            }
+            AppServerLine::Stdout(line) => line,
+            AppServerLine::ReaderFinished { .. } => {
+                return Ok(TurnStreamNotificationProgress::Continue);
+            }
+        };
+        let value = self.parse_json_line(&line)?;
+
+        let is_server_request = value.get("id").is_some_and(|id| !id.is_null())
+            && value.get("method").and_then(Value::as_str).is_some();
+        if is_server_request && recovery_mode.is_transport_closing() {
+            self.diagnostics.record_warning(
+                "app-server server request skipped during terminal recovery after transport closure"
+                    .to_string(),
+            );
+            return Ok(TurnStreamNotificationProgress::Continue);
+        }
+        if is_server_request {
+            // A live grace-expiry scan uses the no-UI decline path, but every write
+            // shares the scan's absolute deadline instead of the normal response
+            // timeout. A failed write taints the connection without hiding a typed
+            // terminal or grace-expired receipt already available to this stack.
+            let previous_deadline = self.terminal_recovery_write_deadline.replace(
+                recovery_mode
+                    .write_deadline()
+                    .expect("live grace recovery always carries a write deadline"),
+            );
+            let response = self.handle_server_request(&value, None, None);
+            self.terminal_recovery_write_deadline = previous_deadline;
+            if response.is_err() {
+                self.diagnostics.record_warning(
+                    "app-server server request response failed during terminal recovery; continuing the bounded terminal scan"
+                        .to_string(),
+                );
+            }
+            return Ok(TurnStreamNotificationProgress::Continue);
+        }
+        let Some(notification) = AppServerNotification::from_value(value) else {
+            self.diagnostics.record_warning(
+                "app-server sent a non-notification JSON message during bounded terminal recovery"
+                    .to_string(),
+            );
+            return Ok(TurnStreamNotificationProgress::Continue);
         };
 
         self.handle_turn_stream_notification(
             notification,
             thread_id,
             turn_id,
-            changed_planning_file_paths,
+            notification_state,
+            event_sender,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_turn_stream_line(
+        &mut self,
+        line: AppServerLine,
+        thread_id: &str,
+        turn_id: &str,
+        notification_state: &mut ActiveTurnNotificationState,
+        event_sender: &dyn AppServerEventSender,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+    ) -> Result<TurnStreamNotificationProgress> {
+        let line = match line {
+            AppServerLine::Stderr(line) => {
+                self.diagnostics.record_stderr(line);
+                return Ok(TurnStreamNotificationProgress::Continue);
+            }
+            AppServerLine::ReaderFinished {
+                source: AppServerReaderSource::Stderr,
+                termination,
+            } => {
+                self.diagnostics.record_warning(format!(
+                    "app-server stderr reader {} while streaming the active turn",
+                    termination.description()
+                ));
+                return Ok(TurnStreamNotificationProgress::Continue);
+            }
+            AppServerLine::ReaderFinished {
+                source: AppServerReaderSource::Stdout,
+                termination,
+            } => {
+                return Err(self.fail_transport(format!(
+                    "app-server stdout reader {} before the active turn produced a terminal notification",
+                    termination.description()
+                )));
+            }
+            AppServerLine::Stdout(line) => line,
+        };
+        let value = self.parse_json_line(&line)?;
+
+        if self.handle_server_request(
+            &value,
+            Some(event_sender),
+            Some(BoundApprovalContext {
+                thread_id,
+                turn_id,
+                interrupt: ApprovalInterruptContext {
+                    signal: interrupt_signal,
+                    observed_generation: observed_interrupt_generation,
+                },
+            }),
+        )? {
+            return Ok(TurnStreamNotificationProgress::Continue);
+        }
+
+        let Some(notification) = AppServerNotification::from_value(value) else {
+            self.diagnostics.record_warning(
+                "app-server sent a non-notification JSON message while streaming the active turn"
+                    .to_string(),
+            );
+            return Ok(TurnStreamNotificationProgress::Continue);
+        };
+
+        self.handle_turn_stream_notification(
+            notification,
+            thread_id,
+            turn_id,
+            notification_state,
             event_sender,
         )
     }
@@ -2317,9 +2853,9 @@ impl AppServerConnection {
         notification: AppServerNotification,
         thread_id: &str,
         turn_id: &str,
-        changed_planning_file_paths: &mut Vec<String>,
+        notification_state: &mut ActiveTurnNotificationState,
         event_sender: &dyn AppServerEventSender,
-    ) -> Result<bool> {
+    ) -> Result<TurnStreamNotificationProgress> {
         /*
          * protocol::handle_turn_notification owns payload translation into domain
          * stream events. This connection layer keeps the transport responsibilities:
@@ -2329,21 +2865,114 @@ impl AppServerConnection {
         if !notification.should_defer_to_turn_stream() {
             self.diagnostics
                 .record_warning(notification.warning_text("while streaming the active turn"));
-            return Ok(false);
+            return Ok(TurnStreamNotificationProgress::Continue);
         }
 
         match handle_turn_notification(
             &notification,
             thread_id,
             turn_id,
-            changed_planning_file_paths,
+            notification_state,
             event_sender,
         )? {
-            TurnNotificationHandling::Consumed => Ok(false),
-            TurnNotificationHandling::Completed => Ok(true),
+            TurnNotificationHandling::Consumed | TurnNotificationHandling::RetryObserved { .. } => {
+                Ok(TurnStreamNotificationProgress::Continue)
+            }
+            TurnNotificationHandling::NonRetryErrorCandidate { error } => Ok(
+                TurnStreamNotificationProgress::NonRetryErrorCandidate(error),
+            ),
+            TurnNotificationHandling::Terminal { receipt } => {
+                Ok(TurnStreamNotificationProgress::Terminal(receipt))
+            }
+            TurnNotificationHandling::DuplicateTerminal { receipt } => {
+                self.diagnostics.record_warning(
+                    "app-server repeated a terminal notification; preserving the first terminal receipt"
+                        .to_string(),
+                );
+                Ok(TurnStreamNotificationProgress::Terminal(receipt))
+            }
             TurnNotificationHandling::Dropped(warning) => {
                 self.diagnostics.record_warning(warning);
-                Ok(false)
+                Ok(TurnStreamNotificationProgress::Continue)
+            }
+        }
+    }
+
+    fn apply_turn_notification_progress(
+        &self,
+        progress: TurnStreamNotificationProgress,
+        non_retry_error_candidate: &mut Option<(ConversationTurnError, Instant)>,
+    ) -> Option<ConversationTurnTerminalReceipt> {
+        match progress {
+            TurnStreamNotificationProgress::Continue => None,
+            TurnStreamNotificationProgress::NonRetryErrorCandidate(error) => {
+                if non_retry_error_candidate.is_none() {
+                    *non_retry_error_candidate =
+                        Some((error, Instant::now() + self.config.terminal_grace_timeout));
+                }
+                None
+            }
+            TurnStreamNotificationProgress::Terminal(receipt) => Some(receipt),
+        }
+    }
+
+    fn deliver_terminal_receipt(
+        &mut self,
+        receipt: ConversationTurnTerminalReceipt,
+        event_sender: &dyn AppServerEventSender,
+    ) -> ConversationTurnTerminalReceipt {
+        let receipt = bounded_terminal_receipt(receipt);
+        let confirmed_receipt = receipt
+            .clone()
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+        let delivery_deadline = Instant::now() + self.config.terminal_delivery_timeout;
+
+        loop {
+            match event_sender.try_send_prebounded(ConversationStreamEvent::TurnTerminal {
+                receipt: confirmed_receipt.clone(),
+            }) {
+                Ok(()) => return confirmed_receipt,
+                Err(AppServerEventTrySendError::Disconnected) => {
+                    self.diagnostics.record_warning(
+                        "terminal receipt application sink disconnected before acknowledgement"
+                            .to_string(),
+                    );
+                    return receipt.with_application_delivery(
+                        ConversationTurnApplicationDelivery::Unconfirmed(
+                            ConversationTurnApplicationDeliveryFailure::Disconnected,
+                        ),
+                    );
+                }
+                Err(AppServerEventTrySendError::Full)
+                    if self.config.terminal_delivery_timeout.is_zero() =>
+                {
+                    self.diagnostics
+                        .record_warning("terminal receipt application sink was full".to_string());
+                    return receipt.with_application_delivery(
+                        ConversationTurnApplicationDelivery::Unconfirmed(
+                            ConversationTurnApplicationDeliveryFailure::Full,
+                        ),
+                    );
+                }
+                Err(AppServerEventTrySendError::Full) => {
+                    let now = Instant::now();
+                    if now >= delivery_deadline {
+                        self.diagnostics.record_warning(
+                            "terminal receipt application sink remained full through its bounded delivery deadline"
+                                .to_string(),
+                        );
+                        return receipt.with_application_delivery(
+                            ConversationTurnApplicationDelivery::Unconfirmed(
+                                ConversationTurnApplicationDeliveryFailure::DeadlineExceeded,
+                            ),
+                        );
+                    }
+                    thread::sleep(
+                        self.config
+                            .terminal_delivery_retry_interval
+                            .min(delivery_deadline.saturating_duration_since(now)),
+                    );
+                }
             }
         }
     }
@@ -2418,6 +3047,19 @@ impl AppServerConnection {
                         }
                     }
                 }
+                Ok(AppServerLine::ReaderFinished {
+                    source,
+                    termination,
+                }) => {
+                    self.diagnostics.record_warning(format!(
+                        "app-server {} reader {} while draining notices",
+                        source.description(),
+                        termination.description()
+                    ));
+                    if source == AppServerReaderSource::Stdout {
+                        break;
+                    }
+                }
                 Err(_) => break,
             }
         }
@@ -2445,6 +3087,17 @@ impl AppServerConnection {
         self.error_with_diagnostics(format!("app-server transport failed: {message}"))
     }
 
+    fn taint_terminal_recovery_transport(&self, message: impl Into<String>) -> anyhow::Error {
+        self.transport_failure.record(message);
+        let message = self
+            .transport_failure
+            .current()
+            .unwrap_or_else(|| "unknown terminal-recovery transport failure".to_string());
+        self.error_with_diagnostics(format!(
+            "app-server transport tainted during terminal recovery: {message}"
+        ))
+    }
+
     fn terminate_child(&mut self) {
         if let Err(error) = self.child.terminate_and_wait() {
             tracing::warn!(error = %error, "app-server process containment cleanup failed");
@@ -2462,11 +3115,55 @@ impl Drop for AppServerConnection {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppServerReaderSource {
+    Stdout,
+    Stderr,
+}
+
+impl AppServerReaderSource {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppServerReaderTermination {
+    EndOfFile,
+    Failed,
+}
+
+impl AppServerReaderTermination {
+    fn description(self) -> &'static str {
+        match self {
+            Self::EndOfFile => "reached EOF",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 enum AppServerLine {
     // Stdout carries JSON-RPC responses and notifications.
     Stdout(String),
     // Stderr is diagnostics-only and never parsed as protocol.
     Stderr(String),
+    // ReaderFinished is ordered after every line produced by that pipe reader.
+    ReaderFinished {
+        source: AppServerReaderSource,
+        termination: AppServerReaderTermination,
+    },
+}
+
+impl AppServerLine {
+    fn encoded_size_bytes(&self) -> usize {
+        match self {
+            Self::Stdout(line) | Self::Stderr(line) => line.len(),
+            Self::ReaderFinished { .. } => 0,
+        }
+    }
 }
 
 enum BoundedLineRead {
@@ -2522,22 +3219,42 @@ fn spawn_pipe_reader<T: std::io::Read + Send + 'static>(
     // A blocking send is intentional backpressure: a short, valid notification burst must not be
     // reclassified as a transport failure merely because the consumer lost one scheduler timeslice.
     thread::spawn(move || {
-        let source = if is_stderr { "stderr" } else { "stdout" };
+        let source = if is_stderr {
+            AppServerReaderSource::Stderr
+        } else {
+            AppServerReaderSource::Stdout
+        };
         let mut reader = BufReader::new(pipe);
         loop {
             let line = match read_bounded_line(&mut reader, maximum_bytes) {
                 Ok(BoundedLineRead::Line(line)) => line,
-                Ok(BoundedLineRead::EndOfFile) => return,
+                Ok(BoundedLineRead::EndOfFile) => {
+                    let _ = tx.send(AppServerLine::ReaderFinished {
+                        source,
+                        termination: AppServerReaderTermination::EndOfFile,
+                    });
+                    return;
+                }
                 Ok(BoundedLineRead::LimitExceeded) => {
                     transport_failure.record(format!(
-                        "app-server {source} line exceeded the {maximum_bytes}-byte limit"
+                        "app-server {} line exceeded the {maximum_bytes}-byte limit",
+                        source.description()
                     ));
+                    let _ = tx.send(AppServerLine::ReaderFinished {
+                        source,
+                        termination: AppServerReaderTermination::Failed,
+                    });
                     return;
                 }
                 Err(error) => {
                     transport_failure.record(format!(
-                        "failed to read app-server {source} safely: {error}"
+                        "failed to read app-server {} safely: {error}",
+                        source.description()
                     ));
+                    let _ = tx.send(AppServerLine::ReaderFinished {
+                        source,
+                        termination: AppServerReaderTermination::Failed,
+                    });
                     return;
                 }
             };
@@ -2561,8 +3278,8 @@ mod tests {
     use std::io::{BufReader, Cursor};
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
-    use std::sync::Arc;
     use std::sync::mpsc::{self, SyncSender};
+    use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -2575,10 +3292,12 @@ mod tests {
     use super::app_server_process_environment_variable_allowed;
     use super::diagnostics::{ConnectionDiagnostics, PendingNotifications};
     use super::{
-        API_KEY_AUTH_ENV_VAR, APP_SERVER_LINE_CHANNEL_CAPACITY, AppServerApprovalMode,
-        AppServerConnection, AppServerConnectionConfig, AppServerLine, AppServerStdinWriter,
-        AppServerTurnInterruptSignal, ApprovalInterruptContext, BoundApprovalContext,
-        BoundedLineRead, CANCELLED_SERVER_REQUEST_METHODS, DISABLE_LOGIN_SHELL_OVERRIDE,
+        API_KEY_AUTH_ENV_VAR, APP_SERVER_LINE_CHANNEL_CAPACITY, APP_SERVER_WRITE_CHANNEL_CAPACITY,
+        AppServerApprovalMode, AppServerConnection, AppServerConnectionConfig,
+        AppServerEventSender, AppServerEventTrySendError, AppServerLine, AppServerReaderSource,
+        AppServerReaderTermination, AppServerStdinWriter, AppServerTurnInterruptSignal,
+        ApprovalInterruptContext, BoundApprovalContext, BoundedLineRead,
+        CANCELLED_SERVER_REQUEST_METHODS, DISABLE_LOGIN_SHELL_OVERRIDE,
         LOCALLY_SUPPORTED_SERVER_REQUEST_METHODS, MAX_PENDING_NOTIFICATIONS,
         MAX_RESPONSE_TIMEOUT_SECS, MAX_STDERR_LINE_BYTES, MAX_STDOUT_LINE_BYTES,
         METHOD_SPECIFIC_UNSUPPORTED_SERVER_REQUEST_METHODS, PROCESS_ENVIRONMENT_ENV_VAR,
@@ -2605,7 +3324,97 @@ mod tests {
     use crate::domain::conversation::{
         ConversationApprovalDecision, ConversationApprovalResolution,
     };
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
+        ConversationTurnItemsView, ConversationTurnTerminalOutcome,
+        ConversationTurnTerminalReceipt, ConversationTurnTerminalUncertainty,
+    };
     use crate::subprocess;
+
+    fn completed_turn_notification(thread_id: &str, turn_id: &str) -> Value {
+        json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {
+                    "id": turn_id,
+                    "items": [],
+                    "status": "completed"
+                }
+            }
+        })
+    }
+
+    struct RecoveryHandoffEventSender {
+        release_terminal: Mutex<Option<mpsc::Sender<()>>>,
+        statuses_before_release: Mutex<usize>,
+        events: Mutex<Vec<ConversationStreamEvent>>,
+    }
+
+    impl RecoveryHandoffEventSender {
+        fn new(release_terminal: mpsc::Sender<()>) -> Self {
+            Self::after_statuses(1, release_terminal)
+        }
+
+        fn after_statuses(
+            statuses_before_release: usize,
+            release_terminal: mpsc::Sender<()>,
+        ) -> Self {
+            Self {
+                release_terminal: Mutex::new(Some(release_terminal)),
+                statuses_before_release: Mutex::new(statuses_before_release),
+                events: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn events(&self) -> Vec<ConversationStreamEvent> {
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    impl AppServerEventSender for RecoveryHandoffEventSender {
+        fn try_send_prebounded(
+            &self,
+            event: ConversationStreamEvent,
+        ) -> std::result::Result<(), AppServerEventTrySendError> {
+            if matches!(event, ConversationStreamEvent::StatusUpdated { .. }) {
+                let should_release = {
+                    let mut remaining = self
+                        .statuses_before_release
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    *remaining = remaining.saturating_sub(1);
+                    *remaining == 0
+                };
+                if should_release
+                    && let Some(release_terminal) = self
+                        .release_terminal
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take()
+                {
+                    let _ = release_terminal.send(());
+                }
+            }
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(event);
+            Ok(())
+        }
+    }
+
+    fn confirmed_completed_receipt(
+        thread_id: &str,
+        turn_id: &str,
+        changed_planning_file_paths: Vec<String>,
+    ) -> ConversationTurnTerminalReceipt {
+        ConversationTurnTerminalReceipt::completed(thread_id, turn_id, changed_planning_file_paths)
+            .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed)
+    }
 
     fn bound_approval_context<'a>(
         signal: &'a AppServerTurnInterruptSignal,
@@ -4481,15 +5290,7 @@ mod tests {
                 "summary": "stream config warning"
             }
         }));
-        harness.send_stdout(json!({
-            "method": "turn/completed",
-            "params": {
-                "threadId": "thread-1",
-                "turn": {
-                    "id": "turn-1"
-                }
-            }
-        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
         let (event_sender, event_receiver) = mpsc::channel();
 
         harness
@@ -4509,9 +5310,8 @@ mod tests {
                 ConversationStreamEvent::StatusUpdated {
                     text: "thread status: running".to_string(),
                 },
-                ConversationStreamEvent::TurnCompleted {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: Vec::new(),
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: confirmed_completed_receipt("thread-1", "turn-1", Vec::new()),
                 },
             ]
         );
@@ -4520,6 +5320,1271 @@ mod tests {
         assert_contains_warning(&warnings, "non-notification JSON message");
         assert_contains_warning(&warnings, "stream side warning");
         assert_contains_warning(&warnings, "stream config warning");
+    }
+
+    #[test]
+    fn retry_error_keeps_stream_open_until_confirmed_completion() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "method": "error",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "willRetry": true,
+                "error": {
+                    "message": "temporary upstream overload",
+                    "codexErrorInfo": "serverOverloaded"
+                }
+            }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("retry should continue to the authoritative completion");
+
+        assert!(receipt.is_completed_and_confirmed());
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                ConversationStreamEvent::TurnRetrying { error, .. },
+                ConversationStreamEvent::TurnTerminal { receipt }
+            ] if error.message == "temporary upstream overload"
+                && receipt.is_completed_and_confirmed()
+        ));
+    }
+
+    #[test]
+    fn non_retry_error_without_final_turn_expires_to_confirmed_unknown() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_grace_timeout = Duration::from_millis(2);
+        harness.send_stdout(json!({
+            "method": "error",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "willRetry": false,
+                "error": {
+                    "message": "non-retry stream failure",
+                    "additionalDetails": "final turn omitted"
+                }
+            }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("live transport should close the grace deadline with an unknown receipt");
+
+        assert!(matches!(
+            receipt.outcome,
+            ConversationTurnTerminalOutcome::Unknown {
+                reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+                observed_error: Some(_),
+            }
+        ));
+        assert_eq!(receipt.items_view, ConversationTurnItemsView::NotLoaded);
+        assert_eq!(
+            receipt.application_delivery,
+            ConversationTurnApplicationDelivery::Confirmed
+        );
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+    }
+
+    #[test]
+    fn grace_recovery_declines_buffered_approval_without_waiting_for_operator_timeout() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_grace_timeout = Duration::ZERO;
+        harness.connection.config.approval_timeout = Duration::from_secs(5);
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
+                    "method": "error",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "willRetry": false,
+                        "error": { "message": "grace candidate" }
+                    }
+                })))
+        );
+        harness.send_stdout(json!({
+            "id": "approval-during-grace-recovery",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        }));
+        let (event_sender, event_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("grace recovery should return a typed unknown receipt");
+
+        assert!(started_at.elapsed() < Duration::from_millis(500));
+        assert!(matches!(
+            receipt.outcome,
+            ConversationTurnTerminalOutcome::Unknown {
+                reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+                ..
+            }
+        ));
+        assert_eq!(receipt.items_view, ConversationTurnItemsView::NotLoaded);
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+        assert_eq!(
+            harness.logged_json_lines(1)[0]["result"],
+            json!({ "decision": "decline" })
+        );
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn grace_recovery_write_deadline_taints_transport_without_hiding_unknown_receipt() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.response_timeout = Duration::from_secs(30);
+        harness.connection.config.approval_timeout = Duration::from_secs(30);
+        harness.connection.config.terminal_grace_timeout = Duration::ZERO;
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
+                    "method": "error",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "willRetry": false,
+                        "error": { "message": "grace candidate before blocked decline" }
+                    }
+                })))
+        );
+        harness.send_stdout(json!({
+            "id": "blocked-grace-recovery-approval",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        }));
+        let (blocked_writer_sender, blocked_writer_receiver) =
+            mpsc::sync_channel(APP_SERVER_WRITE_CHANNEL_CAPACITY);
+        let original_writer = std::mem::replace(
+            &mut harness.connection.stdin_writer,
+            AppServerStdinWriter {
+                sender: Some(blocked_writer_sender),
+                worker: None,
+            },
+        );
+        let (event_sender, event_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("a recovery write timeout must not hide the typed unknown receipt");
+        let blocked_writer =
+            std::mem::replace(&mut harness.connection.stdin_writer, original_writer);
+        drop(blocked_writer);
+        drop(blocked_writer_receiver);
+
+        assert!(started_at.elapsed() < Duration::from_millis(100));
+        assert!(matches!(
+            receipt.outcome,
+            ConversationTurnTerminalOutcome::Unknown {
+                reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+                ..
+            }
+        ));
+        assert_eq!(receipt.items_view, ConversationTurnItemsView::NotLoaded);
+        assert!(
+            harness
+                .connection
+                .transport_failure
+                .current()
+                .is_some_and(|message| message.contains("terminal-recovery JSON-RPC frame"))
+        );
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn pending_nonterminal_burst_yields_to_interrupt_safety_deadline() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.interrupt_total_timeout = Duration::ZERO;
+        for index in 0..super::MAX_PENDING_TURN_NOTIFICATIONS_PER_POLL * 2 {
+            assert!(
+                harness
+                    .connection
+                    .pending_notifications
+                    .try_push(notification(json!({
+                        "method": "thread/status/changed",
+                        "params": {
+                            "threadId": "thread-1",
+                            "status": { "type": format!("queued-{index}") }
+                        }
+                    })))
+            );
+        }
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        signal.request_stop_all_sessions();
+        let (event_sender, _event_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let error = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &signal,
+                observed_generation,
+                &event_sender,
+            )
+            .expect_err("interrupt safety deadline must preempt a pending nonterminal burst");
+
+        assert!(started_at.elapsed() < Duration::from_millis(500));
+        assert!(
+            error
+                .to_string()
+                .contains("stop request failed within the bounded app-server interrupt deadline")
+        );
+        assert!(!harness.connection.pending_notifications.is_empty());
+    }
+
+    #[test]
+    fn expired_interrupt_deadline_beats_simultaneous_grace_unknown() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_grace_timeout = Duration::ZERO;
+        harness.connection.config.interrupt_total_timeout = Duration::from_millis(2);
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
+                    "method": "error",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "willRetry": false,
+                        "error": { "message": "grace candidate racing with stop" }
+                    }
+                })))
+        );
+        harness.send_stdout(json!({ "id": 1, "result": {} }));
+        harness.send_stdout(json!({
+            "id": "approval-during-interrupt-deadline",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        }));
+        let signal = AppServerTurnInterruptSignal::default();
+        let observed_generation = signal.current_generation();
+        signal.request_stop_all_sessions();
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &signal,
+                observed_generation,
+                &event_sender,
+            )
+            .expect_err("an expired interrupt deadline must beat grace-expired Unknown");
+
+        let events = event_receiver.try_iter().collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ConversationStreamEvent::TurnInterruptRequestFailed { .. }
+        )));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ConversationStreamEvent::TurnTerminal { .. }))
+        );
+    }
+
+    #[test]
+    fn authoritative_failed_turn_replaces_non_retry_error_candidate() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "method": "error",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "willRetry": false,
+                "error": { "message": "candidate failure" }
+            }
+        }));
+        harness.send_stdout(json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-1",
+                    "items": [],
+                    "status": "failed",
+                    "error": {
+                        "message": "authoritative failure",
+                        "codexErrorInfo": "serverOverloaded"
+                    }
+                }
+            }
+        }));
+        let (event_sender, _event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("authoritative failed turn is a transport-success receipt");
+
+        assert!(matches!(
+            receipt.outcome,
+            ConversationTurnTerminalOutcome::Failed { ref error }
+                if error.message == "authoritative failure"
+        ));
+        assert!(!receipt.is_completed_and_confirmed());
+    }
+
+    #[test]
+    fn malformed_terminal_identity_returns_confirmed_unknown_receipt() {
+        for (params, missing_field) in [
+            (
+                json!({
+                    "turn": { "id": "turn-1", "items": [], "status": "completed" }
+                }),
+                "threadId",
+            ),
+            (
+                json!({
+                    "threadId": null,
+                    "turn": { "id": "turn-1", "items": [], "status": "completed" }
+                }),
+                "threadId",
+            ),
+            (
+                json!({
+                    "threadId": "",
+                    "turn": { "id": "turn-1", "items": [], "status": "completed" }
+                }),
+                "threadId",
+            ),
+            (
+                json!({
+                    "threadId": 7,
+                    "turn": { "id": "turn-1", "items": [], "status": "completed" }
+                }),
+                "threadId",
+            ),
+            (
+                json!({
+                    "threadId": "thread-1",
+                    "turn": { "items": [], "status": "completed" }
+                }),
+                "turn.id",
+            ),
+            (
+                json!({
+                    "threadId": "thread-1",
+                    "turn": { "id": null, "items": [], "status": "completed" }
+                }),
+                "turn.id",
+            ),
+            (
+                json!({
+                    "threadId": "thread-1",
+                    "turn": { "id": "", "items": [], "status": "completed" }
+                }),
+                "turn.id",
+            ),
+            (
+                json!({
+                    "threadId": "thread-1",
+                    "turn": { "id": 7, "items": [], "status": "completed" }
+                }),
+                "turn.id",
+            ),
+        ] {
+            let mut harness = TestConnection::new(true);
+            harness.send_stdout(json!({
+                "method": "turn/completed",
+                "params": params,
+            }));
+            let (event_sender, event_receiver) = mpsc::channel();
+
+            let receipt = harness
+                .connection
+                .wait_for_turn_stream(
+                    "thread-1",
+                    "turn-1",
+                    &AppServerTurnInterruptSignal::default(),
+                    0,
+                    &event_sender,
+                )
+                .expect("malformed terminal identity should remain a typed terminal fact");
+
+            assert!(matches!(
+                receipt.outcome,
+                ConversationTurnTerminalOutcome::Unknown {
+                    reason: ConversationTurnTerminalUncertainty::MissingRequiredIdentity {
+                        ref field
+                    },
+                    ..
+                } if field == missing_field
+            ));
+            assert_eq!(
+                receipt.application_delivery,
+                ConversationTurnApplicationDelivery::Confirmed
+            );
+            assert!(harness.connection.transport_failure.current().is_none());
+            assert_eq!(
+                event_receiver.try_iter().collect::<Vec<_>>(),
+                vec![ConversationStreamEvent::TurnTerminal {
+                    receipt: receipt.clone(),
+                }]
+            );
+            assert!(
+                harness
+                    .connection
+                    .child
+                    .try_wait()
+                    .expect("healthy child status should be observable")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn late_malformed_terminal_closes_the_next_turn_as_recovery_pending() {
+        let mut harness = TestConnection::new(true);
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turn": { "items": [], "status": "completed" }
+                    }
+                })))
+        );
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-next",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("a late terminal without identity should remain unknown");
+
+        assert_eq!(receipt.thread_id, "thread-1");
+        assert_eq!(receipt.turn_id, "turn-next");
+        assert!(matches!(
+            receipt.outcome,
+            ConversationTurnTerminalOutcome::Unknown {
+                reason: ConversationTurnTerminalUncertainty::MissingRequiredIdentity {
+                    ref field
+                },
+                ..
+            } if field == "turn.id"
+        ));
+        assert!(!receipt.is_completed_and_confirmed());
+        assert!(harness.connection.transport_failure.current().is_none());
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+    }
+
+    #[test]
+    fn queued_terminal_receipt_wins_over_exited_child() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        harness.send_stdout_eof();
+        harness
+            .connection
+            .child
+            .terminate_and_wait()
+            .expect("fixture child should exit after the terminal line was queued");
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("a queued terminal receipt must win over later child exit observation");
+
+        assert!(receipt.is_completed_and_confirmed());
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+    }
+
+    #[test]
+    fn exited_child_recovery_skips_buffered_approval_and_preserves_terminal() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.approval_timeout = Duration::from_secs(5);
+        harness.send_stdout(json!({
+            "id": "approval-before-exited-terminal",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        harness.send_stdout_eof();
+        harness
+            .connection
+            .child
+            .terminate_and_wait()
+            .expect("fixture child should exit after the terminal line was queued");
+        let (event_sender, event_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("closed-transport recovery should still find the queued terminal");
+
+        assert!(started_at.elapsed() < Duration::from_millis(500));
+        assert!(receipt.is_completed_and_confirmed());
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+        assert!(harness.logged_json_lines(0).is_empty());
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn exited_child_recovery_observes_capacity_one_reader_handoff() {
+        let mut harness = TestConnection::new(true);
+        let (line_sender, line_receiver) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        harness.connection.rx = line_receiver;
+        line_sender
+            .send(AppServerLine::Stdout(
+                json!({
+                    "method": "thread/status/changed",
+                    "params": {
+                        "threadId": "thread-1",
+                        "status": { "type": "busy" }
+                    }
+                })
+                .to_string(),
+            ))
+            .expect("the production-capacity channel should accept the first line");
+        let (release_terminal, await_status_delivery) = mpsc::channel();
+        let event_sender = RecoveryHandoffEventSender::new(release_terminal);
+        let terminal_sender = thread::spawn(move || {
+            await_status_delivery
+                .recv()
+                .expect("status reduction should release the terminal sender");
+            line_sender
+                .send(AppServerLine::Stdout(
+                    completed_turn_notification("thread-1", "turn-1").to_string(),
+                ))
+                .expect("reader handoff should retain the terminal line");
+            line_sender
+                .send(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stdout,
+                    termination: AppServerReaderTermination::EndOfFile,
+                })
+                .expect("reader handoff should finish with stdout EOF");
+        });
+        harness
+            .connection
+            .child
+            .terminate_and_wait()
+            .expect("fixture child should exit before terminal recovery");
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("bounded recovery should observe the capacity-one reader handoff");
+        terminal_sender
+            .join()
+            .expect("terminal sender should finish after the bounded handoff");
+
+        assert!(receipt.is_completed_and_confirmed());
+        assert_eq!(
+            event_sender.events(),
+            vec![
+                ConversationStreamEvent::StatusUpdated {
+                    text: "thread status: busy".to_string(),
+                },
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: receipt.clone(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn exited_child_recovery_waits_for_initial_capacity_one_terminal_handoff() {
+        let mut harness = TestConnection::new(true);
+        let (line_sender, line_receiver) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        harness.connection.rx = line_receiver;
+        harness
+            .connection
+            .child
+            .terminate_and_wait()
+            .expect("fixture child should exit before the reader handoff");
+        let handoff = Arc::new(Barrier::new(2));
+        let sender_handoff = handoff.clone();
+        let terminal_sender = thread::spawn(move || {
+            sender_handoff.wait();
+            line_sender
+                .send(AppServerLine::Stdout(
+                    completed_turn_notification("thread-1", "turn-1").to_string(),
+                ))
+                .expect("the terminal-only reader handoff should remain connected");
+            line_sender
+                .send(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stdout,
+                    termination: AppServerReaderTermination::EndOfFile,
+                })
+                .expect("terminal-only handoff should finish with stdout EOF");
+        });
+        let (event_sender, event_receiver) = mpsc::channel();
+        handoff.wait();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("initial Empty must allow one bounded terminal-only reader handoff");
+        terminal_sender
+            .join()
+            .expect("terminal-only sender should finish inside the recovery window");
+
+        assert!(receipt.is_completed_and_confirmed());
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+    }
+
+    #[test]
+    fn transport_closing_drain_preserves_terminal_after_large_capacity_one_burst() {
+        const STATUS_COUNT: usize = 40;
+
+        let mut harness = TestConnection::new(true);
+        let (line_sender, line_receiver) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        harness.connection.rx = line_receiver;
+        harness
+            .connection
+            .child
+            .terminate_and_wait()
+            .expect("fixture child should exit before transport-closing recovery");
+        let (release_terminal, await_statuses) = mpsc::channel();
+        let event_sender =
+            RecoveryHandoffEventSender::after_statuses(STATUS_COUNT, release_terminal);
+        let reader = thread::spawn(move || {
+            for index in 0..STATUS_COUNT {
+                line_sender
+                    .send(AppServerLine::Stdout(
+                        json!({
+                            "method": "thread/status/changed",
+                            "params": {
+                                "threadId": "thread-1",
+                                "status": { "type": format!("closing-{index}") }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("capacity-one reader should backpressure without dropping status");
+            }
+            await_statuses
+                .recv()
+                .expect("all status reductions should release the delayed terminal");
+            line_sender
+                .send(AppServerLine::Stdout(
+                    completed_turn_notification("thread-1", "turn-1").to_string(),
+                ))
+                .expect("terminal should follow the delayed nonterminal burst");
+            line_sender
+                .send(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stdout,
+                    termination: AppServerReaderTermination::EndOfFile,
+                })
+                .expect("reader should publish EOF after the terminal");
+        });
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("EOF-aware recovery should preserve a terminal beyond 32 lines");
+        reader.join().expect("fixture reader should reach EOF");
+
+        assert!(receipt.is_completed_and_confirmed());
+        let events = event_sender.events();
+        assert_eq!(events.len(), STATUS_COUNT + 1);
+        assert_eq!(
+            events.last(),
+            Some(&ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            })
+        );
+    }
+
+    #[test]
+    fn transport_closing_stdout_eof_without_terminal_returns_child_error() {
+        let mut harness = TestConnection::new(true);
+        let (line_sender, line_receiver) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        harness.connection.rx = line_receiver;
+        harness
+            .connection
+            .child
+            .terminate_and_wait()
+            .expect("fixture child should exit before EOF recovery");
+        line_sender
+            .send(AppServerLine::ReaderFinished {
+                source: AppServerReaderSource::Stdout,
+                termination: AppServerReaderTermination::EndOfFile,
+            })
+            .expect("fixture should publish stdout EOF");
+        let (event_sender, event_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let error = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect_err("EOF without a terminal must remain a child-exit error");
+
+        assert!(started_at.elapsed() < Duration::from_millis(50));
+        assert!(
+            error
+                .to_string()
+                .contains("exited before the turn completed")
+        );
+        assert!(event_receiver.try_iter().next().is_none());
+    }
+
+    #[test]
+    fn exited_child_recovery_beats_expired_grace_without_writing_approval() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_grace_timeout = Duration::ZERO;
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
+                    "method": "error",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "willRetry": false,
+                        "error": { "message": "expired candidate before child exit" }
+                    }
+                })))
+        );
+        let approval = json!({
+            "id": "approval-after-expired-grace",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        });
+        let (line_sender, line_receiver) = mpsc::sync_channel(APP_SERVER_LINE_CHANNEL_CAPACITY);
+        harness.connection.rx = line_receiver;
+        harness
+            .connection
+            .child
+            .terminate_and_wait()
+            .expect("fixture child should exit after terminal lines were queued");
+        let reader = thread::spawn(move || {
+            for line in [approval, completed_turn_notification("thread-1", "turn-1")] {
+                line_sender
+                    .send(AppServerLine::Stdout(line.to_string()))
+                    .expect("transport-closing fixture line should be consumed");
+            }
+            line_sender
+                .send(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stdout,
+                    termination: AppServerReaderTermination::EndOfFile,
+                })
+                .expect("transport-closing fixture should publish stdout EOF");
+        });
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("transport-closing recovery should win over expired grace synthesis");
+        reader
+            .join()
+            .expect("transport-closing fixture reader should finish");
+
+        assert!(receipt.is_completed_and_confirmed());
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+        assert!(harness.logged_json_lines(0).is_empty());
+        assert_eq!(harness.connection.approval_broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn pending_authoritative_terminal_wins_over_expired_non_retry_grace() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_grace_timeout = Duration::ZERO;
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(json!({
+                    "method": "error",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "willRetry": false,
+                        "error": { "message": "candidate before queued terminal" }
+                    }
+                })))
+        );
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(completed_turn_notification(
+                    "thread-1", "turn-1"
+                )))
+        );
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("an authoritative pending terminal must win over grace expiry");
+
+        assert!(receipt.is_completed_and_confirmed());
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_sink_full_without_retry_preserves_unconfirmed_upstream_completion() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_delivery_timeout = Duration::ZERO;
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, _event_receiver) = mpsc::sync_channel(0);
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("full application sink must not erase upstream terminal truth");
+
+        assert!(matches!(
+            receipt.outcome,
+            ConversationTurnTerminalOutcome::Completed
+        ));
+        assert_eq!(
+            receipt.application_delivery,
+            ConversationTurnApplicationDelivery::Unconfirmed(
+                ConversationTurnApplicationDeliveryFailure::Full,
+            )
+        );
+        assert!(!receipt.is_completed_and_confirmed());
+    }
+
+    #[test]
+    fn terminal_sink_full_through_deadline_is_unconfirmed() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_delivery_timeout = Duration::from_millis(2);
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, _event_receiver) = mpsc::sync_channel(0);
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("bounded delivery timeout should return a typed receipt");
+
+        assert_eq!(
+            receipt.application_delivery,
+            ConversationTurnApplicationDelivery::Unconfirmed(
+                ConversationTurnApplicationDeliveryFailure::DeadlineExceeded,
+            )
+        );
+    }
+
+    #[test]
+    fn nonterminal_events_cannot_block_terminal_delivery_deadline() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_delivery_timeout = Duration::from_millis(2);
+        for status in ["first", "second"] {
+            harness.send_stdout(json!({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": "thread-1",
+                    "status": { "type": status }
+                }
+            }));
+        }
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::sync_channel(1);
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("ordinary backpressure must not prevent a typed terminal result");
+
+        assert_eq!(
+            receipt.application_delivery,
+            ConversationTurnApplicationDelivery::Unconfirmed(
+                ConversationTurnApplicationDeliveryFailure::DeadlineExceeded,
+            )
+        );
+        assert_eq!(
+            event_receiver.try_iter().collect::<Vec<_>>(),
+            vec![ConversationStreamEvent::StatusUpdated {
+                text: "thread status: first".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rejected_retry_fact_cannot_be_promoted_by_later_completion() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({
+            "method": "error",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "willRetry": true,
+                "error": { "message": "retry before completion" }
+            }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, _event_receiver) = mpsc::sync_channel(1);
+        event_sender
+            .try_send(ConversationStreamEvent::StatusUpdated {
+                text: "occupy application sink".to_string(),
+            })
+            .expect("fixture should fill the bounded sink");
+
+        let error = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect_err("a lost retry fact must fail closed before later completion");
+
+        assert!(error.to_string().contains("turn/retrying"));
+    }
+
+    #[test]
+    fn terminal_event_and_return_share_the_same_bounded_receipt() {
+        let oversized_thread_id = format!("thread-{}", "t".repeat(8 * 1024));
+        let oversized_turn_id = format!("turn-{}", "u".repeat(8 * 1024));
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(completed_turn_notification(
+            &oversized_thread_id,
+            &oversized_turn_id,
+        ));
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                &oversized_thread_id,
+                &oversized_turn_id,
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("oversized identifiers should be bounded at the adapter boundary");
+        let ConversationStreamEvent::TurnTerminal {
+            receipt: projected_receipt,
+        } = event_receiver
+            .recv()
+            .expect("terminal event should be delivered")
+        else {
+            panic!("expected terminal receipt event");
+        };
+
+        assert_eq!(projected_receipt, receipt);
+        assert!(receipt.is_completed_and_confirmed());
+        assert!(receipt.thread_id.len() < oversized_thread_id.len());
+        assert!(receipt.turn_id.len() < oversized_turn_id.len());
+    }
+
+    #[test]
+    fn terminal_delivery_bounds_all_receipt_fields_before_projection() {
+        let oversized_thread_id = format!("thread-{}", "t".repeat(8 * 1024));
+        let oversized_turn_id = format!("turn-{}", "u".repeat(8 * 1024));
+        let oversized_path = format!(".codex-exec-loop/planning/{}.md", "p".repeat(32 * 1024));
+        let oversized_items_view = "future-view-".repeat(8 * 1024);
+        let upstream_receipt = ConversationTurnTerminalReceipt::completed(
+            oversized_thread_id.clone(),
+            oversized_turn_id.clone(),
+            vec![oversized_path.clone()],
+        )
+        .with_turn_metadata(
+            ConversationTurnItemsView::Unknown(oversized_items_view.clone()),
+            Some(10),
+            Some(20),
+            Some(10_000),
+        );
+        let mut harness = TestConnection::new(true);
+        let (event_sender, event_receiver) = mpsc::channel();
+
+        let receipt = harness
+            .connection
+            .deliver_terminal_receipt(upstream_receipt, &event_sender);
+        let ConversationStreamEvent::TurnTerminal {
+            receipt: projected_receipt,
+        } = event_receiver
+            .recv()
+            .expect("terminal event should be delivered")
+        else {
+            panic!("expected terminal receipt event");
+        };
+
+        assert_eq!(projected_receipt, receipt);
+        assert!(receipt.is_completed_and_confirmed());
+        assert!(receipt.thread_id.len() < oversized_thread_id.len());
+        assert!(receipt.turn_id.len() < oversized_turn_id.len());
+        assert!(receipt.observations.changed_planning_file_paths[0].len() < oversized_path.len());
+        let ConversationTurnItemsView::Unknown(items_view) = &receipt.items_view else {
+            panic!("unknown items view should be retained");
+        };
+        assert!(items_view.len() < oversized_items_view.len());
+    }
+
+    #[test]
+    fn disconnected_terminal_sink_is_unconfirmed() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::sync_channel(1);
+        drop(event_receiver);
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("disconnected application sink must retain upstream terminal truth");
+
+        assert_eq!(
+            receipt.application_delivery,
+            ConversationTurnApplicationDelivery::Unconfirmed(
+                ConversationTurnApplicationDeliveryFailure::Disconnected,
+            )
+        );
+    }
+
+    #[test]
+    fn temporarily_full_terminal_sink_can_recover_before_deadline() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.terminal_delivery_timeout = Duration::from_millis(20);
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::sync_channel(1);
+        event_sender
+            .try_send(ConversationStreamEvent::StatusUpdated {
+                text: "occupy terminal sink".to_string(),
+            })
+            .expect("fixture should fill the bounded sink");
+        let drain_worker = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(2));
+            let first = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("preloaded event should drain");
+            let terminal = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("terminal event should be retried after drain");
+            (first, terminal)
+        });
+
+        let receipt = harness
+            .connection
+            .wait_for_turn_stream(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+            )
+            .expect("temporary backpressure should recover before the deadline");
+        let (_, terminal) = drain_worker.join().expect("drain worker should finish");
+
+        assert!(receipt.is_completed_and_confirmed());
+        assert_eq!(
+            terminal,
+            ConversationStreamEvent::TurnTerminal {
+                receipt: receipt.clone(),
+            }
+        );
     }
 
     #[test]
@@ -4535,15 +6600,7 @@ mod tests {
                 "startedAtMs": 1
             }
         }));
-        harness.send_stdout(json!({
-            "method": "turn/completed",
-            "params": {
-                "threadId": "thread-1",
-                "turn": {
-                    "id": "turn-1"
-                }
-            }
-        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
         let (event_sender, event_receiver) = mpsc::channel();
 
         harness
@@ -4567,9 +6624,8 @@ mod tests {
                     text: "app-server approval request `item/fileChange/requestApproval` declined (requested file changes and grant scope cannot be reviewed completely)"
                         .to_string(),
                 },
-                ConversationStreamEvent::TurnCompleted {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: Vec::new(),
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: confirmed_completed_receipt("thread-1", "turn-1", Vec::new()),
                 },
             ]
         );
@@ -4592,13 +6648,7 @@ mod tests {
                 "availableDecisions": ["accept", "decline"]
             }
         }));
-        harness.send_stdout(json!({
-            "method": "turn/completed",
-            "params": {
-                "threadId": "thread-hidden",
-                "turn": { "id": "turn-hidden" }
-            }
-        }));
+        harness.send_stdout(completed_turn_notification("thread-hidden", "turn-hidden"));
         let (event_sender, event_receiver) = mpsc::channel();
 
         harness
@@ -4616,9 +6666,8 @@ mod tests {
         assert_eq!(logged[0]["result"]["decision"], "decline");
         assert_eq!(
             event_receiver.try_iter().collect::<Vec<_>>(),
-            vec![ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-hidden".to_string(),
-                changed_planning_file_paths: Vec::new(),
+            vec![ConversationStreamEvent::TurnTerminal {
+                receipt: confirmed_completed_receipt("thread-hidden", "turn-hidden", Vec::new(),),
             }]
         );
     }
@@ -4660,15 +6709,9 @@ mod tests {
             harness
                 .connection
                 .pending_notifications
-                .try_push(notification(json!({
-                "method": "turn/completed",
-                "params": {
-                    "threadId": "thread-1",
-                    "turn": {
-                        "id": "turn-1"
-                    }
-                }
-                })))
+                .try_push(notification(completed_turn_notification(
+                    "thread-1", "turn-1"
+                )))
         );
         let (event_sender, event_receiver) = mpsc::channel();
 
@@ -4688,14 +6731,17 @@ mod tests {
             events.as_slice(),
             [
                 ConversationStreamEvent::ToolActivity { .. },
-                ConversationStreamEvent::TurnCompleted { .. }
+                ConversationStreamEvent::TurnTerminal { .. }
             ]
         ));
         assert_eq!(
             events.last(),
-            Some(&ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-1".to_string(),
-                changed_planning_file_paths: vec![RESULT_OUTPUT_FILE_PATH.to_string()],
+            Some(&ConversationStreamEvent::TurnTerminal {
+                receipt: confirmed_completed_receipt(
+                    "thread-1",
+                    "turn-1",
+                    vec![RESULT_OUTPUT_FILE_PATH.to_string()],
+                ),
             })
         );
     }
@@ -4707,15 +6753,7 @@ mod tests {
             "id": 1,
             "result": {}
         }));
-        harness.send_stdout(json!({
-            "method": "turn/completed",
-            "params": {
-                "threadId": "thread-1",
-                "turn": {
-                    "id": "turn-1"
-                }
-            }
-        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
         let (event_sender, event_receiver) = mpsc::channel();
         let signal = AppServerTurnInterruptSignal::default();
         let observed_generation = signal.current_generation();
@@ -4743,9 +6781,8 @@ mod tests {
                 ConversationStreamEvent::StatusUpdated {
                     text: "stop requested / app-server interrupt sent".to_string(),
                 },
-                ConversationStreamEvent::TurnCompleted {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: Vec::new(),
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: confirmed_completed_receipt("thread-1", "turn-1", Vec::new()),
                 },
             ]
         );
@@ -5031,6 +7068,7 @@ mod tests {
             client_version: "test-version".to_string(),
             initialized: true,
             config,
+            terminal_recovery_write_deadline: None,
             approval_broker: Arc::new(AppServerApprovalBroker::default()),
             approval_mode: AppServerApprovalMode::Interactive,
             interrupt_signal: AppServerTurnInterruptSignal::default(),
@@ -5162,6 +7200,7 @@ mod tests {
             client_version: "test-version".to_string(),
             initialized: true,
             config: test_config(),
+            terminal_recovery_write_deadline: None,
             approval_broker: Arc::new(AppServerApprovalBroker::default()),
             approval_mode: AppServerApprovalMode::Interactive,
             interrupt_signal: AppServerTurnInterruptSignal::default(),
@@ -5228,6 +7267,7 @@ mod tests {
             client_version: "test-version".to_string(),
             initialized: true,
             config,
+            terminal_recovery_write_deadline: None,
             approval_broker: Arc::new(AppServerApprovalBroker::default()),
             approval_mode: AppServerApprovalMode::Interactive,
             interrupt_signal: AppServerTurnInterruptSignal::default(),
@@ -5309,8 +7349,9 @@ mod tests {
 
         let mut stdout_lines = Vec::new();
         let mut stderr_lines = Vec::new();
+        let mut finished_readers = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(1);
-        while stdout_lines.len() < 2 || stderr_lines.is_empty() {
+        while stdout_lines.len() < 2 || stderr_lines.is_empty() || finished_readers.len() < 2 {
             assert!(
                 Instant::now() < deadline,
                 "pipe reader did not send all expected lines"
@@ -5318,6 +7359,10 @@ mod tests {
             match rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(AppServerLine::Stdout(line)) => stdout_lines.push(line),
                 Ok(AppServerLine::Stderr(line)) => stderr_lines.push(line),
+                Ok(AppServerLine::ReaderFinished {
+                    source,
+                    termination,
+                }) => finished_readers.push((source, termination)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -5326,6 +7371,23 @@ mod tests {
         stdout_lines.sort();
         assert_eq!(stdout_lines, vec!["out-one", "out-two"]);
         assert_eq!(stderr_lines, vec!["err-one"]);
+        finished_readers.sort_by_key(|(source, _)| match source {
+            AppServerReaderSource::Stdout => 0,
+            AppServerReaderSource::Stderr => 1,
+        });
+        assert_eq!(
+            finished_readers,
+            vec![
+                (
+                    AppServerReaderSource::Stdout,
+                    AppServerReaderTermination::EndOfFile,
+                ),
+                (
+                    AppServerReaderSource::Stderr,
+                    AppServerReaderTermination::EndOfFile,
+                ),
+            ]
+        );
         assert!(transport_failure.current().is_none());
     }
 
@@ -5380,13 +7442,20 @@ mod tests {
                 Ok(AppServerLine::Stdout(line)) if line == expected
             ));
         }
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Ok(AppServerLine::ReaderFinished {
+                source: AppServerReaderSource::Stdout,
+                termination: AppServerReaderTermination::EndOfFile,
+            })
+        ));
         assert!(transport_failure.current().is_none());
     }
 
     #[test]
     fn oversized_pipe_line_poisoning_terminates_the_connection() {
         const TEST_LINE_LIMIT: usize = 8 * 1024;
-        let (tx, _rx) = mpsc::sync_channel(1);
+        let (tx, rx) = mpsc::sync_channel(1);
         let transport_failure = Arc::new(TransportFailure::default());
         spawn_pipe_reader(
             Cursor::new(vec![b'x'; TEST_LINE_LIMIT + 1]),
@@ -5397,6 +7466,13 @@ mod tests {
         );
         let failure = wait_for_transport_failure(&transport_failure);
         assert!(failure.contains("line exceeded"));
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Ok(AppServerLine::ReaderFinished {
+                source: AppServerReaderSource::Stdout,
+                termination: AppServerReaderTermination::Failed,
+            })
+        ));
 
         let mut harness = TestConnection::new(true);
         harness.connection.transport_failure.record(failure);
@@ -5561,6 +7637,7 @@ mod tests {
                     client_version: "test-version".to_string(),
                     initialized,
                     config: test_config(),
+                    terminal_recovery_write_deadline: None,
                     approval_broker: Arc::new(AppServerApprovalBroker::default()),
                     approval_mode,
                     interrupt_signal,
@@ -5580,6 +7657,15 @@ mod tests {
             self.tx
                 .send(AppServerLine::Stderr(line.to_string()))
                 .expect("test channel should accept stderr line");
+        }
+
+        fn send_stdout_eof(&self) {
+            self.tx
+                .send(AppServerLine::ReaderFinished {
+                    source: AppServerReaderSource::Stdout,
+                    termination: AppServerReaderTermination::EndOfFile,
+                })
+                .expect("test channel should accept the stdout EOF marker");
         }
 
         fn logged_json_lines(&self, expected_count: usize) -> Vec<Value> {
@@ -5604,6 +7690,9 @@ mod tests {
             interrupt_total_timeout: Duration::from_millis(25),
             interrupt_retry_backoff: Duration::from_millis(1),
             interrupt_retry_limit: 3,
+            terminal_grace_timeout: Duration::from_millis(20),
+            terminal_delivery_timeout: Duration::from_millis(20),
+            terminal_delivery_retry_interval: Duration::from_millis(1),
         }
     }
 

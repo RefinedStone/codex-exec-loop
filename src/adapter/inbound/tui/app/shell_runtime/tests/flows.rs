@@ -152,7 +152,7 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
         &self,
         request: ParallelAgentWorkerStreamRequest<'_>,
         event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-    ) -> Result<()> {
+    ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
         let launch_index = self.launch_count.fetch_add(1, Ordering::SeqCst) + 1;
         self.requests
             .lock()
@@ -167,7 +167,7 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
             let _ = event_sender.send(ConversationStreamEvent::Failed {
                 message: "flow worker launch failed before stream start".to_string(),
             });
-            return Ok(());
+            anyhow::bail!("flow worker launch failed before stream start");
         }
         if self.hold_streams.load(Ordering::SeqCst) {
             let _ = event_sender.send(ConversationStreamEvent::ThreadPrepared {
@@ -202,7 +202,7 @@ impl ParallelAgentWorkerPort for FlowParallelAgentWorkerPort {
                 message: "flow worker stream released by test harness".to_string(),
             });
         }
-        Ok(())
+        anyhow::bail!("flow worker stream ended without a terminal receipt")
     }
 }
 

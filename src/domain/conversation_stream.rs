@@ -3,6 +3,7 @@ use crate::domain::conversation::{
     ConversationToolActivity,
 };
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+use crate::domain::turn_terminal::{ConversationTurnError, ConversationTurnTerminalReceipt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversationStreamEvent {
@@ -46,9 +47,13 @@ pub enum ConversationStreamEvent {
     TurnInterruptRequestFailed {
         message: String,
     },
-    TurnCompleted {
+    TurnRetrying {
+        thread_id: String,
         turn_id: String,
-        changed_planning_file_paths: Vec<String>,
+        error: ConversationTurnError,
+    },
+    TurnTerminal {
+        receipt: ConversationTurnTerminalReceipt,
     },
     Failed {
         message: String,

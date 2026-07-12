@@ -1,4 +1,7 @@
 use super::super::*;
+use crate::application::service::parallel_mode::{
+    ParallelModeAutomationGuard, ParallelModeOrchestratorTrigger,
+};
 
 // supervisor snapshot은 관찰 전용이어야 한다. queue head가 merge-pending 상태여도
 // snapshot 렌더링 과정에서 GitHub inspect, push, recovery 같은 runtime 작업이
@@ -80,76 +83,781 @@ fn build_supervisor_snapshot_does_not_trigger_runtime_recovery_side_effects() {
 }
 
 #[test]
-fn distributor_tick_recovers_commit_ready_result_missing_its_queue_record() {
-    let repo = TempGitRepo::new("commit-ready-enqueue-recovery");
+fn readiness_does_not_write_a_missing_commit_ready_handoff() {
+    let repo = TempGitRepo::new("readiness-missing-handoff-observation");
     let service =
         test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = prepare_missing_commit_ready_result(
+        &service,
+        &repo,
+        "task-readiness",
+        "agent-readiness",
+        "readiness",
+    );
+    assert!(
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty(),
+        "the fixture must begin in the interrupted handoff state"
+    );
+    let readiness = service.inspect_readiness(
+        &repo.workspace_dir(),
+        &PlanningRuntimeProjection::ready("prompt".into(), "queue".into(), None)
+            .with_workspace_present(true),
+    );
+    assert!(readiness.allows_parallel_mode());
+    assert!(
+        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty(),
+        "readiness inspection must not enqueue a missing commit-ready handoff"
+    );
+    let commit_ready_detail =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("readiness authority projection should load")
+            .session_details
+            .into_iter()
+            .find(|detail| detail.session_key == lease.session_key())
+            .expect("commit-ready authority detail should remain present");
+    assert_eq!(commit_ready_detail.state_label, "commit_ready");
+    assert!(
+        service
+            .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+            .expect("pending recovery signature should be readable")
+            .is_some(),
+        "a commit-ready authority row without a queue record must remain wakeable"
+    );
+}
+
+#[test]
+fn manual_unguarded_tick_recovers_and_processes_a_missing_commit_ready_handoff() {
+    let repo = TempGitRepo::new("manual-missing-handoff-recovery");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = prepare_missing_commit_ready_result(
+        &service,
+        &repo,
+        "task-manual",
+        "agent-manual",
+        "manual",
+    );
+
+    let tick = service
+        .run_orchestrator_tick(
+            &repo.workspace_dir(),
+            ParallelModeOrchestratorTrigger::ManualDispatch,
+        )
+        .expect("manual unguarded processing should recover and deliver the missing handoff");
+    assert!(!tick.blocked);
+    assert!(
+        tick.notices
+            .iter()
+            .any(|notice| notice.contains("distributor integrated queue head into prerelease")),
+        "manual missing-handoff recovery should integrate in the same tick: {:?}",
+        tick.notices
+    );
+    let records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].session_key, lease.session_key());
+    assert_eq!(records[0].queue_state, ParallelModeQueueItemState::Done);
+    assert_eq!(
+        service
+            .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+            .expect("manual recovery signature should load"),
+        None
+    );
+}
+
+#[test]
+fn closed_guarded_tick_does_not_recover_a_missing_commit_ready_handoff() {
+    let repo = TempGitRepo::new("closed-guarded-missing-handoff");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = prepare_missing_commit_ready_result(
+        &service,
+        &repo,
+        "task-closed",
+        "agent-closed",
+        "closed",
+    );
+    let guard = ParallelModeAutomationGuard::default();
+    guard.activate(repo.workspace_dir(), 1);
+    let closed_permit = guard.permit(repo.workspace_dir(), 1);
+    guard.cancel(&repo.workspace_dir());
+    let closed_tick = service
+        .run_orchestrator_tick_guarded(
+            &repo.workspace_dir(),
+            ParallelModeOrchestratorTrigger::ManualDispatch,
+            &closed_permit,
+        )
+        .expect("closed epoch tick should fail closed");
+    assert!(closed_tick.blocked);
+    assert!(load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty());
+    let projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("closed guarded authority projection should load");
+    let detail = projection
+        .session_details
+        .iter()
+        .find(|detail| detail.session_key == lease.session_key())
+        .expect("closed guarded commit-ready detail should remain present");
+    assert_eq!(detail.state_label, "commit_ready");
+    assert!(
+        service
+            .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+            .expect("closed guarded recovery signature should load")
+            .is_some()
+    );
+}
+
+#[test]
+fn stale_guarded_enqueue_preflight_does_not_block_or_mutate_replacement_generation() {
+    let repo = TempGitRepo::new("stale-enqueue-preflight-replacement");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = prepare_missing_commit_ready_result(
+        &service,
+        &repo,
+        "task-old-enqueue",
+        "agent-old-enqueue",
+        "old-enqueue",
+    );
+
+    let continuation_gate = PostTurnContinuationGate::default();
+    let automation_guard = ParallelModeAutomationGuard::default();
+    automation_guard.activate(repo.workspace_dir(), 17);
+    let old_permit = automation_guard
+        .permit(repo.workspace_dir(), 17)
+        .with_continuation_permit(continuation_gate.capture());
+    let (preflight_entered_sender, preflight_entered_receiver) = std::sync::mpsc::channel();
+    let (resume_old_sender, resume_old_receiver) = std::sync::mpsc::channel();
+    let (old_done_sender, old_done_receiver) = std::sync::mpsc::channel();
+    let old_service = service.clone();
+    let old_lease = lease.clone();
+    let old_thread = thread::spawn(move || {
+        install_after_distributor_enqueue_preflight_hook(move || {
+            preflight_entered_sender
+                .send(())
+                .expect("old preflight entry should be observed");
+            resume_old_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("old enqueue preflight should be released");
+        });
+        let result = old_service
+            .enqueue_workspace_commit_ready_result_for_lease_guarded(&old_lease, &old_permit);
+        old_done_sender
+            .send(result)
+            .expect("old enqueue result should be observed");
+    });
+    preflight_entered_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("old enqueue should pause after its unlocked preflight");
+
+    continuation_gate.advance();
+    let replacement_continuation = continuation_gate.capture();
+    let mut replacement = lease.clone();
+    replacement.task_id = "task-replacement".to_string();
+    replacement.task_title = "Replacement".to_string();
+    replacement.agent_id = "agent-replacement".to_string();
+    replacement.leased_at = "2099-01-01T00:00:00Z".to_string();
+    replacement.running_started_at = Some("2099-01-01T00:00:01Z".to_string());
+    replacement.lease_generation =
+        Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+    replacement.state = ParallelModeSlotLeaseState::Running;
+    let expected_replacement = replacement.clone();
+    let transition_workspace = repo.workspace_dir();
+    let transition_pool_root = repo.pool_root();
+    let (transition_done_sender, transition_done_receiver) = std::sync::mpsc::channel();
+    let transition_thread = thread::spawn(move || {
+        let result = replacement_continuation
+            .with_current(|| -> Result<(), String> {
+                let authority = SqlitePlanningAuthorityAdapter::new();
+                let runtime = test_parallel_runtime();
+                let pool_lock = acquire_pool_mutation_lock(&authority, &transition_workspace)?;
+                pool_lock.verify_pool_root(&transition_pool_root)?;
+                write_slot_lease(
+                    &authority,
+                    &runtime,
+                    &transition_workspace,
+                    &transition_pool_root,
+                    &replacement,
+                )?;
+                record_running_session_detail(
+                    &authority,
+                    &runtime,
+                    &transition_workspace,
+                    &transition_pool_root,
+                    &replacement,
+                )?;
+                Ok(())
+            })
+            .ok_or_else(|| "replacement continuation unexpectedly became stale".to_string())
+            .and_then(|result| result);
+        transition_done_sender
+            .send(result)
+            .expect("replacement transition result should be observed");
+    });
+    transition_done_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("replacement continuation must not wait on the old enqueue preflight")
+        .expect("replacement pool transition should succeed");
+
+    resume_old_sender
+        .send(())
+        .expect("old enqueue preflight should resume");
+    let old_result = old_done_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stale old enqueue should terminate promptly")
+        .expect("stale old enqueue should fail closed without an error");
+    assert!(old_result.is_none());
+    old_thread.join().expect("old enqueue thread should join");
+    transition_thread
+        .join()
+        .expect("replacement transition thread should join");
+
+    let projection =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("replacement authority projection should load");
+    assert_eq!(
+        projection.slot_leases.get(&expected_replacement.slot_id),
+        Some(&expected_replacement)
+    );
+    let replacement_detail = projection
+        .session_details
+        .iter()
+        .find(|detail| detail.session_key == expected_replacement.session_key())
+        .expect("replacement running detail should remain present");
+    assert_eq!(replacement_detail.state_label, "running");
+    assert_eq!(replacement_detail.completion_state_label, "in_progress");
+    assert!(projection.distributor_queue_records.is_empty());
+    assert!(load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty());
+}
+
+#[test]
+fn guarded_enqueue_pool_busy_stops_within_one_retry_interval_after_gate_advance() {
+    let repo = TempGitRepo::new("enqueue-pool-busy-retry");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = prepare_missing_commit_ready_result(
+        &service,
+        &repo,
+        "task-pool-busy",
+        "agent-pool-busy",
+        "pool-busy",
+    );
+
+    let continuation_gate = PostTurnContinuationGate::default();
+    let automation_guard = ParallelModeAutomationGuard::default();
+    automation_guard.activate(repo.workspace_dir(), 23);
+    let enqueue_permit = automation_guard
+        .permit(repo.workspace_dir(), 23)
+        .with_continuation_permit(continuation_gate.capture());
+    let (preflight_entered_sender, preflight_entered_receiver) = std::sync::mpsc::channel();
+    let (resume_preflight_sender, resume_preflight_receiver) = std::sync::mpsc::channel();
+    let (pool_busy_sender, pool_busy_receiver) = std::sync::mpsc::channel();
+    let (release_busy_sender, release_busy_receiver) = std::sync::mpsc::channel();
+    let (enqueue_done_sender, enqueue_done_receiver) = std::sync::mpsc::channel();
+    let enqueue_service = service.clone();
+    let enqueue_lease = lease.clone();
+    let enqueue_thread = thread::spawn(move || {
+        install_after_distributor_enqueue_preflight_hook(move || {
+            preflight_entered_sender
+                .send(())
+                .expect("enqueue preflight entry should be observed");
+            resume_preflight_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("enqueue preflight should resume");
+        });
+        install_after_distributor_enqueue_pool_busy_hook(move || {
+            pool_busy_sender
+                .send(())
+                .expect("pool-busy attempt should be observed");
+            release_busy_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("pool-busy retry should be released");
+        });
+        let result = enqueue_service.enqueue_workspace_commit_ready_result_for_lease_guarded(
+            &enqueue_lease,
+            &enqueue_permit,
+        );
+        enqueue_done_sender
+            .send(result)
+            .expect("enqueue result should be observed");
+    });
+    preflight_entered_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("enqueue should pause after preflight");
+
+    let authority = SqlitePlanningAuthorityAdapter::new();
+    let pool_lock = acquire_pool_mutation_lock(&authority, &repo.workspace_dir())
+        .expect("test should hold the pool lock across the first final attempt");
+    pool_lock
+        .verify_pool_root(&repo.pool_root())
+        .expect("test pool lock should match the fixture");
+    resume_preflight_sender
+        .send(())
+        .expect("enqueue final phase should start");
+    pool_busy_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first nonblocking final attempt should observe pool contention");
+
+    let barrier_permit = continuation_gate.capture();
+    let (barrier_done_sender, barrier_done_receiver) = std::sync::mpsc::channel();
+    let barrier_thread = thread::spawn(move || {
+        let entered = barrier_permit.with_current(|| ());
+        barrier_done_sender
+            .send(entered)
+            .expect("continuation barrier result should be observed");
+    });
+    assert_eq!(
+        barrier_done_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("pool-busy retry must release the continuation mutex"),
+        Some(())
+    );
+    barrier_thread
+        .join()
+        .expect("continuation barrier thread should join");
+
+    continuation_gate.advance();
+    drop(pool_lock);
+    release_busy_sender
+        .send(())
+        .expect("stale pool-busy retry should leave its hook");
+    let stale_result = enqueue_done_receiver
+        .recv_timeout(Duration::from_millis(25))
+        .expect("stale pool-busy retry should stop before one retry sleep elapses")
+        .expect("stale pool-busy retry should fail closed without an error");
+    assert!(stale_result.is_none());
+    enqueue_thread
+        .join()
+        .expect("stale enqueue retry thread should join");
+    assert!(load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty());
+    let detail = SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+        .expect("stale retry authority projection should load")
+        .session_details
+        .into_iter()
+        .find(|detail| detail.session_key == lease.session_key())
+        .expect("stale retry commit-ready detail should remain present");
+    assert_eq!(detail.state_label, "commit_ready");
+}
+
+#[test]
+fn dirty_missing_commit_ready_candidate_does_not_starve_an_existing_queue_head() {
+    let repo = TempGitRepo::new("commit-ready-recovery-does-not-starve-head");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(GitBackedGithubAutomationPort::ready()));
+    let queued_lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-a", "Queued A", "agent-a", "queued-a"),
+        )
+        .expect("queued slot should lease");
+    service
+        .mark_workspace_slot_running(&queued_lease.worktree_path)
+        .expect("queued slot should become running");
+    repo.commit_file_in_slot(
+        Path::new(&queued_lease.worktree_path),
+        "queued-a.txt",
+        "queued A result\n",
+        "record queued A result",
+    );
+    service
+        .begin_workspace_official_completion(
+            &queued_lease.worktree_path,
+            "turn-a",
+            None,
+            Some("Queued A complete."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("queued A completion should capture");
+    service
+        .mark_workspace_official_completion_refreshing(&queued_lease.worktree_path)
+        .expect("queued A should enter refreshing");
+    service
+        .mark_workspace_commit_ready(&queued_lease.worktree_path, "queued A accepted")
+        .expect("queued A should become commit-ready");
+    service
+        .enqueue_workspace_commit_ready_result(&queued_lease.worktree_path)
+        .expect("queued A should enqueue")
+        .expect("queued A queue record should exist");
+
+    let missing_lease = service
+        .acquire_slot_lease(
+            &repo.workspace_dir(),
+            sample_lease_request("task-b", "Recover B", "agent-b", "recover-b"),
+        )
+        .expect("recovery slot should lease");
+    service
+        .mark_workspace_slot_running(&missing_lease.worktree_path)
+        .expect("recovery slot should become running");
+    repo.commit_file_in_slot(
+        Path::new(&missing_lease.worktree_path),
+        "recover-b.txt",
+        "recover B result\n",
+        "record recoverable B result",
+    );
+    service
+        .begin_workspace_official_completion(
+            &missing_lease.worktree_path,
+            "turn-b",
+            None,
+            Some("Recover B complete."),
+            Some("cargo test passed"),
+            None,
+        )
+        .expect("recovery B completion should capture");
+    service
+        .mark_workspace_official_completion_refreshing(&missing_lease.worktree_path)
+        .expect("recovery B should enter refreshing");
+    service
+        .mark_workspace_commit_ready(&missing_lease.worktree_path, "recovery B accepted")
+        .expect("recovery B should become commit-ready");
+    let dirty_path = Path::new(&missing_lease.worktree_path).join("operator-dirty.txt");
+    fs::write(&dirty_path, "operator inspection in progress\n")
+        .expect("dirty recovery fixture should write");
+
+    let guard = ParallelModeAutomationGuard::default();
+    guard.activate(repo.workspace_dir(), 7);
+    let permit = guard.permit(repo.workspace_dir(), 7);
+    let queued_tick = service
+        .run_orchestrator_tick_guarded(
+            &repo.workspace_dir(),
+            ParallelModeOrchestratorTrigger::ManualDispatch,
+            &permit,
+        )
+        .expect("existing queue head should run before missing-result recovery");
+    assert!(queued_tick.notices.iter().any(|notice| {
+        notice.contains("distributor integrated queue head into prerelease")
+            && notice.contains("agent-a")
+    }));
+    let records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].task_id, "task-a");
+    assert_eq!(records[0].queue_state, ParallelModeQueueItemState::Done);
+
+    let dirty_signature = service
+        .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+        .expect("dirty recovery signature should load")
+        .expect("dirty recovery candidate should remain wakeable");
+    assert!(dirty_signature.contains("untracked files"));
+    let dirty_error = service
+        .run_orchestrator_tick_guarded(
+            &repo.workspace_dir(),
+            ParallelModeOrchestratorTrigger::ManualDispatch,
+            &permit,
+        )
+        .expect_err("dirty missing result should fail its own recovery tick");
+    assert!(dirty_error.contains("nonignored worktree changes"));
+    assert_eq!(
+        service
+            .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+            .expect("unchanged recovery signature should load")
+            .as_deref(),
+        Some(dirty_signature.as_str()),
+        "unchanged dirty state must retain one dedupe signature"
+    );
+
+    fs::remove_file(&dirty_path).expect("operator should be able to repair the dirty candidate");
+    let clean_signature_before_commit = service
+        .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+        .expect("clean recovery signature should load")
+        .expect("clean recovery candidate should remain wakeable until delivery");
+    assert_ne!(clean_signature_before_commit, dirty_signature);
+    assert!(clean_signature_before_commit.contains("source:clean"));
+    repo.commit_file_in_slot(
+        Path::new(&missing_lease.worktree_path),
+        "recover-b-late.txt",
+        "late clean recovery evidence\n",
+        "record late clean recovery evidence",
+    );
+    let clean_signature_after_commit = service
+        .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+        .expect("post-commit recovery signature should load")
+        .expect("post-commit recovery candidate should remain wakeable until delivery");
+    assert_ne!(clean_signature_after_commit, clean_signature_before_commit);
+    assert!(clean_signature_after_commit.contains("source:clean"));
+    let recovered_tick = service
+        .run_orchestrator_tick_guarded(
+            &repo.workspace_dir(),
+            ParallelModeOrchestratorTrigger::ManualDispatch,
+            &permit,
+        )
+        .expect("the same automation epoch should retry after external repair");
+    assert!(
+        recovered_tick.notices.iter().any(|notice| {
+            notice.contains("distributor integrated queue head into prerelease")
+                && notice.contains("agent-b")
+        }),
+        "repaired recovery should integrate B in the same epoch: {:?}",
+        recovered_tick.notices
+    );
+    assert_eq!(
+        service
+            .pending_commit_ready_recovery_signature(&repo.workspace_dir())
+            .expect("completed recovery signature should load"),
+        None
+    );
+}
+
+fn prepare_missing_commit_ready_result(
+    service: &ParallelModeService,
+    repo: &TempGitRepo,
+    task_id: &str,
+    agent_id: &str,
+    task_slug: &str,
+) -> ParallelModeSlotLeaseSnapshot {
     let lease = service
         .acquire_slot_lease(
             &repo.workspace_dir(),
-            sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            sample_lease_request(task_id, "Recoverable", agent_id, task_slug),
         )
-        .expect("slot lease should be acquired");
+        .expect("recovery slot should lease");
     service
         .mark_workspace_slot_running(&lease.worktree_path)
-        .expect("slot should transition to running");
+        .expect("recovery slot should become running");
     repo.commit_file_in_slot(
         Path::new(&lease.worktree_path),
-        "recovered.txt",
-        "recovered result\n",
+        &format!("{task_slug}.txt"),
+        "recoverable result\n",
         "record recoverable result",
     );
     service
         .begin_workspace_official_completion(
             &lease.worktree_path,
-            "turn-recover-enqueue",
+            &format!("turn-{task_id}"),
             None,
-            Some("The result is complete but its first queue handoff was interrupted."),
+            Some("Recoverable result complete."),
             Some("cargo test passed"),
             None,
         )
-        .expect("official completion should be captured");
+        .expect("official completion should capture");
     service
         .mark_workspace_official_completion_refreshing(&lease.worktree_path)
-        .expect("ledger refreshing should be recorded");
+        .expect("official completion should enter refreshing");
     service
-        .mark_workspace_commit_ready(
-            &lease.worktree_path,
-            "official ledger refresh succeeded before queue persistence",
-        )
-        .expect("commit-ready should be recorded");
-    assert!(
-        load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty(),
-        "the fixture must begin in the interrupted handoff state"
+        .mark_workspace_commit_ready(&lease.worktree_path, "recoverable result accepted")
+        .expect("official completion should become commit-ready");
+    lease
+}
+
+#[test]
+fn stale_base_enqueue_rejects_source_that_already_incorporated_the_advanced_target() {
+    let repo = TempGitRepo::new("commit-ready-recovery-source-drift");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = prepare_missing_commit_ready_result(
+        &service,
+        &repo,
+        "task-source-drift",
+        "agent-source-drift",
+        "source-drift",
+    );
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    fs::write(repo.repo_root.join("advanced-target.txt"), "advanced\n")
+        .expect("advanced target fixture should write");
+    run_git(&repo.repo_root, &["add", "advanced-target.txt"]);
+    run_git(
+        &repo.repo_root,
+        &["commit", "-qm", "advance integration target"],
+    );
+    let advanced_target = run_command(
+        "git",
+        ["-C", repo.workspace_dir().as_str(), "rev-parse", "HEAD"],
+        None,
+    )
+    .expect("advanced target should resolve");
+    run_git(
+        &repo.repo_root,
+        &["push", "-q", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+    );
+    run_git(
+        Path::new(&lease.worktree_path),
+        &["rebase", advanced_target.as_str()],
     );
 
-    let notices = service
-        .process_distributor_queue(&repo.workspace_dir())
-        .expect("the next distributor tick should recover and deliver the result");
-
+    let error = service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect_err("source that incorporated the target advance must fail closed");
     assert!(
-        notices
+        error.contains("no longer has lease-frozen base"),
+        "unexpected source-drift rejection: {error}"
+    );
+    assert!(load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty());
+}
+
+#[test]
+fn stale_base_enqueue_rejects_non_linear_target_rewrite() {
+    let repo = TempGitRepo::new("commit-ready-recovery-target-rewrite");
+    let service =
+        test_parallel_mode_service_with_github(Arc::new(FakeGithubAutomationPort::ready()));
+    let lease = prepare_missing_commit_ready_result(
+        &service,
+        &repo,
+        "task-target-rewrite",
+        "agent-target-rewrite",
+        "target-rewrite",
+    );
+    let rewritten_repo = repo.root.join("rewritten-target");
+    fs::create_dir_all(&rewritten_repo).expect("rewritten target repo should exist");
+    run_git(&rewritten_repo, &["init", "-q"]);
+    run_git(&rewritten_repo, &["config", "user.name", "RefinedStone"]);
+    run_git(
+        &rewritten_repo,
+        &["config", "user.email", "akra@example.invalid"],
+    );
+    fs::write(rewritten_repo.join("rewritten.txt"), "unrelated history\n")
+        .expect("rewritten target fixture should write");
+    run_git(&rewritten_repo, &["add", "rewritten.txt"]);
+    run_git(
+        &rewritten_repo,
+        &["commit", "-qm", "rewrite target history"],
+    );
+    let origin = repo.create_bare_origin_remote();
+    run_git(
+        &rewritten_repo,
+        &[
+            "remote",
+            "add",
+            DEFAULT_PUSH_REMOTE_NAME,
+            origin.to_str().expect("origin path should be valid utf-8"),
+        ],
+    );
+    run_git(
+        &rewritten_repo,
+        &[
+            "push",
+            "-q",
+            "--force",
+            DEFAULT_PUSH_REMOTE_NAME,
+            &format!("HEAD:{POOL_BASELINE_BRANCH}"),
+        ],
+    );
+
+    let error = service
+        .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+        .expect_err("non-linear target rewrite must fail closed");
+    assert!(
+        error.contains("moved outside lease-frozen history"),
+        "unexpected target-rewrite rejection: {error}"
+    );
+    assert!(load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root()).is_empty());
+}
+
+#[test]
+fn merge_queued_uses_authority_detail_when_mirror_is_missing_or_stale() {
+    for (fixture_name, stale_mirror) in [
+        ("merge-queued-missing-session-mirror", false),
+        ("merge-queued-stale-session-mirror", true),
+    ] {
+        let repo = TempGitRepo::new(fixture_name);
+        let service = test_parallel_mode_service();
+        let lease = service
+            .acquire_slot_lease(
+                &repo.workspace_dir(),
+                sample_lease_request("task-1", "Task One", "agent-1", "task-one"),
+            )
+            .expect("slot lease should be acquired");
+        service
+            .mark_workspace_slot_running(&lease.worktree_path)
+            .expect("slot should transition to running");
+        repo.commit_file_in_slot(
+            Path::new(&lease.worktree_path),
+            "authority-detail.txt",
+            "authority detail survives mirror drift\n",
+            "record authority detail result",
+        );
+        service
+            .begin_workspace_official_completion(
+                &lease.worktree_path,
+                "turn-authority-detail",
+                None,
+                Some("Final response survives missing or stale mirror state."),
+                Some("cargo test --lib preserved authority detail"),
+                None,
+            )
+            .expect("official completion should be captured");
+        service
+            .mark_workspace_official_completion_refreshing(&lease.worktree_path)
+            .expect("ledger refreshing should be recorded");
+        service
+            .mark_workspace_commit_ready(
+                &lease.worktree_path,
+                "official authority refresh outcome survives mirror drift",
+            )
+            .expect("commit-ready should be recorded");
+
+        let session_key = lease.session_key();
+        let authority_before =
+            SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+                .expect("authority projection should load")
+                .session_details
+                .into_iter()
+                .find(|detail| detail.session_key == session_key)
+                .expect("commit-ready authority detail should exist");
+        let mirror_path = repo.session_detail_path(&session_key);
+        if stale_mirror {
+            let mut stale = authority_before.clone();
+            stale.latest_summary = "stale mirror summary".to_string();
+            stale.validation_summary = "stale mirror validation".to_string();
+            stale.authority_refresh_outcome = "stale mirror refresh outcome".to_string();
+            stale.history.clear();
+            fs::write(
+                &mirror_path,
+                serde_json::to_string_pretty(&stale).expect("stale mirror should serialize"),
+            )
+            .expect("stale mirror should be installed");
+        } else {
+            fs::remove_file(&mirror_path).expect("session mirror should be removable");
+        }
+
+        service
+            .enqueue_workspace_commit_ready_result(&lease.worktree_path)
+            .expect("commit-ready result should enqueue")
+            .expect("queue item should be created");
+
+        let projection =
+            SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+                .expect("updated authority projection should load");
+        let detail = projection
+            .session_details
             .iter()
-            .any(|notice| { notice.contains("distributor integrated queue head into prerelease") }),
-        "recovered commit-ready result should be delivered in the same tick: {notices:?}"
-    );
-    let records = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root());
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].queue_state, ParallelModeQueueItemState::Done);
-    assert_eq!(
-        run_command(
-            "git",
-            [
-                "-C",
-                repo.workspace_dir().as_str(),
-                "show",
-                "refs/remotes/origin/prerelease:recovered.txt",
-            ],
-            None,
-        )
-        .as_deref(),
-        Some("recovered result")
-    );
+            .find(|detail| detail.session_key == session_key)
+            .expect("merge-queued authority detail should remain available");
+        assert_eq!(detail.state_label, "merge_queued");
+        assert_eq!(detail.completion_state_label, "merge_queued");
+        assert_eq!(
+            detail.validation_summary,
+            authority_before.validation_summary
+        );
+        assert_eq!(
+            detail.authority_refresh_outcome,
+            authority_before.authority_refresh_outcome
+        );
+        assert_eq!(
+            &detail.history[..authority_before.history.len()],
+            authority_before.history.as_slice()
+        );
+        assert!(detail.history.iter().any(|entry| {
+            entry
+                .summary
+                .contains("Final response survives missing or stale mirror state.")
+        }));
+        assert_eq!(
+            projection.distributor_queue_records[0].validation_summary,
+            authority_before.validation_summary
+        );
+        assert_eq!(
+            projection.distributor_queue_records[0].authority_refresh_outcome,
+            authority_before.authority_refresh_outcome
+        );
+        assert_eq!(
+            read_agent_session_detail_record(
+                &test_parallel_runtime(),
+                &repo.pool_root(),
+                &session_key,
+            )
+            .expect("merge-queued mirror should be projected from authority"),
+            *detail
+        );
+    }
 }
 
 #[test]

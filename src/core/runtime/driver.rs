@@ -88,6 +88,13 @@ where
         }
         outcome
     }
+
+    #[cfg(test)]
+    pub(crate) fn begin_test_turn_submission(
+        &mut self,
+    ) -> crate::core::app::TurnSubmissionCorrelation {
+        self.controller.begin_test_turn_submission()
+    }
 }
 
 #[cfg(test)]
@@ -208,7 +215,10 @@ mod tests {
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             effects.recorded_effects(),
-            vec![CoreEffect::SubmitTurn(request)]
+            vec![CoreEffect::SubmitTurn {
+                correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                request,
+            }]
         );
     }
 

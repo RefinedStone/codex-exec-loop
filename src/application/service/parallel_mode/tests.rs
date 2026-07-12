@@ -5,20 +5,22 @@ use super::{
     DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH, DEFAULT_POOL_SIZE, DEFAULT_PUSH_REMOTE_NAME,
     MAX_AGENT_BRANCH_SLUG_LEN, ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot,
     ParallelModeCapabilityState, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
-    ParallelModeService, PoolSlotCleanupIdentity, agent_session_detail_record_path,
-    allocate_agent_branch_name, build_pool_board, cleanup_slot_to_ref_with_hooks, command_succeeds,
-    delete_cleaned_slot_branch_if_unchanged, derive_default_pool_root,
-    derive_integration_worktree_path, detect_canonical_repo_root, inspect_akra_branch,
-    inspect_authority_store, inspect_gh_auth, inspect_gh_binary, inspect_git_worktree,
-    inspect_planning_projection, inspect_push_remote, inspect_slot_git_status,
-    install_before_distributor_cleanup_lock_hook, lease_session_key, local_branch_ref,
-    normalize_parallel_mode_integration_branch, parallel_mode_integration_branch_for_repo,
-    parse_https_remote, read_agent_session_detail_record, reconcile_pool_board,
-    record_assigned_session_detail, record_running_session_detail, remote_branch_name,
-    remote_tracking_branch_ref, reset_slot_worktree_to_ref,
-    resolve_parallel_mode_integration_branch, resolve_parallel_mode_integration_branch_strict,
-    resolve_parent_high_risk_opt_in, resolve_workspace_slot_lease, run_command, sanitize_task_slug,
-    short_branch_slug_hash, slot_id, slot_lease_file_path, write_slot_lease,
+    ParallelModeService, PoolSlotCleanupIdentity, acquire_pool_mutation_lock,
+    agent_session_detail_record_path, allocate_agent_branch_name, build_pool_board,
+    cleanup_slot_to_ref_with_hooks, command_succeeds, delete_cleaned_slot_branch_if_unchanged,
+    derive_default_pool_root, derive_integration_worktree_path, detect_canonical_repo_root,
+    inspect_akra_branch, inspect_authority_store, inspect_gh_auth, inspect_gh_binary,
+    inspect_git_worktree, inspect_planning_projection, inspect_push_remote,
+    inspect_slot_git_status, install_after_distributor_enqueue_pool_busy_hook,
+    install_after_distributor_enqueue_preflight_hook, install_before_distributor_cleanup_lock_hook,
+    lease_session_key, local_branch_ref, normalize_parallel_mode_integration_branch,
+    parallel_mode_integration_branch_for_repo, parse_https_remote,
+    read_agent_session_detail_record, reconcile_pool_board, record_assigned_session_detail,
+    record_running_session_detail, remote_branch_name, remote_tracking_branch_ref,
+    reset_slot_worktree_to_ref, resolve_parallel_mode_integration_branch,
+    resolve_parallel_mode_integration_branch_strict, resolve_parent_high_risk_opt_in,
+    resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash, slot_id,
+    slot_lease_file_path, write_slot_lease,
 };
 
 #[test]
@@ -61,8 +63,8 @@ use crate::domain::parallel_mode::{
     ParallelModeSlotLeaseState, ParallelModeSupervisorState, ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
-    PriorityQueueProjection, PriorityQueueTask, TaskActor, TaskAuthorityDocument, TaskDefinition,
-    TaskStatus,
+    PostTurnContinuationGate, PriorityQueueProjection, PriorityQueueTask, TaskActor,
+    TaskAuthorityDocument, TaskDefinition, TaskStatus,
 };
 use std::collections::BTreeMap;
 use std::fs;

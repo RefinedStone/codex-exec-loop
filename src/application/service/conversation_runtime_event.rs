@@ -1,7 +1,5 @@
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
-use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
-
 pub use crate::domain::conversation_stream::ConversationStreamEvent;
 
 // Keep only a short provider burst between the app-server producer and the
@@ -16,25 +14,48 @@ pub fn conversation_stream_channel() -> (ConversationStreamSender, ConversationS
     sync_channel(CONVERSATION_STREAM_CHANNEL_CAPACITY)
 }
 
-pub(crate) fn emit_attachment_observed(
+#[cfg(test)]
+pub(crate) fn confirmed_test_terminal_receipt()
+-> crate::domain::turn_terminal::ConversationTurnTerminalReceipt {
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
+    };
+
+    ConversationTurnTerminalReceipt::completed("test-thread", "test-turn", Vec::new())
+        .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed)
+}
+
+#[cfg(test)]
+pub(crate) fn emit_confirmed_test_terminal_receipt(
     event_sender: &ConversationStreamSender,
-    profile: TerminalBridgeAttachmentProfile,
-) {
-    let _ = event_sender.send(ConversationStreamEvent::attachment_observed(profile));
-}
+    thread_id: &str,
+    cwd: &str,
+) -> anyhow::Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
+    };
 
-pub(crate) fn emit_codex_app_server_launch_attachment(event_sender: &ConversationStreamSender) {
-    emit_attachment_observed(
-        event_sender,
-        TerminalBridgeAttachmentProfile::codex_app_server_launch(),
-    );
-}
-
-pub(crate) fn emit_codex_app_server_reattach_attachment(event_sender: &ConversationStreamSender) {
-    emit_attachment_observed(
-        event_sender,
-        TerminalBridgeAttachmentProfile::codex_app_server_reattach(),
-    );
+    let turn_id = "test-turn";
+    event_sender
+        .send(ConversationStreamEvent::ThreadPrepared {
+            thread_id: thread_id.to_string(),
+            title: "Test thread".to_string(),
+            cwd: cwd.to_string(),
+        })
+        .map_err(|_| anyhow::anyhow!("test stream event receiver disconnected"))?;
+    event_sender
+        .send(ConversationStreamEvent::TurnStarted {
+            turn_id: turn_id.to_string(),
+        })
+        .map_err(|_| anyhow::anyhow!("test stream event receiver disconnected"))?;
+    let receipt = ConversationTurnTerminalReceipt::completed(thread_id, turn_id, Vec::new())
+        .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+    event_sender
+        .send(ConversationStreamEvent::TurnTerminal {
+            receipt: receipt.clone(),
+        })
+        .map_err(|_| anyhow::anyhow!("test stream event receiver disconnected"))?;
+    Ok(receipt)
 }
 
 #[cfg(test)]
@@ -43,6 +64,7 @@ mod tests {
 
     use super::{
         CONVERSATION_STREAM_CHANNEL_CAPACITY, ConversationStreamEvent, conversation_stream_channel,
+        emit_confirmed_test_terminal_receipt,
     };
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
@@ -120,5 +142,34 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn confirmed_test_stream_emits_correlated_terminal_event_and_return_receipt() {
+        let (sender, receiver) = conversation_stream_channel();
+
+        let returned =
+            emit_confirmed_test_terminal_receipt(&sender, "thread-test", "/tmp/test-workspace")
+                .expect("test terminal stream should emit");
+
+        assert!(matches!(
+            receiver.recv().expect("thread event should arrive"),
+            ConversationStreamEvent::ThreadPrepared {
+                ref thread_id,
+                ref cwd,
+                ..
+            } if thread_id == "thread-test" && cwd == "/tmp/test-workspace"
+        ));
+        assert!(matches!(
+            receiver.recv().expect("turn event should arrive"),
+            ConversationStreamEvent::TurnStarted { ref turn_id } if turn_id == "test-turn"
+        ));
+        assert_eq!(
+            receiver.recv().expect("terminal event should arrive"),
+            ConversationStreamEvent::TurnTerminal {
+                receipt: returned.clone(),
+            }
+        );
+        assert!(returned.is_completed_and_confirmed());
     }
 }

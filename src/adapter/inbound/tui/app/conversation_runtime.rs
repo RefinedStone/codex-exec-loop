@@ -426,6 +426,26 @@ pub(super) fn reduce_conversation_runtime(
                 state.clear_interrupt_request();
                 state.status_text = message;
             }
+            TurnStreamUpdate::TurnRetrying {
+                error,
+                correlation_failure,
+                status_text,
+                ..
+            } => {
+                if correlation_failure.is_none() {
+                    state.clear_interrupt_request();
+                    state.status_text = status_text;
+                    state.extend_runtime_notices([format!(
+                        "app-server retrying active turn: {}",
+                        error.summary()
+                    )]);
+                } else {
+                    state.extend_runtime_notices([format!(
+                        "ignored retry notification outside the active turn: {}",
+                        error.summary()
+                    )]);
+                }
+            }
             TurnStreamUpdate::TurnCompleted {
                 turn_id,
                 changed_planning_file_paths,
@@ -448,6 +468,24 @@ pub(super) fn reduce_conversation_runtime(
                     effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
                 }
             }
+            TurnStreamUpdate::TurnTerminal {
+                receipt,
+                status_text,
+                ..
+            } => {
+                let approval_was_pending = state.pending_approval_request.is_some();
+                state.fail_turn(receipt.status_error_summary());
+                state.status_text = status_text;
+                if approval_was_pending {
+                    effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
+                }
+            }
+            TurnStreamUpdate::TurnTerminalIgnored { receipt, reason } => {
+                state.extend_runtime_notices([format!(
+                    "ignored terminal receipt for {}: {reason:?}",
+                    receipt.turn_id
+                )]);
+            }
             TurnStreamUpdate::Failed {
                 message,
                 status_text: _,
@@ -459,6 +497,11 @@ pub(super) fn reduce_conversation_runtime(
                 if approval_was_pending {
                     effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
                 }
+            }
+            TurnStreamUpdate::RuntimeFailureIgnored { message } => {
+                state.extend_runtime_notices([format!(
+                    "ignored runtime failure after terminal receipt: {message}"
+                )]);
             }
             TurnStreamUpdate::RuntimeNotice { notice } => {
                 // Execution-layer notices come from effect runners, not provider
@@ -685,9 +728,42 @@ mod tests {
 
     fn stream_snapshot_event(event: ConversationStreamEvent) -> ConversationRuntimeEvent {
         let mut stream_state = TurnStreamState::new();
+        if let ConversationStreamEvent::TurnTerminal { receipt } = &event {
+            stream_state.seed_loaded_thread_identity(
+                receipt.thread_id.clone(),
+                "Test thread",
+                "/tmp/workspace",
+            );
+            stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+                turn_id: receipt.turn_id.clone(),
+            });
+        }
         ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
             stream_state.apply_stream_event(core_turn_stream_event_from_application(event)),
         ))
+    }
+
+    fn completed_stream_event(thread_id: &str, turn_id: &str) -> ConversationStreamEvent {
+        let receipt = crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
+            thread_id,
+            turn_id,
+            Vec::new(),
+        )
+        .with_application_delivery(
+            crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
+        );
+        ConversationStreamEvent::TurnTerminal { receipt }
+    }
+
+    fn terminal_stream_event(
+        outcome: crate::domain::turn_terminal::ConversationTurnTerminalOutcome,
+        delivery: crate::domain::turn_terminal::ConversationTurnApplicationDelivery,
+    ) -> ConversationStreamEvent {
+        let receipt = crate::domain::turn_terminal::ConversationTurnTerminalReceipt::new(
+            "thread-1", "turn-1", outcome,
+        )
+        .with_application_delivery(delivery);
+        ConversationStreamEvent::TurnTerminal { receipt }
     }
 
     fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
@@ -1129,10 +1205,7 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             reduction.state,
-            stream_snapshot_event(ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-auto-1".to_string(),
-                changed_planning_file_paths: Vec::new(),
-            }),
+            stream_snapshot_event(completed_stream_event("thread-1", "turn-auto-1")),
         );
 
         assert_eq!(reduction.state.auto_follow_state.progress_label(), "1/20");
@@ -1141,6 +1214,76 @@ mod tests {
             "completed auto turn must hold manual intake until post-turn evaluation settles"
         );
         assert!(!reduction.state.can_accept_manual_prompt());
+    }
+
+    #[test]
+    fn only_confirmed_completed_terminal_queues_post_turn_evaluation() {
+        use crate::domain::turn_terminal::{
+            ConversationTurnApplicationDelivery, ConversationTurnApplicationDeliveryFailure,
+            ConversationTurnError, ConversationTurnTerminalOutcome,
+            ConversationTurnTerminalUncertainty,
+        };
+
+        let terminal_events = [
+            terminal_stream_event(
+                ConversationTurnTerminalOutcome::Interrupted,
+                ConversationTurnApplicationDelivery::Confirmed,
+            ),
+            terminal_stream_event(
+                ConversationTurnTerminalOutcome::Failed {
+                    error: ConversationTurnError::new("provider failed", None::<&str>, None),
+                },
+                ConversationTurnApplicationDelivery::Confirmed,
+            ),
+            terminal_stream_event(
+                ConversationTurnTerminalOutcome::Unknown {
+                    reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+                    observed_error: None,
+                },
+                ConversationTurnApplicationDelivery::Confirmed,
+            ),
+            terminal_stream_event(
+                ConversationTurnTerminalOutcome::Completed,
+                ConversationTurnApplicationDelivery::Unconfirmed(
+                    ConversationTurnApplicationDeliveryFailure::Disconnected,
+                ),
+            ),
+        ];
+
+        for event in terminal_events {
+            let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+            state.thread_id = "thread-1".to_string();
+            let reduction = reduce_conversation_runtime(state, stream_snapshot_event(event));
+
+            assert!(reduction.effects.iter().all(|effect| !matches!(
+                effect,
+                ConversationRuntimeEffect::EvaluatePostTurn { .. }
+            )));
+            assert!(reduction.state.can_accept_manual_prompt());
+        }
+
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.thread_id = "thread-1".to_string();
+        let recovery_pending = reduce_conversation_runtime(
+            state,
+            stream_snapshot_event(terminal_stream_event(
+                ConversationTurnTerminalOutcome::Completed,
+                ConversationTurnApplicationDelivery::Unconfirmed(
+                    ConversationTurnApplicationDeliveryFailure::Disconnected,
+                ),
+            )),
+        );
+
+        assert_eq!(recovery_pending.state.status_text, "turn recovery pending");
+        assert!(
+            recovery_pending
+                .state
+                .messages
+                .iter()
+                .any(|message| message.kind == ConversationMessageKind::Status
+                    && message.text.contains("recovery pending")
+                    && message.text.contains("application delivery unconfirmed"))
+        );
     }
 
     #[test]
@@ -1160,10 +1303,7 @@ mod tests {
 
         let reduction = reduce_conversation_runtime(
             state,
-            stream_snapshot_event(ConversationStreamEvent::TurnCompleted {
-                turn_id: "turn-1".to_string(),
-                changed_planning_file_paths: Vec::new(),
-            }),
+            stream_snapshot_event(completed_stream_event("thread-1", "turn-1")),
         );
 
         assert!(reduction.effects.iter().any(|effect| matches!(
@@ -1201,10 +1341,23 @@ mod tests {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.thread_id = "thread-1".to_string();
         state.replace_active_turn_workspace_directory("/tmp/workspace".to_string());
+        let expected_lease = crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot::new(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            "akra-agent/slot-1/task-1",
+            "/tmp/workspace",
+            crate::domain::parallel_mode::ParallelModeSlotLeaseState::Running,
+            "2026-07-12T00:00:00Z",
+            Some("2026-07-12T00:00:01Z".to_string()),
+        )
+        .with_lease_generation("a".repeat(64));
         let snapshot_capture = PlanningTurnExecutionSnapshotCapture::ready(
             "/tmp/workspace",
             PlanningExecutionSnapshot::default(),
-        );
+        )
+        .with_parallel_slot_lease(Some(expected_lease.clone()));
 
         let reduction = with_akra_event_trace(|| {
             reduce_conversation_runtime(
@@ -1231,6 +1384,10 @@ mod tests {
             })
             .expect("turn completion should queue post-turn evaluation with the snapshot capture");
         assert_eq!(post_turn_effect, snapshot_capture);
+        assert_eq!(
+            post_turn_effect.parallel_slot_lease.as_deref(),
+            Some(&expected_lease)
+        );
     }
 
     #[test]

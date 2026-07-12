@@ -1,5 +1,6 @@
 use std::sync::mpsc;
 
+#[cfg(test)]
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::control_plane::{
@@ -10,8 +11,7 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 #[cfg(test)]
 use crate::application::service::planning::PlanningTaskToolUseCases;
 use crate::application::service::planning::{
-    PlanningRuntimeUseCases, PlanningServices, PlanningTurnExecutionSnapshotCapture,
-    PlanningWorkspaceUseCases,
+    PlanningRuntimeUseCases, PlanningServices, PlanningWorkspaceUseCases,
 };
 #[cfg(test)]
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
@@ -21,10 +21,12 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
+#[cfg(test)]
+use crate::core::app::TurnStreamEvent;
 use crate::core::app::{
     AppCommand, AppEvent, ConversationLoadCorrelation,
     ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome, CoreInput,
-    SessionCatalogSnapshot, StartupCheckCorrelation, StartupSnapshot, TurnStreamEvent,
+    SessionCatalogSnapshot, StartupCheckCorrelation, StartupSnapshot,
 };
 use crate::core::runtime::{CoreRuntime, core_input_channel};
 #[cfg(test)]
@@ -65,11 +67,10 @@ pub(super) enum BackgroundMessage {
     StartupLoaded(Result<Box<StartupReadySnapshot>, String>),
     #[cfg(test)]
     ConversationLoaded(Result<ConversationSnapshot, String>),
-    ConversationStream(ConversationStreamEvent),
-    ConversationTurnCompleted {
-        turn_id: String,
-        changed_planning_file_paths: Vec<String>,
-        execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
+    #[cfg(test)]
+    ConversationStream {
+        correlation: crate::core::app::TurnSubmissionCorrelation,
+        event: ConversationStreamEvent,
     },
     ConversationRuntimeNotice(String),
     OperatorAlert(OperatorAlert),
@@ -111,6 +112,7 @@ impl NativeTuiAppRuntimeChannels {
     }
 }
 
+#[cfg(test)]
 pub(super) fn core_turn_stream_event_from_application(
     event: ConversationStreamEvent,
 ) -> TurnStreamEvent {
@@ -168,12 +170,18 @@ pub(super) fn core_turn_stream_event_from_application(
         ConversationStreamEvent::TurnInterruptRequestFailed { message } => {
             TurnStreamEvent::TurnInterruptRequestFailed { message }
         }
-        ConversationStreamEvent::TurnCompleted {
+        ConversationStreamEvent::TurnRetrying {
+            thread_id,
             turn_id,
-            changed_planning_file_paths,
-        } => TurnStreamEvent::TurnCompleted {
+            error,
+        } => TurnStreamEvent::TurnRetrying {
+            thread_id,
             turn_id,
-            changed_planning_file_paths,
+            error,
+        },
+        ConversationStreamEvent::TurnTerminal { receipt } => TurnStreamEvent::TurnTerminal {
+            receipt,
+            execution_snapshot_capture: None,
         },
         ConversationStreamEvent::Failed { message } => TurnStreamEvent::Failed { message },
     }
@@ -224,6 +232,15 @@ mod tests {
             rationale: Some("needs approval".to_string()),
         };
         let attachment_profile = TerminalBridgeAttachmentProfile::codex_app_server_launch();
+        let terminal_receipt =
+            crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
+                "thread-1",
+                "turn-1",
+                vec!["docs/plan.md".to_string()],
+            )
+            .with_application_delivery(
+                crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
+            );
 
         let cases = vec![
             (
@@ -297,13 +314,12 @@ mod tests {
                 TurnStreamEvent::ApprovalReviewUpdated { review },
             ),
             (
-                ConversationStreamEvent::TurnCompleted {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: vec!["docs/plan.md".to_string()],
+                ConversationStreamEvent::TurnTerminal {
+                    receipt: terminal_receipt.clone(),
                 },
-                TurnStreamEvent::TurnCompleted {
-                    turn_id: "turn-1".to_string(),
-                    changed_planning_file_paths: vec!["docs/plan.md".to_string()],
+                TurnStreamEvent::TurnTerminal {
+                    receipt: terminal_receipt,
+                    execution_snapshot_capture: None,
                 },
             ),
             (
@@ -521,22 +537,30 @@ mod tests {
 
         fn run_new_thread_stream(
             &self,
-            _cwd: &str,
+            cwd: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-        ) -> Result<()> {
-            Ok(())
+            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+                &event_sender,
+                "test-thread",
+                cwd,
+            )
         }
 
         fn run_turn_stream(
             &self,
-            _thread_id: &str,
+            thread_id: &str,
             _prompt: &str,
             _options: crate::domain::conversation::ConversationTurnOptions,
-            _event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
-        ) -> Result<()> {
-            Ok(())
+            event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
+        ) -> Result<crate::domain::turn_terminal::ConversationTurnTerminalReceipt> {
+            crate::application::service::conversation_runtime_event::emit_confirmed_test_terminal_receipt(
+                &event_sender,
+                thread_id,
+                "/tmp/test-workspace",
+            )
         }
     }
 
