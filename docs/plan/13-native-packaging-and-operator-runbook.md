@@ -88,10 +88,15 @@ therefore produce byte-identical archive and checksum files.
 
 ## Operator Prerequisites
 
-- Codex CLI installed and on `PATH`
+- Official Codex CLI installed and on `PATH`
 - Codex login already completed
 - access to the target workspace
 - normal access to `~/.codex/history.jsonl` and `~/.codex/sessions/`
+- on Linux, either an official complete-package install with its adjacent `codex-resources/bwrap`
+  helper or a compatible system `bwrap`; the simple one-binary platform tar is unsupported when no
+  system helper is present because sandboxed commands fail even though version/startup probes pass
+- on Unix, a private `$CODEX_HOME` (default `~/.codex`) whose existing auth and rollout files are not
+  group/world accessible; Akra does not repair upstream file modes
 
 Rust is not required on the operator machine after the bundle is built.
 
@@ -143,13 +148,15 @@ Useful env vars:
 
 ## Smoke Checklist
 
-1. Start the binary from a real workspace.
-2. Confirm startup diagnostics pass.
-3. Open recent sessions or start a new draft.
-4. Send one prompt and confirm streaming output appears.
-5. Open `:planning` once if planning is part of the workflow.
-6. Open `:queue` once and confirm the compact queue summary appears.
-7. If GitHub polling is expected, set `CODEX_EXEC_LOOP_GITHUB_PR` and confirm the shell shows an active GitHub state.
+1. On Linux, run `codex sandbox -C "$PWD" -P :read-only /usr/bin/true` and require exit zero before
+   launching Akra; `codex --version` alone does not prove sandbox readiness.
+2. Start the binary from a real workspace.
+3. Confirm startup diagnostics pass.
+4. Open recent sessions or start a new draft.
+5. Send one prompt and confirm streaming output appears.
+6. Open `:planning` once if planning is part of the workflow.
+7. Open `:queue` once and confirm the compact queue summary appears.
+8. If GitHub polling is expected, set `CODEX_EXEC_LOOP_GITHUB_PR` and confirm the shell shows an active GitHub state.
 
 ## Validation Handoff
 

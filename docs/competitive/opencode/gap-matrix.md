@@ -323,6 +323,9 @@ retain their current fail-closed behavior until separate P2 slices land.
 - require server request ID, method, `threadId`, `turnId`, and `itemId` for command/permission
   ownership; only the distinct `approvalId` callback may be absent. Also retain child generation,
   workspace ownership, request age, decision-source classification, and bounded inspectable facts;
+- permit the pinned protocol's network-only command approval shape to omit command and cwd while
+  requiring its network/host/protocol facts; a missing command is not by itself malformed when the
+  official request identifies that shape;
 - model command decisions separately: one-shot accept, session accept, exec-policy amendment,
   network-policy amendment, decline-and-continue, and cancel/interrupt;
 - classify `availableDecisions` before rendering: a non-empty valid array exposes exactly its offered
@@ -340,9 +343,12 @@ retain their current fail-closed behavior until separate P2 slices land.
 - key local ownership by child generation, method, server request, workspace, thread, turn, and
   callback/item identity; a compare-and-set permits at most one local response write;
 - represent `pending -> locally_decided -> write_attempted -> write_confirmed` as local transport
-  facts. The pinned protocol provides no general remote-resolution acknowledgement, so remote state
-  remains unknown unless a later method supplies explicit evidence. Disconnect or timeout after a
-  write never becomes a fabricated accepted/declined terminal result;
+  facts. From any live local state, a matching `serverRequest/resolved` advances the request to
+  `remote_cleared` while preserving the last local fact: it proves the server no longer has that
+  pending request, including lifecycle cleanup before a write, but does not prove the decision was
+  accepted, consumed, or applied. Only the correlated authoritative item/turn outcome settles
+  effect. Disconnect or timeout after a write never becomes a fabricated accepted/declined terminal
+  result;
 - timeout, disconnect, interrupt, stale turn, duplicate response, and late UI action close local UI
   authority and remain auditable without claiming that the remote side consumed a response;
 - on deadline or UI-queue loss before an operator decision, if the same child generation and
@@ -369,8 +375,11 @@ overstated.
 - round-trip response serialization against pinned official app-server fixtures;
 - command and permission modal tests at narrow/wide terminal sizes;
 - second-confirmation and scope-copy tests for persistent decisions;
-- duplicate, timeout, disconnect-before-write, disconnect-after-write-before-ack, interrupt,
-  stale-child/turn/workspace, callback-ID, late-action, and remote-observation race tests;
+- duplicate, timeout, disconnect-before-write, disconnect-after-write-before-clear, interrupt,
+  stale-child/turn/workspace, callback-ID, late-action, missing/mismatched/duplicate
+  `serverRequest/resolved`, lifecycle-cleanup-before/after-write, and authoritative-outcome race
+  tests;
+- network-only request fixtures with omitted command/cwd plus malformed lookalikes;
 - timeout-before-decision with a live child proves either one decline write or an explicit recovery-
   owned interrupt/termination transition, never an ownerless pending request;
 - UI-queue loss and missing/mismatched required thread/turn/item identity prove the same decline-or-
