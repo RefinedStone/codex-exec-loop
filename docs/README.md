@@ -64,6 +64,13 @@ adoption decision.
   Server, ACP, and Automation source ledger, release-gate output, and audit limits
 - [competitive/agent-canvas/gap-matrix.md](competitive/agent-canvas/gap-matrix.md): Codex-first
   adoption boundaries, truthful fleet-operation gaps, and reviewable Akra slices
+- [competitive/opencode/analysis.md](competitive/opencode/analysis.md): OpenCode v1.17.18 TUI,
+  attach/server, desktop/web/IDE, GitHub automation, performance, and trust-boundary deep dive
+- [competitive/opencode/evidence.md](competitive/opencode/evidence.md): immutable release/source
+  ledger, reproduced tests and resolved-secret canary, artifact identity, and audit limits
+- [competitive/opencode/gap-matrix.md](competitive/opencode/gap-matrix.md): Akra-relative adoption
+  boundaries, attach/recovery and permission/secret lessons, reviewed-delivery differentiation, and
+  dependency-aware session/TUI amendments
 
 ## Implemented Surfaces
 
