@@ -859,7 +859,9 @@ fn confirmed_exit_hides_modal_then_quits_after_redraw() {
     assert!(!runtime.app().is_exit_confirmation_visible());
     assert!(runtime.take_redraw_request());
 
-    runtime.finish_pending_quit_after_draw();
+    runtime.finish_pending_quit_after_transaction(false);
+    assert!(!runtime.should_quit());
+    runtime.finish_pending_quit_after_transaction(true);
     assert!(runtime.should_quit());
 }
 #[test]

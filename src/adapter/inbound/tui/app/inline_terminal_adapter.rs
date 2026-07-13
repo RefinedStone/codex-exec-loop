@@ -55,6 +55,12 @@ struct InlineTerminalSyncPolicy {
     parallel_mode_enabled: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineViewportSync {
+    Deferred,
+    Stable { redraw_required: bool },
+}
+
 impl InlineTerminalSyncPolicy {
     fn from_app(app: &NativeTuiApp) -> Self {
         Self {
@@ -86,7 +92,7 @@ impl<B: InlineResizeBackend> InlineTerminalAdapter<B> {
     pub(super) fn draw_inline_transaction(
         &mut self,
         runtime: &mut ShellRuntime,
-    ) -> Result<(), B::Error> {
+    ) -> Result<bool, B::Error> {
         draw_inline_transaction(&mut self.terminal, runtime, &mut self.state)
     }
 }
@@ -95,23 +101,28 @@ pub(super) fn draw_inline_transaction<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
-) -> Result<(), B::Error> {
+) -> Result<bool, B::Error> {
     /*
      * A transaction first reconciles durable history and geometry, then redraws
      * only if the visible tail may differ. This keeps every terminal tick cheap
      * when no stream text, history insertion, overlay, or resize changed state.
      */
-    if sync_inline_viewport(terminal, runtime, inline_terminal)? {
-        draw_inline_frame(terminal, runtime, inline_terminal)?;
+    let InlineViewportSync::Stable { redraw_required } =
+        sync_inline_viewport_transaction(terminal, runtime, inline_terminal)?
+    else {
+        return Ok(false);
+    };
+    if redraw_required && !draw_inline_frame(terminal, runtime, inline_terminal)? {
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }
 
 fn draw_inline_frame<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
-) -> Result<(), B::Error> {
+) -> Result<bool, B::Error> {
     if !inline_terminal.viewport.back_buffer_trustworthy {
         /*
          * Inline viewport content is not a full-screen alternate buffer. Once
@@ -150,7 +161,8 @@ fn draw_inline_frame<B: InlineResizeBackend>(
          * instead of treating it as an application-driven history fit.
          */
         inline_terminal.invalidate_back_buffer();
-        return Ok(());
+        runtime.request_resize_redraw_retry();
+        return Ok(false);
     }
     /*
      * ratatui reports the actual frame area used for this draw. Recording that
@@ -158,7 +170,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
      * able to decide whether the back buffer is still trustworthy.
      */
     inline_terminal.mark_frame_drawn(terminal_size, drawn_viewport_area, cursor_position);
-    Ok(())
+    Ok(true)
 }
 
 fn clear_inline_viewport<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
@@ -178,11 +190,23 @@ fn clear_visible_inline_rows<B: Backend>(terminal: &mut Terminal<B>) -> Result<(
     terminal.backend_mut().flush()
 }
 
+#[cfg(test)]
 fn sync_inline_viewport<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
 ) -> Result<bool, B::Error> {
+    match sync_inline_viewport_transaction(terminal, runtime, inline_terminal)? {
+        InlineViewportSync::Deferred => Ok(false),
+        InlineViewportSync::Stable { redraw_required } => Ok(redraw_required),
+    }
+}
+
+fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
+    terminal: &mut Terminal<B>,
+    runtime: &mut ShellRuntime,
+    inline_terminal: &mut InlineTerminalState,
+) -> Result<InlineViewportSync, B::Error> {
     // Capture render settings before mutating terminal state so one transaction uses
     // a stable compatibility policy snapshot instead of ad hoc env-owned fields.
     let policy = {
@@ -199,8 +223,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         .backend_mut()
         .observe_resize_epoch(resize_event_epoch);
     let Some(resize_snapshot) = autoresize_inline_viewport(terminal)? else {
-        inline_terminal.invalidate_back_buffer();
-        return Ok(false);
+        defer_resize_redraw(runtime, inline_terminal);
+        return Ok(InlineViewportSync::Deferred);
     };
     let terminal_size = resize_snapshot.size;
     let physical_terminal_resized = inline_terminal.physical_terminal_resized(resize_snapshot);
@@ -210,8 +234,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         .backend()
         .matches_resize_snapshot(resize_snapshot)?
     {
-        inline_terminal.invalidate_back_buffer();
-        return Ok(false);
+        defer_resize_redraw(runtime, inline_terminal);
+        return Ok(InlineViewportSync::Deferred);
     }
     let Some(insert_mode) = policy.host_insert_mode() else {
         /*
@@ -224,8 +248,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
             .backend()
             .matches_resize_snapshot(resize_snapshot)?
         {
-            inline_terminal.invalidate_back_buffer();
-            return Ok(false);
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
         }
         inline_terminal
             .history_flush
@@ -240,7 +264,9 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
             viewport_area.width,
             viewport_area.height,
         );
-        return Ok(tail_frame_changed);
+        return Ok(InlineViewportSync::Stable {
+            redraw_required: tail_frame_changed,
+        });
     };
     let parallel_history_pending = policy.parallel_mode_enabled
         && inline_terminal
@@ -254,8 +280,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
             .backend()
             .matches_resize_snapshot(resize_snapshot)?
         {
-            inline_terminal.invalidate_back_buffer();
-            return Ok(false);
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
         }
         /*
          * Parallel mode streams event rows into host scrollback while redrawing
@@ -270,7 +296,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
             .backend()
             .matches_resize_snapshot(resize_snapshot)?
         {
-            return Ok(false);
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
         }
     }
     let visible_history_adjusted = if physical_terminal_resized {
@@ -278,8 +305,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
             .backend()
             .matches_resize_snapshot(resize_snapshot)?
         {
-            inline_terminal.invalidate_back_buffer();
-            return Ok(false);
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
         }
         inline_terminal
             .history_flush
@@ -291,8 +318,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
             viewport_area,
         )?
         else {
-            inline_terminal.invalidate_back_buffer();
-            return Ok(false);
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
         };
         adjusted
     };
@@ -330,8 +357,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         } else {
             inline_terminal.history_flush.visible_history_rows = visible_history_rows_before;
         }
-        inline_terminal.invalidate_back_buffer();
-        return Ok(false);
+        defer_resize_redraw(runtime, inline_terminal);
+        return Ok(InlineViewportSync::Deferred);
     }
     if history_sync.inserted() {
         inline_terminal.invalidate_back_buffer();
@@ -348,8 +375,8 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         inline_terminal
             .history_flush
             .mark_visible_history_rows_dirty();
-        inline_terminal.invalidate_back_buffer();
-        return Ok(false);
+        defer_resize_redraw(runtime, inline_terminal);
+        return Ok(InlineViewportSync::Deferred);
     }
     if physical_terminal_resized {
         inline_terminal.invalidate_back_buffer();
@@ -362,8 +389,16 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         viewport_area.width,
         viewport_area.height,
     );
-    Ok(visible_history_adjusted || history_sync.inserted() || tail_frame_changed)
+    Ok(InlineViewportSync::Stable {
+        redraw_required: visible_history_adjusted || history_sync.inserted() || tail_frame_changed,
+    })
 }
+
+fn defer_resize_redraw(runtime: &mut ShellRuntime, inline_terminal: &mut InlineTerminalState) {
+    inline_terminal.invalidate_back_buffer();
+    runtime.request_resize_redraw_retry();
+}
+
 fn current_viewport_area<B: Backend>(terminal: &mut Terminal<B>) -> Rect {
     terminal.get_frame().area()
 }

@@ -15,6 +15,7 @@ use super::app_runtime::TUI_BACKGROUND_CHANNEL_CAPACITY;
 use super::{BackgroundMessage, InputCursorMovement, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
+const TERMINAL_RESIZE_RETRY_DELAY: Duration = Duration::from_millis(16);
 const _: () = assert!(TUI_BACKGROUND_CHANNEL_CAPACITY > BACKGROUND_MESSAGE_DRAIN_BUDGET);
 
 /* ShellRuntime is the thin event-loop owner around NativeTuiApp. It drains
@@ -77,8 +78,17 @@ impl ShellRuntime {
     fn request_redraw_at(&mut self, now: Instant) {
         self.frame_scheduler.request_immediate(now);
     }
-    pub(super) fn finish_pending_quit_after_draw(&mut self) {
-        if self.quit_after_redraw {
+    pub(super) fn request_resize_redraw_retry(&mut self) {
+        self.request_resize_redraw_retry_at(Instant::now());
+    }
+    fn request_resize_redraw_retry_at(&mut self, now: Instant) {
+        // A short delay prevents an unstable terminal from spinning while still
+        // repairing a deferred frame without waiting for another input event.
+        self.frame_scheduler
+            .request_delayed(now, TERMINAL_RESIZE_RETRY_DELAY);
+    }
+    pub(super) fn finish_pending_quit_after_transaction(&mut self, transaction_completed: bool) {
+        if transaction_completed && self.quit_after_redraw {
             self.quit_after_redraw = false;
             self.should_quit = true;
         }

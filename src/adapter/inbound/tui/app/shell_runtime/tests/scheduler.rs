@@ -6,7 +6,7 @@ use crossterm::event::Event;
 
 use super::{
     BACKGROUND_MESSAGE_DRAIN_BUDGET, BackgroundMessage, ConversationState, ShellOverlay,
-    TuiFrameScheduler, make_test_runtime,
+    TERMINAL_RESIZE_RETRY_DELAY, TuiFrameScheduler, make_test_runtime,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
@@ -63,6 +63,36 @@ fn scheduler_reports_zero_timeout_when_draw_is_due() {
         scheduler.next_poll_timeout(now, Duration::from_millis(100)),
         Duration::ZERO
     );
+}
+
+#[test]
+fn resize_retry_is_delayed_coalesced_and_preserved_while_unfocused() {
+    let mut runtime = make_test_runtime();
+    runtime.take_redraw_request();
+    let now = Instant::now();
+
+    runtime.request_resize_redraw_retry_at(now);
+    runtime.request_resize_redraw_retry_at(now + Duration::from_millis(1));
+
+    assert_eq!(
+        runtime.next_event_poll_timeout(now, Duration::from_secs(1)),
+        TERMINAL_RESIZE_RETRY_DELAY
+    );
+    assert!(!runtime.take_due_draw_request(now + Duration::from_millis(15)));
+    assert!(runtime.take_due_draw_request(now + TERMINAL_RESIZE_RETRY_DELAY));
+
+    runtime.request_resize_redraw_retry_at(now + TERMINAL_RESIZE_RETRY_DELAY);
+    let pending_deadline = runtime.frame_scheduler.next_deadline;
+    runtime.handle_terminal_event_at(Event::FocusLost, now + Duration::from_millis(17));
+    assert!(!runtime.take_due_draw_request(now + Duration::from_millis(32)));
+    assert_eq!(runtime.frame_scheduler.next_deadline, pending_deadline);
+    assert_eq!(
+        runtime.next_event_poll_timeout(now + Duration::from_millis(32), Duration::from_secs(1)),
+        Duration::from_secs(1)
+    );
+
+    runtime.handle_terminal_event_at(Event::FocusGained, now + Duration::from_millis(33));
+    assert!(runtime.take_due_draw_request(now + Duration::from_millis(33)));
 }
 
 #[test]

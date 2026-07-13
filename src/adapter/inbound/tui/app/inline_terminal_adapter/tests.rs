@@ -27,6 +27,7 @@ use ratatui::{Terminal, Viewport};
 use std::cell::Cell as StdCell;
 use std::convert::Infallible;
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 // These tests pin the terminal-adapter contract between committed host
 // history and the live inline tail. They intentionally exercise both
@@ -1787,7 +1788,12 @@ fn draw_resize_races_defer_physical_history_reconciliation() {
         let mut inline_terminal = InlineTerminalState::default();
 
         assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
-        draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+        assert!(draw_test_frame(
+            &mut terminal,
+            &mut runtime,
+            &mut inline_terminal
+        ));
+        assert!(runtime.take_redraw_request());
         inline_terminal.history_flush.visible_history_rows = 30;
 
         if resize_after_flush {
@@ -1801,7 +1807,15 @@ fn draw_resize_races_defer_physical_history_reconciliation() {
                 .inner_mut()
                 .resize_and_clamp_cursor(48, 10);
         }
-        draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+        assert!(!draw_test_frame(
+            &mut terminal,
+            &mut runtime,
+            &mut inline_terminal
+        ));
+        assert_resize_retry_scheduled(
+            &mut runtime,
+            "draw-time resize must schedule a follow-up frame",
+        );
 
         assert_eq!(
             inline_terminal.last_known_screen_size(),
@@ -2103,7 +2117,7 @@ fn autoresize_retries_sampled_shrink_restore_before_history_mutation() {
 }
 
 #[test]
-fn unstable_resize_does_not_spin_or_mutate_history_accounting() {
+fn unstable_resize_retries_before_pending_quit_and_history_reconciliation() {
     let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
     inner
         .set_cursor_position(Position::new(0, 39))
@@ -2121,11 +2135,35 @@ fn unstable_resize_does_not_spin_or_mutate_history_accounting() {
 
     assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
     draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+    assert!(runtime.take_redraw_request());
     inline_terminal.history_flush.visible_history_rows = 30;
+    runtime
+        .app_mut()
+        .dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+    let transaction_completed =
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("exit confirmation should draw before confirmation");
+    assert!(transaction_completed);
+    let modal_screen = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
+    assert!(modal_screen.contains("Akra / Confirm Exit"));
     let appended_lines = terminal.backend_mut().inner().appended_lines();
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('y'),
+        KeyModifiers::NONE,
+    )));
     terminal.backend_mut().inner_mut().report_changing_sizes();
 
-    assert!(!sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert!(runtime.take_redraw_request());
+    let transaction_completed =
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("unstable resize transaction should defer without failing");
+    assert!(!transaction_completed);
+    runtime.finish_pending_quit_after_transaction(transaction_completed);
+    assert!(!runtime.should_quit());
+    assert_resize_retry_scheduled(
+        &mut runtime,
+        "unstable autoresize must schedule a follow-up frame",
+    );
     assert_eq!(
         inline_terminal.last_known_screen_size(),
         Some(Size::new(80, 40)),
@@ -2142,10 +2180,29 @@ fn unstable_resize_does_not_spin_or_mutate_history_accounting() {
         .backend_mut()
         .inner_mut()
         .finish_reported_resize(Size::new(48, 10));
-    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    let transaction_completed =
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("scheduled resize retry should reconcile stable geometry");
+    assert!(transaction_completed);
+    runtime.finish_pending_quit_after_transaction(transaction_completed);
+    assert!(runtime.should_quit());
+    let completed_screen = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
+    assert!(!completed_screen.contains("Akra / Confirm Exit"));
     assert_eq!(
         inline_terminal.last_known_screen_size(),
         Some(Size::new(48, 10))
+    );
+}
+
+fn assert_resize_retry_scheduled(runtime: &mut ShellRuntime, message: &str) {
+    let now = Instant::now();
+    assert!(
+        runtime.next_event_poll_timeout(now, Duration::from_secs(1)) < Duration::from_secs(1),
+        "{message}: frontend poll must wake for the retry"
+    );
+    assert!(
+        runtime.take_due_draw_request(now + Duration::from_secs(1)),
+        "{message}: scheduled deadline must become due"
     );
 }
 
@@ -2517,11 +2574,12 @@ fn draw_test_frame<B>(
     terminal: &mut Terminal<InlineTerminalBackend<B>>,
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
-) where
+) -> bool
+where
     InlineTerminalBackend<B>: InlineResizeBackend,
     <InlineTerminalBackend<B> as Backend>::Error: std::fmt::Debug,
 {
-    draw_inline_frame(terminal, runtime, inline_terminal).expect("draw test frame");
+    draw_inline_frame(terminal, runtime, inline_terminal).expect("draw test frame")
 }
 fn append_history_message(app: &mut NativeTuiApp, text: &str) {
     append_message(app, ConversationMessageKind::Agent, text);
