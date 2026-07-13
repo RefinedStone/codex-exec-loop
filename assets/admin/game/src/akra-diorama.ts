@@ -2,7 +2,16 @@ import "@pixi/unsafe-eval";
 import * as PIXI_RUNTIME from "pixi.js";
 
 type StatusSeverity = "normal" | "success" | "warning" | "danger" | "info" | "muted";
-type TargetKind = "distributor" | "events";
+type VisualState =
+  | "starting"
+  | "working"
+  | "awaiting_review"
+  | "blocked"
+  | "delivering"
+  | "cleanup";
+type StaticPose = "neutral" | "laptop" | "callout" | "alert" | "sit";
+type Facing = "down" | "side" | "up";
+type ArchetypeKey = "planner" | "coffee_addict" | "ai_researcher" | "designer";
 type AssetKey =
   | "fdDesk1"
   | "fdDesk2"
@@ -15,16 +24,10 @@ type AssetKey =
   | "fdSofa"
   | "fdPlant"
   | "agentAtlas";
-type Facing = "down" | "side" | "up";
 
 interface Point {
   x: number;
   y: number;
-}
-
-interface BoardSize {
-  width: number;
-  height: number;
 }
 
 interface PixiScale {
@@ -35,7 +38,6 @@ interface PixiDisplayObject {
   x: number;
   y: number;
   alpha: number;
-  rotation: number;
   zIndex: number;
   scale: PixiScale;
   destroy: (options?: { children?: boolean; texture?: boolean; baseTexture?: boolean }) => void;
@@ -63,13 +65,6 @@ interface PixiSprite extends PixiDisplayObject {
   texture: PixiTexture;
 }
 
-interface PixiText extends PixiDisplayObject {
-  anchor: PixiScale;
-  text: string;
-  width: number;
-  height: number;
-}
-
 interface PixiTexture {
   baseTexture?: unknown;
 }
@@ -79,38 +74,12 @@ interface PixiApplication {
   stage: PixiContainer;
   renderer: {
     resize: (width: number, height: number) => void;
-  };
-  ticker: {
-    add: (handler: (delta: number) => void) => void;
+    render: (displayObject: PixiDisplayObject) => void;
   };
   destroy: (
     removeView?: boolean,
     options?: { children?: boolean; texture?: boolean; baseTexture?: boolean }
   ) => void;
-}
-
-interface AgentUnit {
-  agentId: string;
-  node: HTMLElement;
-  index: number;
-  color: number;
-  group: PixiContainer;
-  ring: PixiGraphics;
-  sprite: PixiSprite | null;
-  speechBubble: AgentSpeechBubble | null;
-  packet: PixiGraphics;
-  frameSet: AgentFrameSet | null;
-  point: Point;
-  destination: Point;
-  phase: number;
-  speed: number;
-  walkSpeed: number;
-  routeIndex: number;
-  waitUntil: number;
-  facing: Facing;
-  facingSign: 1 | -1;
-  isWalking: boolean;
-  targetKind: TargetKind;
 }
 
 interface AgentFrameSet {
@@ -119,10 +88,17 @@ interface AgentFrameSet {
   up: PixiTexture[];
 }
 
-interface AgentSpeechBubble {
+interface AgentUnit {
+  actorId: string;
+  agentId: string;
+  slotId: string;
+  visualState: VisualState;
+  pose: StaticPose;
+  node: HTMLElement;
   group: PixiContainer;
-  background: PixiGraphics;
-  label: PixiText;
+  sprite: PixiSprite | null;
+  marker: PixiGraphics;
+  point: Point;
 }
 
 interface StructureSpec {
@@ -140,24 +116,34 @@ interface StructureSprite {
   sprite: PixiSprite;
 }
 
-interface RoamSnapshot {
-  point: Point;
-  destination: Point;
-  routeIndex: number;
-  waitUntil: number;
+interface SceneInspection {
+  ready: boolean;
+  actorCount: number;
+  packetCount: 0;
+  semanticMotionCount: 0;
+  renderCount: number;
+  actors: Array<{
+    actorId: string;
+    agentId: string;
+    slotId: string;
+    visualState: VisualState;
+    pose: StaticPose;
+    x: number;
+    y: number;
+  }>;
 }
 
 interface DioramaHandle {
   app: PixiApplication;
   destroy: () => void;
   rebuildAgentUnits: () => void;
-  setSpeechBubblesEnabled: (enabled: boolean) => void;
   syncLayout: () => void;
+  inspectScene: () => SceneInspection;
 }
 
 interface AkraAdminGameBridge {
   mountDiorama?: () => DioramaHandle | null;
-  setSpeechBubblesEnabled?: (enabled: boolean) => void;
+  inspectScene?: () => SceneInspection | null;
   [key: string]: unknown;
 }
 
@@ -166,13 +152,8 @@ const AGENT_FRAME_HEIGHT = 192;
 const AGENT_SPRITE_SCALE = 0.4675;
 const AGENT_SHADOW_WIDTH = 26.35;
 const AGENT_SHADOW_HEIGHT = 6.8;
-const AGENT_RING_WIDTH = 21.25;
-const AGENT_RING_HEIGHT = 5.95;
-const AGENT_SPEECH_BUBBLES_DEFAULT_ENABLED = true;
-const AGENT_SPEECH_BUBBLE_MAX_WIDTH = 116;
-const AGENT_SPEECH_BUBBLE_MIN_WIDTH = 54;
-const AGENT_SPEECH_BUBBLE_TAIL_HEIGHT = 7;
-const AGENT_SPEECH_BUBBLE_HEAD_GAP = 8;
+const AGENT_MARKER_WIDTH = 21.25;
+const AGENT_MARKER_HEIGHT = 5.95;
 const MAP_WIDTH = 1671;
 const MAP_HEIGHT = 941;
 
@@ -183,22 +164,6 @@ const SLOT_SEATS: Point[] = [
   { x: 760, y: 565 },
   { x: 1030, y: 570 },
 ];
-
-const ROAM_POINTS: Point[] = [
-  { x: 535, y: 470 },
-  { x: 700, y: 485 },
-  { x: 880, y: 575 },
-  { x: 1065, y: 530 },
-  { x: 905, y: 660 },
-  { x: 630, y: 665 },
-  { x: 1130, y: 395 },
-  { x: 790, y: 370 },
-];
-
-const TARGET_POINTS: Record<TargetKind, Point> = {
-  distributor: { x: 1060, y: 300 },
-  events: { x: 1330, y: 390 },
-};
 
 const STRUCTURE_SPECS: StructureSpec[] = [
   { key: "fdDesk1", x: 470, y: 405, scale: 0.62 },
@@ -215,6 +180,24 @@ const STRUCTURE_SPECS: StructureSpec[] = [
   { key: "fdPlant", x: 1185, y: 620, scale: 0.7 },
 ];
 
+const STATIC_POSE_MANIFEST: Record<VisualState, { facing: Facing; frameIndex: number }> = {
+  starting: { facing: "side", frameIndex: 0 },
+  working: { facing: "down", frameIndex: 0 },
+  awaiting_review: { facing: "up", frameIndex: 0 },
+  blocked: { facing: "side", frameIndex: 0 },
+  delivering: { facing: "up", frameIndex: 0 },
+  cleanup: { facing: "down", frameIndex: 0 },
+};
+
+const ARCHETYPE_BY_PROFILE: Record<string, ArchetypeKey> = {
+  Artificer: "planner",
+  Seer: "planner",
+  Scribe: "coffee_addict",
+  Runner: "coffee_addict",
+  Guardian: "ai_researcher",
+  Ranger: "designer",
+};
+
 const PIXI = PIXI_RUNTIME as unknown as {
   Application: new (options: Record<string, unknown>) => PixiApplication;
   BaseTexture: { defaultOptions: { scaleMode?: unknown } };
@@ -222,12 +205,9 @@ const PIXI = PIXI_RUNTIME as unknown as {
   Graphics: new () => PixiGraphics;
   Container: new () => PixiContainer;
   Sprite: new (texture: PixiTexture) => PixiSprite;
-  Text?: new (text: string, style: Record<string, unknown>) => PixiText;
   Texture: new (baseTexture: unknown, frame: unknown) => PixiTexture;
   Rectangle: new (x: number, y: number, width: number, height: number) => unknown;
-  Assets: {
-    load: (url: string) => Promise<PixiTexture>;
-  };
+  Assets: { load: (url: string) => Promise<PixiTexture> };
 };
 
 declare global {
@@ -247,15 +227,30 @@ declare global {
     value === "info" ||
     value === "muted";
 
+  const isVisualState = (value: string | undefined): value is VisualState =>
+    value === "starting" ||
+    value === "working" ||
+    value === "awaiting_review" ||
+    value === "blocked" ||
+    value === "delivering" ||
+    value === "cleanup";
+
+  const isStaticPose = (value: string | undefined): value is StaticPose =>
+    value === "neutral" ||
+    value === "laptop" ||
+    value === "callout" ||
+    value === "alert" ||
+    value === "sit";
+
   const isPixiTexture = (texture: PixiTexture | null): texture is PixiTexture =>
     texture !== null;
 
   const mountDiorama = (): DioramaHandle | null => {
     const container = document.getElementById("pixi-diorama");
     if (!container) return null;
-
     const boardEl = container.closest<HTMLElement>(".office-board");
     if (!boardEl || container.dataset.akraDioramaMounted === "true") return null;
+
     container.dataset.akraDioramaMounted = "true";
     const initialWidth = boardEl.offsetWidth || 900;
     const initialHeight = boardEl.offsetHeight || 540;
@@ -264,12 +259,12 @@ declare global {
       height: initialHeight,
       backgroundAlpha: 0,
       antialias: false,
-      resolution: window.devicePixelRatio || 1,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
+      autoStart: false,
       hello: false,
     });
     container.appendChild(app.view);
-
     PIXI.BaseTexture.defaultOptions.scaleMode = PIXI.SCALE_MODES.NEAREST;
 
     const basePath = "/admin/assets/graphics/";
@@ -289,12 +284,10 @@ declare global {
 
     const root = boardEl.closest<HTMLElement>("[data-admin-graphic]");
     const structureLayer = new PIXI.Container();
-    const pathLayer = new PIXI.Graphics();
-    const packetLayer = new PIXI.Container();
     const agentLayer = new PIXI.Container();
     structureLayer.sortableChildren = true;
     agentLayer.sortableChildren = true;
-    app.stage.addChild(structureLayer, agentLayer, pathLayer, packetLayer);
+    app.stage.addChild(structureLayer, agentLayer);
 
     const statusPalette: Record<StatusSeverity, number> = {
       normal: 0x35d07f,
@@ -306,34 +299,39 @@ declare global {
     };
 
     let textures: Partial<Record<AssetKey, PixiTexture>> = {};
-    let agentFrameSets: AgentFrameSet[] = [];
+    let agentFrameSets: Partial<Record<ArchetypeKey, AgentFrameSet>> = {};
     let agentUnits: AgentUnit[] = [];
     let structureSprites: StructureSprite[] = [];
-    let roamSnapshots = new Map<string, RoamSnapshot>();
-    let stageBurst = 0;
-    let elapsed = 0;
-    let speechBubblesEnabled = AGENT_SPEECH_BUBBLES_DEFAULT_ENABLED;
     let resizeObserver: ResizeObserver | null = null;
+    let renderRequestId = 0;
+    let renderCount = 0;
+    let ready = false;
 
-    const boardSize = (): BoardSize => ({
+    const syncInspectionDataset = (): void => {
+      container.dataset.sceneReady = String(ready);
+      container.dataset.sceneActorCount = String(agentUnits.length);
+      container.dataset.scenePacketCount = "0";
+      container.dataset.sceneSemanticMotionCount = "0";
+      container.dataset.sceneRenderCount = String(renderCount);
+      container.dataset.sceneActorSignature = JSON.stringify(
+        agentUnits.map((unit) => ({
+          actorId: unit.actorId,
+          agentId: unit.agentId,
+          slotId: unit.slotId,
+          visualState: unit.visualState,
+          pose: unit.pose,
+        }))
+      );
+    };
+
+    const boardSize = () => ({
       width: boardEl.offsetWidth || initialWidth,
       height: boardEl.offsetHeight || initialHeight,
     });
 
     const designToBoardPoint = (point: Point): Point => {
       const { width, height } = boardSize();
-      return {
-        x: (point.x / MAP_WIDTH) * width,
-        y: (point.y / MAP_HEIGHT) * height,
-      };
-    };
-
-    const boardToDesignPoint = (point: Point): Point => {
-      const { width, height } = boardSize();
-      return {
-        x: width > 0 ? (point.x / width) * MAP_WIDTH : point.x,
-        y: height > 0 ? (point.y / height) * MAP_HEIGHT : point.y,
-      };
+      return { x: (point.x / MAP_WIDTH) * width, y: (point.y / MAP_HEIGHT) * height };
     };
 
     const boardVisualScale = (): number => {
@@ -341,67 +339,23 @@ declare global {
       return Math.min(width / MAP_WIDTH, height / MAP_HEIGHT) || 1;
     };
 
-    const fallbackPoints = (): Point[] => {
-      return SLOT_SEATS;
-    };
-
-    let targets: Record<TargetKind, Point> = { ...TARGET_POINTS };
-
-    const parseSeverity = (node: HTMLElement): StatusSeverity => {
-      if (isStatusSeverity(node.dataset.detailSeverity)) return node.dataset.detailSeverity;
-      if (node.classList.contains("severity-danger")) return "danger";
-      if (node.classList.contains("severity-warning")) return "warning";
-      if (node.classList.contains("severity-info")) return "info";
-      return "normal";
-    };
-
-    const colorFor = (severity: StatusSeverity): number =>
-      statusPalette[severity] || statusPalette.normal;
-
     const clamp = (value: number, min: number, max: number): number =>
       Math.min(Math.max(value, min), max);
 
-    const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
-
-    const distanceBetween = (a: Point, b: Point): number =>
-      Math.hypot(a.x - b.x, a.y - b.y);
-
-    const seededRatio = (index: number, routeIndex: number, salt: number): number => {
-      const raw =
-        Math.sin((index + 1) * 12.9898 + (routeIndex + 1) * 78.233 + salt * 37.719) *
-        43758.5453;
-      return raw - Math.floor(raw);
-    };
-
-    const roamBounds = () => {
-      return {
-        left: 360,
-        right: 1185,
-        top: 285,
-        bottom: 700,
-      };
-    };
-
-    const clampRoamPoint = (point: Point): Point => {
-      const bounds = roamBounds();
-      return {
-        x: clamp(point.x, bounds.left, bounds.right),
-        y: clamp(point.y, bounds.top, bounds.bottom),
-      };
-    };
-
-    const chooseRoamPoint = (index: number, routeIndex: number): Point => {
-      const preferred = ROAM_POINTS[(index + routeIndex) % ROAM_POINTS.length];
-      return clampRoamPoint({
-        x: preferred.x + (seededRatio(index, routeIndex, 1) - 0.5) * 44,
-        y: preferred.y + (seededRatio(index, routeIndex, 2) - 0.5) * 34,
+    const requestSceneRender = (): void => {
+      if (renderRequestId) return;
+      renderRequestId = window.requestAnimationFrame(() => {
+        renderRequestId = 0;
+        app.renderer.render(app.stage);
+        renderCount += 1;
+        syncInspectionDataset();
       });
     };
 
     const makeAtlasFrame = (
       texture: PixiTexture | undefined,
       col: number,
-      row = 0
+      row: number
     ): PixiTexture | null => {
       const baseTexture = texture?.baseTexture;
       if (!baseTexture || typeof PIXI.Rectangle === "undefined") return null;
@@ -425,67 +379,30 @@ declare global {
         isPixiTexture
       );
 
-    const buildAgentFrameSets = (texture: PixiTexture | undefined): AgentFrameSet[] => {
-      const planner = {
+    const buildAgentFrameSets = (
+      texture: PixiTexture | undefined
+    ): Partial<Record<ArchetypeKey, AgentFrameSet>> => ({
+      planner: {
         down: makeFrameRow(texture, 0, 0),
         side: makeFrameRow(texture, 1, 0),
         up: makeFrameRow(texture, 2, 0),
-      };
-      const coffeeAddict = {
+      },
+      coffee_addict: {
         down: makeFrameRow(texture, 0, 4),
         side: makeFrameRow(texture, 1, 4),
         up: makeFrameRow(texture, 2, 4),
-      };
-      const aiResearcher = {
+      },
+      ai_researcher: {
         down: makeFrameRow(texture, 3, 0),
         side: makeFrameRow(texture, 4, 0),
         up: makeFrameRow(texture, 4, 0),
-      };
-      const designer = {
+      },
+      designer: {
         down: makeFrameRow(texture, 3, 4),
         side: makeFrameRow(texture, 4, 4),
         up: makeFrameRow(texture, 4, 4),
-      };
-      return [planner, coffeeAddict, aiResearcher, designer].filter(
-        (set) => set.down.length > 0 && set.side.length > 0 && set.up.length > 0
-      );
-    };
-
-    const resolvePoint = (
-      node: Element | null | undefined,
-      fallback: Point,
-      xBias = 0.5,
-      yBias = 0.76
-    ): Point => {
-      if (!node) return fallback;
-      const element = node as HTMLElement;
-      const seatX = Number(element.dataset.seatX || "");
-      const seatY = Number(element.dataset.seatY || "");
-      if (Number.isFinite(seatX) && Number.isFinite(seatY) && seatX > 0 && seatY > 0) {
-        return { x: seatX, y: seatY };
-      }
-      const slotClass = [...element.classList].find((className) => /^agent-\d+$/.test(className));
-      const slotIndex = slotClass ? Number(slotClass.replace("agent-", "")) - 1 : -1;
-      if (slotIndex >= 0 && SLOT_SEATS[slotIndex]) return SLOT_SEATS[slotIndex];
-      const boardRect = boardEl.getBoundingClientRect();
-      const rect = node.getBoundingClientRect();
-      if (rect.width <= 0 && rect.height <= 0) return fallback;
-      return boardToDesignPoint({
-        x: rect.left - boardRect.left + rect.width * xBias,
-        y: rect.top - boardRect.top + rect.height * yBias,
-      });
-    };
-
-    const makePacket = (color: number): PixiGraphics => {
-      const packet = new PIXI.Graphics();
-      packet.beginFill(color, 0.92);
-      packet.lineStyle(1, 0xffffff, 0.42);
-      packet.drawPolygon([0, -6, 6, 0, 0, 6, -6, 0]);
-      packet.endFill();
-      packet.alpha = 0.84;
-      packetLayer.addChild(packet);
-      return packet;
-    };
+      },
+    });
 
     const agentSpriteScale = (): number =>
       AGENT_SPRITE_SCALE * clamp(boardVisualScale(), 0.58, 1.08);
@@ -516,390 +433,185 @@ declare global {
       syncStructureSprites();
     };
 
-    const speechNodeFor = (node: HTMLElement): HTMLElement | null =>
-      node.querySelector<HTMLElement>(".speech");
-
-    const speechLabelFor = (node: HTMLElement): string =>
-      speechNodeFor(node)?.textContent?.trim() || node.dataset.detailState?.trim() || "작업중";
-
-    const speechTextStyleFor = (node: HTMLElement): Record<string, unknown> => {
-      const speechNode = speechNodeFor(node);
-      const speechStyle = speechNode ? window.getComputedStyle(speechNode) : null;
-      const fontSize = speechStyle ? parseFloat(speechStyle.fontSize) || 12 : 12;
-      const lineHeight =
-        speechStyle?.lineHeight && speechStyle.lineHeight !== "normal"
-          ? parseFloat(speechStyle.lineHeight) || Math.round(fontSize * 1.25)
-          : Math.round(fontSize * 1.25);
-      return {
-        align: "center",
-        fill: speechStyle?.color || "#102015",
-        fontFamily: speechStyle?.fontFamily || "'Galmuri11', monospace",
-        fontSize,
-        fontWeight: speechStyle?.fontWeight || "800",
-        lineHeight,
-        wordWrap: true,
-        wordWrapWidth: AGENT_SPEECH_BUBBLE_MAX_WIDTH - 18,
-      };
+    const parseSeverity = (node: HTMLElement): StatusSeverity => {
+      if (isStatusSeverity(node.dataset.detailSeverity)) return node.dataset.detailSeverity;
+      if (node.classList.contains("severity-danger")) return "danger";
+      if (node.classList.contains("severity-warning")) return "warning";
+      if (node.classList.contains("severity-info")) return "info";
+      return "normal";
     };
 
-    const drawSpeechBubbleBackground = (
-      background: PixiGraphics,
-      width: number,
-      height: number,
+    const archetypeFor = (node: HTMLElement): ArchetypeKey =>
+      ARCHETYPE_BY_PROFILE[node.dataset.archetypeKey || ""] || "coffee_addict";
+
+    const pointFor = (node: HTMLElement): Point => {
+      const seatIndex = Number(node.dataset.sceneSeatIndex || "") - 1;
+      return SLOT_SEATS[seatIndex] || SLOT_SEATS[0];
+    };
+
+    const drawStaticMarker = (
+      marker: PixiGraphics,
+      visualState: VisualState,
+      color: number
     ): void => {
-      const halfWidth = width / 2;
-      const bottom = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT;
-      const top = bottom - height;
-      const bubbleShape = [
-        -halfWidth,
-        top,
-        halfWidth,
-        top,
-        halfWidth,
-        bottom,
-        7,
-        bottom,
-        0,
-        0,
-        -7,
-        bottom,
-        -halfWidth,
-        bottom,
-      ];
-      const shadowShape = bubbleShape.map((value, index) => value + (index % 2 === 0 ? 2 : 3));
-
-      background.clear();
-      background.beginFill(0x000000, 0.28);
-      background.drawPolygon(shadowShape);
-      background.endFill();
-      background.lineStyle(2, 0x18452a, 0.4);
-      background.beginFill(0xf2fff4, 0.98);
-      background.drawPolygon(bubbleShape);
-      background.endFill();
-      background.lineStyle(1, 0xffffff, 0.38);
-      background.moveTo(-halfWidth + 4, top + 4);
-      background.lineTo(halfWidth - 4, top + 4);
-    };
-
-    const makeSpeechBubble = (node: HTMLElement): AgentSpeechBubble | null => {
-      const TextCtor = PIXI.Text;
-      if (!TextCtor) return null;
-
-      const group = new PIXI.Container();
-      const background = new PIXI.Graphics();
-      const label = new TextCtor(speechLabelFor(node), speechTextStyleFor(node));
-      label.anchor.set(0.5, 0.5);
-
-      const width = Math.ceil(
-        clamp(label.width + 18, AGENT_SPEECH_BUBBLE_MIN_WIDTH, AGENT_SPEECH_BUBBLE_MAX_WIDTH)
-      );
-      const height = Math.ceil(Math.max(24, label.height + 10));
-      drawSpeechBubbleBackground(background, width, height);
-      label.y = -AGENT_SPEECH_BUBBLE_TAIL_HEIGHT - height / 2;
-      group.addChild(background, label);
-      group.alpha = speechBubblesEnabled ? 0.96 : 0;
-      return { group, background, label };
-    };
-
-    const setSpeechBubblesEnabled = (enabled: boolean): void => {
-      speechBubblesEnabled = enabled;
-      for (const unit of agentUnits) {
-        if (unit.speechBubble) unit.speechBubble.group.alpha = enabled ? 0.96 : 0;
+      const scale = boardVisualScale();
+      const width = AGENT_MARKER_WIDTH * scale;
+      const height = AGENT_MARKER_HEIGHT * scale;
+      marker.clear();
+      marker.lineStyle(2, color, 0.78);
+      if (visualState === "blocked") {
+        marker.moveTo(-width * 0.7, -height);
+        marker.lineTo(width * 0.7, height);
+        marker.moveTo(width * 0.7, -height);
+        marker.lineTo(-width * 0.7, height);
+        return;
+      }
+      if (visualState === "delivering") {
+        marker.beginFill(color, 0.22);
+        marker.drawPolygon([-width, -height, width * 0.35, -height, width, 0, width * 0.35, height, -width, height]);
+        marker.endFill();
+        return;
+      }
+      marker.drawEllipse(0, 0, width, height);
+      if (visualState === "awaiting_review") marker.drawEllipse(0, 0, width * 0.66, height * 0.66);
+      if (visualState === "working") {
+        marker.beginFill(color, 0.16);
+        marker.drawEllipse(0, 0, width * 0.72, height * 0.72);
+        marker.endFill();
       }
     };
 
-    const makeAgentUnit = (node: HTMLElement, index: number): AgentUnit => {
-      const agentId = node.dataset.agentId || `agent-${index}`;
+    const makeAgentUnit = (node: HTMLElement): AgentUnit | null => {
+      const visualState = node.dataset.visualState;
+      if (!isVisualState(visualState)) return null;
+      const pose = isStaticPose(node.dataset.staticPose) ? node.dataset.staticPose : "neutral";
+      const actorId = node.dataset.actorId || "";
+      const agentId = node.dataset.agentId || "";
+      const slotId = node.dataset.slotId || "";
+      if (!actorId || !agentId || !slotId) return null;
+
       const severity = parseSeverity(node);
-      const color = colorFor(severity);
+      const color = statusPalette[severity] || statusPalette.normal;
+      const frameSet = agentFrameSets[archetypeFor(node)];
+      const poseFrame = STATIC_POSE_MANIFEST[visualState];
+      const frames = frameSet?.[poseFrame.facing] || [];
+      const texture = frames[poseFrame.frameIndex] || frames[0] || null;
       const group = new PIXI.Container();
       const shadow = new PIXI.Graphics();
       shadow.beginFill(0x000000, 0.26);
       shadow.drawEllipse(0, 0, AGENT_SHADOW_WIDTH, AGENT_SHADOW_HEIGHT);
       shadow.endFill();
-
-      const ring = new PIXI.Graphics();
-      const frameSet = agentFrameSets.length ? agentFrameSets[index % agentFrameSets.length] : null;
-      const texture = frameSet?.down[0] || null;
+      const marker = new PIXI.Graphics();
+      drawStaticMarker(marker, visualState, color);
       const sprite = texture ? new PIXI.Sprite(texture) : null;
-      const speechBubble = makeSpeechBubble(node);
       if (sprite) {
         sprite.anchor.set(0.5, 1);
         sprite.scale.set(agentSpriteScale());
-        group.addChild(shadow, ring, sprite);
+        group.addChild(shadow, marker, sprite);
       } else {
-        group.addChild(shadow, ring);
+        group.addChild(shadow, marker);
       }
-      if (speechBubble) group.addChild(speechBubble.group);
-
       group.alpha = severity === "muted" ? 0.58 : 0.95;
       agentLayer.addChild(group);
 
-      const packet = makePacket(color);
+      const point = pointFor(node);
+      const unit: AgentUnit = {
+        actorId,
+        agentId,
+        slotId,
+        visualState,
+        pose,
+        node,
+        group,
+        sprite,
+        marker,
+        point,
+      };
       node.addEventListener("pointerenter", () => {
         group.scale.set(1.08);
-        packet.scale.set(1.2);
+        requestSceneRender();
       });
       node.addEventListener("pointerleave", () => {
         group.scale.set(1);
-        packet.scale.set(1);
+        requestSceneRender();
       });
-      node.addEventListener("click", () => {
-        stageBurst = Math.min(stageBurst + 0.55, 1.4);
-      });
+      return unit;
+    };
 
-      const points = fallbackPoints();
-      const fallbackPoint = resolvePoint(node, points[index % points.length], 0.5, 0.78);
-      const snapshot = roamSnapshots.get(agentId);
-      const routeIndex = snapshot?.routeIndex ?? index * 5;
-      const point = clampRoamPoint(snapshot?.point || fallbackPoint);
-      let destination = clampRoamPoint(snapshot?.destination || chooseRoamPoint(index, routeIndex));
-      if (distanceBetween(point, destination) < 54) {
-        destination = chooseRoamPoint(index, routeIndex + 1);
+    const syncAgentUnits = (): void => {
+      for (const unit of agentUnits) {
+        unit.point = pointFor(unit.node);
+        const point = designToBoardPoint(unit.point);
+        unit.group.x = point.x;
+        unit.group.y = point.y;
+        unit.group.zIndex = point.y;
+        if (unit.sprite) unit.sprite.scale.set(agentSpriteScale());
+        drawStaticMarker(
+          unit.marker,
+          unit.visualState,
+          statusPalette[parseSeverity(unit.node)] || statusPalette.normal
+        );
       }
-      return {
-        agentId,
-        node,
-        index,
-        color,
-        group,
-        ring,
-        sprite,
-        speechBubble,
-        packet,
-        frameSet,
-        point,
-        destination,
-        phase: index * 0.23,
-        speed: 0.16 + index * 0.025,
-        walkSpeed: 34 + index * 4,
-        routeIndex,
-        waitUntil: snapshot?.waitUntil ?? 0,
-        facing: "down",
-        facingSign: 1,
-        isWalking: false,
-        targetKind: index % 2 === 0 ? "distributor" : "events",
-      };
     };
 
     const syncLayout = (): void => {
       const { width, height } = boardSize();
       if (width > 0 && height > 0) app.renderer.resize(width, height);
       syncStructureSprites();
-      targets = {
-        distributor: resolvePoint(
-          root?.querySelector(".distributor-desk"),
-          TARGET_POINTS.distributor,
-          0.5,
-          0.6
-        ),
-        events: resolvePoint(
-          root?.querySelector(".event-board"),
-          TARGET_POINTS.events,
-          0.5,
-          0.58
-        ),
-      };
-      const points = fallbackPoints();
-      for (const unit of agentUnits) {
-        const fallbackPoint = resolvePoint(unit.node, points[unit.index % points.length], 0.5, 0.78);
-        unit.point = clampRoamPoint(unit.point || fallbackPoint);
-        unit.destination = clampRoamPoint(unit.destination || chooseRoamPoint(unit.index, 0));
-        const point = designToBoardPoint(unit.point);
-        unit.group.x = point.x;
-        unit.group.y = point.y;
-      }
-    };
-
-    const rememberRoamSnapshots = (): void => {
-      roamSnapshots = new Map(
-        agentUnits.map((unit) => [
-          unit.agentId,
-          {
-            point: { ...unit.point },
-            destination: { ...unit.destination },
-            routeIndex: unit.routeIndex,
-            waitUntil: unit.waitUntil,
-          },
-        ])
-      );
+      syncAgentUnits();
+      requestSceneRender();
     };
 
     const rebuildAgentUnits = (): void => {
-      rememberRoamSnapshots();
-      for (const child of packetLayer.removeChildren()) child.destroy({ children: true });
       for (const child of agentLayer.removeChildren()) child.destroy({ children: true });
       agentUnits = root
-        ? [...root.querySelectorAll<HTMLElement>(".desk[data-agent-id]")].map(makeAgentUnit)
+        ? [...root.querySelectorAll<HTMLElement>(".desk[data-actor-id]")]
+            .map(makeAgentUnit)
+            .filter((unit): unit is AgentUnit => unit !== null)
         : [];
+      syncInspectionDataset();
       syncLayout();
     };
 
-    const setNextRoamTarget = (unit: AgentUnit): void => {
-      unit.routeIndex += 1;
-      unit.destination = chooseRoamPoint(unit.index, unit.routeIndex);
-      if (distanceBetween(unit.point, unit.destination) < 72) {
-        unit.routeIndex += 1;
-        unit.destination = chooseRoamPoint(unit.index, unit.routeIndex);
-      }
-      unit.waitUntil = 0;
-    };
-
-    const updateFacing = (unit: AgentUnit, dx: number, dy: number): void => {
-      if (Math.abs(dx) > Math.abs(dy) * 0.72) {
-        unit.facing = "side";
-        unit.facingSign = dx < 0 ? 1 : -1;
-        return;
-      }
-      unit.facing = dy < 0 ? "up" : "down";
-    };
-
-    const updateRoamMotion = (unit: AgentUnit, delta: number): void => {
-      const dt = Math.min(delta / 60, 0.08);
-      const dx = unit.destination.x - unit.point.x;
-      const dy = unit.destination.y - unit.point.y;
-      const distance = Math.hypot(dx, dy);
-
-      if (distance <= 3) {
-        unit.isWalking = false;
-        if (unit.waitUntil === 0) {
-          unit.waitUntil = elapsed + 0.2 + seededRatio(unit.index, unit.routeIndex, 3) * 0.8;
-        }
-        if (elapsed >= unit.waitUntil) {
-          setNextRoamTarget(unit);
-        }
-        return;
-      }
-
-      unit.isWalking = true;
-      updateFacing(unit, dx, dy);
-      const step = Math.min(distance, unit.walkSpeed * (1 + stageBurst * 0.1) * dt);
-      unit.point = clampRoamPoint({
-        x: unit.point.x + (dx / distance) * step,
-        y: unit.point.y + (dy / distance) * step,
-      });
-    };
-
-    const applyWalkFrame = (unit: AgentUnit): void => {
-      if (!unit.sprite || !unit.frameSet) return;
-      const frames = unit.frameSet[unit.facing];
-      if (frames.length === 0) return;
-
-      const frameIndex = unit.isWalking
-        ? Math.floor((elapsed * 7.5 + unit.phase * 6) % frames.length)
-        : 0;
-      unit.sprite.texture = frames[frameIndex] || frames[0];
-      const scale = agentSpriteScale();
-      unit.sprite.scale.set(
-        unit.facing === "side" ? unit.facingSign * scale : scale,
-        scale
-      );
-    };
-
-    const applySpeechBubbleFrame = (unit: AgentUnit): void => {
-      if (!unit.speechBubble) return;
-      const spriteHeight = AGENT_FRAME_HEIGHT * agentSpriteScale();
-      const driftX = Math.sin(elapsed * 1.7 + unit.phase * 11) * 1.5;
-      const driftY = Math.sin(elapsed * 2.6 + unit.phase * 9) * 3;
-      unit.speechBubble.group.x = driftX;
-      unit.speechBubble.group.y =
-        -spriteHeight - AGENT_SPEECH_BUBBLE_HEAD_GAP + driftY - stageBurst * 1.5;
-      unit.speechBubble.group.alpha = speechBubblesEnabled
-        ? 0.9 + Math.sin(elapsed * 2.2 + unit.phase * 5) * 0.06
-        : 0;
-      unit.speechBubble.group.scale.set(1 + stageBurst * 0.025);
-    };
-
-    const drawDashedLine = (
-      graphics: PixiGraphics,
-      start: Point,
-      end: Point,
-      color: number,
-      alpha: number
-    ): void => {
-      const dx = end.x - start.x;
-      const dy = end.y - start.y;
-      const distance = Math.hypot(dx, dy);
-      if (distance <= 0) return;
-      const dash = 10;
-      const gap = 8;
-      const ux = dx / distance;
-      const uy = dy / distance;
-      graphics.lineStyle(2, color, alpha);
-      for (let offset = 0; offset < distance; offset += dash + gap) {
-        const segmentEnd = Math.min(offset + dash, distance);
-        graphics.moveTo(start.x + ux * offset, start.y + uy * offset);
-        graphics.lineTo(start.x + ux * segmentEnd, start.y + uy * segmentEnd);
-      }
-    };
-
-    const renderTick = (delta: number): void => {
-      elapsed += delta / 60;
-      stageBurst = Math.max(0, stageBurst - delta * 0.018);
-      pathLayer.clear();
-
-      for (const unit of agentUnits) {
-        updateRoamMotion(unit, delta);
-        applyWalkFrame(unit);
-        applySpeechBubbleFrame(unit);
-
-        const target = targets[unit.targetKind] || targets.distributor;
-        const boardPoint = designToBoardPoint(unit.point);
-        const boardTarget = designToBoardPoint(target);
-        const scale = boardVisualScale();
-        const start = { x: boardPoint.x, y: boardPoint.y - 24 * scale };
-        const end = { x: boardTarget.x, y: boardTarget.y - 18 * scale };
-        const alpha = 0.22 + stageBurst * 0.16;
-        drawDashedLine(pathLayer, start, end, unit.color, alpha);
-
-        const travel = (elapsed * unit.speed + unit.phase) % 1;
-        const arc = Math.sin(travel * Math.PI) * (24 + stageBurst * 10);
-        unit.packet.x = lerp(start.x, end.x, travel);
-        unit.packet.y = lerp(start.y, end.y, travel) - arc;
-        unit.packet.rotation += delta * 0.08;
-        unit.packet.alpha = 0.42 + Math.sin(travel * Math.PI) * 0.42 + stageBurst * 0.12;
-        unit.packet.scale.set(0.92 + stageBurst * 0.18);
-
-        const bob = Math.sin(elapsed * 3.4 + unit.phase * 8) * 2.2;
-        unit.group.x = boardPoint.x;
-        unit.group.y = boardPoint.y + bob - stageBurst * 1.5;
-        unit.group.zIndex = boardPoint.y;
-        unit.ring.clear();
-        unit.ring.lineStyle(2, unit.color, 0.58 + stageBurst * 0.2);
-        const ringPulse = 1 + Math.sin(elapsed * 4.2 + unit.phase * 4) * 0.12 + stageBurst * 0.12;
-        unit.ring.drawEllipse(
-          0,
-          0,
-          AGENT_RING_WIDTH * ringPulse * scale,
-          AGENT_RING_HEIGHT * ringPulse * scale
-        );
-      }
-    };
+    const inspectScene = (): SceneInspection => ({
+      ready,
+      actorCount: agentUnits.length,
+      packetCount: 0,
+      semanticMotionCount: 0,
+      renderCount,
+      actors: agentUnits.map((unit) => ({
+        actorId: unit.actorId,
+        agentId: unit.agentId,
+        slotId: unit.slotId,
+        visualState: unit.visualState,
+        pose: unit.pose,
+        x: Math.round(unit.point.x),
+        y: Math.round(unit.point.y),
+      })),
+    });
 
     const loadTextures = async (): Promise<void> => {
       textures = {};
-      for (const [key, url] of Object.entries(assets) as [AssetKey, string][]) {
-        try {
-          textures[key] = await PIXI.Assets.load(url);
-        } catch (error) {
-          console.warn(`Failed to load sprite: ${key}`, error);
+      const entries = Object.entries(assets) as [AssetKey, string][];
+      const results = await Promise.allSettled(entries.map(([, url]) => PIXI.Assets.load(url)));
+      results.forEach((result, index) => {
+        const [key] = entries[index];
+        if (result.status === "fulfilled") {
+          textures[key] = result.value;
+        } else {
+          console.warn(`Failed to load sprite: ${key}`, result.reason);
         }
-      }
+      });
       agentFrameSets = buildAgentFrameSets(textures.agentAtlas);
     };
 
-    const onMissionPulse = (event: Event): void => {
-      const detail = (event as CustomEvent<{ count?: number }>).detail;
-      const count = Number(detail?.count || 1);
-      stageBurst = Math.min(stageBurst + 0.45 + count * 0.06, 1.6);
-    };
     const onResize = (): void => syncLayout();
 
     const destroy = (): void => {
-      window.removeEventListener("akra:mission-pulse", onMissionPulse);
-      window.removeEventListener("akra:dashboard-rendered", rebuildAgentUnits);
+      window.removeEventListener("akra:scene-rendered", rebuildAgentUnits);
       window.removeEventListener("resize", onResize);
       resizeObserver?.disconnect();
+      if (renderRequestId) window.cancelAnimationFrame(renderRequestId);
       app.destroy(true, { children: true, texture: false, baseTexture: false });
       delete container.dataset.akraDioramaMounted;
       if (activeHandle?.app === app) activeHandle = null;
@@ -908,9 +620,10 @@ declare global {
     loadTextures().then(() => {
       buildStructureSprites();
       rebuildAgentUnits();
-      app.ticker.add(renderTick);
-      window.addEventListener("akra:mission-pulse", onMissionPulse);
-      window.addEventListener("akra:dashboard-rendered", rebuildAgentUnits);
+      ready = true;
+      syncInspectionDataset();
+      requestSceneRender();
+      window.addEventListener("akra:scene-rendered", rebuildAgentUnits);
       window.addEventListener("resize", onResize);
       if (typeof ResizeObserver !== "undefined") {
         resizeObserver = new ResizeObserver(syncLayout);
@@ -918,7 +631,7 @@ declare global {
       }
     });
 
-    const handle = { app, destroy, rebuildAgentUnits, setSpeechBubblesEnabled, syncLayout };
+    const handle = { app, destroy, rebuildAgentUnits, syncLayout, inspectScene };
     activeHandle = handle;
     return handle;
   };
@@ -926,9 +639,7 @@ declare global {
   window.AkraAdminGame = {
     ...(window.AkraAdminGame || {}),
     mountDiorama,
-    setSpeechBubblesEnabled: (enabled: boolean): void => {
-      activeHandle?.setSpeechBubblesEnabled(enabled);
-    },
+    inspectScene: (): SceneInspection | null => activeHandle?.inspectScene() || null,
   };
 
   if (document.readyState === "loading") {

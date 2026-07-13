@@ -198,6 +198,12 @@ impl PlanningAuthorityDistributorQueueRecord {
             self.commit_sha.chars().take(7).collect::<String>(),
             self.integration_note.clone(),
         )
+        .with_identity(
+            self.queue_item_id.clone(),
+            self.session_key.clone(),
+            self.slot_id.clone(),
+            self.task_id.clone(),
+        )
     }
 
     // Legacy records without source_branch treat the result branch as the baseline.
@@ -1131,6 +1137,13 @@ mod tests {
         assert_eq!(display.branch_name, "prerelease");
         assert_eq!(display.commit_short_sha, "abcdef1");
         assert_eq!(display.integration_note, "waiting for review");
+        let identity = display
+            .identity
+            .expect("display item should preserve typed delivery identity");
+        assert_eq!(identity.queue_item_id, "queue-1");
+        assert_eq!(identity.session_key, "session-1");
+        assert_eq!(identity.slot_id, "slot-1");
+        assert_eq!(identity.task_id, "task-1");
     }
 
     #[test]

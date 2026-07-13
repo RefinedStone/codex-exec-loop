@@ -241,6 +241,24 @@
     gap: 12px;
     align-items: stretch;
   }
+  .scene-actor-list {
+    display: none;
+  }
+  .scene-diagnostics {
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid rgba(245, 200, 75, 0.36);
+    background: rgba(245, 200, 75, 0.08);
+  }
+  .scene-diagnostics[hidden] { display: none; }
+  .scene-diagnostics p {
+    display: grid;
+    gap: 3px;
+    margin: 0;
+  }
+  .scene-diagnostics strong { color: var(--game-yellow); }
+  .scene-diagnostics span { color: var(--game-muted); }
   .office-board {
     position: relative;
     min-height: var(--office-board-height);
@@ -287,10 +305,6 @@
     mix-blend-mode: screen;
     transform: translateX(-42%);
     animation: akraStageScan 8s linear infinite;
-  }
-  .office-board.is-bursting::after {
-    opacity: 0.4;
-    animation-duration: 1.8s;
   }
   .stage-hud {
     position: absolute;
@@ -476,7 +490,6 @@
     background: radial-gradient(ellipse at center, rgba(93,169,255,0.28) 0 32%, transparent 66%);
     opacity: 0.7;
     pointer-events: none;
-    animation: akraStatusRing 1.9s ease-in-out infinite;
   }
   .scene-object.severity-danger::after {
     border-color: rgba(255, 107, 107, 0.46);
@@ -486,13 +499,6 @@
     border-color: rgba(245, 200, 75, 0.48);
     background: radial-gradient(ellipse at center, rgba(245,200,75,0.28) 0 32%, transparent 66%);
   }
-  .desk {
-    animation: akraAgentBob 3.4s ease-in-out infinite;
-  }
-  .desk.agent-2 { animation-delay: -0.5s; }
-  .desk.agent-3 { animation-delay: -1s; }
-  .desk.agent-4 { animation-delay: -1.5s; }
-  .desk.agent-5 { animation-delay: -2s; }
   .desk,
   .distributor-desk,
   .event-board {
@@ -1003,14 +1009,6 @@
     from { transform: translateX(-42%); }
     to { transform: translateX(42%); }
   }
-  @keyframes akraAgentBob {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-3px); }
-  }
-  @keyframes akraStatusRing {
-    0%, 100% { transform: translateX(-50%) scale(0.92); opacity: 0.45; }
-    50% { transform: translateX(-50%) scale(1.08); opacity: 0.9; }
-  }
   @keyframes akraServerBlink {
     0%, 48% { filter: brightness(1); }
     50%, 54% { filter: brightness(1.45); }
@@ -1282,23 +1280,26 @@
     border-width: 1px;
     background: rgba(6, 24, 39, 0.78);
   }
-  .slot-avatar {
+  .station-icon {
     position: relative;
     width: 38px;
     height: 48px;
     border: 1px solid rgba(255,255,255,0.18);
     border-radius: 5px;
-    background-image: var(--agent-sprite-sheet);
-    background-repeat: no-repeat;
-    background-size: 384px 504px;
-    image-rendering: pixelated;
+    display: grid;
+    place-items: center;
+    color: var(--game-blue);
+    background:
+      linear-gradient(90deg, transparent 47%, rgba(93,169,255,0.2) 48% 52%, transparent 53%),
+      linear-gradient(rgba(93,169,255,0.2) 47%, transparent 48% 52%, rgba(93,169,255,0.2) 53%),
+      #0b1b2e;
     filter: drop-shadow(0 3px 0 rgba(0,0,0,0.35));
   }
-  .slot-card:nth-of-type(1) .slot-avatar { background-position: 0 0; }
-  .slot-card:nth-of-type(2) .slot-avatar { background-position: -48px 0; }
-  .slot-card:nth-of-type(3) .slot-avatar { background-position: -96px 0; }
-  .slot-card:nth-of-type(4) .slot-avatar { background-position: -144px 0; }
-  .slot-card:nth-of-type(5) .slot-avatar { background-position: -192px 0; }
+  .station-icon::before {
+    content: "S";
+    font-size: 15px;
+    font-weight: 900;
+  }
   .slot-card strong {
     font-size: 14px;
   }
@@ -1634,6 +1635,26 @@
     .event-board,
     .boss-seat,
     .rest-area { display: none; }
+    .scene-actor-list {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .scene-actor-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 4px 10px;
+      min-height: 48px;
+      padding: 10px 12px;
+      border: 1px solid rgba(93, 169, 255, 0.34);
+      color: var(--game-text);
+      background: rgba(12, 26, 46, 0.9);
+      text-align: left;
+    }
+    .scene-actor-row strong,
+    .scene-actor-row small { grid-column: 1; }
+    .scene-actor-row span { grid-column: 2; grid-row: 1 / span 2; }
+    .scene-actor-row small { color: var(--game-muted); }
     .admin-detail-drawer {
       right: 14px;
       bottom: 14px;
@@ -1731,7 +1752,7 @@
           data-detail-note="{{ slot.note }}"
           title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
         >
-          <span class="slot-avatar" aria-hidden="true"></span>
+          <span class="station-icon" aria-hidden="true"></span>
           <div>
             <strong>{{ slot.display_slot_label }}</strong>
             <small>{{ slot.task_id.as_deref().unwrap_or("-") }}</small>
@@ -1769,32 +1790,38 @@
           <button type="button" class="stage-refresh-btn" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">R</button>
         </div>
 
-        {% for slot in dashboard.pool.slots %}
+        {% for actor in dashboard.scene.actors %}
         <button
           type="button"
-          class="scene-object desk agent-{{ loop.index }} severity-{{ slot.severity }}"
-          data-agent-id="{{ slot.slot_id }}"
-          data-slot-id="{{ slot.slot_id }}"
-          data-task-id="{{ slot.task_id.as_deref().unwrap_or("") }}"
-          data-detail-type="slot"
-          data-detail-title="워크트리 풀 · {{ slot.display_slot_label }}"
-          data-detail-subtitle="{{ slot.label }}"
-          data-detail-state="{{ slot.label }}"
-          data-detail-severity="{{ slot.severity }}"
-          data-detail-slot="{{ slot.display_slot_label }}"
-          data-detail-task="{{ slot.task_id.as_deref().unwrap_or("-") }}"
-          data-detail-branch="{{ slot.branch_name }}"
-          data-detail-worktree="{{ slot.worktree_label }}"
-          data-detail-owner="{{ slot.owner_label }}"
-          data-detail-note="{{ slot.note }}"
-          title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
+          class="scene-object desk agent-{{ actor.seat_index }} severity-{{ actor.severity }}"
+          data-actor-id="{{ actor.actor_id }}"
+          data-agent-id="{{ actor.agent_id }}"
+          data-slot-id="{{ actor.slot_id }}"
+          data-task-id="{{ actor.task_id }}"
+          data-lease-generation="{{ actor.lease_generation.as_deref().unwrap_or("") }}"
+          data-scene-seat-index="{{ actor.seat_index }}"
+          data-archetype-key="{{ actor.archetype_key }}"
+          data-visual-state="{{ actor.visual_state }}"
+          data-static-pose="{{ actor.static_pose }}"
+          data-detail-type="agent"
+          data-detail-title="{{ actor.display_name }} · {{ actor.role_label }}"
+          data-detail-subtitle="{{ actor.lifecycle_state }}"
+          data-detail-state="{{ actor.status_label }}"
+          data-detail-severity="{{ actor.severity }}"
+          data-detail-slot="{{ actor.slot_id }}"
+          data-detail-task="{{ actor.task_id }} · {{ actor.task_title }}"
+          data-detail-branch="{{ actor.branch_name }}"
+          data-detail-runtime="{{ actor.duration_label }}"
+          data-detail-progress="{{ actor.progress_label }}"
+          data-detail-summary="{{ actor.latest_summary }}"
+          title="{{ actor.display_name }} · {{ actor.status_label }} · {{ actor.task_title }} · {{ actor.branch_name }}"
         >
-          <span class="speech">{{ slot.bubble_label }}</span>
-          <span class="agent-sprite avatar-{{ slot.avatar_class_label }}" aria-hidden="true"><span class="sprite-label">{{ slot.display_slot_label }}</span></span>
+          <span class="speech">{{ actor.bubble_label }}</span>
+          <span class="agent-sprite avatar-{{ actor.archetype_key }}" aria-hidden="true"><span class="sprite-label">{{ actor.display_name }}</span></span>
           <span class="object-label">
-            <strong>{{ slot.display_slot_label }}</strong>
-            <span>{{ slot.task_id.as_deref().unwrap_or("-") }}</span>
-            <small>{{ slot.label }} · {{ slot.worktree_label }}</small>
+            <strong>{{ actor.display_name }}</strong>
+            <span>{{ actor.task_title }}</span>
+            <small>{{ actor.status_label }} · {{ actor.duration_label }}</small>
           </span>
         </button>
         {% endfor %}
@@ -1867,6 +1894,46 @@
           <span class="object-label"><strong>휴식 공간</strong></span>
         </div>
       </div>
+
+      <section class="scene-actor-list" data-scene-actor-list aria-label="현재 활동 요원">
+        {% for actor in dashboard.scene.actors %}
+        <button
+          type="button"
+          class="scene-actor-row severity-{{ actor.severity }}"
+          data-actor-id="{{ actor.actor_id }}"
+          data-agent-id="{{ actor.agent_id }}"
+          data-slot-id="{{ actor.slot_id }}"
+          data-task-id="{{ actor.task_id }}"
+          data-archetype-key="{{ actor.archetype_key }}"
+          data-visual-state="{{ actor.visual_state }}"
+          data-static-pose="{{ actor.static_pose }}"
+          data-detail-type="agent"
+          data-detail-title="{{ actor.display_name }} · {{ actor.role_label }}"
+          data-detail-subtitle="{{ actor.lifecycle_state }}"
+          data-detail-state="{{ actor.status_label }}"
+          data-detail-severity="{{ actor.severity }}"
+          data-detail-slot="{{ actor.slot_id }}"
+          data-detail-task="{{ actor.task_id }} · {{ actor.task_title }}"
+          data-detail-branch="{{ actor.branch_name }}"
+          data-detail-runtime="{{ actor.duration_label }}"
+          data-detail-progress="{{ actor.progress_label }}"
+          data-detail-summary="{{ actor.latest_summary }}"
+        >
+          <strong>{{ actor.display_name }}</strong>
+          <span>{{ actor.status_label }} · {{ actor.slot_id }}</span>
+          <small>{{ actor.task_title }}</small>
+        </button>
+        {% endfor %}
+      </section>
+
+      <section class="scene-diagnostics" data-scene-diagnostics aria-label="게임 화면 진단" aria-live="polite" {% if dashboard.scene.diagnostics.is_empty() %}hidden{% endif %}>
+        {% for diagnostic in dashboard.scene.diagnostics %}
+        <p class="severity-{{ diagnostic.severity }}" data-diagnostic-code="{{ diagnostic.code }}">
+          <strong>표시 보류 · {{ diagnostic.code }}</strong>
+          <span>{{ diagnostic.message }}</span>
+        </p>
+        {% endfor %}
+      </section>
     </div>
 
     <aside class="right-stack" aria-label="이벤트와 공지">

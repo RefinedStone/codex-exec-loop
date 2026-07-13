@@ -1202,6 +1202,17 @@ async fn admin_akra_json_snapshot_routes_render_read_only_views() {
             body.is_object() || body.is_array(),
             "Akra snapshot route should return structured JSON for {uri}"
         );
+        if uri == "/api/admin/akra/dashboard" {
+            assert!(body["scene"]["stations"].is_array());
+            assert!(body["scene"]["actors"].is_array());
+            assert!(body["scene"]["diagnostics"].is_array());
+            assert_eq!(body["scene"]["actors"].as_array().map(Vec::len), Some(0));
+            assert!(
+                body["scene"]["stations"]
+                    .as_array()
+                    .is_some_and(|stations| !stations.is_empty())
+            );
+        }
     }
 }
 
@@ -2446,9 +2457,9 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "MISSION FLOW",
         "stage-refresh-btn",
         "detailSourceKey(node) === nextKey",
-        "is-bursting",
-        "akra:mission-pulse",
-        "pulseStage",
+        "data-actor-id",
+        "data-visual-state",
+        "data-scene-diagnostics",
         "has-changed",
         "prependEventRows",
         "stale snapshot",
@@ -2458,6 +2469,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "/admin/assets/scripts/akra-dashboard.js",
         "data-planning-revision",
         "akra:dashboard-rendered",
+        "akra:scene-rendered",
         "renderDashboardPanels",
         "dashboardSignature",
         "renderCampaign",
@@ -2465,6 +2477,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "renderPipeline",
         "renderSelectedTask",
         "agents: dashboard.agents || null",
+        "scene: dashboard.scene || null",
         "pool: dashboard.pool || null",
         "distributor: dashboard.distributor || null",
         "campaign: dashboard.campaign || null",
@@ -2527,9 +2540,10 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "rebuildAgentUnits",
         "PIXI.Application",
         "gamebaljeonguk_atlas_128x192.png",
-        "chooseRoamPoint",
-        "updateRoamMotion",
-        "applyWalkFrame",
+        "STATIC_POSE_MANIFEST",
+        "autoStart: false",
+        "Promise.allSettled",
+        "inspectScene",
         "buildAgentFrameSets",
     ] {
         assert!(
@@ -2655,23 +2669,20 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "const mountDiorama = (): DioramaHandle | null",
         "window.AkraAdminGame",
         "PIXI.Assets.load",
-        "app.ticker.add",
+        "autoStart: false",
+        "Math.min(window.devicePixelRatio || 1, 2)",
+        "Promise.allSettled",
+        "requestSceneRender",
+        "inspectScene",
         "type Facing = \"down\" | \"side\" | \"up\"",
         "interface AgentFrameSet",
-        "interface AgentSpeechBubble",
-        "const chooseRoamPoint",
-        "const updateRoamMotion",
-        "const applyWalkFrame",
-        "const speechTextStyleFor",
-        "window.getComputedStyle(speechNode)",
-        "fontFamily: speechStyle?.fontFamily",
-        "const makeSpeechBubble",
-        "const applySpeechBubbleFrame",
+        "type VisualState",
+        "const STATIC_POSE_MANIFEST",
+        "const ARCHETYPE_BY_PROFILE",
+        "const drawStaticMarker",
         "const AGENT_FRAME_WIDTH = 128",
         "const AGENT_FRAME_HEIGHT = 192",
         "const AGENT_SPRITE_SCALE = 0.4675",
-        "const AGENT_SPEECH_BUBBLES_DEFAULT_ENABLED = true",
-        "setSpeechBubblesEnabled",
         "gamebaljeonguk_atlas_128x192.png",
     ] {
         assert!(
@@ -2742,12 +2753,20 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "data-detail-type=\"slot\"",
         "data-detail-type=\"distributor\"",
         "data-detail-type=\"queueItem\"",
-        "class=\"scene-object desk agent-{{ loop.index }} severity-{{ slot.severity }}\"",
-        "data-task-id=\"{{ slot.task_id.as_deref().unwrap_or(\"\") }}\"",
-        "avatar-{{ slot.avatar_class_label }}",
-        "const createSlotAgentButton",
-        "renderAgents(dashboard.pool)",
-        "button.append(createText(\"span\", \"speech\", slot.bubbleLabel), sprite, label);",
+        "{% for actor in dashboard.scene.actors %}",
+        "class=\"scene-object desk agent-{{ actor.seat_index }} severity-{{ actor.severity }}\"",
+        "data-actor-id=\"{{ actor.actor_id }}\"",
+        "data-agent-id=\"{{ actor.agent_id }}\"",
+        "data-visual-state=\"{{ actor.visual_state }}\"",
+        "data-static-pose=\"{{ actor.static_pose }}\"",
+        "avatar-{{ actor.archetype_key }}",
+        "const createActorButton",
+        "renderActors(dashboard.scene)",
+        "actorDetailDataset",
+        "data-scene-actor-list",
+        "data-scene-diagnostics",
+        "GameSceneView",
+        "map_game_scene",
         "분배관 호출",
         "optionalText(distributor.bubbleLabel, \"배포 파이프라인\")",
         "worker_lifecycle_bubble",
@@ -2773,13 +2792,12 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "MAP_HEIGHT = 941",
         "STRUCTURE_SPECS",
         "designToBoardPoint",
-        "drawDashedLine",
         "akraStageScan",
-        "makePacket",
         "statusPalette",
-        "chooseRoamPoint",
-        "updateRoamMotion",
-        "applyWalkFrame",
+        "STATIC_POSE_MANIFEST",
+        "requestSceneRender",
+        "Promise.allSettled",
+        "inspectScene",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(token)
@@ -2790,6 +2808,23 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
                 || ADMIN_SHELL_JS.contains(token)
                 || AKRA_DASHBOARD_JS.contains(token),
             "graphic visual contract should keep {token}"
+        );
+    }
+
+    for removed_motion in [
+        "app.ticker.add",
+        "chooseRoamPoint",
+        "updateRoamMotion",
+        "applyWalkFrame",
+        "makePacket",
+        "drawDashedLine",
+        "akra:mission-pulse",
+        "pulseStage",
+    ] {
+        assert!(
+            !AKRA_DIORAMA_TS.contains(removed_motion)
+                && !AKRA_DASHBOARD_JS.contains(removed_motion),
+            "truthful static scene should remove continuous motion token {removed_motion}"
         );
     }
 

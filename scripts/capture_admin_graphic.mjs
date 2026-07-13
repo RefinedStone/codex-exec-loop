@@ -107,6 +107,7 @@ try {
         canvas.height > 64
       );
     });
+    await page.waitForFunction(() => window.AkraAdminGame?.inspectScene?.()?.ready === true);
 
     const canvas = page.locator("#pixi-diorama canvas");
     const analysisPage = await context.newPage();
@@ -161,8 +162,10 @@ try {
 
     await page.waitForTimeout(100);
     const firstFrame = await inspectCanvasFrame();
+    const firstScene = await page.evaluate(() => window.AkraAdminGame?.inspectScene?.());
     await page.waitForTimeout(300);
     const secondFrame = await inspectCanvasFrame();
+    const secondScene = await page.evaluate(() => window.AkraAdminGame?.inspectScene?.());
     if (browserErrors.length > 0) {
       await page.screenshot({ path, fullPage: true });
       throw new Error(`${label} browser errors:\n${browserErrors.join("\n")}`);
@@ -173,8 +176,30 @@ try {
         throw new Error(`${label} WebGL canvas is blank: ${JSON.stringify(frame)}`);
       }
     }
-    if (firstFrame.checksum === secondFrame.checksum) {
-      throw new Error(`${label} WebGL canvas did not change across animation frames`);
+    if (firstFrame.checksum !== secondFrame.checksum) {
+      throw new Error(`${label} static WebGL canvas changed without a typed transition`);
+    }
+    for (const scene of [firstScene, secondScene]) {
+      if (!scene || scene.packetCount !== 0 || scene.semanticMotionCount !== 0) {
+        throw new Error(`${label} scene reported unowned motion: ${JSON.stringify(scene)}`);
+      }
+    }
+    if (firstScene.renderCount !== secondScene.renderCount) {
+      throw new Error(`${label} static scene rendered continuously without a state change`);
+    }
+    const actorParity = await page.evaluate(() => {
+      const dom = [...document.querySelectorAll(".desk[data-actor-id]")].map((node) => ({
+        actorId: node.dataset.actorId,
+        agentId: node.dataset.agentId,
+        slotId: node.dataset.slotId,
+        visualState: node.dataset.visualState,
+        pose: node.dataset.staticPose,
+      }));
+      const canvasActors = window.AkraAdminGame?.inspectScene?.()?.actors || [];
+      return { dom, canvasActors };
+    });
+    if (JSON.stringify(actorParity.dom) !== JSON.stringify(actorParity.canvasActors.map(({ x, y, ...actor }) => actor))) {
+      throw new Error(`${label} DOM/canvas actor identity mismatch: ${JSON.stringify(actorParity)}`);
     }
     await analysisPage.close();
 

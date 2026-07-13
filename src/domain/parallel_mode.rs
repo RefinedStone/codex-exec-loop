@@ -13,7 +13,7 @@ mod runtime_events;
 // 호출자는 `domain::parallel_mode::*`만 알면 된다. 하위 모듈 경로는 이 퍼사드가
 // 흡수해 병렬 모드 화면과 서비스가 같은 도메인 언어를 쓰게 둔다.
 pub use self::agent_session::{
-    ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
+    ParallelModeAgentLeaseIdentity, ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
     ParallelModeLiveSessionDetailDefaults, ParallelModeSupervisorDetailSnapshot,
 };

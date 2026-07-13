@@ -28,6 +28,16 @@ pub struct ParallelModeAgentRosterEntry {
     pub duration_label: String,
     // roster에서 마지막 의미 있는 진행 상태를 보여 주는 한 줄 요약이다.
     pub latest_summary: String,
+    // live lease에서 직접 전달된 scene-safe identity다. 수동/legacy fixture의 None을
+    // display 문자열에서 복원하지 않고 unknown diagnostic으로 남기기 위해 optional이다.
+    pub lease_identity: Option<ParallelModeAgentLeaseIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeAgentLeaseIdentity {
+    pub task_id: String,
+    pub session_key: String,
+    pub lease_generation: Option<String>,
 }
 
 impl ParallelModeAgentRosterEntry {
@@ -50,11 +60,26 @@ impl ParallelModeAgentRosterEntry {
             state_label: state_label.into(),
             duration_label: duration_label.into(),
             latest_summary: latest_summary.into(),
+            lease_identity: None,
         }
     }
 
     pub fn with_thread_id(mut self, thread_id: Option<String>) -> Self {
         self.thread_id = thread_id;
+        self
+    }
+
+    pub fn with_lease_identity(
+        mut self,
+        task_id: impl Into<String>,
+        session_key: impl Into<String>,
+        lease_generation: Option<String>,
+    ) -> Self {
+        self.lease_identity = Some(ParallelModeAgentLeaseIdentity {
+            task_id: task_id.into(),
+            session_key: session_key.into(),
+            lease_generation,
+        });
         self
     }
 
@@ -482,6 +507,11 @@ fn project_agent_roster_entry(
         roster_latest_summary(lease, detail),
     )
     .with_thread_id(detail.and_then(|detail| detail.thread_id.clone()))
+    .with_lease_identity(
+        lease.task_id.clone(),
+        lease.session_key(),
+        lease.lease_generation.clone(),
+    )
 }
 
 // state priority는 roster sorting과 default selection이 공유하는 lease lifecycle ordering이다.

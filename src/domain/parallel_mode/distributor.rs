@@ -110,6 +110,15 @@ pub struct ParallelModeDistributorQueueItem {
     pub branch_name: String,
     pub commit_short_sha: String,
     pub integration_note: String,
+    pub identity: Option<Box<ParallelModeDistributorQueueIdentity>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeDistributorQueueIdentity {
+    pub queue_item_id: String,
+    pub session_key: String,
+    pub slot_id: String,
+    pub task_id: String,
 }
 
 impl ParallelModeDistributorQueueItem {
@@ -128,7 +137,24 @@ impl ParallelModeDistributorQueueItem {
             branch_name: branch_name.into(),
             commit_short_sha: commit_short_sha.into(),
             integration_note: integration_note.into(),
+            identity: None,
         }
+    }
+
+    pub fn with_identity(
+        mut self,
+        queue_item_id: impl Into<String>,
+        session_key: impl Into<String>,
+        slot_id: impl Into<String>,
+        task_id: impl Into<String>,
+    ) -> Self {
+        self.identity = Some(Box::new(ParallelModeDistributorQueueIdentity {
+            queue_item_id: queue_item_id.into(),
+            session_key: session_key.into(),
+            slot_id: slot_id.into(),
+            task_id: task_id.into(),
+        }));
+        self
     }
 }
 

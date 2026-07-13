@@ -13,6 +13,7 @@ use crate::domain::parallel_mode::{
 use anyhow::Result;
 use chrono::Utc;
 use serde::Serialize;
+use std::collections::HashSet;
 
 use crate::git_subprocess;
 
@@ -26,6 +27,7 @@ pub(super) struct AkraAdminDashboardView {
     pub kpis: AkraKpiView,
     pub pool: PoolBoardView,
     pub agents: AgentRosterView,
+    pub scene: GameSceneView,
     pub selected_task: Option<SelectedTaskView>,
     pub distributor: DistributorView,
     pub events: Vec<RuntimeEventView>,
@@ -97,7 +99,6 @@ pub(super) struct PoolSummaryView {
 pub(super) struct PoolSlotView {
     pub slot_id: String,
     pub display_slot_label: String,
-    pub avatar_class_label: String,
     pub state: String,
     pub label: String,
     pub branch_name: String,
@@ -135,6 +136,141 @@ pub(super) struct AgentView {
     pub status: String,
     pub overload: bool,
     pub bubble_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GameSceneView {
+    pub stations: Vec<GameStationView>,
+    pub actors: Vec<GameActorView>,
+    pub diagnostics: Vec<GameSceneDiagnosticView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GameStationView {
+    pub station_id: String,
+    pub seat_index: usize,
+    pub state: String,
+    pub severity: String,
+    pub actor_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GameActorView {
+    pub actor_id: String,
+    pub agent_id: String,
+    pub task_id: String,
+    pub lease_generation: Option<String>,
+    pub slot_id: String,
+    pub seat_index: usize,
+    pub display_name: String,
+    pub archetype_key: String,
+    pub role_label: String,
+    pub visual_state: GameVisualState,
+    pub static_pose: GameStaticPose,
+    pub severity: String,
+    pub status_label: String,
+    pub lifecycle_state: String,
+    pub task_title: String,
+    pub branch_name: String,
+    pub progress_label: String,
+    pub duration_label: String,
+    pub latest_summary: String,
+    pub bubble_label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GameVisualState {
+    Starting,
+    Working,
+    AwaitingReview,
+    Blocked,
+    Delivering,
+    Cleanup,
+}
+
+impl GameVisualState {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Working => "working",
+            Self::AwaitingReview => "awaiting_review",
+            Self::Blocked => "blocked",
+            Self::Delivering => "delivering",
+            Self::Cleanup => "cleanup",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Starting => "시작 준비",
+            Self::Working => "작업 중",
+            Self::AwaitingReview => "검토 대기",
+            Self::Blocked => "차단됨",
+            Self::Delivering => "배포 중",
+            Self::Cleanup => "정리 중",
+        }
+    }
+
+    fn severity(self) -> &'static str {
+        match self {
+            Self::Blocked => "danger",
+            Self::Cleanup => "warning",
+            Self::Delivering | Self::AwaitingReview | Self::Starting => "info",
+            Self::Working => "success",
+        }
+    }
+
+    fn pose(self) -> GameStaticPose {
+        match self {
+            Self::Starting => GameStaticPose::Neutral,
+            Self::Working => GameStaticPose::Laptop,
+            Self::AwaitingReview | Self::Delivering => GameStaticPose::Callout,
+            Self::Blocked => GameStaticPose::Alert,
+            Self::Cleanup => GameStaticPose::Sit,
+        }
+    }
+}
+
+impl std::fmt::Display for GameVisualState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.key())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GameStaticPose {
+    Neutral,
+    Laptop,
+    Callout,
+    Alert,
+    Sit,
+}
+
+impl std::fmt::Display for GameStaticPose {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Neutral => "neutral",
+            Self::Laptop => "laptop",
+            Self::Callout => "callout",
+            Self::Alert => "alert",
+            Self::Sit => "sit",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GameSceneDiagnosticView {
+    pub code: String,
+    pub message: String,
+    pub agent_id: Option<String>,
+    pub slot_id: Option<String>,
+    pub severity: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,6 +321,10 @@ pub(super) struct EventFeedView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct DistributorQueueItemView {
+    pub queue_item_id: Option<String>,
+    pub session_key: Option<String>,
+    pub slot_id: Option<String>,
+    pub task_id: Option<String>,
     pub source_agent: String,
     pub task_title: String,
     pub queue_state: String,
@@ -299,6 +439,7 @@ pub(super) fn build_akra_dashboard_view(
 
     let pool = map_pool(&supervisor);
     let agents = map_agents(&supervisor, &agent_profiles);
+    let scene = map_game_scene(&supervisor, &agent_profiles);
     let selected_task = map_selected_task(&supervisor);
     let distributor = map_distributor(&supervisor);
     let planning_revision = events
@@ -361,6 +502,7 @@ pub(super) fn build_akra_dashboard_view(
         },
         pool,
         agents,
+        scene,
         selected_task,
         distributor,
         events,
@@ -391,14 +533,12 @@ fn map_pool(supervisor: &ParallelModeSupervisorSnapshot) -> PoolBoardView {
         slots: pool
             .slots
             .iter()
-            .enumerate()
-            .map(|(index, slot)| map_pool_slot(index, slot, supervisor))
+            .map(|slot| map_pool_slot(slot, supervisor))
             .collect(),
     }
 }
 
 fn map_pool_slot(
-    index: usize,
     slot: &ParallelModePoolSlotSnapshot,
     supervisor: &ParallelModeSupervisorSnapshot,
 ) -> PoolSlotView {
@@ -411,7 +551,6 @@ fn map_pool_slot(
     PoolSlotView {
         slot_id: slot.slot_id.clone(),
         display_slot_label: pool_slot_display_label(&slot.slot_id),
-        avatar_class_label: agent_class_label(index).to_string(),
         state: slot.state.label().to_string(),
         label: pool_state_korean_label(slot.state).to_string(),
         branch_name: slot.branch_name.clone(),
@@ -476,6 +615,278 @@ fn map_agent(
         bubble_label: agent_bubble(entry.state_label.as_str()).to_string(),
     }
 }
+
+fn map_game_scene(
+    supervisor: &ParallelModeSupervisorSnapshot,
+    agent_profiles: &ParallelAgentProfileConfig,
+) -> GameSceneView {
+    let mut actors = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut seen_agent_ids = HashSet::new();
+    let mut seen_slot_ids = HashSet::new();
+
+    for entry in &supervisor.roster.entries {
+        if !seen_agent_ids.insert(entry.agent_id.clone()) {
+            diagnostics.push(game_scene_diagnostic(
+                "duplicate_agent",
+                format!(
+                    "{} 에이전트가 roster에 중복으로 나타났습니다.",
+                    entry.agent_id
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            ));
+            continue;
+        }
+        if !seen_slot_ids.insert(entry.slot_id.clone()) {
+            diagnostics.push(game_scene_diagnostic(
+                "duplicate_slot_actor",
+                format!(
+                    "{} 슬롯에 여러 에이전트가 연결되어 있습니다.",
+                    entry.slot_id
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            ));
+            continue;
+        }
+
+        let Some(identity) = entry.lease_identity.as_ref() else {
+            diagnostics.push(game_scene_diagnostic(
+                "missing_lease_identity",
+                format!(
+                    "{} 에이전트의 typed lease identity가 없습니다.",
+                    entry.agent_id
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            ));
+            continue;
+        };
+        let matching_stations = supervisor
+            .pool
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.slot_id == entry.slot_id)
+            .collect::<Vec<_>>();
+        let [(station_index, station)] = matching_stations.as_slice() else {
+            diagnostics.push(game_scene_diagnostic(
+                "station_identity_mismatch",
+                format!(
+                    "{} 에이전트의 {} station을 하나로 확정할 수 없습니다.",
+                    entry.agent_id, entry.slot_id
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            ));
+            continue;
+        };
+        if matches!(
+            station.state,
+            ParallelModePoolSlotState::Idle
+                | ParallelModePoolSlotState::Missing
+                | ParallelModePoolSlotState::Unavailable
+        ) {
+            diagnostics.push(game_scene_diagnostic(
+                "inactive_station_has_roster_agent",
+                format!(
+                    "{} station은 {}인데 {} roster agent가 남아 있습니다.",
+                    station.slot_id,
+                    station.state.label(),
+                    entry.agent_id
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            ));
+            continue;
+        }
+        if station.branch_name != entry.branch_name {
+            diagnostics.push(game_scene_diagnostic(
+                "station_branch_mismatch",
+                format!(
+                    "{} station과 {} 에이전트의 branch가 다릅니다.",
+                    station.slot_id, entry.agent_id
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            ));
+            continue;
+        }
+
+        match game_visual_state(entry, station, supervisor) {
+            Ok(visual_state) => actors.push(map_game_actor(
+                entry,
+                identity,
+                *station_index,
+                visual_state,
+                agent_profiles,
+            )),
+            Err(code) => diagnostics.push(game_scene_diagnostic(
+                code,
+                format!(
+                    "{} 에이전트의 {} lifecycle을 신뢰 가능한 scene state로 투영할 수 없습니다.",
+                    entry.agent_id, entry.state_label
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            )),
+        }
+    }
+
+    let stations = supervisor
+        .pool
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(index, slot)| GameStationView {
+            station_id: slot.slot_id.clone(),
+            seat_index: scene_seat_index(index),
+            state: slot.state.label().to_string(),
+            severity: pool_state_severity(slot.state).to_string(),
+            actor_id: actors
+                .iter()
+                .find(|actor| actor.slot_id == slot.slot_id)
+                .map(|actor| actor.actor_id.clone()),
+        })
+        .collect();
+
+    GameSceneView {
+        stations,
+        actors,
+        diagnostics,
+    }
+}
+
+fn map_game_actor(
+    entry: &ParallelModeAgentRosterEntry,
+    identity: &crate::domain::parallel_mode::ParallelModeAgentLeaseIdentity,
+    station_index: usize,
+    visual_state: GameVisualState,
+    agent_profiles: &ParallelAgentProfileConfig,
+) -> GameActorView {
+    let profile = agent_profiles.profile_for_agent_id(&entry.agent_id);
+    let display_name = profile
+        .as_ref()
+        .map(|profile| profile.display_name.clone())
+        .unwrap_or_else(|| entry.agent_id.clone());
+    let archetype_key = profile
+        .as_ref()
+        .map(|profile| profile.avatar_class.clone())
+        .unwrap_or_else(|| "Runner".to_string());
+    let role_label = profile
+        .as_ref()
+        .map(|profile| profile.role.clone())
+        .unwrap_or_else(|| "Agent".to_string());
+    GameActorView {
+        actor_id: identity.session_key.clone(),
+        agent_id: entry.agent_id.clone(),
+        task_id: identity.task_id.clone(),
+        lease_generation: identity.lease_generation.clone(),
+        slot_id: entry.slot_id.clone(),
+        seat_index: scene_seat_index(station_index),
+        display_name,
+        archetype_key,
+        role_label,
+        visual_state,
+        static_pose: visual_state.pose(),
+        severity: visual_state.severity().to_string(),
+        status_label: visual_state.label().to_string(),
+        lifecycle_state: entry.state_label.clone(),
+        task_title: entry.task_title.clone(),
+        branch_name: entry.branch_name.clone(),
+        progress_label: progress_label(entry.state_label.as_str()),
+        duration_label: entry.duration_label.clone(),
+        latest_summary: entry.latest_summary.clone(),
+        bubble_label: agent_bubble(entry.state_label.as_str()).to_string(),
+    }
+}
+
+fn game_visual_state(
+    entry: &ParallelModeAgentRosterEntry,
+    station: &ParallelModePoolSlotSnapshot,
+    supervisor: &ParallelModeSupervisorSnapshot,
+) -> std::result::Result<GameVisualState, &'static str> {
+    let identity = entry
+        .lease_identity
+        .as_ref()
+        .ok_or("missing_lease_identity")?;
+    let queue_item = supervisor.distributor.queue_items.iter().find(|item| {
+        item.identity.as_ref().is_some_and(|queue_identity| {
+            queue_identity.session_key == identity.session_key
+                && queue_identity.slot_id == entry.slot_id
+                && queue_identity.task_id == identity.task_id
+                && item.source_agent == entry.agent_id
+        })
+    });
+
+    if matches!(
+        queue_item.map(|item| item.queue_state),
+        Some(ParallelModeQueueItemState::Blocked | ParallelModeQueueItemState::Failed)
+    ) || station.state == ParallelModePoolSlotState::Blocked
+        || matches!(
+            entry.state_label.as_str(),
+            "failed" | "official_refresh_recovery_needed"
+        )
+    {
+        return Ok(GameVisualState::Blocked);
+    }
+    if station.state == ParallelModePoolSlotState::AwaitingCleanup
+        || matches!(entry.state_label.as_str(), "cleanup_pending" | "cleaning")
+        || matches!(
+            queue_item.map(|item| item.queue_state),
+            Some(ParallelModeQueueItemState::Cleaning)
+        )
+    {
+        return Ok(GameVisualState::Cleanup);
+    }
+    if matches!(
+        queue_item.map(|item| item.queue_state),
+        Some(
+            ParallelModeQueueItemState::Queued
+                | ParallelModeQueueItemState::Pushing
+                | ParallelModeQueueItemState::PrPending
+                | ParallelModeQueueItemState::MergePending
+                | ParallelModeQueueItemState::Integrating
+        )
+    ) {
+        return Ok(GameVisualState::Delivering);
+    }
+
+    match entry.state_label.as_str() {
+        "reported_complete" | "ledger_refreshing" | "commit_ready" => {
+            Ok(GameVisualState::AwaitingReview)
+        }
+        "running" => Ok(GameVisualState::Working),
+        "assigned" | "starting" => Ok(GameVisualState::Starting),
+        "merge_queued" | "pushing" | "pr_pending" | "merge_pending" | "integrating" => {
+            Err("delivery_identity_mismatch")
+        }
+        "done" | "cleaned" | "merged" => Err("terminal_roster_actor"),
+        _ => Err("unknown_lifecycle"),
+    }
+}
+
+fn game_scene_diagnostic(
+    code: impl Into<String>,
+    message: impl Into<String>,
+    agent_id: Option<String>,
+    slot_id: Option<String>,
+) -> GameSceneDiagnosticView {
+    GameSceneDiagnosticView {
+        code: code.into(),
+        message: message.into(),
+        agent_id,
+        slot_id,
+        severity: "warning".to_string(),
+    }
+}
+
+fn scene_seat_index(index: usize) -> usize {
+    index % SLOT_SEATS_CAPACITY + 1
+}
+
+const SLOT_SEATS_CAPACITY: usize = 5;
 
 fn map_selected_task(supervisor: &ParallelModeSupervisorSnapshot) -> Option<SelectedTaskView> {
     let session = supervisor.detail.session.as_ref()?;
@@ -573,6 +984,22 @@ fn event_feed_status_label(visible_event_count: usize, total_event_count: usize)
 
 fn map_queue_item(item: &ParallelModeDistributorQueueItem) -> DistributorQueueItemView {
     DistributorQueueItemView {
+        queue_item_id: item
+            .identity
+            .as_ref()
+            .map(|identity| identity.queue_item_id.clone()),
+        session_key: item
+            .identity
+            .as_ref()
+            .map(|identity| identity.session_key.clone()),
+        slot_id: item
+            .identity
+            .as_ref()
+            .map(|identity| identity.slot_id.clone()),
+        task_id: item
+            .identity
+            .as_ref()
+            .map(|identity| identity.task_id.clone()),
         source_agent: item.source_agent.clone(),
         task_title: item.task_title.clone(),
         queue_state: item.queue_state.label().to_string(),
@@ -1259,7 +1686,8 @@ mod tests {
                     "commit_ready",
                     "45m",
                     "ready for distributor",
-                ),
+                )
+                .with_lease_identity("task-1", "session-one", Some("a".repeat(64))),
                 ParallelModeAgentRosterEntry::new(
                     "agent-two",
                     "Investigate dashboard copy",
@@ -1268,7 +1696,8 @@ mod tests {
                     "running",
                     "2h 10m",
                     "still running",
-                ),
+                )
+                .with_lease_identity("task-2", "session-two", Some("b".repeat(64))),
             ],
             "no active agents",
         );
@@ -1292,7 +1721,8 @@ mod tests {
                     "akra-agent/slot-1/task-1",
                     "abc1234",
                     "pushing source branch",
-                ),
+                )
+                .with_identity("queue-one", "session-one", "slot-1", "task-1"),
                 ParallelModeDistributorQueueItem::new(
                     "agent-two",
                     "Investigate dashboard copy",
@@ -1300,7 +1730,8 @@ mod tests {
                     "akra-agent/slot-2/task-2",
                     "def5678",
                     "merge conflict",
-                ),
+                )
+                .with_identity("queue-two", "session-two", "slot-2", "task-2"),
             ],
             Vec::new(),
             "agent-one ready",
@@ -1343,11 +1774,49 @@ mod tests {
         ]
     }
 
+    fn scene_supervisor(
+        lifecycle_state: &str,
+        pool_state: ParallelModePoolSlotState,
+    ) -> ParallelModeSupervisorSnapshot {
+        let mut supervisor = rich_supervisor_snapshot();
+        supervisor.pool = ParallelModePoolBoardSnapshot::new(
+            1,
+            "pool-root",
+            "ready",
+            vec![ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                pool_state,
+                "akra-agent/slot-1/task-1",
+                "slot-1",
+                "agent-one / task-1",
+            )],
+        );
+        supervisor.roster = ParallelModeAgentRosterSnapshot::new(
+            vec![
+                ParallelModeAgentRosterEntry::new(
+                    "agent-one",
+                    "Cover dashboard mapping",
+                    "slot-1",
+                    "akra-agent/slot-1/task-1",
+                    lifecycle_state,
+                    "45m",
+                    "latest summary",
+                )
+                .with_lease_identity("task-1", "session-one", Some("a".repeat(64))),
+            ],
+            "no active agents",
+        );
+        supervisor.distributor =
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "no queue");
+        supervisor
+    }
+
     #[test]
     fn dashboard_mapping_projects_rich_supervisor_snapshot() {
         let supervisor = rich_supervisor_snapshot();
         let pool = map_pool(&supervisor);
         let agents = map_agents(&supervisor, &profile_config());
+        let scene = map_game_scene(&supervisor, &profile_config());
         let selected_task = map_selected_task(&supervisor).expect("selected task should map");
         let distributor = map_distributor(&supervisor);
         let events_snapshot = ParallelModeRuntimeEventsSnapshot::new(
@@ -1413,6 +1882,24 @@ mod tests {
         assert_eq!(agents.entries[1].class_label, "Scribe");
         assert!(agents.entries[1].overload);
 
+        assert_eq!(scene.stations.len(), 3);
+        assert_eq!(scene.actors.len(), 1);
+        assert_eq!(scene.actors[0].actor_id, "session-one");
+        assert_eq!(scene.actors[0].agent_id, "agent-one");
+        assert_eq!(scene.actors[0].task_id, "task-1");
+        assert_eq!(scene.actors[0].slot_id, "slot-1");
+        assert_eq!(scene.actors[0].seat_index, 1);
+        assert_eq!(scene.actors[0].visual_state, GameVisualState::Delivering);
+        assert_eq!(scene.actors[0].static_pose, GameStaticPose::Callout);
+        assert_eq!(scene.stations[0].actor_id.as_deref(), Some("session-one"));
+        assert_eq!(scene.stations[1].actor_id, None);
+        assert_eq!(scene.stations[2].actor_id, None);
+        assert_eq!(scene.diagnostics.len(), 1);
+        assert_eq!(
+            scene.diagnostics[0].code,
+            "inactive_station_has_roster_agent"
+        );
+
         assert_eq!(selected_task.task_id, "task-1");
         assert_eq!(selected_task.progress_percent, None);
         assert_eq!(
@@ -1460,6 +1947,134 @@ mod tests {
         assert_eq!(campaign.intel_cards[0].severity, "danger");
         assert_eq!(campaign.intel_cards[2].severity, "danger");
         assert_eq!(campaign.intel_cards[3].note, "latest #12");
+    }
+
+    #[test]
+    fn game_scene_maps_closed_lifecycle_states_to_static_poses() {
+        let cases = [
+            (
+                "assigned",
+                ParallelModePoolSlotState::Leased,
+                GameVisualState::Starting,
+                GameStaticPose::Neutral,
+            ),
+            (
+                "starting",
+                ParallelModePoolSlotState::Leased,
+                GameVisualState::Starting,
+                GameStaticPose::Neutral,
+            ),
+            (
+                "running",
+                ParallelModePoolSlotState::Running,
+                GameVisualState::Working,
+                GameStaticPose::Laptop,
+            ),
+            (
+                "reported_complete",
+                ParallelModePoolSlotState::Running,
+                GameVisualState::AwaitingReview,
+                GameStaticPose::Callout,
+            ),
+            (
+                "commit_ready",
+                ParallelModePoolSlotState::Running,
+                GameVisualState::AwaitingReview,
+                GameStaticPose::Callout,
+            ),
+            (
+                "failed",
+                ParallelModePoolSlotState::Blocked,
+                GameVisualState::Blocked,
+                GameStaticPose::Alert,
+            ),
+            (
+                "cleanup_pending",
+                ParallelModePoolSlotState::AwaitingCleanup,
+                GameVisualState::Cleanup,
+                GameStaticPose::Sit,
+            ),
+        ];
+
+        for (lifecycle, pool_state, expected_state, expected_pose) in cases {
+            let scene = map_game_scene(&scene_supervisor(lifecycle, pool_state), &profile_config());
+            assert_eq!(scene.actors.len(), 1, "{lifecycle}");
+            assert_eq!(scene.actors[0].visual_state, expected_state, "{lifecycle}");
+            assert_eq!(scene.actors[0].static_pose, expected_pose, "{lifecycle}");
+            assert!(scene.diagnostics.is_empty(), "{lifecycle}");
+        }
+    }
+
+    #[test]
+    fn game_scene_applies_station_overlay_precedence() {
+        let blocked = map_game_scene(
+            &scene_supervisor("running", ParallelModePoolSlotState::Blocked),
+            &profile_config(),
+        );
+        assert_eq!(blocked.actors[0].visual_state, GameVisualState::Blocked);
+
+        let cleanup = map_game_scene(
+            &scene_supervisor("commit_ready", ParallelModePoolSlotState::AwaitingCleanup),
+            &profile_config(),
+        );
+        assert_eq!(cleanup.actors[0].visual_state, GameVisualState::Cleanup);
+    }
+
+    #[test]
+    fn game_scene_requires_typed_delivery_identity() {
+        let mut supervisor = scene_supervisor("pushing", ParallelModePoolSlotState::Running);
+        let unmatched = map_game_scene(&supervisor, &profile_config());
+        assert!(unmatched.actors.is_empty());
+        assert_eq!(unmatched.diagnostics[0].code, "delivery_identity_mismatch");
+
+        supervisor.distributor.queue_items = vec![
+            ParallelModeDistributorQueueItem::new(
+                "agent-one",
+                "Cover dashboard mapping",
+                ParallelModeQueueItemState::Pushing,
+                "akra-agent/slot-1/task-1",
+                "abc1234",
+                "pushing source branch",
+            )
+            .with_identity("queue-one", "session-one", "slot-1", "task-1"),
+        ];
+        let matched = map_game_scene(&supervisor, &profile_config());
+        assert_eq!(matched.actors.len(), 1);
+        assert_eq!(matched.actors[0].visual_state, GameVisualState::Delivering);
+    }
+
+    #[test]
+    fn game_scene_rejects_unknown_terminal_and_mismatched_actors() {
+        for lifecycle in ["unknown", "done", "cleaned", "merged"] {
+            let scene = map_game_scene(
+                &scene_supervisor(lifecycle, ParallelModePoolSlotState::Running),
+                &profile_config(),
+            );
+            assert!(scene.actors.is_empty(), "{lifecycle}");
+            assert_eq!(scene.diagnostics.len(), 1, "{lifecycle}");
+        }
+
+        let mut missing_identity = scene_supervisor("running", ParallelModePoolSlotState::Running);
+        missing_identity.roster.entries[0].lease_identity = None;
+        let scene = map_game_scene(&missing_identity, &profile_config());
+        assert!(scene.actors.is_empty());
+        assert_eq!(scene.diagnostics[0].code, "missing_lease_identity");
+
+        let inactive = map_game_scene(
+            &scene_supervisor("running", ParallelModePoolSlotState::Idle),
+            &profile_config(),
+        );
+        assert!(inactive.actors.is_empty());
+        assert_eq!(
+            inactive.diagnostics[0].code,
+            "inactive_station_has_roster_agent"
+        );
+
+        let mut branch_mismatch = scene_supervisor("running", ParallelModePoolSlotState::Running);
+        branch_mismatch.pool.slots[0].branch_name = "other-branch".to_string();
+        let scene = map_game_scene(&branch_mismatch, &profile_config());
+        assert!(scene.actors.is_empty());
+        assert_eq!(scene.diagnostics[0].code, "station_branch_mismatch");
     }
 
     #[test]

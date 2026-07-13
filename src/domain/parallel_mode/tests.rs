@@ -633,6 +633,13 @@ fn roster_projection_sorts_active_leases_and_applies_runtime_detail_overrides() 
         "no agent sessions launched in this slice"
     );
     assert_eq!(roster.entries[0].slot_id, "slot-1");
+    let running_identity = roster.entries[0]
+        .lease_identity
+        .as_ref()
+        .expect("live roster entry should preserve typed lease identity");
+    assert_eq!(running_identity.task_id, "task-1");
+    assert_eq!(running_identity.session_key, "slot-1@2026-01-01T00:00:00Z");
+    assert_eq!(running_identity.lease_generation, None);
     assert_eq!(roster.entries[0].state_label, "commit_ready");
     assert_eq!(roster.entries[0].duration_label, "official");
     assert_eq!(

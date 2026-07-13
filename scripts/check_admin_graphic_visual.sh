@@ -330,7 +330,8 @@ for token in \
   'data-event-drawer' \
   'data-detail-drawer' \
   'data-refresh-dashboard' \
-  'is-bursting' \
+  'data-scene-actor-list' \
+  'data-scene-diagnostics' \
   'data-event-feed-status' \
   'gamebaljeonguk_atlas_64x96.png' \
   'background-image: var(--agent-sprite-sheet)' \
@@ -363,8 +364,11 @@ for token in \
   'optionalText(distributor.bubbleLabel, "배포 파이프라인")' \
   'openDetailDrawer' \
   'openRefreshDetail' \
-  'akra:mission-pulse' \
-  'pulseStage' \
+  'createActorButton' \
+  'renderActors' \
+  'sceneSignature' \
+  'dashboardRequest' \
+  'eventsRequest' \
   'agentAvatarClass' \
   'prependEventRows' \
   'stale snapshot'; do
@@ -377,6 +381,8 @@ for token in \
   'gamebaljeonguk_atlas_128x192.png' \
   'sprite_fd_desk_1.png' \
   'sprite_fd_event_log_tower.png' \
+  'inspectScene' \
+  'Promise.allSettled' \
   'PixiJS - The MIT License'; do
   require_contains "${game_js}" "${token}"
 done
@@ -394,13 +400,21 @@ for token in \
   '게임화 정책' \
   '도메인 매핑' \
   'blocked slot은 operator recovery' \
+  'is-bursting' \
   'blocked-copy'; do
   require_not_contains "${admin_html}" "${token}"
 done
 
 for token in \
+  'akra:mission-pulse' \
+  'pulseStage' \
+  'createSlotAgentButton' \
+  'renderAgents(dashboard.pool)'; do
+  require_not_contains "${dashboard_js}" "${token}"
+done
+
+for token in \
   'data-agent-progress' \
-  'data-detail-type="agent"' \
   'data-detail-title="슬롯 요원'; do
   require_not_contains "${admin_html}" "${token}"
 done
@@ -477,6 +491,10 @@ for token in \
   '"kpis"' \
   '"pool"' \
   '"agents"' \
+  '"scene"' \
+  '"stations"' \
+  '"actors"' \
+  '"diagnostics"' \
   '"distributor"' \
   '"campaign"' \
   '"laneCards"' \

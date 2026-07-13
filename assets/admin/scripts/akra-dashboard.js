@@ -86,14 +86,6 @@
   const detailDrawerTitle = root.querySelector("[data-detail-drawer-title]");
   const detailDrawerSubtitle = root.querySelector("[data-detail-drawer-subtitle]");
   const detailDrawerBody = root.querySelector("[data-detail-drawer-body]");
-  const stageBoard = root.querySelector(".office-board");
-
-  const pulseStage = (count = 1) => {
-    stageBoard?.classList.add("is-bursting");
-    window.dispatchEvent(new CustomEvent("akra:mission-pulse", { detail: { count } }));
-    window.setTimeout(() => stageBoard?.classList.remove("is-bursting"), 900);
-  };
-
   const detailRowsByType = {
     slot: [
       ["상태", "detailState", "chip"],
@@ -452,7 +444,6 @@
     if (!eventPanel || !eventDrawer || events.length === 0) return;
     removeEmptyEventCopy();
     const existing = new Set([...eventPanel.querySelectorAll("[data-event-sequence]")].map((row) => row.dataset.eventSequence));
-    let insertedCount = 0;
     for (const event of [...events].reverse()) {
       const sequence = String(event.sequence || "");
       if (!sequence || existing.has(sequence)) continue;
@@ -460,12 +451,10 @@
       row.classList.add("is-new");
       eventPanel.insertBefore(row, eventPanel.querySelector("[data-event-sequence]") || eventDrawer);
       existing.add(sequence);
-      insertedCount += 1;
     }
     trimEventRows();
     setEventStatus();
     syncSelectedDetail();
-    if (insertedCount > 0) pulseStage(insertedCount);
   };
 
   const createCampaignLane = (lane) => {
@@ -626,9 +615,9 @@
       detailNote: slotNote
     });
     button.title = `${slotDisplayLabel} · ${slotStateLabel} · task ${slotTaskId} · branch ${slotBranchName} · worktree ${slotWorktreeLabel} · owner ${slotOwnerLabel} · note ${slotNote}`;
-    const avatar = document.createElement("span");
-    avatar.className = "slot-avatar";
-    avatar.setAttribute("aria-hidden", "true");
+    const stationIcon = document.createElement("span");
+    stationIcon.className = "station-icon";
+    stationIcon.setAttribute("aria-hidden", "true");
     const body = document.createElement("div");
     body.append(
       createText("strong", "", slotDisplayLabel),
@@ -647,7 +636,7 @@
     fill.className = "slot-meter-fill";
     track.appendChild(fill);
     meter.appendChild(track);
-    button.append(avatar, body, progress, meter);
+    button.append(stationIcon, body, progress, meter);
     initializeDetailControl(button);
     return button;
   };
@@ -661,58 +650,100 @@
     );
   };
 
-  const createSlotAgentButton = (slot, index) => {
+  const actorDetailDataset = (actor) => ({
+    actorId: actor.actorId,
+    agentId: actor.agentId,
+    slotId: actor.slotId,
+    taskId: actor.taskId,
+    leaseGeneration: actor.leaseGeneration || "",
+    sceneSeatIndex: actor.seatIndex,
+    archetypeKey: actor.archetypeKey,
+    visualState: actor.visualState,
+    staticPose: actor.staticPose,
+    detailType: "agent",
+    detailTitle: `${optionalText(actor.displayName)} · ${optionalText(actor.roleLabel)}`,
+    detailSubtitle: optionalText(actor.lifecycleState),
+    detailState: optionalText(actor.statusLabel),
+    detailSeverity: actor.severity,
+    detailSlot: actor.slotId,
+    detailTask: `${optionalText(actor.taskId)} · ${optionalText(actor.taskTitle)}`,
+    detailBranch: actor.branchName,
+    detailRuntime: actor.durationLabel,
+    detailProgress: actor.progressLabel,
+    detailSummary: actor.latestSummary
+  });
+
+  const createActorButton = (actor) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `scene-object desk agent-${index % 5 + 1} ${severityClass(slot.severity)}`;
-    const slotDisplayLabel = optionalText(slot.displaySlotLabel || slot.slotId, "슬롯");
-    const slotStateLabel = optionalText(slot.label || slot.bubbleLabel, "상태");
-    const slotTaskId = optionalText(slot.taskId, "-");
-    const slotBranchName = optionalText(slot.branchName, "-");
-    const slotWorktreeLabel = optionalText(slot.worktreeLabel, "-");
-    const slotOwnerLabel = optionalText(slot.ownerLabel, "-");
-    const slotNote = optionalText(slot.note, "-");
-    setDataset(button, {
-      agentId: slot.slotId,
-      slotId: slot.slotId,
-      taskId: slot.taskId || "",
-      detailType: "slot",
-      detailTitle: `워크트리 풀 · ${slotDisplayLabel}`,
-      detailSubtitle: slotStateLabel,
-      detailState: slotStateLabel,
-      detailSeverity: slot.severity,
-      detailSlot: slotDisplayLabel,
-      detailTask: slotTaskId,
-      detailBranch: slotBranchName,
-      detailWorktree: slotWorktreeLabel,
-      detailOwner: slotOwnerLabel,
-      detailNote: slotNote
-    });
-    button.title = `${slotDisplayLabel} · ${slotStateLabel} · task ${slotTaskId} · branch ${slotBranchName} · worktree ${slotWorktreeLabel} · owner ${slotOwnerLabel} · note ${slotNote}`;
+    button.className = `scene-object desk agent-${Number(actor.seatIndex) || 1} ${severityClass(actor.severity)}`;
+    setDataset(button, actorDetailDataset(actor));
+    button.title = `${optionalText(actor.displayName)} · ${optionalText(actor.statusLabel)} · ${optionalText(actor.taskTitle)} · ${optionalText(actor.branchName)}`;
     const sprite = document.createElement("span");
-    sprite.className = `agent-sprite ${agentAvatarClass(slot.avatarClassLabel)}`;
+    sprite.className = `agent-sprite ${agentAvatarClass(actor.archetypeKey)}`;
     sprite.setAttribute("aria-hidden", "true");
-    sprite.appendChild(createText("span", "sprite-label", slotDisplayLabel));
+    sprite.appendChild(createText("span", "sprite-label", actor.displayName));
     const label = document.createElement("span");
     label.className = "object-label";
     label.append(
-      createText("strong", "", slotDisplayLabel),
-      createText("span", "", slotTaskId),
-      createText("small", "", `${slotStateLabel} · ${slotWorktreeLabel}`)
+      createText("strong", "", actor.displayName),
+      createText("span", "", actor.taskTitle),
+      createText("small", "", `${optionalText(actor.statusLabel)} · ${optionalText(actor.durationLabel)}`)
     );
-    button.append(createText("span", "speech", slot.bubbleLabel), sprite, label);
+    button.append(createText("span", "speech", actor.bubbleLabel), sprite, label);
     initializeDetailControl(button);
     return button;
   };
 
-  const renderAgents = (pool) => {
-    const board = root.querySelector(".office-board");
-    if (!board || !pool) return;
-    for (const node of board.querySelectorAll(".desk[data-agent-id]")) node.remove();
-    const anchor = board.querySelector(".distributor-desk") || board.querySelector(".event-board");
-    asArray(pool.slots).forEach((slot, index) => {
-      board.insertBefore(createSlotAgentButton(slot, index), anchor);
+  const createActorListButton = (actor) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `scene-actor-row ${severityClass(actor.severity)}`;
+    setDataset(button, actorDetailDataset(actor));
+    button.append(
+      createText("strong", "", actor.displayName),
+      createText("span", "", `${optionalText(actor.statusLabel)} · ${optionalText(actor.slotId)}`),
+      createText("small", "", actor.taskTitle)
+    );
+    initializeDetailControl(button);
+    return button;
+  };
+
+  const renderSceneDiagnostics = (diagnostics) => {
+    const panel = root.querySelector("[data-scene-diagnostics]");
+    if (!panel) return;
+    const rows = asArray(diagnostics).map((diagnostic) => {
+      const row = document.createElement("p");
+      row.className = severityClass(diagnostic.severity);
+      row.dataset.diagnosticCode = optionalText(diagnostic.code, "unknown");
+      row.append(
+        createText("strong", "", `표시 보류 · ${optionalText(diagnostic.code, "unknown")}`),
+        createText("span", "", diagnostic.message)
+      );
+      return row;
     });
+    panel.replaceChildren(...rows);
+    panel.hidden = rows.length === 0;
+  };
+
+  const renderActors = (scene) => {
+    const board = root.querySelector(".office-board");
+    if (!board || !scene) return;
+    const nextSignature = JSON.stringify({
+      stations: asArray(scene.stations),
+      actors: asArray(scene.actors),
+      diagnostics: asArray(scene.diagnostics)
+    });
+    if (root.dataset.sceneSignature === nextSignature) return;
+    for (const node of board.querySelectorAll(".desk[data-actor-id]")) node.remove();
+    const anchor = board.querySelector(".distributor-desk") || board.querySelector(".event-board");
+    for (const actor of asArray(scene.actors)) board.insertBefore(createActorButton(actor), anchor);
+    root.querySelector("[data-scene-actor-list]")?.replaceChildren(
+      ...asArray(scene.actors).map(createActorListButton)
+    );
+    renderSceneDiagnostics(scene.diagnostics);
+    root.dataset.sceneSignature = nextSignature;
+    window.dispatchEvent(new CustomEvent("akra:scene-rendered", { detail: { scene } }));
   };
 
   const syncStageHud = (dashboard) => {
@@ -781,7 +812,7 @@
 
   const renderBoard = (dashboard) => {
     renderPool(dashboard.pool);
-    renderAgents(dashboard.pool);
+    renderActors(dashboard.scene);
     syncStageHud(dashboard);
     syncDistributorDesk(dashboard.distributor);
     syncEventBoard(dashboard);
@@ -881,6 +912,7 @@
 
   const dashboardSignature = (dashboard) => JSON.stringify({
     agents: dashboard.agents || null,
+    scene: dashboard.scene || null,
     pool: dashboard.pool || null,
     distributor: dashboard.distributor || null,
     campaign: dashboard.campaign || null,
@@ -944,7 +976,6 @@
     const nextSignature = dashboardSignature(dashboard);
     if (previousSignature !== nextSignature) {
       renderDashboardPanels(dashboard);
-      if (previousSignature) pulseStage(1);
       root.dataset.dashboardSignature = nextSignature;
     }
     if (Number.isFinite(dashboard.eventFeed?.totalEventCount)) {
@@ -1023,52 +1054,67 @@
   pollStatus.textContent = "snapshot loaded";
   root.querySelector(".stage-hud")?.appendChild(pollStatus);
 
-  const pollDashboard = async () => {
-    setKpiState("loading");
-    pollStatus.textContent = "refreshing snapshot";
-    pollStatus.classList.remove("is-stale", "is-error");
-    try {
-      const response = await fetch(dashboardUrl, { headers: { "Accept": "application/json" } });
-      if (!response.ok) throw new Error(`dashboard ${response.status}`);
-      const dashboard = await response.json();
-      updateDashboard(dashboard);
-      setKpiState("fresh");
-      pollStatus.textContent = "live snapshot";
-      return true;
-    } catch (error) {
-      setKpiState("error");
-      pollStatus.textContent = `stale snapshot: ${error.message}`;
-      pollStatus.classList.add("is-stale", "is-error");
-      return false;
-    }
+  let dashboardRequest = null;
+  let eventsRequest = null;
+
+  const pollDashboard = () => {
+    if (dashboardRequest) return dashboardRequest;
+    dashboardRequest = (async () => {
+      setKpiState("loading");
+      pollStatus.textContent = "refreshing snapshot";
+      pollStatus.classList.remove("is-stale", "is-error");
+      try {
+        const response = await fetch(dashboardUrl, { headers: { "Accept": "application/json" } });
+        if (!response.ok) throw new Error(`dashboard ${response.status}`);
+        const dashboard = await response.json();
+        updateDashboard(dashboard);
+        setKpiState("fresh");
+        pollStatus.textContent = "live snapshot";
+        return true;
+      } catch (error) {
+        setKpiState("error");
+        pollStatus.textContent = `stale snapshot: ${error.message}`;
+        pollStatus.classList.add("is-stale", "is-error");
+        return false;
+      }
+    })().finally(() => {
+      dashboardRequest = null;
+    });
+    return dashboardRequest;
   };
 
-  const pollEvents = async () => {
-    const latest = Number(root.dataset.latestEventSequence || "0");
-    const url = latest > 0 ? `${eventsUrl}?afterSequence=${latest}&limit=50` : `${eventsUrl}?limit=50`;
-    try {
-      const response = await fetch(url, { headers: { "Accept": "application/json" } });
-      if (!response.ok) throw new Error(`events ${response.status}`);
-      const payload = await response.json();
-      if (Array.isArray(payload.events)) {
-        if (payload.feed?.incremental) {
-          prependEventRows(payload.events);
-        } else {
-          replaceEventRows(payload.events);
+  const pollEvents = () => {
+    if (eventsRequest) return eventsRequest;
+    eventsRequest = (async () => {
+      const latest = Number(root.dataset.latestEventSequence || "0");
+      const url = latest > 0 ? `${eventsUrl}?afterSequence=${latest}&limit=50` : `${eventsUrl}?limit=50`;
+      try {
+        const response = await fetch(url, { headers: { "Accept": "application/json" } });
+        if (!response.ok) throw new Error(`events ${response.status}`);
+        const payload = await response.json();
+        if (Array.isArray(payload.events)) {
+          if (payload.feed?.incremental) {
+            prependEventRows(payload.events);
+          } else {
+            replaceEventRows(payload.events);
+          }
         }
+        const newest = payload.feed?.newestSequence;
+        if (Number.isFinite(newest)) root.dataset.latestEventSequence = String(newest);
+        if (Number.isFinite(payload.feed?.totalEventCount) && !payload.feed?.incremental) {
+          root.dataset.eventTotalCount = String(payload.feed.totalEventCount);
+        }
+        setEventStatus();
+        return true;
+      } catch (_error) {
+        pollStatus.textContent = "stale events";
+        pollStatus.classList.add("is-stale");
+        return false;
       }
-      const newest = payload.feed?.newestSequence;
-      if (Number.isFinite(newest)) root.dataset.latestEventSequence = String(newest);
-      if (Number.isFinite(payload.feed?.totalEventCount) && !payload.feed?.incremental) {
-        root.dataset.eventTotalCount = String(payload.feed.totalEventCount);
-      }
-      setEventStatus();
-      return true;
-    } catch (_error) {
-      pollStatus.textContent = "stale events";
-      pollStatus.classList.add("is-stale");
-      return false;
-    }
+    })().finally(() => {
+      eventsRequest = null;
+    });
+    return eventsRequest;
   };
 
   window.setInterval(() => {
