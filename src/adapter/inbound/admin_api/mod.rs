@@ -7,7 +7,7 @@ use crate::composition::production;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -250,10 +250,16 @@ async fn local_admin_request_guard(
 }
 
 fn harden_admin_response(mut response: Response) -> Response {
-    response.headers_mut().insert(
-        "cache-control",
-        HeaderValue::from_static("no-store, max-age=0"),
-    );
+    if response
+        .extensions()
+        .get::<static_assets::BundledAssetCachePolicy>()
+        .is_none()
+    {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, max-age=0"),
+        );
+    }
     response.headers_mut().insert(
         "content-security-policy",
         HeaderValue::from_static(

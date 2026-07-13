@@ -1,125 +1,248 @@
 use axum::extract::Path;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 
-const FINAL_DRAFT_MAP_SPRITE: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/final-draft-map-sprite.png");
-const GAMEBALJEONGUK_ATLAS_64X96: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png");
-const GAMEBALJEONGUK_ATLAS_128X192: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png");
+const BUNDLED_ASSET_CACHE_CONTROL: &str = "private, no-cache";
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BundledAssetCachePolicy;
+
+macro_rules! bundled_asset {
+    ($bytes:ident, $etag:ident, $path:literal) => {
+        const $bytes: &[u8] = include_bytes!($path);
+        static $etag: LazyLock<HeaderValue> = LazyLock::new(|| bundled_asset_etag($bytes));
+    };
+}
+
+bundled_asset!(
+    FINAL_DRAFT_MAP_SPRITE,
+    FINAL_DRAFT_MAP_SPRITE_ETAG,
+    "../../../../assets/admin/graphics/final-draft-map-sprite.png"
+);
+bundled_asset!(
+    GAMEBALJEONGUK_ATLAS_64X96,
+    GAMEBALJEONGUK_ATLAS_64X96_ETAG,
+    "../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png"
+);
+bundled_asset!(
+    GAMEBALJEONGUK_ATLAS_128X192,
+    GAMEBALJEONGUK_ATLAS_128X192_ETAG,
+    "../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png"
+);
 
 // Individual isometric sprites for PixiJS diorama
-const SPRITE_FD_DESK_1: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_1.png");
-const SPRITE_FD_DESK_2: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_2.png");
-const SPRITE_FD_DESK_3: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_3.png");
-const SPRITE_FD_DESK_4: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_4.png");
-const SPRITE_FD_DESK_5: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_desk_5.png");
-const SPRITE_FD_BOSS_DESK: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_boss_desk.png");
-const SPRITE_FD_DISTRIBUTOR_DESK: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_distributor_desk.png");
-const SPRITE_FD_EVENT_LOG_TOWER: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_event_log_tower.png");
-const SPRITE_FD_SOFA: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_sofa.png");
-const SPRITE_FD_POTTED_PLANT: &[u8] =
-    include_bytes!("../../../../assets/admin/graphics/sprite_fd_potted_plant.png");
-const AKRA_DIORAMA_JS: &[u8] = include_bytes!("../../../../assets/admin/game/akra-diorama.js");
-const ADMIN_SHELL_JS: &[u8] = include_bytes!("../../../../assets/admin/scripts/admin-shell.js");
-const AKRA_DASHBOARD_JS: &[u8] =
-    include_bytes!("../../../../assets/admin/scripts/akra-dashboard.js");
-const GALMURI11_WOFF2: &[u8] = include_bytes!("../../../../assets/admin/fonts/Galmuri11.woff2");
-const GALMURI11_BOLD_WOFF2: &[u8] =
-    include_bytes!("../../../../assets/admin/fonts/Galmuri11-Bold.woff2");
+bundled_asset!(
+    SPRITE_FD_DESK_1,
+    SPRITE_FD_DESK_1_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_desk_1.png"
+);
+bundled_asset!(
+    SPRITE_FD_DESK_2,
+    SPRITE_FD_DESK_2_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_desk_2.png"
+);
+bundled_asset!(
+    SPRITE_FD_DESK_3,
+    SPRITE_FD_DESK_3_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_desk_3.png"
+);
+bundled_asset!(
+    SPRITE_FD_DESK_4,
+    SPRITE_FD_DESK_4_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_desk_4.png"
+);
+bundled_asset!(
+    SPRITE_FD_DESK_5,
+    SPRITE_FD_DESK_5_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_desk_5.png"
+);
+bundled_asset!(
+    SPRITE_FD_BOSS_DESK,
+    SPRITE_FD_BOSS_DESK_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_boss_desk.png"
+);
+bundled_asset!(
+    SPRITE_FD_DISTRIBUTOR_DESK,
+    SPRITE_FD_DISTRIBUTOR_DESK_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_distributor_desk.png"
+);
+bundled_asset!(
+    SPRITE_FD_EVENT_LOG_TOWER,
+    SPRITE_FD_EVENT_LOG_TOWER_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_event_log_tower.png"
+);
+bundled_asset!(
+    SPRITE_FD_SOFA,
+    SPRITE_FD_SOFA_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_sofa.png"
+);
+bundled_asset!(
+    SPRITE_FD_POTTED_PLANT,
+    SPRITE_FD_POTTED_PLANT_ETAG,
+    "../../../../assets/admin/graphics/sprite_fd_potted_plant.png"
+);
+bundled_asset!(
+    AKRA_DIORAMA_JS,
+    AKRA_DIORAMA_JS_ETAG,
+    "../../../../assets/admin/game/akra-diorama.js"
+);
+bundled_asset!(
+    ADMIN_SHELL_JS,
+    ADMIN_SHELL_JS_ETAG,
+    "../../../../assets/admin/scripts/admin-shell.js"
+);
+bundled_asset!(
+    AKRA_DASHBOARD_JS,
+    AKRA_DASHBOARD_JS_ETAG,
+    "../../../../assets/admin/scripts/akra-dashboard.js"
+);
+bundled_asset!(
+    GALMURI11_WOFF2,
+    GALMURI11_WOFF2_ETAG,
+    "../../../../assets/admin/fonts/Galmuri11.woff2"
+);
+bundled_asset!(
+    GALMURI11_BOLD_WOFF2,
+    GALMURI11_BOLD_WOFF2_ETAG,
+    "../../../../assets/admin/fonts/Galmuri11-Bold.woff2"
+);
+
+fn bundled_asset_etag(bytes: &[u8]) -> HeaderValue {
+    let digest = Sha256::digest(bytes);
+    let value = format!("\"sha256-{digest:x}\"");
+    HeaderValue::from_bytes(value.as_bytes()).expect("SHA-256 ETag must be a valid header value")
+}
+
+fn if_none_match_matches(headers: &HeaderMap, etag: &HeaderValue) -> bool {
+    let Ok(expected) = etag.to_str() else {
+        return false;
+    };
+
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|candidate| {
+            candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == expected
+        })
+}
+
+fn bundled_asset_response(
+    request_headers: &HeaderMap,
+    content_type: &'static str,
+    bytes: &'static [u8],
+    etag: &'static LazyLock<HeaderValue>,
+) -> Response {
+    let etag = LazyLock::force(etag);
+    let mut response = if if_none_match_matches(request_headers, etag) {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        ([(header::CONTENT_TYPE, content_type)], bytes).into_response()
+    };
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(BUNDLED_ASSET_CACHE_CONTROL),
+    );
+    response.headers_mut().insert(header::ETAG, etag.clone());
+    response.extensions_mut().insert(BundledAssetCachePolicy);
+    response
+}
 
 pub(super) async fn admin_graphic_asset(
+    request_headers: HeaderMap,
     Path(asset_name): Path<String>,
 ) -> std::result::Result<Response, StatusCode> {
-    let bytes = match asset_name.as_str() {
-        "final-draft-map-sprite.png" => FINAL_DRAFT_MAP_SPRITE,
-        "gamebaljeonguk_atlas_64x96.png" => GAMEBALJEONGUK_ATLAS_64X96,
-        "gamebaljeonguk_atlas_128x192.png" => GAMEBALJEONGUK_ATLAS_128X192,
-        "sprite_fd_desk_1.png" => SPRITE_FD_DESK_1,
-        "sprite_fd_desk_2.png" => SPRITE_FD_DESK_2,
-        "sprite_fd_desk_3.png" => SPRITE_FD_DESK_3,
-        "sprite_fd_desk_4.png" => SPRITE_FD_DESK_4,
-        "sprite_fd_desk_5.png" => SPRITE_FD_DESK_5,
-        "sprite_fd_boss_desk.png" => SPRITE_FD_BOSS_DESK,
-        "sprite_fd_distributor_desk.png" => SPRITE_FD_DISTRIBUTOR_DESK,
-        "sprite_fd_event_log_tower.png" => SPRITE_FD_EVENT_LOG_TOWER,
-        "sprite_fd_sofa.png" => SPRITE_FD_SOFA,
-        "sprite_fd_potted_plant.png" => SPRITE_FD_POTTED_PLANT,
+    let (bytes, etag) = match asset_name.as_str() {
+        "final-draft-map-sprite.png" => (FINAL_DRAFT_MAP_SPRITE, &FINAL_DRAFT_MAP_SPRITE_ETAG),
+        "gamebaljeonguk_atlas_64x96.png" => {
+            (GAMEBALJEONGUK_ATLAS_64X96, &GAMEBALJEONGUK_ATLAS_64X96_ETAG)
+        }
+        "gamebaljeonguk_atlas_128x192.png" => (
+            GAMEBALJEONGUK_ATLAS_128X192,
+            &GAMEBALJEONGUK_ATLAS_128X192_ETAG,
+        ),
+        "sprite_fd_desk_1.png" => (SPRITE_FD_DESK_1, &SPRITE_FD_DESK_1_ETAG),
+        "sprite_fd_desk_2.png" => (SPRITE_FD_DESK_2, &SPRITE_FD_DESK_2_ETAG),
+        "sprite_fd_desk_3.png" => (SPRITE_FD_DESK_3, &SPRITE_FD_DESK_3_ETAG),
+        "sprite_fd_desk_4.png" => (SPRITE_FD_DESK_4, &SPRITE_FD_DESK_4_ETAG),
+        "sprite_fd_desk_5.png" => (SPRITE_FD_DESK_5, &SPRITE_FD_DESK_5_ETAG),
+        "sprite_fd_boss_desk.png" => (SPRITE_FD_BOSS_DESK, &SPRITE_FD_BOSS_DESK_ETAG),
+        "sprite_fd_distributor_desk.png" => {
+            (SPRITE_FD_DISTRIBUTOR_DESK, &SPRITE_FD_DISTRIBUTOR_DESK_ETAG)
+        }
+        "sprite_fd_event_log_tower.png" => {
+            (SPRITE_FD_EVENT_LOG_TOWER, &SPRITE_FD_EVENT_LOG_TOWER_ETAG)
+        }
+        "sprite_fd_sofa.png" => (SPRITE_FD_SOFA, &SPRITE_FD_SOFA_ETAG),
+        "sprite_fd_potted_plant.png" => (SPRITE_FD_POTTED_PLANT, &SPRITE_FD_POTTED_PLANT_ETAG),
         _ => return Err(StatusCode::NOT_FOUND),
     };
 
-    Ok((
-        [
-            (header::CONTENT_TYPE, "image/png"),
-            (header::CACHE_CONTROL, "no-store, max-age=0"),
-        ],
+    Ok(bundled_asset_response(
+        &request_headers,
+        "image/png",
         bytes,
-    )
-        .into_response())
+        etag,
+    ))
 }
 
 pub(super) async fn admin_game_asset(
+    request_headers: HeaderMap,
     Path(asset_name): Path<String>,
 ) -> std::result::Result<Response, StatusCode> {
-    let (content_type, bytes) = match asset_name.as_str() {
-        "akra-diorama.js" => ("text/javascript; charset=utf-8", AKRA_DIORAMA_JS),
+    let (content_type, bytes, etag) = match asset_name.as_str() {
+        "akra-diorama.js" => (
+            "text/javascript; charset=utf-8",
+            AKRA_DIORAMA_JS,
+            &AKRA_DIORAMA_JS_ETAG,
+        ),
         _ => return Err(StatusCode::NOT_FOUND),
     };
 
-    Ok((
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CACHE_CONTROL, "no-store, max-age=0"),
-        ],
+    Ok(bundled_asset_response(
+        &request_headers,
+        content_type,
         bytes,
-    )
-        .into_response())
+        etag,
+    ))
 }
 
 pub(super) async fn admin_script_asset(
+    request_headers: HeaderMap,
     Path(asset_name): Path<String>,
 ) -> std::result::Result<Response, StatusCode> {
-    let bytes = match asset_name.as_str() {
-        "admin-shell.js" => ADMIN_SHELL_JS,
-        "akra-dashboard.js" => AKRA_DASHBOARD_JS,
+    let (bytes, etag) = match asset_name.as_str() {
+        "admin-shell.js" => (ADMIN_SHELL_JS, &ADMIN_SHELL_JS_ETAG),
+        "akra-dashboard.js" => (AKRA_DASHBOARD_JS, &AKRA_DASHBOARD_JS_ETAG),
         _ => return Err(StatusCode::NOT_FOUND),
     };
 
-    Ok((
-        [
-            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store, max-age=0"),
-        ],
+    Ok(bundled_asset_response(
+        &request_headers,
+        "text/javascript; charset=utf-8",
         bytes,
-    )
-        .into_response())
+        etag,
+    ))
 }
 
 pub(super) async fn admin_font_asset(
+    request_headers: HeaderMap,
     Path(asset_name): Path<String>,
 ) -> std::result::Result<Response, StatusCode> {
-    let bytes = match asset_name.as_str() {
-        "Galmuri11.woff2" => GALMURI11_WOFF2,
-        "Galmuri11-Bold.woff2" => GALMURI11_BOLD_WOFF2,
+    let (bytes, etag) = match asset_name.as_str() {
+        "Galmuri11.woff2" => (GALMURI11_WOFF2, &GALMURI11_WOFF2_ETAG),
+        "Galmuri11-Bold.woff2" => (GALMURI11_BOLD_WOFF2, &GALMURI11_BOLD_WOFF2_ETAG),
         _ => return Err(StatusCode::NOT_FOUND),
     };
 
-    Ok((
-        [
-            (header::CONTENT_TYPE, "font/woff2"),
-            (header::CACHE_CONTROL, "no-store, max-age=0"),
-        ],
+    Ok(bundled_asset_response(
+        &request_headers,
+        "font/woff2",
         bytes,
-    )
-        .into_response())
+        etag,
+    ))
 }

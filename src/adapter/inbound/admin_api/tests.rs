@@ -5,7 +5,9 @@ use super::helpers::{
 use super::pages::{draft_mutation_path, extract_file_updates, nav_for_kind};
 use super::security::{ADMIN_TOKEN_HEADER, AdminSecurityConfig, verify_local_admin_request};
 use super::views::{EditorActionPaths, EditorTemplate};
-use super::{build_admin_state, build_router, parse_args, parse_reset_target};
+use super::{
+    build_admin_state, build_router, harden_admin_response, parse_args, parse_reset_target,
+};
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterInboxItem, ReviewCenterRepositoryPort, ReviewCenterThreadProjection,
@@ -20,6 +22,7 @@ use askama::Template;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
+use axum::response::Response;
 use axum_extra::extract::CookieJar;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -84,9 +87,43 @@ const ADMIN_PAGES: &str = include_str!("pages.rs");
 const ADMIN_STATIC_ASSETS: &str = include_str!("static_assets.rs");
 const TEST_ADMIN_HOST: &str = "akra-test.localhost:18442";
 const TEST_ADMIN_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const BUNDLED_ASSET_CACHE_CONTROL: &str = "private, no-cache";
 
 fn source_contains(source: &str, needle: &str) -> bool {
     source.contains(needle) || source.replace("\r\n", "\n").contains(needle)
+}
+
+fn assert_bundled_asset_cache_headers(response: &axum::response::Response) -> HeaderValue {
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static(BUNDLED_ASSET_CACHE_CONTROL))
+    );
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .expect("bundled assets should include a content ETag")
+        .clone();
+    let etag_text = etag.to_str().expect("content ETag should be valid text");
+    assert!(etag_text.starts_with("\"sha256-"), "{etag_text}");
+    assert!(etag_text.ends_with('"'), "{etag_text}");
+    assert_eq!(etag_text.len(), 73, "{etag_text}");
+    etag
+}
+
+#[test]
+fn admin_response_hardening_overrides_untrusted_cache_policy() {
+    let mut response = Response::new(Body::empty());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000"),
+    );
+
+    let hardened = harden_admin_response(response);
+
+    assert_eq!(
+        hardened.headers().get(header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("no-store, max-age=0"))
+    );
 }
 
 struct TempAdminWorkspace {
@@ -739,6 +776,13 @@ async fn admin_login_exchanges_capability_for_strict_http_only_session_cookie() 
         .await
         .expect("session-authenticated request should be served");
     assert_eq!(authenticated_with_cookie.status(), StatusCode::OK);
+    assert_eq!(
+        authenticated_with_cookie
+            .headers()
+            .get(header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("no-store, max-age=0")),
+        "authenticated JSON responses must remain non-cacheable"
+    );
     let refreshed_cookie = authenticated_with_cookie
         .headers()
         .get_all(header::SET_COOKIE)
@@ -1405,11 +1449,7 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
             Some(&header::HeaderValue::from_static("image/png")),
             "{asset_name}"
         );
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&header::HeaderValue::from_static("no-store, max-age=0")),
-            "{asset_name}"
-        );
+        assert_bundled_asset_cache_headers(&response);
         let body = bytes_body(response).await;
         assert!(body.starts_with(b"\x89PNG\r\n\x1a\n"), "{asset_name}");
     }
@@ -1468,10 +1508,7 @@ async fn admin_game_asset_route_serves_diorama_bundle_and_rejects_unknown_names(
             "text/javascript; charset=utf-8"
         ))
     );
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL),
-        Some(&header::HeaderValue::from_static("no-store, max-age=0"))
-    );
+    assert_bundled_asset_cache_headers(&response);
     let body = text_body(response).await;
     assert!(body.contains("AkraAdminGame"));
     assert!(body.contains("sprite_fd_desk_1.png"));
@@ -1520,11 +1557,7 @@ async fn admin_script_asset_routes_serve_externalized_code_and_reject_unknown_na
             )),
             "{asset_name}"
         );
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&header::HeaderValue::from_static("no-store, max-age=0")),
-            "{asset_name}"
-        );
+        assert_bundled_asset_cache_headers(&response);
         assert!(text_body(response).await.contains(expected_token));
     }
 
@@ -1545,6 +1578,11 @@ async fn admin_script_asset_routes_serve_externalized_code_and_reject_unknown_na
 async fn admin_font_asset_routes_serve_bundled_korean_fonts_and_reject_unknown_names() {
     let workspace = TempAdminWorkspace::new("font-asset-routes");
     let router = admin_test_router(&workspace);
+    assert_eq!(
+        BASE_TEMPLATE.matches("font-display: swap;").count(),
+        2,
+        "both bundled font weights must keep first paint non-blocking"
+    );
 
     for asset_name in ["Galmuri11.woff2", "Galmuri11-Bold.woff2"] {
         let response = router
@@ -1564,11 +1602,7 @@ async fn admin_font_asset_routes_serve_bundled_korean_fonts_and_reject_unknown_n
             Some(&header::HeaderValue::from_static("font/woff2")),
             "{asset_name}"
         );
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&header::HeaderValue::from_static("no-store, max-age=0")),
-            "{asset_name}"
-        );
+        assert_bundled_asset_cache_headers(&response);
         assert!(bytes_body(response).await.len() > 100_000, "{asset_name}");
     }
 
@@ -1583,6 +1617,79 @@ async fn admin_font_asset_routes_serve_bundled_korean_fonts_and_reject_unknown_n
         .await
         .expect("missing font asset request should be served");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn bundled_admin_assets_revalidate_with_content_etag_and_empty_304() {
+    let workspace = TempAdminWorkspace::new("asset-etag");
+    let router = admin_test_router(&workspace);
+
+    for asset_path in [
+        "/admin/assets/graphics/final-draft-map-sprite.png",
+        "/admin/assets/game/akra-diorama.js",
+        "/admin/assets/scripts/admin-shell.js",
+        "/admin/assets/fonts/Galmuri11.woff2",
+    ] {
+        let initial = router
+            .clone()
+            .oneshot(
+                admin_request_builder()
+                    .method(Method::GET)
+                    .uri(asset_path)
+                    .body(Body::empty())
+                    .expect("initial asset request should build"),
+            )
+            .await
+            .expect("initial asset request should be served");
+        assert_eq!(initial.status(), StatusCode::OK, "{asset_path}");
+        let etag = assert_bundled_asset_cache_headers(&initial);
+
+        let not_modified = router
+            .clone()
+            .oneshot(
+                admin_request_builder()
+                    .method(Method::GET)
+                    .uri(asset_path)
+                    .header(header::IF_NONE_MATCH, etag.clone())
+                    .body(Body::empty())
+                    .expect("conditional asset request should build"),
+            )
+            .await
+            .expect("conditional asset request should be served");
+        assert_eq!(
+            not_modified.status(),
+            StatusCode::NOT_MODIFIED,
+            "{asset_path}"
+        );
+        assert_eq!(
+            assert_bundled_asset_cache_headers(&not_modified),
+            etag,
+            "{asset_path}"
+        );
+        assert!(
+            bytes_body(not_modified).await.is_empty(),
+            "304 asset response must not transfer the bundled body: {asset_path}"
+        );
+
+        let changed_validator = router
+            .clone()
+            .oneshot(
+                admin_request_builder()
+                    .method(Method::GET)
+                    .uri(asset_path)
+                    .header(header::IF_NONE_MATCH, "\"sha256-stale\"")
+                    .body(Body::empty())
+                    .expect("stale validator request should build"),
+            )
+            .await
+            .expect("stale validator request should be served");
+        assert_eq!(changed_validator.status(), StatusCode::OK, "{asset_path}");
+        assert_eq!(
+            assert_bundled_asset_cache_headers(&changed_validator),
+            etag,
+            "{asset_path}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2955,20 +3062,23 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     );
 
     for token in [
-        "include_bytes!(\"../../../../assets/admin/graphics/final-draft-map-sprite.png\")",
-        "include_bytes!(\"../../../../assets/admin/graphics/sprite_fd_desk_1.png\")",
-        "include_bytes!(\"../../../../assets/admin/graphics/sprite_fd_event_log_tower.png\")",
-        "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png\")",
-        "include_bytes!(\"../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png\")",
-        "include_bytes!(\"../../../../assets/admin/game/akra-diorama.js\")",
-        "include_bytes!(\"../../../../assets/admin/scripts/admin-shell.js\")",
-        "include_bytes!(\"../../../../assets/admin/scripts/akra-dashboard.js\")",
-        "include_bytes!(\"../../../../assets/admin/fonts/Galmuri11.woff2\")",
-        "include_bytes!(\"../../../../assets/admin/fonts/Galmuri11-Bold.woff2\")",
+        "../../../../assets/admin/graphics/final-draft-map-sprite.png",
+        "../../../../assets/admin/graphics/sprite_fd_desk_1.png",
+        "../../../../assets/admin/graphics/sprite_fd_event_log_tower.png",
+        "../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png",
+        "../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png",
+        "../../../../assets/admin/game/akra-diorama.js",
+        "../../../../assets/admin/scripts/admin-shell.js",
+        "../../../../assets/admin/scripts/akra-dashboard.js",
+        "../../../../assets/admin/fonts/Galmuri11.woff2",
+        "../../../../assets/admin/fonts/Galmuri11-Bold.woff2",
         "image/png",
         "text/javascript; charset=utf-8",
         "font/woff2",
-        "no-store, max-age=0",
+        "private, no-cache",
+        "Sha256::digest",
+        "header::IF_NONE_MATCH",
+        "StatusCode::NOT_MODIFIED",
     ] {
         assert!(
             ADMIN_STATIC_ASSETS.contains(token),
