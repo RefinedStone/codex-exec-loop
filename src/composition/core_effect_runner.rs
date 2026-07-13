@@ -195,7 +195,7 @@ fn startup_checks_completion(
         result: result
             .map(StartupReadySnapshot::from_diagnostics)
             .map(Box::new)
-            .map_err(|error| error.to_string()),
+            .map_err(|error| format!("{error:#}")),
     }
 }
 
@@ -349,11 +349,16 @@ mod tests {
 
     #[test]
     fn startup_error_maps_to_core_completion() {
+        let error = anyhow::anyhow!("unsafe executable ancestor")
+            .context("failed to pin trusted Codex executable");
         assert_eq!(
-            startup_checks_completion(startup_correlation(), Err(anyhow::anyhow!("codex missing")),),
+            startup_checks_completion(startup_correlation(), Err(error)),
             CoreEffectCompletion::StartupChecksLoaded {
                 correlation: startup_correlation(),
-                result: Err("codex missing".to_string()),
+                result: Err(
+                    "failed to pin trusted Codex executable: unsafe executable ancestor"
+                        .to_string()
+                ),
             }
         );
     }

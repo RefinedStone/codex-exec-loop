@@ -13,6 +13,8 @@ const MAX_CODEX_SHEBANG_BYTES: usize = 4 * 1024;
 #[cfg(any(windows, test))]
 const MAX_WINDOWS_CODEX_SHIM_BYTES: usize = 16 * 1024;
 const MAX_NATIVE_EXECUTABLE_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(target_os = "macos")]
+const MACOS_ADMIN_GROUP_ID: u32 = 80;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TrustedCommand {
@@ -89,7 +91,7 @@ pub(crate) fn pinned_codex_command() -> Result<TrustedCommand> {
             .get_or_init(|| {
                 let path =
                     std::env::var_os("PATH").ok_or_else(|| "PATH is unavailable".to_string())?;
-                resolve_codex_command_from_path(&path, &cwd).map_err(|error| error.to_string())
+                resolve_codex_command_from_path(&path, &cwd).map_err(|error| format!("{error:#}"))
             })
             .clone()
             .map_err(anyhow::Error::msg)
@@ -1418,13 +1420,40 @@ fn validate_owner_and_mode(metadata: &fs::Metadata, executable: bool) -> Result<
     if owner != 0 && owner != current {
         bail!("path owner is neither root nor the current user")
     }
-    if metadata.mode() & 0o022 != 0 {
-        bail!("path is group- or world-writable")
+    validate_unix_mode(
+        metadata.gid(),
+        metadata.mode(),
+        metadata.is_dir(),
+        executable,
+    )?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_unix_mode(group: u32, mode: u32, directory: bool, executable: bool) -> Result<()> {
+    if mode & 0o002 != 0 {
+        bail!("path is world-writable")
     }
-    if executable && metadata.mode() & 0o111 == 0 {
+    if mode & 0o020 != 0 && !(directory && unix_group_can_mutate_trusted_directory(group)) {
+        bail!("path is group-writable by an untrusted group")
+    }
+    if executable && mode & 0o111 == 0 {
         bail!("executable target has no execute bit")
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn unix_group_can_mutate_trusted_directory(group: u32) -> bool {
+    // Homebrew's standard prefix is current-user/root owned while its shared directories are
+    // writable by macOS's privileged admin group. Treat that well-known group like the Windows
+    // Administrators SID, but keep group-writable executable files and ordinary groups rejected.
+    group == MACOS_ADMIN_GROUP_ID
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn unix_group_can_mutate_trusted_directory(_group: u32) -> bool {
+    false
 }
 
 #[cfg(windows)]
@@ -1491,6 +1520,7 @@ mod tests {
     #[cfg(unix)]
     use super::{
         resolve_codex_command_from_path, resolve_from_path, sanitized_path, validate_absolute,
+        validate_unix_mode,
     };
     use std::fs;
     #[cfg(unix)]
@@ -1586,6 +1616,78 @@ mod tests {
                 .map(ToString::to_string)
                 .any(|detail| detail.contains("not a"))
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_unix_mode_policy_limits_group_writes_to_privileged_macos_directories() {
+        assert!(validate_unix_mode(20, 0o755, true, false).is_ok());
+        assert!(validate_unix_mode(20, 0o755, false, true).is_ok());
+        assert!(validate_unix_mode(20, 0o777, true, false).is_err());
+        assert!(validate_unix_mode(20, 0o775, false, true).is_err());
+        assert!(validate_unix_mode(20, 0o644, false, true).is_err());
+
+        #[cfg(target_os = "macos")]
+        {
+            assert!(validate_unix_mode(super::MACOS_ADMIN_GROUP_ID, 0o775, true, false).is_ok());
+            assert!(validate_unix_mode(super::MACOS_ADMIN_GROUP_ID, 0o775, false, true).is_err());
+        }
+        #[cfg(not(target_os = "macos"))]
+        assert!(validate_unix_mode(80, 0o775, true, false).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_macos_homebrew_style_codex_launcher_is_trusted() {
+        let root = fixture_root("native-macos-homebrew-codex");
+        let workspace = root.join("workspace");
+        let prefix = root.join("homebrew");
+        let bin = prefix.join("bin");
+        let library = prefix.join("lib");
+        let cellar = prefix.join("Cellar");
+        let launcher = library
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        let node = cellar.join("node").join("1.0.0").join("bin").join("node");
+        fs::create_dir_all(&workspace).expect("workspace should be created");
+        fs::create_dir_all(&bin).expect("Homebrew bin should be created");
+        fs::create_dir_all(
+            launcher
+                .parent()
+                .expect("Codex launcher should have a parent"),
+        )
+        .expect("Codex package directory should be created");
+        fs::create_dir_all(node.parent().expect("Node should have a parent"))
+            .expect("Node Cellar directory should be created");
+        make_safe_directory_chain(&root);
+        write_executable(&launcher, "#!/usr/bin/env node\nprocess.exit(0);\n");
+        write_native_executable(&node);
+        symlink(&launcher, bin.join("codex")).expect("Codex launcher should be linked");
+        symlink(&node, bin.join("node")).expect("Node should be linked");
+
+        for directory in [bin.as_path(), library.as_path(), cellar.as_path()] {
+            std::os::unix::fs::chown(directory, None, Some(super::MACOS_ADMIN_GROUP_ID))
+                .expect("Homebrew directory should use the macOS admin group");
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o775))
+                .expect("Homebrew directory should be group-writable");
+        }
+
+        let plan = resolve_codex_command_from_path(bin.as_os_str(), &workspace)
+            .expect("standard Homebrew Codex and Node paths should resolve");
+        assert_eq!(
+            plan.source_executable,
+            fs::canonicalize(&launcher).expect("launcher should canonicalize")
+        );
+        assert_eq!(
+            plan.program,
+            fs::canonicalize(&node).expect("Node should canonicalize")
+        );
+        sanitized_path(bin.as_os_str(), &workspace)
+            .expect("standard Homebrew bin should remain on the sanitized PATH");
         let _ = fs::remove_dir_all(root);
     }
 

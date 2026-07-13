@@ -295,7 +295,7 @@ impl AppServerConnectionConfig {
             }
             Err(error) => {
                 config.executable = unresolved_codex_executable_path();
-                config.executable_resolution_error = Some(error.to_string());
+                config.executable_resolution_error = Some(format!("{error:#}"));
             }
         }
         config
