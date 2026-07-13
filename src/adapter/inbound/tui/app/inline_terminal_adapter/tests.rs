@@ -73,7 +73,7 @@ fn host_history_sync_keeps_live_agent_delta_out_of_inserted_history() {
 fn host_history_sync_keeps_progressive_activity_rail_transient() {
     let secret = "AKRA_PROGRESSIVE_SCROLLBACK_SECRET";
     let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 160, 24);
     let mut app = make_test_app();
     app.show_startup_ascii_art = false;
     app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -100,7 +100,7 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
         &mut runtime,
         &mut inline_viewport,
     );
-    tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 24);
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 160, 24);
     frames.draw_and_record(
         "restored-live",
         &mut terminal,
@@ -117,6 +117,17 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
         assert!(!frame.host_scrollback_text.contains("activity:"), "{label}");
         assert!(!frame.host_scrollback_text.contains(secret), "{label}");
     }
+    for label in ["wide-live", "restored-live"] {
+        let screen = &frames.frame(label).screen_text;
+        assert!(screen.contains("model:gpt-5.5"), "{label}");
+        assert!(screen.contains("task:P0-D3 rail"), "{label}");
+        assert!(screen.contains("lane:cmd1/files2"), "{label}");
+        assert!(!screen.contains("requested-model-hidden"), "{label}");
+    }
+    let narrow = &frames.frame("narrow-live").screen_text;
+    assert!(!narrow.contains("model:"));
+    assert!(!narrow.contains("task:"));
+    assert!(!narrow.contains("lane:"));
     assert!(
         frames
             .frame("wide-live")
@@ -130,17 +141,33 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
     conversation.fail_turn("command failed".to_string());
     frames.draw_and_record("cleared", &mut terminal, &mut runtime, &mut inline_viewport);
     let cleared = frames.frame("cleared");
-    assert!(!cleared.screen_text.contains("activity:"));
+    assert!(
+        cleared
+            .screen_text
+            .contains("notice: activity: terminal:runtime-failed")
+    );
+    assert!(!cleared.screen_text.contains("cmd:2"));
     assert!(!cleared.screen_text.contains("active:command"));
-    assert!(!cleared.terminal_history_text.contains("activity:"));
+    assert!(
+        cleared
+            .terminal_history_text
+            .contains("terminal:runtime-failed")
+    );
+    assert!(!cleared.terminal_history_text.contains("cmd:2"));
+    assert!(!cleared.terminal_history_text.contains("active:command"));
+    assert!(!cleared.host_scrollback_text.contains("activity:"));
     assert!(!cleared.terminal_history_text.contains(secret));
+    assert!(!cleared.host_scrollback_text.contains(secret));
 }
 
 #[test]
 fn vt100_progressive_activity_rail_stays_transient_across_resize() {
     let secret = "AKRA_PROGRESSIVE_VT100_SECRET";
-    let mut terminal =
-        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut terminal = tui_testkit::inline_history_vt100_terminal(
+        InlineHistoryRenderMode::HostScrollback,
+        160,
+        24,
+    );
     let mut app = make_test_app();
     app.show_startup_ascii_art = false;
     app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -153,7 +180,7 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
-    for (width, height) in [(80, 24), (48, 10), (80, 24)] {
+    for (width, height) in [(160, 24), (48, 10), (160, 24)] {
         tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, width, height);
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("progressive VT100 draw transaction");
@@ -162,6 +189,19 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
         assert!(screen.contains("cmd:2"), "{width}x{height}");
         assert!(screen.contains("active:command"), "{width}x{height}");
         assert!(!screen.contains(secret), "{width}x{height}");
+        if width == 160 {
+            assert!(screen.contains("model:gpt-5.5"), "{width}x{height}");
+            assert!(screen.contains("task:P0-D3 rail"), "{width}x{height}");
+            assert!(screen.contains("lane:cmd1/files2"), "{width}x{height}");
+            assert!(
+                !screen.contains("requested-model-hidden"),
+                "{width}x{height}"
+            );
+        } else {
+            assert!(!screen.contains("model:"), "{width}x{height}");
+            assert!(!screen.contains("task:"), "{width}x{height}");
+            assert!(!screen.contains("lane:"), "{width}x{height}");
+        }
         let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
         assert!(!host_scrollback.contains("activity:"), "{width}x{height}");
         assert!(!host_scrollback.contains(secret), "{width}x{height}");
@@ -174,7 +214,8 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("cleared progressive VT100 draw transaction");
     let screen = tui_testkit::screen_text(&terminal);
-    assert!(!screen.contains("activity:"));
+    assert!(screen.contains("notice: activity: terminal:runtime-failed"));
+    assert!(!screen.contains("cmd:2"));
     assert!(!screen.contains("active:command"));
     let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
     assert!(!host_scrollback.contains("activity:"));

@@ -17,6 +17,7 @@ use std::fmt;
 use std::io::{self, Write};
 use std::sync::Arc;
 
+use crate::application::service::planning::PlanningTaskHandoff;
 use crate::domain::conversation_item_lifecycle::{
     ConversationItemKind, ConversationItemLifecycleConsistency,
     ConversationItemLifecycleObservation, ConversationItemLifecyclePhase,
@@ -27,6 +28,11 @@ use crate::domain::conversation_progressive_activity::{
     ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
     ConversationProgressiveActivityProjection, ConversationProgressiveActivityProjectionSnapshot,
     ConversationProgressiveTokenUsage, ConversationProgressiveTokenUsageBreakdown,
+};
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeConfigurationObservation, ConversationRuntimeConfigurationRequest,
+    ConversationRuntimeEnvelope, ConversationRuntimeLaunchEnvironment,
+    ConversationRuntimeObservedValue, ConversationRuntimeRequestedValue,
 };
 
 // VT100-backed helpers keep a larger scrollback than the visible viewport so
@@ -347,6 +353,30 @@ pub(super) fn set_progressive_command_activity(
         );
     }
     conversation.record_turn_started("turn-rail".to_string());
+    let runtime_request = ConversationRuntimeConfigurationRequest {
+        model: ConversationRuntimeRequestedValue::Value("requested-model-hidden".to_string()),
+        ..ConversationRuntimeConfigurationRequest::default()
+    };
+    conversation.runtime_envelope = Some(ConversationRuntimeEnvelope::prepared(
+        runtime_request,
+        ConversationRuntimeConfigurationObservation {
+            model: ConversationRuntimeObservedValue::Observed("gpt-5.5".to_string()),
+            ..ConversationRuntimeConfigurationObservation::default()
+        },
+        ConversationRuntimeLaunchEnvironment::unknown(),
+        ConversationRuntimeObservedValue::Missing,
+    ));
+    conversation.last_planning_task_handoff = Some(PlanningTaskHandoff {
+        task_id: "task-p0-d3".to_string(),
+        task_title: "P0-D3 rail".to_string(),
+        direction_id: "direction-tui".to_string(),
+        combined_priority: 90,
+        updated_at: "2026-07-13T00:00:00Z".to_string(),
+        status_label: "ready".to_string(),
+    });
+    conversation.turn_activity.current_turn_command_count = 1;
+    conversation.turn_activity.current_turn_file_change_count = 2;
+    conversation.turn_activity.current_turn_last_summary = Some("coarse activity".to_string());
     conversation.progressive_activity.observe_item_lifecycle(
         &ConversationItemLifecycleObservation {
             thread_id: conversation.thread_id.clone(),

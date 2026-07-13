@@ -7,6 +7,10 @@ use super::contract_tests::{
 use super::*;
 use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
 use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
+use crate::domain::conversation_runtime_envelope::{
+    ConversationRuntimeConfigurationObservation, ConversationRuntimeEnvelope,
+    ConversationRuntimeLaunchEnvironment, ConversationRuntimeObservedValue,
+};
 
 #[test]
 fn inline_main_buffer_ready_shell_matches_snapshot() {
@@ -244,12 +248,13 @@ fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
         false,
     );
 
-    let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 80, 24);
+    let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
     assert!(
         wide.contains(
-            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00%"
+            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail | lane:cmd1/files2"
         )
     );
+    assert!(!wide.contains("requested-model-hidden"));
     assert!(!wide.contains(secret));
     assert_snapshot!("inline_progressive_activity_rail_wide", wide);
 
@@ -288,15 +293,50 @@ fn vt100_progressive_activity_rail_is_transient_and_payload_free() {
         false,
     );
 
-    let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
+    let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 160, 24);
 
     assert!(
         rendered.contains(
-            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00%"
+            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail | lane:cmd1/files2"
         )
     );
+    assert!(!rendered.contains("requested-model-hidden"));
     assert!(!rendered.contains(secret));
     assert_snapshot!("vt100_progressive_activity_rail", rendered);
+}
+
+#[test]
+fn narrow_running_rail_never_falls_back_to_raw_coarse_summary() {
+    let secret = "AKRA_RAW_COARSE_FALLBACK_SECRET";
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.record_thread_prepared(
+        "thread-rail".to_string(),
+        "Typed rail".to_string(),
+        "/tmp/root".to_string(),
+    );
+    conversation.record_turn_started("turn-rail".to_string());
+    conversation.runtime_envelope = Some(ConversationRuntimeEnvelope::prepared(
+        Default::default(),
+        ConversationRuntimeConfigurationObservation {
+            model: ConversationRuntimeObservedValue::Observed("m".repeat(256)),
+            ..ConversationRuntimeConfigurationObservation::default()
+        },
+        ConversationRuntimeLaunchEnvironment::unknown(),
+        ConversationRuntimeObservedValue::Missing,
+    ));
+    conversation.turn_activity.current_turn_command_count = 1;
+    conversation.turn_activity.current_turn_last_summary = Some(format!("{secret}\u{1b}[31m"));
+
+    let rendered = tui_testkit::render_inline_snapshot(&mut app, 32, 10);
+
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains('\u{1b}'));
+    assert!(!rendered.contains("tool activity:"));
 }
 
 #[test]

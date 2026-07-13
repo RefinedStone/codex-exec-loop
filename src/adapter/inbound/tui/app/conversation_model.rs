@@ -10,6 +10,8 @@ pub(super) use crate::domain::conversation::{ConversationMessage, ConversationMe
 
 // 이 index는 conversation UI 상태를 하나의 module boundary 뒤에 묶고, 구현은
 // follow-up 정책, 현재 turn activity, renderer-facing view model로 나눠 둔다.
+#[path = "conversation_model/activity_rail.rs"]
+mod activity_rail;
 #[path = "conversation_model/auto_follow.rs"]
 mod auto_follow;
 #[path = "conversation_model/progressive_activity.rs"]
@@ -23,12 +25,15 @@ mod view_model;
 
 // auto-follow 상태는 shell input handling과 테스트가 함께 쓰므로, 호출부는
 // policy 파일 배치가 아니라 conversation model surface에만 의존한다.
+pub(crate) use activity_rail::ActivityRailTerminalState;
 #[cfg(test)]
 pub(crate) use auto_follow::AutoFollowDecision;
 pub(crate) use auto_follow::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, StopKeywordRule,
 };
-pub(crate) use progressive_activity::{ProgressiveActivityItemKind, ProgressiveActivityState};
+pub(crate) use progressive_activity::ProgressiveActivityItemKind;
+#[cfg(test)]
+pub(crate) use progressive_activity::ProgressiveActivityState;
 pub(crate) use progressive_activity_detail::ProgressiveActivityDetailKind;
 // shell은 conversation state, input state, planning-repair state를 이 surface에서
 // 가져오고, 실제 mapping logic은 `view_model.rs` 안에 남긴다.

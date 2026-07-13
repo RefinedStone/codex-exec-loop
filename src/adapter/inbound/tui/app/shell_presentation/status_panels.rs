@@ -7,6 +7,9 @@ use crate::application::service::planning::PlanningRuntimeProjection;
 use super::ConversationViewModel;
 use super::NativeTuiApp;
 
+// Activity rail copy owns cross-source priority and width budgeting for the live operator notice.
+#[path = "status_panels/activity_rail.rs"]
+mod activity_rail;
 // Width-aware inline tail layout owns cursor placement and top-anchored startup behavior.
 #[path = "status_panels/live_status_layout.rs"]
 mod live_status_layout;

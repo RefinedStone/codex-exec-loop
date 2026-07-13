@@ -10,7 +10,9 @@
  * to execute.
  */
 use super::PromptOrigin;
-use super::conversation_model::{AutoFollowSkipReason, ConversationViewModel, PlanningRepairState};
+use super::conversation_model::{
+    ActivityRailTerminalState, AutoFollowSkipReason, ConversationViewModel, PlanningRepairState,
+};
 use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
@@ -573,7 +575,11 @@ pub(super) fn reduce_conversation_runtime(
                     ..
                 } => {
                     let approval_was_pending = state.pending_approval_request.is_some();
-                    state.fail_turn(receipt.status_error_summary());
+                    let terminal_state = ActivityRailTerminalState::from_receipt(&receipt);
+                    state.fail_turn_with_terminal_state(
+                        receipt.status_error_summary(),
+                        terminal_state,
+                    );
                     state.status_text = status_text;
                     if approval_was_pending {
                         effects.push(ConversationRuntimeEffect::CloseApprovalOverlay);
@@ -1494,6 +1500,10 @@ mod tests {
             }),
         );
         assert_eq!(reduction.state.status_text, "turn failed");
+        assert_eq!(
+            reduction.state.activity_rail_terminal_state,
+            Some(ActivityRailTerminalState::RuntimeFailed)
+        );
         assert!(reduction.state.messages.iter().any(|message| {
             message.kind == ConversationMessageKind::Tool && message.text == "cargo test"
         }));
@@ -1602,6 +1612,18 @@ mod tests {
                 .document(ProgressiveActivityDetailKind::Output)
                 .is_none()
         );
+        assert_eq!(
+            failed.state.activity_rail_terminal_state,
+            Some(ActivityRailTerminalState::RuntimeFailed)
+        );
+        assert!(!format!("{:?}", failed.state.activity_rail_terminal_state).contains(secret));
+
+        let mut retrying = failed.state;
+        retrying.mark_turn_submitting("/tmp/workspace".to_string());
+        assert_eq!(retrying.activity_rail_terminal_state, None);
+        retrying.fail_turn("retry failed".to_string());
+        retrying.record_turn_started("turn-2".to_string());
+        assert_eq!(retrying.activity_rail_terminal_state, None);
     }
 
     #[test]
@@ -1834,32 +1856,44 @@ mod tests {
         };
 
         let terminal_events = [
-            terminal_stream_event(
-                ConversationTurnTerminalOutcome::Interrupted,
-                ConversationTurnApplicationDelivery::Confirmed,
-            ),
-            terminal_stream_event(
-                ConversationTurnTerminalOutcome::Failed {
-                    error: ConversationTurnError::new("provider failed", None::<&str>, None),
-                },
-                ConversationTurnApplicationDelivery::Confirmed,
-            ),
-            terminal_stream_event(
-                ConversationTurnTerminalOutcome::Unknown {
-                    reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
-                    observed_error: None,
-                },
-                ConversationTurnApplicationDelivery::Confirmed,
-            ),
-            terminal_stream_event(
-                ConversationTurnTerminalOutcome::Completed,
-                ConversationTurnApplicationDelivery::Unconfirmed(
-                    ConversationTurnApplicationDeliveryFailure::Disconnected,
+            (
+                terminal_stream_event(
+                    ConversationTurnTerminalOutcome::Interrupted,
+                    ConversationTurnApplicationDelivery::Confirmed,
                 ),
+                ActivityRailTerminalState::Interrupted,
+            ),
+            (
+                terminal_stream_event(
+                    ConversationTurnTerminalOutcome::Failed {
+                        error: ConversationTurnError::new("provider failed", None::<&str>, None),
+                    },
+                    ConversationTurnApplicationDelivery::Confirmed,
+                ),
+                ActivityRailTerminalState::Failed,
+            ),
+            (
+                terminal_stream_event(
+                    ConversationTurnTerminalOutcome::Unknown {
+                        reason: ConversationTurnTerminalUncertainty::NonRetryErrorGraceExpired,
+                        observed_error: None,
+                    },
+                    ConversationTurnApplicationDelivery::Confirmed,
+                ),
+                ActivityRailTerminalState::Unknown,
+            ),
+            (
+                terminal_stream_event(
+                    ConversationTurnTerminalOutcome::Completed,
+                    ConversationTurnApplicationDelivery::Unconfirmed(
+                        ConversationTurnApplicationDeliveryFailure::Disconnected,
+                    ),
+                ),
+                ActivityRailTerminalState::RecoveryPending,
             ),
         ];
 
-        for event in terminal_events {
+        for (event, expected_terminal_state) in terminal_events {
             let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
             state.thread_id = "thread-1".to_string();
             let reduction = reduce_conversation_runtime(state, stream_snapshot_event(event));
@@ -1869,6 +1903,10 @@ mod tests {
                 ConversationRuntimeEffect::EvaluatePostTurn { .. }
             )));
             assert!(reduction.state.can_accept_manual_prompt());
+            assert_eq!(
+                reduction.state.activity_rail_terminal_state,
+                Some(expected_terminal_state)
+            );
         }
 
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
@@ -1884,6 +1922,10 @@ mod tests {
         );
 
         assert_eq!(recovery_pending.state.status_text, "turn recovery pending");
+        assert_eq!(
+            recovery_pending.state.activity_rail_terminal_state,
+            Some(ActivityRailTerminalState::RecoveryPending)
+        );
         assert!(
             recovery_pending
                 .state
@@ -1892,6 +1934,20 @@ mod tests {
                 .any(|message| message.kind == ConversationMessageKind::Status
                     && message.text.contains("recovery pending")
                     && message.text.contains("application delivery unconfirmed"))
+        );
+
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.thread_id = "thread-1".to_string();
+        let completed = reduce_conversation_runtime(
+            state,
+            stream_snapshot_event(completed_stream_event("thread-1", "turn-1")),
+        );
+        assert_eq!(completed.state.activity_rail_terminal_state, None);
+        assert!(
+            completed
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, ConversationRuntimeEffect::EvaluatePostTurn { .. }))
         );
     }
 

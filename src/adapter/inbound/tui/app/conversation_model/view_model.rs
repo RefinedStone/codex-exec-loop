@@ -31,6 +31,7 @@ use crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope;
 use crate::domain::planning::PlanningRepairRequestSnapshot;
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
+use super::activity_rail::ActivityRailTerminalState;
 #[cfg(test)]
 use super::auto_follow::AutoFollowDecision;
 use super::auto_follow::{AutoFollowSkipReason, AutoFollowState};
@@ -150,6 +151,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) progressive_activity: ProgressiveActivityState,
     pub(crate) progressive_activity_detail: ProgressiveActivityDetailState,
+    pub(crate) activity_rail_terminal_state: Option<ActivityRailTerminalState>,
     // Approval review is tied to the currently streaming turn and cleared on a new turn.
     pub(crate) approval_review: Option<ConversationApprovalReview>,
     pub(crate) pending_approval_request: Option<ConversationApprovalRequest>,
@@ -200,6 +202,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
             progressive_activity_detail: ProgressiveActivityDetailState::default(),
+            activity_rail_terminal_state: None,
             approval_review: None,
             pending_approval_request: None,
             pending_approval_resolution: None,
@@ -277,6 +280,7 @@ impl ConversationViewModel {
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
             progressive_activity_detail: ProgressiveActivityDetailState::default(),
+            activity_rail_terminal_state: None,
             approval_review: None,
             pending_approval_request: None,
             pending_approval_resolution: None,
@@ -407,6 +411,7 @@ impl ConversationViewModel {
         // Thread preparation upgrades a draft into an app-server backed conversation.
         self.progressive_activity.reset();
         self.progressive_activity_detail.reset();
+        self.activity_rail_terminal_state = None;
         let reattached_same_thread = self.thread_id == thread_id && self.has_active_thread();
         self.thread_id = thread_id;
         self.title = title.clone();
@@ -417,6 +422,11 @@ impl ConversationViewModel {
         }
     }
     pub(crate) fn record_turn_started(&mut self, turn_id: String) {
+        if self.input_state != ConversationInputState::SubmittingTurn {
+            // A recovered start has no local prompt-origin correlation. Do not
+            // relabel a prior turn's handoff as the current task.
+            self.last_planning_task_handoff = None;
+        }
         self.progressive_activity.reset();
         self.progressive_activity_detail.reset();
         self.mark_turn_started(turn_id);
@@ -477,6 +487,7 @@ impl ConversationViewModel {
     pub(crate) fn mark_turn_submitting(&mut self, workspace_directory: String) {
         self.startup_submit_armed = false;
         self.interrupt_request_pending = false;
+        self.activity_rail_terminal_state = None;
         self.input_state = ConversationInputState::SubmittingTurn;
         self.active_turn_workspace_directory = Some(workspace_directory);
         self.active_turn_started_at = Some(Instant::now());
@@ -486,6 +497,7 @@ impl ConversationViewModel {
     }
     pub(crate) fn mark_turn_started(&mut self, turn_id: String) {
         self.active_turn_id = Some(turn_id);
+        self.activity_rail_terminal_state = None;
         // Keep a submitting-phase stop sticky. The runtime reducer resends that
         // interrupt after the concrete turn id arrives, closing the race where
         // app-server samples the first stop generation while starting the turn.
@@ -507,6 +519,7 @@ impl ConversationViewModel {
         self.pending_approval_request = None;
         self.pending_approval_resolution = None;
         self.approval_detail_scroll_offset = 0;
+        self.activity_rail_terminal_state = None;
         self.input_state = self.ready_input_state();
     }
     pub(crate) fn set_pending_approval_request(&mut self, request: ConversationApprovalRequest) {
@@ -619,6 +632,13 @@ impl ConversationViewModel {
         workspace_directory
     }
     pub(crate) fn fail_turn(&mut self, message: String) {
+        self.fail_turn_with_terminal_state(message, Some(ActivityRailTerminalState::RuntimeFailed));
+    }
+    pub(crate) fn fail_turn_with_terminal_state(
+        &mut self,
+        message: String,
+        terminal_state: Option<ActivityRailTerminalState>,
+    ) {
         // Preserve whatever stream content arrived before failure, then reopen the input gate.
         self.commit_live_agent_message();
         self.flush_buffered_tool_messages();
@@ -626,6 +646,7 @@ impl ConversationViewModel {
         self.mark_turn_finished();
         self.progressive_activity.reset();
         self.progressive_activity_detail.reset();
+        self.activity_rail_terminal_state = terminal_state;
         self.status_text = "turn failed".to_string();
         self.append_status_message(message);
     }

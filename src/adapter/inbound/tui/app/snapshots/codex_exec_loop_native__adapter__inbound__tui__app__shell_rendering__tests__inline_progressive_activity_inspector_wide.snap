@@ -15,7 +15,7 @@ expression: wide
 "Akra  |  thread: Progressive activity  |  turn: working  |  input: streaming                                            "
 "status: turn started                                                                                                    "
 "◦ Working (0s • waiting for response / interrupt runtime-...)                                                           "
-"notice: activity: cmd:52 lines | active:command | diff:+1 -1 h1 | ctx:75.00% | history:bounded                          "
+"notice: activity: cmd:52 lines | active:command | diff:+1 -1 h1 | ctx:75.00% | history:bounded | model:gpt-5.5          "
 ">                                                                                                                       "
 "prompt: turn running  |  type now, Enter when idle                                                                      "
 "                                                                                                                        "
