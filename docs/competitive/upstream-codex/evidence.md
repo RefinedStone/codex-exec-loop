@@ -789,11 +789,44 @@ has been removed. No progressive type implements persistence serialization, ente
 records, or is projected into Admin, CLI, Telegram, or parallel state in this slice.
 
 The memory assertions above are exact sums of retained `String`/identifier lengths and queue
-accounting, not allocator capacity, RSS, or a comparative performance measurement. This is
-schema-and-fixture plus deterministic local evidence. There is no released app-server
-progressive capture, rich TUI rail, diff/output drilldown, context-pressure UI, restart persistence,
-or comparative latency/RSS result. Those claims remain with P0-D, recovery, and the later native
+accounting, not allocator capacity, RSS, or a comparative performance measurement. At the P0-C2
+commit this was schema-and-fixture plus deterministic local evidence, with no released app-server
+progressive capture, rich TUI rail, Diff/Output inspector, context-pressure UI, restart persistence,
+or comparative latency/RSS result. The later P0-D1/P0-D2 evidence below supersedes only the named
+TUI rail and inspector gaps; the other claims remain with P0-D, recovery, and the later native
 performance artifact.
+
+## P0-D1 And P0-D2 TUI Projection Evidence
+
+P0-D1 is pinned at `b53559ca32e1fddd22f13d2de4aad028feebf9fe`; P0-D2 is pinned at
+`594859a621e7213356822b008a496f4d5cfca36f`. These later Akra commits are separate from the
+`226e4794...` audit baseline documented below.
+
+- P0-D1's [typed summary reducer](https://github.com/RefinedStone/codex-exec-loop/blob/b53559ca32e1fddd22f13d2de4aad028feebf9fe/src/adapter/inbound/tui/app/conversation_model/progressive_activity.rs)
+  projects bounded, payload-free current activity and approval-first arbitration. Its
+  [deterministic reducer tests](https://github.com/RefinedStone/codex-exec-loop/blob/b53559ca32e1fddd22f13d2de4aad028feebf9fe/src/adapter/inbound/tui/app/conversation_model/progressive_activity_tests.rs)
+  and narrow, wide, and vt100 snapshots cover responsive priority behavior. Class:
+  `verified/source-and-local-test`.
+- P0-D2's [typed retained-detail state](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/conversation_model/progressive_activity_detail.rs)
+  holds a `Weak` reference to the Core snapshot, exposes a strong frame-local document guard, and
+  resets at lifecycle boundaries. The
+  [payload-free viewport state](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/progressive_activity_overlay_ui.rs),
+  [terminal-safe bounded renderer](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/shell_presentation/overlays/activity.rs),
+  and [inline routing](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs)
+  keep scan and materialized output bounded by the visible viewport while preserving exact source,
+  retained, truncation, and incomplete-history metadata. Class: `verified/source`.
+- [Detail lifecycle tests](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/conversation_model/progressive_activity_detail_tests.rs),
+  [pagination-state tests](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/progressive_activity_overlay_ui.rs),
+  [controller-keymap tests](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/shell_controller.rs),
+  [snapshot tests](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/shell_rendering_tests.rs),
+  and [TestBackend/vt100 transaction tests](https://github.com/RefinedStone/codex-exec-loop/blob/594859a621e7213356822b008a496f4d5cfca36f/src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs)
+  cover tab/page navigation, same-sequence new-turn and resize resets, real approval preemption,
+  narrow/wide rendering, control escaping, CJK cell width, and raw-detail host-scrollback negatives.
+  Class: `verified/local-test`.
+
+This is deterministic TestBackend/vt100 and source evidence, not a manual real-terminal capture,
+released-runtime activity capture, allocator/RSS result, or comparative latency result. It does not
+complete P0-D and adds no Admin, CLI, Telegram, parallel persistence, or recovery projection.
 
 ## Akra Baseline Evidence
 

@@ -23,6 +23,7 @@ interaction flow and surface roles.
 | Conversation | typing prompts, watching stream output, reading compact status | default shell surface | submit a prompt or open an overlay |
 | Diagnostics | checking startup readiness and failures | `Ctrl+d`, `:diag` | `Esc`, `Ctrl+c`, or toggle again |
 | Sessions | searching and reopening previous threads | `Ctrl+o`, `:sessions` | open a session, start a draft, or close |
+| Activity Inspector | paging through retained Diff or command-output tail detail for the active turn | `:activity [diff\|output]`, `:act` | `Esc`, `Ctrl+c`; pending approval preempts it |
 | Queue Inspection | reading the current queue task, proposed tasks, and skip summary | `:queue`, `:q` | close overlay |
 | Planning Controls | staging or reopening planning workspace flows | `:planning` | close overlay or enter editor/review flow |
 | Directions Maintenance | editing supporting direction and queue-idle artifacts | `:directions` | close overlay or enter staged editor flow |
@@ -43,8 +44,13 @@ interaction flow and surface roles.
 3. Core submits the turn effect and reduces stream completions into app state.
 4. Live stream output stays in the inline tail until turn completion.
 5. Tool activity, runtime notices, approval-review state, and warnings update the same shell surface.
-6. When the turn completes, assistant output is committed into normal scrollback history.
-7. Post-turn evaluation decides whether internal continuation advances, pauses, or stops.
+6. `:activity` opens a transient inline inspector over the typed Core projection. Diff and Retained
+   Output Tail are viewport-paged without copying raw detail into overlay state; source, retained,
+   truncated, and incomplete-history metadata remain explicit.
+7. Approval owns focus over the inspector. New thread, turn, completion, and failure boundaries reset
+   retained detail, and inspector content never enters host scrollback.
+8. When the turn completes, assistant output is committed into normal scrollback history.
+9. Post-turn evaluation decides whether internal continuation advances, pauses, or stops.
 
 ## Planning And Continuation Flow
 

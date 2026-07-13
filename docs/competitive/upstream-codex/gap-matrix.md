@@ -20,9 +20,12 @@ P0-A terminal truth is present on `prerelease` at `5a9d342f`: current live paths
 completed, failed, interrupted, and unknown outcomes instead of collapsing matching
 `turn/completed` notifications to generic success. P0-B applied-envelope projection is present at
 `7960ecca`, and P0-C1 closed item identity is present at `7514eb05`. This atomic slice implements
-P0-C2 bounded progressive activity; P0-D Core/TUI presentation is next. Durable recovery,
-validation/delivery projection, and broader surface rendering remain separate owners rather than
-implied consequences of P0-A through P0-C2.
+P0-C2 bounded progressive activity. P0-D1's bounded progressive activity rail is present at
+`b53559ca`, and P0-D2's transient retained Diff/Output inspector is present at `594859a6`. P0-D
+remains partial: effective-model and current-planning-task priority coverage, explicit
+failure-priority proof, a real-terminal capture, and final end-to-end completion evidence remain.
+Durable recovery, validation/delivery projection, and broader surface rendering remain separate
+owners rather than implied consequences of P0-A through P0-D2.
 
 ## Authority Boundary
 
@@ -568,11 +571,12 @@ truncation, exact source/retained/loss byte accounting including rename destinat
 cross-publication overflow rejection, post-compaction and schema-maximum context pressure, non-UTF-8
 transport rejection, history-only Core application, stale-generation pruning, and secret canaries.
 
-This slice intentionally adds no rich activity rail, diff/output drilldown UI, context-pressure
-presentation, Admin/CLI/Telegram projection, parallel persistence, durable restart recovery,
-released-runtime capture, or comparative performance claim. Deprecated compaction is represented
-by the P0-C1 `ContextCompaction` item instead of a second progressive fact; model reroute remains
-the P0-B applied-envelope owner.
+At the P0-C2 commit, this slice intentionally added no activity rail or Diff/Output inspector. P0-D1
+later added the bounded summary rail at `b53559ca`, and P0-D2 added transient retained-detail
+inspection at `594859a6`. Admin/CLI/Telegram projection, parallel persistence, durable restart
+recovery, released-runtime capture, and comparative performance evidence remain separate and absent
+from these slices. Deprecated compaction is represented by the P0-C1 `ContextCompaction` item
+instead of a second progressive fact; model reroute remains the P0-B applied-envelope owner.
 
 #### P0-D: Core And TUI Projection
 
@@ -583,6 +587,18 @@ the P0-B applied-envelope owner.
 - preserve host scrollback and keep transient live state out of durable terminal history;
 - leave parallel persistence/Admin, diorama, delivery outcomes, metrics, CLI, and Telegram to their
   existing owner slices, which consume these types later rather than reparsing wire JSON.
+
+**Current status (partial)**
+
+- P0-D1 (`b53559ca32e1fddd22f13d2de4aad028feebf9fe`) adds a bounded, payload-free
+  progressive summary rail with approval-first arbitration and responsive narrow/wide/vt100 proof.
+- P0-D2 (`594859a621e7213356822b008a496f4d5cfca36f`) adds
+  `:activity [diff|output]` / `:act`, bounded Diff and Retained Output Tail pages, truthful retention
+  metadata, approval preemption, lifecycle/resize reset, terminal-safe rendering, and host-scrollback
+  negatives.
+- Remaining P0-D work includes uncovered priority-rail facts, real-terminal capture, and final
+  completion evidence. These slices do not claim Admin/CLI/Telegram projection,
+  persistence/recovery, or comparative latency/RSS.
 
 **Required proof**
 
@@ -870,10 +886,11 @@ inseparable. Later rows may begin only after their prerequisite semantic contrac
 | 20 | Session catalog/provenance/fork | P2 existing | recovery and application identity | cursor/filter/lineage/fork TUI then Admin |
 | 21 | File approval/forms/additional inputs | P2 existing | row 16 and canary invariant | bounded typed UI and source-to-sink proof |
 
-Rows 1 through 3 are implemented as separate atomic slices on `prerelease`; this slice carries row
-4 P0-C2 code and evidence together. Row 5, Core and TUI projection, is next. Durable readback,
-child-loss CAS, validation/delivery/Admin projection, model UI, daemon topology, and broad event
-rendering remain with their later owners.
+Rows 1 through 4 are implemented as separate atomic slices on `prerelease`. Row 5 is partially
+implemented by P0-D1 and P0-D2; it remains open for the residual priority projection, real-terminal
+proof, and final end-to-end evidence. Durable readback, child-loss CAS,
+validation/delivery/Admin projection, model UI, daemon topology, and broad event rendering remain
+with their later owners.
 
 ## Success Audit
 
