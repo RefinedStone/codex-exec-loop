@@ -24,6 +24,7 @@ use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use ratatui::{Terminal, Viewport};
+use std::cell::Cell as StdCell;
 use std::convert::Infallible;
 use std::ops::Range;
 
@@ -412,7 +413,10 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("activity VT100 draw transaction");
         let screen = tui_testkit::screen_text(&terminal);
-        assert!(screen.contains("Retained Output Tail"), "{width}x{height}");
+        assert!(
+            screen.contains("Retained Output Tail"),
+            "{width}x{height}: {screen:?}"
+        );
         assert!(!screen.contains('\u{1b}'), "{width}x{height}");
         let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
         assert!(!host_scrollback.contains(secret), "{width}x{height}");
@@ -1658,6 +1662,262 @@ fn inline_backend_reuses_tracked_cursor_after_initial_query() {
         initial_query_count,
         "append-line cursor tracking should still avoid another terminal query"
     );
+
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .report_resize_after_size_queries(1, 80, 5);
+    terminal
+        .backend_mut()
+        .append_lines(1)
+        .expect("append should tolerate a concurrent physical resize");
+    assert_eq!(
+        terminal
+            .get_cursor_position()
+            .expect("cursor should refresh")
+            .y,
+        4,
+        "refreshed cursor must be clamped inside the reported physical height"
+    );
+    assert_eq!(
+        terminal.backend_mut().inner().cursor_query_count(),
+        initial_query_count + 1,
+        "append-time resize must discard the estimated cursor and query the physical position"
+    );
+}
+
+#[test]
+fn physical_shrink_requeries_cursor_before_inline_autoresize() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("bottom-anchored inline terminal should initialize");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    if let ConversationState::Ready(conversation) = &mut app.conversation_state {
+        conversation.input_buffer = "physical shrink prompt".to_string();
+    }
+    append_history_message(&mut app, "physical shrink history");
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_viewport = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_viewport);
+    let cursor_queries_before_resize = terminal.backend_mut().inner().cursor_query_count();
+    let appended_lines_before_resize = terminal.backend_mut().inner().appended_lines();
+
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .resize_and_clamp_cursor(48, 10);
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_viewport);
+
+    assert_eq!(
+        terminal.backend_mut().inner().cursor_query_count(),
+        cursor_queries_before_resize + 1,
+        "physical resize must refresh the cursor used to anchor the inline viewport"
+    );
+    assert_eq!(
+        terminal.backend_mut().inner().appended_lines(),
+        appended_lines_before_resize,
+        "physical resize must not append a second history-fit adjustment"
+    );
+    let viewport_area = terminal.get_frame().area();
+    assert!(
+        viewport_area.bottom() <= 10,
+        "shrunk inline viewport must stay inside the physical screen: {viewport_area:?}"
+    );
+    let screen_text = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
+    assert_eq!(
+        screen_text.matches("> physical shrink prompt").count(),
+        1,
+        "shrink redraw must keep one visible prompt without a stale tail: {screen_text:?}"
+    );
+
+    let cursor_queries_after_shrink = terminal.backend_mut().inner().cursor_query_count();
+    let _ = sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap();
+    assert_eq!(
+        terminal.backend_mut().inner().cursor_query_count(),
+        cursor_queries_after_shrink,
+        "unchanged geometry must continue using the refreshed cursor cache"
+    );
+
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .resize_and_clamp_cursor(80, 40);
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_viewport).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_viewport);
+    assert_eq!(
+        terminal.backend_mut().inner().cursor_query_count(),
+        cursor_queries_after_shrink + 1,
+        "physical restore must refresh the cursor exactly once"
+    );
+    let restored_screen = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
+    assert_eq!(
+        restored_screen.matches("> physical shrink prompt").count(),
+        1,
+        "restore redraw must keep one visible prompt without stale tail replay: {restored_screen:?}"
+    );
+}
+
+#[test]
+fn draw_resize_races_defer_physical_history_reconciliation() {
+    for resize_after_flush in [false, true] {
+        let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+        inner
+            .set_cursor_position(Position::new(0, 39))
+            .expect("fixture cursor should start at the physical bottom");
+        let backend = InlineTerminalBackend::new(inner);
+        let mut terminal = Terminal::with_options(
+            backend,
+            terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+        )
+        .expect("bottom-anchored inline terminal should initialize");
+        let mut app = make_test_app();
+        app.show_startup_ascii_art = false;
+        let mut runtime = ShellRuntime::new(app);
+        let mut inline_terminal = InlineTerminalState::default();
+
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+        draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+        inline_terminal.history_flush.visible_history_rows = 30;
+
+        if resize_after_flush {
+            terminal
+                .backend_mut()
+                .inner_mut()
+                .resize_on_next_flush(48, 10);
+        } else {
+            terminal
+                .backend_mut()
+                .inner_mut()
+                .resize_and_clamp_cursor(48, 10);
+        }
+        draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+
+        assert_eq!(
+            inline_terminal.last_known_screen_size(),
+            Some(Size::new(80, 40)),
+            "draw-time resize must leave the prior geometry for the next sync; after_flush={resize_after_flush}"
+        );
+        assert!(
+            !inline_terminal.back_buffer_trustworthy(),
+            "draw-time resize must invalidate the mixed-geometry frame; after_flush={resize_after_flush}"
+        );
+        let appended_lines = terminal.backend_mut().inner().appended_lines();
+
+        assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+        assert_eq!(
+            terminal.backend_mut().inner().appended_lines(),
+            appended_lines,
+            "deferred physical resize must reconcile accounting without appending lines; after_flush={resize_after_flush}"
+        );
+        draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+        assert!(
+            terminal.get_frame().area().bottom() <= 10,
+            "reconciled viewport must stay inside the shrunken terminal; after_flush={resize_after_flush}"
+        );
+    }
+}
+
+#[test]
+fn sync_resize_race_uses_one_stable_geometry_snapshot() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("bottom-anchored inline terminal should initialize");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+    inline_terminal.history_flush.visible_history_rows = 30;
+    let appended_lines = terminal.backend_mut().inner().appended_lines();
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .report_resize_after_size_queries(3, 48, 10);
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(48, 10))
+    );
+    assert!(
+        inline_terminal
+            .viewport_area()
+            .is_some_and(|area| area.bottom() <= 10),
+        "sync must not combine the new physical size with the old viewport: {:?}",
+        inline_terminal.viewport_area()
+    );
+    assert_eq!(
+        terminal.backend_mut().inner().appended_lines(),
+        appended_lines,
+        "a resize observed during autoresize must not be applied again as a history fit"
+    );
+}
+
+#[test]
+fn unstable_resize_does_not_spin_or_mutate_history_accounting() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("bottom-anchored inline terminal should initialize");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+    inline_terminal.history_flush.visible_history_rows = 30;
+    let appended_lines = terminal.backend_mut().inner().appended_lines();
+    terminal.backend_mut().inner_mut().report_changing_sizes();
+
+    assert!(!sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(80, 40)),
+        "unstable geometry must leave the previous screen observation intact"
+    );
+    assert!(!inline_terminal.back_buffer_trustworthy());
+    assert_eq!(
+        terminal.backend_mut().inner().appended_lines(),
+        appended_lines,
+        "unstable autoresize must keep resize append suppression active"
+    );
+
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .finish_reported_resize(Size::new(48, 10));
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(48, 10))
+    );
 }
 
 // Resize paths are regression-prone because committed history and live tail
@@ -2055,16 +2315,66 @@ fn append_message(app: &mut NativeTuiApp, kind: ConversationMessageKind, text: &
 struct CursorQueryCountingBackend {
     inner: TestBackend,
     cursor_query_count: usize,
+    appended_lines: u16,
+    resize_on_flush: Option<Size>,
+    size_query_count: StdCell<usize>,
+    reported_size: StdCell<Option<Size>>,
+    resize_on_size_query: StdCell<Option<(usize, Size)>>,
+    changing_sizes_start: StdCell<Option<usize>>,
 }
 impl CursorQueryCountingBackend {
     fn new(inner: TestBackend) -> Self {
         Self {
             inner,
             cursor_query_count: 0,
+            appended_lines: 0,
+            resize_on_flush: None,
+            size_query_count: StdCell::new(0),
+            reported_size: StdCell::new(None),
+            resize_on_size_query: StdCell::new(None),
+            changing_sizes_start: StdCell::new(None),
         }
     }
     fn cursor_query_count(&self) -> usize {
         self.cursor_query_count
+    }
+    fn appended_lines(&self) -> u16 {
+        self.appended_lines
+    }
+    fn resize_and_clamp_cursor(&mut self, width: u16, height: u16) {
+        let cursor = self
+            .inner
+            .get_cursor_position()
+            .expect("fixture cursor should be readable before resize");
+        self.inner.resize(width, height);
+        self.inner
+            .set_cursor_position(Position::new(
+                cursor.x.min(width.saturating_sub(1)),
+                cursor.y.min(height.saturating_sub(1)),
+            ))
+            .expect("fixture cursor clamp should succeed");
+    }
+    fn resize_on_next_flush(&mut self, width: u16, height: u16) {
+        self.resize_on_flush = Some(Size::new(width, height));
+    }
+    fn report_resize_after_size_queries(&mut self, query_count: usize, width: u16, height: u16) {
+        self.resize_on_size_query.set(Some((
+            self.size_query_count.get() + query_count,
+            Size::new(width, height),
+        )));
+    }
+    fn current_reported_size(&self) -> Size {
+        self.reported_size
+            .get()
+            .unwrap_or_else(|| self.inner.size().expect("fixture size should be readable"))
+    }
+    fn report_changing_sizes(&mut self) {
+        self.changing_sizes_start
+            .set(Some(self.size_query_count.get() + 1));
+    }
+    fn finish_reported_resize(&mut self, size: Size) {
+        self.changing_sizes_start.set(None);
+        self.reported_size.set(Some(size));
     }
 }
 impl Backend for CursorQueryCountingBackend {
@@ -2083,7 +2393,12 @@ impl Backend for CursorQueryCountingBackend {
     }
     fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
         self.cursor_query_count += 1;
-        self.inner.get_cursor_position()
+        let cursor = self.inner.get_cursor_position()?;
+        let size = self.current_reported_size();
+        Ok(Position::new(
+            cursor.x.min(size.width.saturating_sub(1)),
+            cursor.y.min(size.height.saturating_sub(1)),
+        ))
     }
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
         self.inner.set_cursor_position(position)
@@ -2095,16 +2410,35 @@ impl Backend for CursorQueryCountingBackend {
         self.inner.clear_region(clear_type)
     }
     fn append_lines(&mut self, line_count: u16) -> Result<(), Self::Error> {
+        self.appended_lines = self.appended_lines.saturating_add(line_count);
         self.inner.append_lines(line_count)
     }
     fn size(&self) -> Result<Size, Self::Error> {
-        self.inner.size()
+        let query_count = self.size_query_count.get() + 1;
+        self.size_query_count.set(query_count);
+        if let Some(first_query) = self.changing_sizes_start.get() {
+            let offset = u16::try_from(query_count - first_query).unwrap_or(u16::MAX);
+            let size = Size::new(80_u16.saturating_sub(offset).max(1), 40);
+            self.reported_size.set(Some(size));
+            return Ok(size);
+        }
+        if let Some((trigger_query, size)) = self.resize_on_size_query.get()
+            && query_count >= trigger_query
+        {
+            self.reported_size.set(Some(size));
+            self.resize_on_size_query.set(None);
+        }
+        Ok(self.current_reported_size())
     }
     fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
         self.inner.window_size()
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
-        self.inner.flush()
+        self.inner.flush()?;
+        if let Some(size) = self.resize_on_flush.take() {
+            self.resize_and_clamp_cursor(size.width, size.height);
+        }
+        Ok(())
     }
     fn scroll_region_up(&mut self, region: Range<u16>, line_count: u16) -> Result<(), Self::Error> {
         self.inner.scroll_region_up(region, line_count)

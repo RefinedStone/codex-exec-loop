@@ -36,6 +36,7 @@ pub(crate) struct InlineTerminalBackend<B> {
      * 한 번 읽거나 설정한 좌표를 기억해 inline history 삽입 뒤에도 shell 위치 계산을 안정화한다.
      */
     tracked_cursor_position: Option<Position>,
+    tracked_cursor_size: Option<Size>,
 }
 
 impl<B> InlineTerminalBackend<B> {
@@ -48,6 +49,7 @@ impl<B> InlineTerminalBackend<B> {
             inner,
             suppress_resize_append_lines: false,
             tracked_cursor_position: None,
+            tracked_cursor_size: None,
         }
     }
 
@@ -130,11 +132,15 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
          * 이렇게 해야 history flush가 여러 번 이어져도 실제 terminal query를 반복하지 않고
          * inline shell positioning이 같은 좌표를 기준으로 계산된다.
          */
-        if let Some(position) = self.tracked_cursor_position {
+        let size = self.inner.size()?;
+        if self.tracked_cursor_size == Some(size)
+            && let Some(position) = self.tracked_cursor_position
+        {
             return Ok(position);
         }
         let position = self.inner.get_cursor_position()?;
         self.tracked_cursor_position = Some(position);
+        self.tracked_cursor_size = Some(size);
         Ok(position)
     }
 
@@ -144,8 +150,10 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
          * 이후 append_lines 보정은 이 cached position을 화면 아래쪽으로 밀어 shell cursor를 따라간다.
          */
         let position = position.into();
+        let size = self.inner.size()?;
         self.inner.set_cursor_position(position)?;
         self.tracked_cursor_position = Some(position);
+        self.tracked_cursor_size = Some(size);
         Ok(())
     }
 
@@ -221,21 +229,23 @@ impl<B: Backend> InlineTerminalBackend<B> {
              */
             return;
         };
-        if let Ok(size) = self.inner.size() {
-            /*
-             * 높이를 모르면 cursor clamping도 할 수 없으므로 size 조회 성공 시에만 갱신한다.
-             * height 0은 backend fixture나 비정상 resize에서 나올 수 있는 방어 케이스다.
-             */
-            if size.height == 0 {
-                return;
-            }
-            position.x = 0;
-            position.y = position
-                .y
-                .saturating_add(line_count)
-                .min(size.height.saturating_sub(1));
-            self.tracked_cursor_position = Some(position);
+        let Ok(size) = self.inner.size() else {
+            self.tracked_cursor_position = None;
+            self.tracked_cursor_size = None;
+            return;
+        };
+        if size.height == 0 || self.tracked_cursor_size != Some(size) {
+            self.tracked_cursor_position = None;
+            self.tracked_cursor_size = None;
+            return;
         }
+        position.x = 0;
+        position.y = position
+            .y
+            .saturating_add(line_count)
+            .min(size.height.saturating_sub(1));
+        self.tracked_cursor_position = Some(position);
+        self.tracked_cursor_size = Some(size);
     }
 }
 

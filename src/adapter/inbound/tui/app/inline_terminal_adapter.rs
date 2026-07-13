@@ -134,13 +134,23 @@ fn draw_inline_frame<B: InlineResizeBackend>(
             prepare_render_state(app, ShellFrontendMode::InlineMainBuffer, frame_area);
             draw(frame, app, ShellFrontendMode::InlineMainBuffer);
         })
-        .map(|_| ());
+        .map(|completed_frame| completed_frame.area.as_size());
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(false);
-    result?;
-    let terminal_size = terminal.size()?;
+    let drawn_screen_size = result?;
     let cursor_position = terminal.get_cursor_position()?;
+    let terminal_size = terminal.size()?;
+    if inline_terminal.screen_size_changed(drawn_screen_size) || drawn_screen_size != terminal_size
+    {
+        /*
+         * A resize can land after sync or after Ratatui flushes this frame. Keep the previous
+         * screen-size observation so the next transaction reconciles physical scrollback movement
+         * instead of treating it as an application-driven history fit.
+         */
+        inline_terminal.invalidate_back_buffer();
+        return Ok(());
+    }
     /*
      * ratatui reports the actual frame area used for this draw. Recording that
      * area with the post-draw cursor position is what makes the next transaction
@@ -183,8 +193,12 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
      * flush so the flush logic knows how many visible rows fit in the current
      * terminal, not the previous frame's dimensions.
      */
-    autoresize_inline_viewport(terminal)?;
-    let terminal_size = terminal.size()?;
+    let Some((terminal_size, physical_terminal_resized)) =
+        autoresize_inline_viewport(terminal, inline_terminal)?
+    else {
+        inline_terminal.invalidate_back_buffer();
+        return Ok(false);
+    };
     let viewport_area = current_viewport_area(terminal);
     let cursor_position = terminal.get_cursor_position()?;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
@@ -223,11 +237,17 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         clear_visible_inline_rows(terminal)?;
         inline_terminal.invalidate_back_buffer();
     }
-    let visible_history_adjusted = inline_terminal.history_flush.fit_visible_rows_to_viewport(
-        terminal,
-        terminal_size,
-        viewport_area,
-    )?;
+    let visible_history_adjusted = if physical_terminal_resized {
+        inline_terminal
+            .history_flush
+            .reconcile_physical_resize(viewport_area)
+    } else {
+        inline_terminal.history_flush.fit_visible_rows_to_viewport(
+            terminal,
+            terminal_size,
+            viewport_area,
+        )?
+    };
     if visible_history_adjusted {
         /*
          * Fitting history to a smaller viewport may insert or remove visible
@@ -267,15 +287,35 @@ fn current_viewport_area<B: Backend>(terminal: &mut Terminal<B>) -> Rect {
 
 fn autoresize_inline_viewport<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
-) -> Result<(), B::Error> {
+    inline_terminal: &InlineTerminalState,
+) -> Result<Option<(Size, bool)>, B::Error> {
+    const MAX_STABILITY_ATTEMPTS: usize = 3;
+
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(true);
-    let result = terminal.autoresize();
+    let result = (|| {
+        let mut observed_size = terminal.size()?;
+        for _ in 0..MAX_STABILITY_ATTEMPTS {
+            terminal.autoresize()?;
+            let terminal_size = terminal.size()?;
+            if terminal_size == observed_size {
+                return Ok(Some(terminal_size));
+            }
+            observed_size = terminal_size;
+        }
+        Ok(None)
+    })();
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(false);
-    result
+    let Some(terminal_size) = result? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        terminal_size,
+        inline_terminal.screen_size_changed(terminal_size),
+    )))
 }
 
 #[cfg(test)]
@@ -334,6 +374,12 @@ pub(super) struct InlineTerminalState {
 }
 
 impl InlineTerminalState {
+    fn screen_size_changed(&self, terminal_size: Size) -> bool {
+        self.viewport
+            .last_known_screen_size
+            .is_some_and(|last_known_screen_size| last_known_screen_size != terminal_size)
+    }
+
     fn record_terminal_viewport(
         &mut self,
         terminal_size: Size,
@@ -345,10 +391,7 @@ impl InlineTerminalState {
          * the same inline area for one tick. Terminal emulators can keep cursor
          * position stable while wrapping rows differently after a resize.
          */
-        let terminal_resized = self
-            .viewport
-            .last_known_screen_size
-            .is_some_and(|last_known_screen_size| last_known_screen_size != terminal_size);
+        let terminal_resized = self.screen_size_changed(terminal_size);
         self.viewport
             .record_terminal_viewport(terminal_size, viewport_area, cursor_position);
         if terminal_resized {

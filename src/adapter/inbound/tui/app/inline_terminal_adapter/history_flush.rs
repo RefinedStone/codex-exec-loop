@@ -57,6 +57,17 @@ const MIN_SHIFTED_HISTORY_OVERLAP: usize = 8;
 
 impl HistoryFlushState {
     /*
+     * A physical terminal resize already moves rows between the visible screen and host
+     * scrollback. Reconcile only the accounting cache in that case; appending more blank lines
+     * would apply the same shrink a second time and leave old live-tail rows on screen.
+     */
+    pub(crate) fn reconcile_physical_resize(&mut self, viewport_area: Rect) -> bool {
+        let previous_visible_rows = self.visible_history_rows;
+        self.visible_history_rows = self.visible_history_rows.min(viewport_area.top());
+        self.visible_history_rows != previous_visible_rows
+    }
+
+    /*
      * Terminal resize and newline-fallback insertion can leave more history rows visible above the
      * frame than the new viewport can contain. Appending blank lines at the bottom advances the host
      * scrollback until the inline frame has clear space again, then clamps the cache to the new top.
