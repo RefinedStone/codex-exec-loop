@@ -2346,7 +2346,7 @@ printf '200'
 }
 
 #[test]
-fn gh_akra_write_status_requires_pinned_api_identity_without_source_git_helper() {
+fn gh_akra_write_status_supports_system_bash_and_requires_pinned_api_identity() {
     let root = make_records_dir();
     let repo = root.join("repo");
     let bin_dir = root.join("bin");
@@ -2410,7 +2410,8 @@ printf '200'
     );
 
     let run = |api_token: &str| {
-        Command::new("bash")
+        let bash = if cfg!(unix) { "/bin/bash" } else { "bash" };
+        Command::new(bash)
             .arg(repo_root().join("scripts/gh-akra.sh"))
             .args(["auth", "write-status"])
             .current_dir(&repo)

@@ -107,7 +107,7 @@ impl GithubAutomationAdapter {
                 );
             };
             let refspec = format!("{current_commit}:refs/heads/{current_branch}");
-            if run_git_to_delivery_target(
+            let push_error = match run_git_to_delivery_target(
                 repo_root,
                 &push_url,
                 &[
@@ -116,24 +116,28 @@ impl GithubAutomationAdapter {
                     FROZEN_GITHUB_REMOTE_NAME,
                     refspec.as_str(),
                 ],
-            )
-            .is_ok()
-            {
-                return ParallelModeCapabilitySnapshot::new(
-                    ParallelModeCapabilityKey::PushRemote,
-                    ParallelModeCapabilityState::Ready,
-                    format!("push dry-run succeeded for `{current_branch}`"),
-                    None,
-                );
-            }
+            ) {
+                Ok(()) => {
+                    return ParallelModeCapabilitySnapshot::new(
+                        ParallelModeCapabilityKey::PushRemote,
+                        ParallelModeCapabilityState::Ready,
+                        format!("push dry-run succeeded for `{current_branch}`"),
+                        None,
+                    );
+                }
+                Err(error) => error,
+            };
+            let error_detail = sanitize_command_output(&format!("{push_error:#}"));
             return ParallelModeCapabilitySnapshot::new(
                 ParallelModeCapabilityKey::PushRemote,
                 ParallelModeCapabilityState::Degraded,
                 format!(
-                    "git push --dry-run failed for `{current_branch}` via remote `{}`",
-                    push_remote
+                    "push readiness probe failed for `{current_branch}` via remote `{push_remote}`: {error_detail}"
                 ),
-                Some("repair git push credentials or remote branch permissions".to_string()),
+                Some(
+                    "repair the reported GitHub identity or git push failure before enabling delivery"
+                        .to_string(),
+                ),
             );
         }
 
@@ -2543,9 +2547,9 @@ printf '%s\n' 'trusted-helper-executed'
             .collect::<String>();
         assert_eq!(
             digest,
-            "949e73431e32c59664a9ca20db09281d01d9ce7b1c446189fa86e1e1d50ddfbe"
+            "5b8fcc4df4f52d9af7820373e0f70fc35ac7dd8391a1d76d03994aa24074fb13"
         );
-        assert_eq!(EMBEDDED_GITHUB_HELPER.len(), 37_296);
+        assert_eq!(EMBEDDED_GITHUB_HELPER.len(), 37_404);
     }
 
     #[test]
@@ -2899,7 +2903,45 @@ printf '%s\n' 'trusted-helper-executed'
 
         assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
         assert_eq!(capability.state, ParallelModeCapabilityState::Degraded);
-        assert!(capability.detail.contains("git push --dry-run failed"));
+        assert!(capability.detail.contains("push readiness probe failed"));
+        assert!(capability.detail.contains("frozen GitHub target"));
+        assert!(capability.next_action.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_remote_capability_preserves_identity_probe_failure_detail() {
+        const IDENTITY_FAILURE: &[u8] = br#"#!/usr/bin/env bash
+printf '%s\n' 'identity-probe-marker' >&2
+exit 23
+"#;
+
+        let _lock = github_script_lock()
+            .lock()
+            .expect("GitHub test environment lock should not be poisoned");
+        let fixture = GitFixture::new("github-automation-identity-probe-failure");
+        git(
+            &fixture.repo,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let _helper_guard = TestGithubHelperGuard::install(IDENTITY_FAILURE);
+
+        let capability = GithubAutomationAdapter::inspect_push_remote(path_str(&fixture.repo));
+
+        assert_eq!(capability.key, ParallelModeCapabilityKey::PushRemote);
+        assert_eq!(capability.state, ParallelModeCapabilityState::Degraded);
+        assert!(capability.detail.contains("push readiness probe failed"));
+        assert!(capability.detail.contains("identity-probe-marker"));
+        assert!(
+            capability
+                .detail
+                .contains("GitHub write identity verification failed")
+        );
         assert!(capability.next_action.is_some());
     }
 

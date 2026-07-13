@@ -7,7 +7,8 @@ temporary_files=()
 
 cleanup_temporary_files() {
   local path
-  for path in "${temporary_files[@]}"; do
+  # macOS Bash 3.2 treats an empty array expansion as unset when nounset is active.
+  for path in "${temporary_files[@]+"${temporary_files[@]}"}"; do
     rm -f -- "${path}"
   done
 }
