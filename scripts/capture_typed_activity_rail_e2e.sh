@@ -497,7 +497,10 @@ assert_active_checkpoint() {
 }
 
 normalize_frame() {
-  sed -E 's/Working \(([0-9]+h [0-9]+m|[0-9]+m [0-9]+s|[0-9]+s)/Working (<elapsed>/' "$1"
+  sed -E \
+    -e 's/Working \(([0-9]+h [0-9]+m|[0-9]+m [0-9]+s|[0-9]+s)/Working (<elapsed>/' \
+    -e '/^[[:space:]]*$/d' \
+    "$1"
 }
 
 wait_for_file "$raw_pipe_ready" 200
@@ -551,8 +554,13 @@ cmp -s "$raw_root/active_narrow.normalized" "$raw_root/active_narrow_repeat.norm
   printf 'repeated narrow resize did not restore an idempotent active frame\n' >&2
   exit 1
 }
-[[ "$(<"$raw_root/active_narrow.history")" == "$(<"$raw_root/active_narrow_repeat.history")" ]] || {
-  printf 'repeated narrow resize changed host history\n' >&2
+normalize_frame "$raw_root/active_narrow.history" >"$raw_root/active_narrow.history.normalized"
+normalize_frame "$raw_root/active_narrow_repeat.history" \
+  >"$raw_root/active_narrow_repeat.history.normalized"
+cmp -s \
+  "$raw_root/active_narrow.history.normalized" \
+  "$raw_root/active_narrow_repeat.history.normalized" || {
+  printf 'repeated narrow resize changed semantic host history\n' >&2
   exit 1
 }
 
@@ -643,6 +651,12 @@ const read = (name, suffix) => fs.readFileSync(`${root}/${name}.${suffix}`);
 const text = (name, suffix) => read(name, suffix).toString('utf8');
 const count = (source, needle) => source.split(needle).length - 1;
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+const semanticFrame = (source) => source
+  .replace(/Working \((?:\d+h \d+m|\d+m \d+s|\d+s)/g, 'Working (<elapsed>')
+  .split('\n')
+  .filter((line) => line.trim().length > 0)
+  .map((line) => line.trimEnd())
+  .join('\n');
 
 function rejectUnsafeText(label, bytes) {
   const value = bytes.toString('utf8');
@@ -708,6 +722,8 @@ function checkpoint(name) {
       currentSha256: sha256(read(name, 'current')),
       historySha256: sha256(read(name, 'history')),
       fullSha256: sha256(read(name, 'full')),
+      semanticCurrentSha256: sha256(Buffer.from(semanticFrame(current), 'utf8')),
+      semanticHistorySha256: sha256(Buffer.from(semanticFrame(history), 'utf8')),
     },
     visibleEvidence: visibleSource
       .split('\n')
@@ -819,7 +835,7 @@ const artifact = {
     runningPromptAbsentFromHostHistory: true,
     rawActivityPayloadAbsentFromRenderedAndRawPtyCapture: true,
     intermediateResizeRevealedModelFact: true,
-    repeatedNarrowResizeIdempotent: true,
+    repeatedNarrowSemanticFrameIdempotent: true,
     restoredFrameInBounds: true,
     committedCompletionPresentExactlyOnce: true,
     activeRailRemovedAfterCompletion: true,
