@@ -94,6 +94,9 @@
       ["브랜치", "detailBranch"],
       ["Worktree", "detailWorktree"],
       ["Owner", "detailOwner"],
+      ["Owner Agent", "detailOwnerAgent"],
+      ["Owner Session", "detailOwnerSession"],
+      ["Lease Generation", "detailLeaseGeneration"],
       ["Note", "detailNote"]
     ],
     agent: [
@@ -602,6 +605,9 @@
     setDataset(button, {
       slotId: slot.slotId,
       taskId: slot.taskId || "",
+      ownerAgentId: slot.ownerAgentId || "",
+      ownerSessionKey: slot.ownerSessionKey || "",
+      leaseGeneration: slot.leaseGeneration || "",
       detailType: "slot",
       detailTitle: `워크트리 풀 · ${slotDisplayLabel}`,
       detailSubtitle: slotStateLabel,
@@ -612,6 +618,9 @@
       detailBranch: slotBranchName,
       detailWorktree: slotWorktreeLabel,
       detailOwner: slotOwnerLabel,
+      detailOwnerAgent: optionalText(slot.ownerAgentId, "-"),
+      detailOwnerSession: optionalText(slot.ownerSessionKey, "-"),
+      detailLeaseGeneration: optionalText(slot.leaseGeneration, "-"),
       detailNote: slotNote
     });
     button.title = `${slotDisplayLabel} · ${slotStateLabel} · task ${slotTaskId} · branch ${slotBranchName} · worktree ${slotWorktreeLabel} · owner ${slotOwnerLabel} · note ${slotNote}`;
@@ -934,7 +943,12 @@
   };
 
   const updateDashboard = (dashboard) => {
-    setText("[data-planning-revision]", `rev ${formatValue(dashboard.planningRevision, "0")}`);
+    root.dataset.eventCursor =
+      dashboard.eventFeed?.eventCursor == null ? "" : String(dashboard.eventFeed.eventCursor);
+    setText(
+      "[data-planning-revision]",
+      dashboard.planningRevision == null ? "미집계" : `rev ${dashboard.planningRevision}`,
+    );
     setText("[data-summary-active-agents]", `${dashboard.kpis.activeAgents} / ${dashboard.kpis.totalAgents}`);
     setText("[data-summary-idle-slots]", formatValue(dashboard.kpis.poolIdle, "0"));
     setText("[data-summary-queue-depth]", formatValue(dashboard.kpis.queueDepth, "0"));

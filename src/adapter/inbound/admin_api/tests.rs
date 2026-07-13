@@ -1247,6 +1247,8 @@ async fn admin_akra_json_snapshot_routes_render_read_only_views() {
             "Akra snapshot route should return structured JSON for {uri}"
         );
         if uri == "/api/admin/akra/dashboard" {
+            assert!(body["planningRevision"].is_number());
+            assert!(body["eventFeed"]["eventCursor"].is_null());
             assert!(body["scene"]["stations"].is_array());
             assert!(body["scene"]["actors"].is_array());
             assert!(body["scene"]["diagnostics"].is_array());
@@ -2885,6 +2887,14 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "data-detail-branch=\"{{ slot.branch_name }}\"",
         "data-detail-worktree=\"{{ slot.worktree_label }}\"",
         "data-detail-owner=\"{{ slot.owner_label }}\"",
+        "data-owner-agent-id=\"{{ slot.owner_agent_id.as_deref().unwrap_or(\"\") }}\"",
+        "data-owner-session-key=\"{{ slot.owner_session_key.as_deref().unwrap_or(\"\") }}\"",
+        "data-lease-generation=\"{{ slot.lease_generation.as_deref().unwrap_or(\"\") }}\"",
+        "detailOwnerAgent: optionalText(slot.ownerAgentId, \"-\")",
+        "detailOwnerSession: optionalText(slot.ownerSessionKey, \"-\")",
+        "detailLeaseGeneration: optionalText(slot.leaseGeneration, \"-\")",
+        "dashboard.planningRevision == null ? \"미집계\"",
+        "data-event-cursor=\"{{ dashboard.event_feed.event_cursor_data }}\"",
         "title=\"{{ slot.display_slot_label }} · {{ slot.label }} · task",
         "const slotDisplayLabel = optionalText(slot.displaySlotLabel || slot.slotId, \"슬롯\")",
         "const slotTaskId = optionalText(slot.taskId, \"-\")",

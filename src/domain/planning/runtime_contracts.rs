@@ -18,6 +18,10 @@ pub enum RuntimeWorkspaceStatus {
 pub struct RuntimeProjection {
     pub(crate) workspace_present: bool,
     pub(crate) workspace_status: RuntimeWorkspaceStatus,
+    // Accepted planning authority revision observed while this projection was built.
+    // This is distinct from the semantic task signature: the revision is the
+    // optimistic-concurrency/version fact shared by operator surfaces.
+    pub(crate) planning_revision: Option<i64>,
     pub(crate) prompt_fragment: Option<String>,
     pub(crate) queue_summary: Option<String>,
     pub(crate) proposal_summary: Option<String>,
@@ -36,6 +40,7 @@ impl RuntimeProjection {
         Self {
             workspace_present: false,
             workspace_status: RuntimeWorkspaceStatus::Uninitialized,
+            planning_revision: None,
             prompt_fragment: None,
             queue_summary: None,
             proposal_summary: None,
@@ -54,6 +59,7 @@ impl RuntimeProjection {
         Self {
             workspace_present: true,
             workspace_status: RuntimeWorkspaceStatus::Invalid,
+            planning_revision: None,
             prompt_fragment: None,
             queue_summary: None,
             proposal_summary: None,
@@ -89,6 +95,7 @@ impl RuntimeProjection {
             } else {
                 RuntimeWorkspaceStatus::ReadyNoTask
             },
+            planning_revision: None,
             prompt_fragment: Some(prompt_fragment),
             queue_summary: Some(queue_summary),
             proposal_summary,
@@ -117,6 +124,7 @@ impl RuntimeProjection {
             } else {
                 RuntimeWorkspaceStatus::ReadyNoTask
             },
+            planning_revision: None,
             prompt_fragment: Some(prompt_fragment),
             queue_summary: Some(queue_summary),
             proposal_summary,
@@ -146,12 +154,21 @@ impl RuntimeProjection {
         self
     }
 
+    pub fn with_planning_revision(mut self, planning_revision: Option<i64>) -> Self {
+        self.planning_revision = planning_revision;
+        self
+    }
+
     pub fn workspace_present(&self) -> bool {
         self.workspace_present
     }
 
     pub fn workspace_status(&self) -> RuntimeWorkspaceStatus {
         self.workspace_status
+    }
+
+    pub fn planning_revision(&self) -> Option<i64> {
+        self.planning_revision
     }
 
     pub fn prompt_fragment(&self) -> Option<&str> {

@@ -1015,6 +1015,13 @@ fn pool_slot_snapshot_projects_lease_state_to_pool_slot_state() {
 
     assert_eq!(slot.state, ParallelModePoolSlotState::AwaitingCleanup);
     assert_eq!(slot.owner_label, "agent-1 / task-1");
+    let owner = slot
+        .owner_identity
+        .expect("lease-backed slot must preserve typed owner identity");
+    assert_eq!(owner.agent_id, "agent-1");
+    assert_eq!(owner.task_id, "task-1");
+    assert_eq!(owner.session_key, lease.session_key());
+    assert_eq!(owner.lease_generation, lease.lease_generation);
 }
 
 #[test]

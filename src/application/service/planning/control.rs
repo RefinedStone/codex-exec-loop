@@ -505,6 +505,7 @@ mod tests {
             workspace_present: true,
             workspace_status:
                 crate::application::service::planning::PlanningRuntimeWorkspaceStatus::ReadyWithTask,
+            planning_revision: Some(11),
             task_authority_signature: Some(42),
             queue_head_task_signature: Some(7),
             auto_follow_paused: false,

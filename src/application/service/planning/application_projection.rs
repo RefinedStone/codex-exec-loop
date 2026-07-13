@@ -14,6 +14,7 @@ use crate::domain::planning::{
 pub struct PlanningApplicationProjection {
     pub workspace_present: bool,
     pub workspace_status: PlanningRuntimeWorkspaceStatus,
+    pub planning_revision: Option<i64>,
     pub task_authority_signature: Option<u64>,
     pub queue_head_task_signature: Option<u64>,
     pub auto_follow_paused: bool,
@@ -95,6 +96,7 @@ impl PlanningApplicationProjection {
         Self {
             workspace_present: runtime_projection.workspace_present(),
             workspace_status: runtime_projection.workspace_status(),
+            planning_revision: runtime_projection.planning_revision(),
             task_authority_signature: runtime_projection.task_authority_signature(),
             queue_head_task_signature: runtime_projection.queue_head_task_signature(),
             auto_follow_paused: runtime_projection.auto_follow_pause_reason().is_some(),
@@ -185,12 +187,14 @@ mod tests {
             QueueIdlePolicy::ReviewAndEnqueue,
             Some(".codex-exec-loop/planning/prompts/queue-idle-review.md".to_string()),
         )
+        .with_planning_revision(Some(11))
         .with_test_signatures(Some(42), Some(7));
 
         let projection =
             PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
 
         assert!(projection.workspace_present);
+        assert_eq!(projection.planning_revision, Some(11));
         assert_eq!(projection.task_authority_signature, Some(42));
         assert_eq!(projection.queue_head_task_signature, Some(7));
         assert_eq!(projection.status_label, "ready");
@@ -238,6 +242,7 @@ mod tests {
             Some("planning validation failed: task authority is unavailable")
         );
         assert_eq!(projection.task_authority_signature, None);
+        assert_eq!(projection.planning_revision, None);
         assert_eq!(projection.queue_head_task_signature, None);
         assert!(!projection.auto_follow_paused);
         assert!(projection.queue_head.is_none());

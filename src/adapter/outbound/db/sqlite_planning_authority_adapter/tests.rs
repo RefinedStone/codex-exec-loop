@@ -6284,9 +6284,32 @@ fn runtime_task_dispatch_block_keeps_newer_block_when_older_update_arrives() {
 }
 
 #[test]
+fn runtime_event_log_without_authority_events_keeps_cursor_unknown() {
+    let workspace_dir = temp_workspace("runtime-events-no-authority-events");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+
+    let snapshot = adapter
+        .load_runtime_event_log(
+            &workspace_dir,
+            ParallelModeRuntimeEventLogRequest::recent(5),
+        )
+        .expect("empty runtime event log should load");
+
+    assert_eq!(snapshot.total_event_count, 0);
+    assert_eq!(snapshot.visible_count(), 0);
+    assert_eq!(snapshot.event_cursor, None);
+}
+
+#[test]
 fn runtime_event_log_empty_filter_reports_no_events() {
     let workspace_dir = temp_workspace("runtime-events-empty");
     let adapter = SqlitePlanningAuthorityAdapter::new();
+    adapter
+        .upsert_runtime_slot_lease(
+            &workspace_dir,
+            &slot_lease("slot-1", ParallelModeSlotLeaseState::Leased),
+        )
+        .expect("unrelated event should persist");
 
     let snapshot = adapter
         .load_runtime_event_log(
@@ -6297,6 +6320,7 @@ fn runtime_event_log_empty_filter_reports_no_events() {
 
     assert_eq!(snapshot.total_event_count, 0);
     assert_eq!(snapshot.visible_count(), 0);
+    assert_eq!(snapshot.event_cursor, Some(1));
     assert_eq!(snapshot.empty_state, "no runtime events captured yet");
 }
 
@@ -6323,6 +6347,7 @@ fn runtime_event_log_port_reads_recent_projection_events() {
 
     assert_eq!(snapshot.total_event_count, 2);
     assert_eq!(snapshot.visible_count(), 1);
+    assert_eq!(snapshot.event_cursor, Some(2));
     let latest = snapshot.latest().expect("latest event should be visible");
     assert_eq!(latest.sequence, 2);
     assert_eq!(latest.event_kind, "slot_lease_upsert");
@@ -6359,6 +6384,7 @@ fn runtime_event_log_port_filters_events_after_sequence() {
 
     assert_eq!(snapshot.total_event_count, 1);
     assert_eq!(snapshot.visible_count(), 1);
+    assert_eq!(snapshot.event_cursor, Some(2));
     let latest = snapshot.latest().expect("latest event should be visible");
     assert_eq!(latest.sequence, 2);
     assert!(latest.sequence > 1);

@@ -158,7 +158,8 @@ impl PlanningPromptService {
             return Ok(PlanningRuntimeProjection::invalid(format!(
                 "planning validation failed: {first_error}"
             ))
-            .with_workspace_present(workspace_present));
+            .with_workspace_present(workspace_present)
+            .with_planning_revision(Some(task_authority_snapshot.planning_revision)));
         }
 
         let directions = validation_result
@@ -183,7 +184,8 @@ impl PlanningPromptService {
                 return Ok(PlanningRuntimeProjection::invalid(format!(
                     "planning queue build failed: {error}"
                 ))
-                .with_workspace_present(workspace_present));
+                .with_workspace_present(workspace_present)
+                .with_planning_revision(Some(task_authority_snapshot.planning_revision)));
             }
         };
 
@@ -227,6 +229,7 @@ impl PlanningPromptService {
             } else {
                 PlanningRuntimeWorkspaceStatus::ReadyNoTask
             },
+            planning_revision: Some(task_authority_snapshot.planning_revision),
             prompt_fragment: Some(prompt_fragment),
             queue_summary: Some(queue_summary),
             proposal_summary,

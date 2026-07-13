@@ -38,7 +38,7 @@ use super::{
     ADMIN_AUTHORITY_MUTATION_CLAIM_KIND, ADMIN_AUTHORITY_MUTATION_SCOPE_KEY,
     ADMIN_TASK_MUTATION_CLAIM_KIND, CLAIM_STALE_AFTER_SECS, DISTRIBUTOR_QUEUE_CLAIM_KIND,
     OFFICIAL_REFRESH_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY, SqlitePlanningAuthorityAdapter,
-    open_authority_connection, read_metadata_i64,
+    open_authority_connection, read_metadata_i64, read_metadata_i64_connection,
 };
 
 const RUNTIME_EVENT_FEED_LIMIT: i64 = 8;
@@ -1404,7 +1404,14 @@ impl SqlitePlanningAuthorityAdapter {
     ) -> Result<ParallelModeRuntimeEventsSnapshot> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let connection = open_authority_connection(&location)?;
-        load_runtime_event_log_snapshot(&connection, &request)
+        let transaction = connection
+            .unchecked_transaction()
+            .context("failed to open runtime event read snapshot")?;
+        let snapshot = load_runtime_event_log_snapshot(&transaction, &request)?;
+        transaction
+            .commit()
+            .context("failed to close runtime event read snapshot")?;
+        Ok(snapshot)
     }
 
     // parallel mode의 slot lease snapshot을 authority DB의 현재 런타임 투영으로 저장한다.
@@ -2380,6 +2387,7 @@ fn load_runtime_event_log_snapshot(
     connection: &Connection,
     request: &ParallelModeRuntimeEventLogRequest,
 ) -> Result<ParallelModeRuntimeEventsSnapshot> {
+    let event_cursor = read_metadata_i64_connection(connection, "runtime_event_sequence")?;
     let projection_kind = request.projection_kind.as_deref();
     let projection_key = request.projection_key.as_deref();
     let after_sequence = request.after_sequence;
@@ -2433,6 +2441,9 @@ fn load_runtime_event_log_snapshot(
     for row in rows {
         entries.push(row.context("failed to decode runtime event row")?);
     }
+    if event_cursor.is_some_and(|cursor| entries.iter().any(|entry| entry.sequence > cursor)) {
+        anyhow::bail!("runtime event rows exceeded the authority cursor in one read snapshot");
+    }
 
     let total_event_count = total_event_count.max(0) as usize;
     let empty_state = if total_event_count > 0 && limit == 0 {
@@ -2440,11 +2451,10 @@ fn load_runtime_event_log_snapshot(
     } else {
         "no runtime events captured yet"
     };
-    Ok(ParallelModeRuntimeEventsSnapshot::new(
-        entries,
-        total_event_count,
-        empty_state,
-    ))
+    Ok(
+        ParallelModeRuntimeEventsSnapshot::new(entries, total_event_count, empty_state)
+            .with_event_cursor(event_cursor),
+    )
 }
 
 fn preserve_failed_start_dispatch_blocks(transaction: &Transaction<'_>) -> Result<usize> {

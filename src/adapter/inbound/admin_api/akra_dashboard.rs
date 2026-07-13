@@ -36,7 +36,8 @@ pub(super) struct AkraAdminDashboardView {
     pub event_feed: EventFeedView,
     pub generated_at: String,
     pub generated_time_label: String,
-    pub planning_revision: i64,
+    pub planning_revision: Option<i64>,
+    pub planning_revision_label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +107,8 @@ pub(super) struct PoolSlotView {
     pub owner_label: String,
     pub owner_agent_id: Option<String>,
     pub task_id: Option<String>,
+    pub owner_session_key: Option<String>,
+    pub lease_generation: Option<String>,
     pub note: String,
     pub severity: String,
     pub bubble_label: String,
@@ -314,6 +317,8 @@ pub(super) struct EventFeedView {
     pub visible_event_count: usize,
     pub status_label: String,
     pub newest_sequence: Option<i64>,
+    pub event_cursor: Option<i64>,
+    pub event_cursor_data: String,
     pub empty_state: String,
     pub incremental: bool,
 }
@@ -430,6 +435,7 @@ pub(super) fn build_akra_dashboard_view(
         &planning_projection,
         ParallelModeRuntimeEventLogRequest::recent(DASHBOARD_EVENT_LIMIT),
     );
+    let planning_revision = planning_projection.planning_revision;
     let readiness = snapshot.readiness;
     let supervisor = snapshot.supervisor;
     let events = snapshot.events;
@@ -442,11 +448,6 @@ pub(super) fn build_akra_dashboard_view(
     let scene = map_game_scene(&supervisor, &agent_profiles);
     let selected_task = map_selected_task(&supervisor);
     let distributor = map_distributor(&supervisor);
-    let planning_revision = events
-        .entries
-        .first()
-        .map(|entry| entry.observed_planning_revision)
-        .unwrap_or_default();
     let event_feed = map_event_feed(&events, DASHBOARD_EVENT_LIMIT, false);
     let events = events
         .entries
@@ -465,7 +466,6 @@ pub(super) fn build_akra_dashboard_view(
         readiness_label.as_str(),
     );
     let generated_at = Utc::now();
-
     Ok(AkraAdminDashboardView {
         workspace: AkraWorkspaceView {
             path: supervisor.workspace_path.clone(),
@@ -512,7 +512,14 @@ pub(super) fn build_akra_dashboard_view(
         generated_at: generated_at.to_rfc3339(),
         generated_time_label: generated_at.format("%H:%M:%S").to_string(),
         planning_revision,
+        planning_revision_label: planning_revision_label(planning_revision),
     })
+}
+
+fn planning_revision_label(planning_revision: Option<i64>) -> String {
+    planning_revision
+        .map(|revision| format!("rev {revision}"))
+        .unwrap_or_else(|| "미집계".to_string())
 }
 
 fn map_pool(supervisor: &ParallelModeSupervisorSnapshot) -> PoolBoardView {
@@ -542,12 +549,25 @@ fn map_pool_slot(
     slot: &ParallelModePoolSlotSnapshot,
     supervisor: &ParallelModeSupervisorSnapshot,
 ) -> PoolSlotView {
-    let (owner_agent_id, task_id) = parse_owner_label(&slot.owner_label);
-    let roster_entry = supervisor
-        .roster
-        .entries
-        .iter()
-        .find(|entry| entry.slot_id == slot.slot_id);
+    let owner_agent_id = slot
+        .owner_identity
+        .as_ref()
+        .map(|identity| identity.agent_id.clone());
+    let task_id = slot
+        .owner_identity
+        .as_ref()
+        .map(|identity| identity.task_id.clone());
+    let owner_session_key = slot
+        .owner_identity
+        .as_ref()
+        .map(|identity| identity.session_key.clone());
+    let lease_generation = slot
+        .owner_identity
+        .as_ref()
+        .and_then(|identity| identity.lease_generation.clone());
+    let roster_entry = supervisor.roster.entries.iter().find(|entry| {
+        entry.slot_id == slot.slot_id && station_roster_identity_error(slot, entry).is_none()
+    });
     PoolSlotView {
         slot_id: slot.slot_id.clone(),
         display_slot_label: pool_slot_display_label(&slot.slot_id),
@@ -558,6 +578,8 @@ fn map_pool_slot(
         owner_label: slot.owner_label.clone(),
         owner_agent_id,
         task_id,
+        owner_session_key,
+        lease_generation,
         note: pool_slot_note(slot),
         severity: pool_state_severity(slot.state).to_string(),
         bubble_label: slot_worker_bubble(slot, roster_entry, &supervisor.detail),
@@ -713,6 +735,18 @@ fn map_game_scene(
             ));
             continue;
         }
+        if let Some(code) = station_roster_identity_error(station, entry) {
+            diagnostics.push(game_scene_diagnostic(
+                code,
+                format!(
+                    "{} station owner와 {} roster lease identity가 일치하지 않습니다.",
+                    station.slot_id, entry.agent_id
+                ),
+                Some(entry.agent_id.clone()),
+                Some(entry.slot_id.clone()),
+            ));
+            continue;
+        }
 
         match game_visual_state(entry, station, supervisor) {
             Ok(visual_state) => actors.push(map_game_actor(
@@ -755,6 +789,70 @@ fn map_game_scene(
         stations,
         actors,
         diagnostics,
+    }
+}
+
+fn station_roster_identity_error(
+    station: &ParallelModePoolSlotSnapshot,
+    entry: &ParallelModeAgentRosterEntry,
+) -> Option<&'static str> {
+    if station.slot_id.trim().is_empty() || entry.slot_id.trim().is_empty() {
+        return Some("missing_slot_identity");
+    }
+    if station.branch_name.trim().is_empty() || entry.branch_name.trim().is_empty() {
+        return Some("missing_branch_identity");
+    }
+    let Some(owner) = station.owner_identity.as_ref() else {
+        return Some("missing_station_owner_identity");
+    };
+    let Some(identity) = entry.lease_identity.as_ref() else {
+        return Some("missing_lease_identity");
+    };
+    if owner.agent_id.trim().is_empty() {
+        return Some("missing_station_owner_agent_id");
+    }
+    if entry.agent_id.trim().is_empty() {
+        return Some("missing_roster_agent_id");
+    }
+    if owner.task_id.trim().is_empty() {
+        return Some("missing_station_owner_task_id");
+    }
+    if identity.task_id.trim().is_empty() {
+        return Some("missing_roster_task_id");
+    }
+    if owner.session_key.trim().is_empty() {
+        return Some("missing_station_owner_session_key");
+    }
+    if identity.session_key.trim().is_empty() {
+        return Some("missing_roster_session_key");
+    }
+    if owner.agent_id != entry.agent_id {
+        return Some("station_owner_agent_mismatch");
+    }
+    if owner.task_id != identity.task_id {
+        return Some("station_owner_task_mismatch");
+    }
+    if owner.session_key != identity.session_key {
+        return Some("station_owner_session_mismatch");
+    }
+    let Some(station_generation) = owner
+        .lease_generation
+        .as_deref()
+        .filter(|generation| !generation.trim().is_empty())
+    else {
+        return Some("missing_lease_generation");
+    };
+    let Some(roster_generation) = identity
+        .lease_generation
+        .as_deref()
+        .filter(|generation| !generation.trim().is_empty())
+    else {
+        return Some("missing_lease_generation");
+    };
+    if station_generation == roster_generation {
+        None
+    } else {
+        Some("station_owner_lease_generation_mismatch")
     }
 }
 
@@ -968,6 +1066,11 @@ fn map_event_feed(
         visible_event_count,
         status_label: event_feed_status_label(visible_event_count, events.total_event_count),
         newest_sequence: events.latest().map(|entry| entry.sequence),
+        event_cursor: events.event_cursor,
+        event_cursor_data: events
+            .event_cursor
+            .map(|cursor| cursor.to_string())
+            .unwrap_or_default(),
         empty_state: events.empty_state.clone(),
         incremental,
     }
@@ -1484,17 +1587,6 @@ fn pool_slot_display_label(slot_id: &str) -> String {
     slot_id.to_string()
 }
 
-fn parse_owner_label(owner_label: &str) -> (Option<String>, Option<String>) {
-    let mut parts = owner_label.split('/').map(str::trim);
-    let agent = parts
-        .next()
-        .filter(|value| !value.is_empty() && *value != "-");
-    let task = parts
-        .next()
-        .filter(|value| !value.is_empty() && *value != "-");
-    (agent.map(str::to_string), task.map(str::to_string))
-}
-
 fn agent_status(state_label: &str) -> &'static str {
     match state_label {
         "failed" | "official_refresh_recovery_needed" => "blocked",
@@ -1502,7 +1594,7 @@ fn agent_status(state_label: &str) -> &'static str {
         "reported_complete" | "commit_ready" | "merge_queued" | "pushing" | "pr_pending"
         | "merge_pending" => "running",
         "assigned" | "starting" | "running" => "running",
-        _ => "idle",
+        _ => "unknown",
     }
 }
 
@@ -1514,7 +1606,7 @@ fn agent_bubble(state_label: &str) -> &'static str {
         "failed" => "실패",
         "official_refresh_recovery_needed" => "차단됨",
         "cleanup_pending" => "정리중",
-        _ => "대기중",
+        _ => "상태 확인 필요",
     }
 }
 
@@ -1583,6 +1675,8 @@ mod tests {
     #[test]
     fn admin_mode_label_does_not_claim_the_separate_tui_runtime_is_enabled() {
         assert_eq!(ADMIN_RUNTIME_MODE_LABEL, "read-only projection");
+        assert_eq!(planning_revision_label(Some(17)), "rev 17");
+        assert_eq!(planning_revision_label(None), "미집계");
     }
 
     fn temp_path(label: &str) -> PathBuf {
@@ -1659,6 +1753,12 @@ mod tests {
                     "akra-agent/slot-1/task-1",
                     "slot-1",
                     "agent-one / task-1",
+                )
+                .with_owner_identity(
+                    "agent-one",
+                    "task-1",
+                    "session-one",
+                    Some("a".repeat(64)),
                 ),
                 ParallelModePoolSlotSnapshot::new(
                     "slot-2",
@@ -1673,6 +1773,12 @@ mod tests {
                     "akra-agent/slot-3/task-3",
                     "slot-3",
                     "agent-three / task-3",
+                )
+                .with_owner_identity(
+                    "agent-three",
+                    "task-3",
+                    "session-three",
+                    Some("c".repeat(64)),
                 ),
             ],
         );
@@ -1783,13 +1889,21 @@ mod tests {
             1,
             "pool-root",
             "ready",
-            vec![ParallelModePoolSlotSnapshot::new(
-                "slot-1",
-                pool_state,
-                "akra-agent/slot-1/task-1",
-                "slot-1",
-                "agent-one / task-1",
-            )],
+            vec![
+                ParallelModePoolSlotSnapshot::new(
+                    "slot-1",
+                    pool_state,
+                    "akra-agent/slot-1/task-1",
+                    "slot-1",
+                    "agent-one / task-1",
+                )
+                .with_owner_identity(
+                    "agent-one",
+                    "task-1",
+                    "session-one",
+                    Some("a".repeat(64)),
+                ),
+            ],
         );
         supervisor.roster = ParallelModeAgentRosterSnapshot::new(
             vec![
@@ -1867,6 +1981,14 @@ mod tests {
         assert_eq!(pool.slots[0].display_slot_label, "슬롯 1");
         assert_eq!(pool.slots[0].owner_agent_id.as_deref(), Some("agent-one"));
         assert_eq!(pool.slots[0].task_id.as_deref(), Some("task-1"));
+        assert_eq!(
+            pool.slots[0].owner_session_key.as_deref(),
+            Some("session-one")
+        );
+        assert_eq!(
+            pool.slots[0].lease_generation.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
         assert_eq!(pool.slots[0].note, "agent-one / task-1 / slot-1");
         assert_eq!(pool.slots[0].bubble_label, "검수 통과");
         assert_eq!(pool.slots[1].owner_agent_id, None);
@@ -2078,6 +2200,116 @@ mod tests {
     }
 
     #[test]
+    fn game_scene_requires_exact_station_owner_and_roster_lease_identity() {
+        let base = scene_supervisor("running", ParallelModePoolSlotState::Running);
+
+        let mut missing_owner = base.clone();
+        missing_owner.pool.slots[0].owner_identity = None;
+        let scene = map_game_scene(&missing_owner, &profile_config());
+        assert!(scene.actors.is_empty());
+        assert_eq!(scene.diagnostics[0].code, "missing_station_owner_identity");
+
+        let cases = [
+            ("agent", "station_owner_agent_mismatch"),
+            ("task", "station_owner_task_mismatch"),
+            ("session", "station_owner_session_mismatch"),
+            ("generation", "station_owner_lease_generation_mismatch"),
+        ];
+        for (field, expected_code) in cases {
+            let mut supervisor = base.clone();
+            let owner = supervisor.pool.slots[0]
+                .owner_identity
+                .as_mut()
+                .expect("scene fixture should have typed station ownership");
+            match field {
+                "agent" => owner.agent_id = "other-agent".to_string(),
+                "task" => owner.task_id = "other-task".to_string(),
+                "session" => owner.session_key = "other-session".to_string(),
+                "generation" => owner.lease_generation = Some("b".repeat(64)),
+                _ => unreachable!(),
+            }
+            let scene = map_game_scene(&supervisor, &profile_config());
+            assert!(scene.actors.is_empty(), "{field}");
+            assert_eq!(scene.diagnostics[0].code, expected_code, "{field}");
+        }
+
+        let missing_cases = [
+            ("station_agent", "missing_station_owner_agent_id"),
+            ("roster_agent", "missing_roster_agent_id"),
+            ("station_task", "missing_station_owner_task_id"),
+            ("roster_task", "missing_roster_task_id"),
+            ("station_session", "missing_station_owner_session_key"),
+            ("roster_session", "missing_roster_session_key"),
+            ("station_generation", "missing_lease_generation"),
+            ("roster_generation", "missing_lease_generation"),
+        ];
+        for (field, expected_code) in missing_cases {
+            let mut supervisor = base.clone();
+            match field {
+                "station_agent" => supervisor.pool.slots[0]
+                    .owner_identity
+                    .as_mut()
+                    .expect("scene fixture should have typed station ownership")
+                    .agent_id
+                    .clear(),
+                "roster_agent" => supervisor.roster.entries[0].agent_id.clear(),
+                "station_task" => supervisor.pool.slots[0]
+                    .owner_identity
+                    .as_mut()
+                    .expect("scene fixture should have typed station ownership")
+                    .task_id
+                    .clear(),
+                "roster_task" => supervisor.roster.entries[0]
+                    .lease_identity
+                    .as_mut()
+                    .expect("scene fixture should have typed roster identity")
+                    .task_id
+                    .clear(),
+                "station_session" => supervisor.pool.slots[0]
+                    .owner_identity
+                    .as_mut()
+                    .expect("scene fixture should have typed station ownership")
+                    .session_key
+                    .clear(),
+                "roster_session" => supervisor.roster.entries[0]
+                    .lease_identity
+                    .as_mut()
+                    .expect("scene fixture should have typed roster identity")
+                    .session_key
+                    .clear(),
+                "station_generation" => {
+                    supervisor.pool.slots[0]
+                        .owner_identity
+                        .as_mut()
+                        .expect("scene fixture should have typed station ownership")
+                        .lease_generation = Some(String::new())
+                }
+                "roster_generation" => {
+                    supervisor.roster.entries[0]
+                        .lease_identity
+                        .as_mut()
+                        .expect("scene fixture should have typed roster identity")
+                        .lease_generation = Some(String::new())
+                }
+                _ => unreachable!(),
+            }
+            let scene = map_game_scene(&supervisor, &profile_config());
+            assert!(scene.actors.is_empty(), "{field}");
+            assert_eq!(scene.diagnostics[0].code, expected_code, "{field}");
+        }
+
+        let mut missing_generation = base;
+        missing_generation.pool.slots[0]
+            .owner_identity
+            .as_mut()
+            .expect("scene fixture should have typed station ownership")
+            .lease_generation = None;
+        let scene = map_game_scene(&missing_generation, &profile_config());
+        assert!(scene.actors.is_empty());
+        assert_eq!(scene.diagnostics[0].code, "missing_lease_generation");
+    }
+
+    #[test]
     fn campaign_attempts_fall_back_to_distributor_queue_then_runtime_events() {
         let mut supervisor = rich_supervisor_snapshot();
         supervisor.detail = ParallelModeSupervisorDetailSnapshot::new(None, "no detail");
@@ -2106,19 +2338,6 @@ mod tests {
 
     #[test]
     fn dashboard_copy_helpers_cover_status_progress_and_severity_edges() {
-        assert_eq!(
-            parse_owner_label(" agent-one / task-1 "),
-            (Some("agent-one".to_string()), Some("task-1".to_string()))
-        );
-        assert_eq!(
-            parse_owner_label(" - / task-2 "),
-            (None, Some("task-2".to_string()))
-        );
-        assert_eq!(
-            parse_owner_label("agent-only"),
-            (Some("agent-only".to_string()), None)
-        );
-
         let blank_owner_slot = ParallelModePoolSlotSnapshot::new(
             "slot-x",
             ParallelModePoolSlotState::Idle,
@@ -2132,10 +2351,10 @@ mod tests {
         assert_eq!(agent_status("failed"), "blocked");
         assert_eq!(agent_status("cleanup_pending"), "cleanup");
         assert_eq!(agent_status("assigned"), "running");
-        assert_eq!(agent_status("unknown"), "idle");
+        assert_eq!(agent_status("unknown"), "unknown");
         assert_eq!(agent_bubble("official_refresh_recovery_needed"), "차단됨");
         assert_eq!(agent_bubble("cleanup_pending"), "정리중");
-        assert_eq!(agent_bubble("unknown"), "대기중");
+        assert_eq!(agent_bubble("unknown"), "상태 확인 필요");
 
         assert_eq!(progress_label("running"), "미집계");
 
@@ -2427,7 +2646,17 @@ mod tests {
         assert_eq!(feed.visible_event_count, 1);
         assert_eq!(feed.status_label, "LIVE · 최근 1개 · 총 50개");
         assert_eq!(feed.newest_sequence, Some(42));
+        assert_eq!(feed.event_cursor, Some(42));
+        assert_eq!(feed.event_cursor_data, "42");
         assert!(feed.incremental);
+
+        let unknown_cursor = map_event_feed(
+            &ParallelModeRuntimeEventsSnapshot::empty("empty"),
+            50,
+            false,
+        );
+        assert_eq!(unknown_cursor.event_cursor, None);
+        assert!(unknown_cursor.event_cursor_data.is_empty());
 
         let event = map_runtime_event(&snapshot.entries[0]);
         assert_eq!(event.icon, "event");

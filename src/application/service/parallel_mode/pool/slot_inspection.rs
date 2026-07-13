@@ -60,7 +60,8 @@ pub(super) fn inspect_pool_slot(
                     "lease exists but worktree is missing",
                 ),
                 slot_lease.owner_label(),
-            );
+            )
+            .with_owner_identity_from_lease(slot_lease);
         }
         if slot_path.exists() {
             return ParallelModePoolSlotSnapshot::new(
@@ -88,16 +89,19 @@ pub(super) fn inspect_pool_slot(
         untracked 파일을 품고 있는지 알 수 없다. unknown 상태에서 idle이나 cleanup-ready로 분류하면
         reset/clean 같은 destructive 작업으로 이어질 수 있으므로 Blocked를 반환한다.
         */
-        return ParallelModePoolSlotSnapshot::new(
-            slot_id,
-            ParallelModePoolSlotState::Blocked,
-            slot_lease
-                .map(|lease| lease.branch_name.clone())
-                .unwrap_or_else(|| "unknown".to_string()),
-            annotate_worktree_label(base_worktree_label, "git status inspection failed"),
-            slot_lease
-                .map(ParallelModeSlotLeaseSnapshot::owner_label)
-                .unwrap_or_else(|| "operator recovery".to_string()),
+        return preserve_slot_owner_identity(
+            ParallelModePoolSlotSnapshot::new(
+                slot_id,
+                ParallelModePoolSlotState::Blocked,
+                slot_lease
+                    .map(|lease| lease.branch_name.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                annotate_worktree_label(base_worktree_label, "git status inspection failed"),
+                slot_lease
+                    .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                    .unwrap_or_else(|| "operator recovery".to_string()),
+            ),
+            slot_lease,
         );
     };
     if worktree_record.branch_name.as_deref() == Some(baseline_branch.as_str())
@@ -121,7 +125,8 @@ pub(super) fn inspect_pool_slot(
                 branch_label,
                 annotate_worktree_label(base_worktree_label, "lease exists on idle baseline"),
                 slot_lease.owner_label(),
-            );
+            )
+            .with_owner_identity_from_lease(slot_lease);
         }
         return if slot_status.is_clean_baseline() {
             /*
@@ -161,14 +166,17 @@ pub(super) fn inspect_pool_slot(
                 중인 worktree는 commit graph가 아직 안정되지 않았고, cleanup readiness나 owner
                 상태보다 먼저 수동 복구가 필요하다.
                 */
-                return ParallelModePoolSlotSnapshot::new(
-                    slot_id,
-                    ParallelModePoolSlotState::Blocked,
-                    branch_name,
-                    annotate_worktree_label(base_worktree_label, &slot_status.detail_label()),
-                    slot_lease
-                        .map(ParallelModeSlotLeaseSnapshot::owner_label)
-                        .unwrap_or_else(|| "operator recovery".to_string()),
+                return preserve_slot_owner_identity(
+                    ParallelModePoolSlotSnapshot::new(
+                        slot_id,
+                        ParallelModePoolSlotState::Blocked,
+                        branch_name,
+                        annotate_worktree_label(base_worktree_label, &slot_status.detail_label()),
+                        slot_lease
+                            .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                            .unwrap_or_else(|| "operator recovery".to_string()),
+                    ),
+                    slot_lease,
                 );
             }
             let worktree_clean = slot_status.is_clean_baseline();
@@ -237,7 +245,8 @@ pub(super) fn inspect_pool_slot(
                         "lease branch does not match worktree branch",
                     ),
                     slot_lease.owner_label(),
-                );
+                )
+                .with_owner_identity_from_lease(slot_lease);
             }
             if !worktree_paths_match(Path::new(&slot_lease.worktree_path), &slot_path) {
                 /*
@@ -254,7 +263,8 @@ pub(super) fn inspect_pool_slot(
                         "lease worktree path does not match slot path",
                     ),
                     slot_lease.owner_label(),
-                );
+                )
+                .with_owner_identity_from_lease(slot_lease);
             }
             return ParallelModePoolSlotSnapshot::from_lease(
                 slot_id,
@@ -275,14 +285,17 @@ pub(super) fn inspect_pool_slot(
         사용자가 수동으로 checkout한 상태일 수 있다. 둘 다 자동 reset 대상이 아니므로 Blocked로
         표시한다.
         */
-        return ParallelModePoolSlotSnapshot::new(
-            slot_id,
-            ParallelModePoolSlotState::Blocked,
-            branch_name,
-            annotate_worktree_label(base_worktree_label, detail),
-            slot_lease
-                .map(ParallelModeSlotLeaseSnapshot::owner_label)
-                .unwrap_or_else(|| "operator recovery".to_string()),
+        return preserve_slot_owner_identity(
+            ParallelModePoolSlotSnapshot::new(
+                slot_id,
+                ParallelModePoolSlotState::Blocked,
+                branch_name,
+                annotate_worktree_label(base_worktree_label, detail),
+                slot_lease
+                    .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                    .unwrap_or_else(|| "operator recovery".to_string()),
+            ),
+            slot_lease,
         );
     }
     let detached_label = format!("detached@{}", short_sha(&worktree_record.head_sha));
@@ -291,18 +304,31 @@ pub(super) fn inspect_pool_slot(
     수동 checkout, 실패한 reset 등 여러 원인이 가능하지만 자동으로 어떤 commit인지 해석하지 않는다.
     short sha를 label로 노출해 운영자가 실제 commit을 확인하게 한다.
     */
-    ParallelModePoolSlotSnapshot::new(
-        slot_id,
-        ParallelModePoolSlotState::Blocked,
-        detached_label,
-        annotate_worktree_label(
-            base_worktree_label,
-            &format!("detached away from `{}` baseline", baseline_branch),
+    preserve_slot_owner_identity(
+        ParallelModePoolSlotSnapshot::new(
+            slot_id,
+            ParallelModePoolSlotState::Blocked,
+            detached_label,
+            annotate_worktree_label(
+                base_worktree_label,
+                &format!("detached away from `{}` baseline", baseline_branch),
+            ),
+            slot_lease
+                .map(ParallelModeSlotLeaseSnapshot::owner_label)
+                .unwrap_or_else(|| "operator recovery".to_string()),
         ),
-        slot_lease
-            .map(ParallelModeSlotLeaseSnapshot::owner_label)
-            .unwrap_or_else(|| "operator recovery".to_string()),
+        slot_lease,
     )
+}
+
+fn preserve_slot_owner_identity(
+    snapshot: ParallelModePoolSlotSnapshot,
+    slot_lease: Option<&ParallelModeSlotLeaseSnapshot>,
+) -> ParallelModePoolSlotSnapshot {
+    match slot_lease {
+        Some(lease) => snapshot.with_owner_identity_from_lease(lease),
+        None => snapshot,
+    }
 }
 
 /*
@@ -495,4 +521,43 @@ fn non_merged_orphan_slot_branch_notice(slot_id: &str, branch_name: &str) -> Str
     format!(
         "{slot_id} branch `{branch_name}` is not integrated into the configured integration branch and has no lease metadata / next action: {NON_MERGED_SLOT_BRANCH_WITHOUT_LEASE_NEXT_ACTION}"
     )
+}
+
+#[cfg(test)]
+mod owner_identity_tests {
+    use super::*;
+    use crate::domain::parallel_mode::ParallelModeSlotLeaseState;
+
+    #[test]
+    fn blocked_slot_projection_keeps_typed_lease_owner_identity() {
+        let lease = ParallelModeSlotLeaseSnapshot::new(
+            "slot-1",
+            "task-1",
+            "Task One",
+            "agent-1",
+            "akra-agent/slot-1/task-1",
+            "/tmp/slot-1",
+            ParallelModeSlotLeaseState::Running,
+            "2026-07-13T00:00:00Z",
+            Some("2026-07-13T00:00:01Z".to_string()),
+        )
+        .with_lease_generation("a".repeat(64));
+        let snapshot = ParallelModePoolSlotSnapshot::new(
+            "slot-1",
+            ParallelModePoolSlotState::Blocked,
+            lease.branch_name.clone(),
+            "lease exists but worktree is missing",
+            lease.owner_label(),
+        );
+
+        let projected = preserve_slot_owner_identity(snapshot, Some(&lease));
+        let owner = projected
+            .owner_identity
+            .expect("blocked lease-backed slot must retain typed identity");
+
+        assert_eq!(owner.agent_id, "agent-1");
+        assert_eq!(owner.task_id, "task-1");
+        assert_eq!(owner.session_key, lease.session_key());
+        assert_eq!(owner.lease_generation, lease.lease_generation);
+    }
 }

@@ -1679,6 +1679,7 @@
   data-admin-graphic
   data-poll-interval-ms="{{ polling_interval_ms }}"
   data-latest-event-sequence="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
+  data-event-cursor="{{ dashboard.event_feed.event_cursor_data }}"
   data-event-total-count="{{ dashboard.event_feed.total_event_count }}"
 >
   <div class="draft-topbar" aria-label="게임발전국 operation summary">
@@ -1749,6 +1750,12 @@
           data-detail-branch="{{ slot.branch_name }}"
           data-detail-worktree="{{ slot.worktree_label }}"
           data-detail-owner="{{ slot.owner_label }}"
+          data-owner-agent-id="{{ slot.owner_agent_id.as_deref().unwrap_or("") }}"
+          data-owner-session-key="{{ slot.owner_session_key.as_deref().unwrap_or("") }}"
+          data-lease-generation="{{ slot.lease_generation.as_deref().unwrap_or("") }}"
+          data-detail-owner-agent="{{ slot.owner_agent_id.as_deref().unwrap_or("-") }}"
+          data-detail-owner-session="{{ slot.owner_session_key.as_deref().unwrap_or("-") }}"
+          data-detail-lease-generation="{{ slot.lease_generation.as_deref().unwrap_or("-") }}"
           data-detail-note="{{ slot.note }}"
           title="{{ slot.display_slot_label }} · {{ slot.label }} · task {{ slot.task_id.as_deref().unwrap_or("-") }} · branch {{ slot.branch_name }} · worktree {{ slot.worktree_label }} · owner {{ slot.owner_label }} · note {{ slot.note }}"
         >
@@ -1786,7 +1793,7 @@
           <span>MISSION FLOW</span>
           <strong>{{ dashboard.campaign.active_lane_count }} lanes</strong>
           <small data-stage-summary>{{ dashboard.distributor.barrier_state }} · {{ dashboard.event_feed.total_event_count }} signals</small>
-          <small data-planning-revision>rev {{ dashboard.planning_revision }}</small>
+          <small data-planning-revision>{{ dashboard.planning_revision_label }}</small>
           <button type="button" class="stage-refresh-btn" data-refresh-dashboard aria-label="Refresh dashboard snapshot" title="Refresh dashboard snapshot">R</button>
         </div>
 

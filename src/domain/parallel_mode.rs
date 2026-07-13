@@ -424,6 +424,18 @@ pub struct ParallelModePoolSlotSnapshot {
     pub branch_name: String,
     pub worktree_label: String,
     pub owner_label: String,
+    // Machine-readable lease ownership must survive the pool projection. The
+    // display label remains for compact TUI copy, but inbound adapters must not
+    // parse it to recover authority identity.
+    pub owner_identity: Option<ParallelModePoolSlotOwnerIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModePoolSlotOwnerIdentity {
+    pub agent_id: String,
+    pub task_id: String,
+    pub session_key: String,
+    pub lease_generation: Option<String>,
 }
 
 impl ParallelModePoolSlotSnapshot {
@@ -440,7 +452,33 @@ impl ParallelModePoolSlotSnapshot {
             branch_name: branch_name.into(),
             worktree_label: worktree_label.into(),
             owner_label: owner_label.into(),
+            owner_identity: None,
         }
+    }
+
+    pub fn with_owner_identity(
+        mut self,
+        agent_id: impl Into<String>,
+        task_id: impl Into<String>,
+        session_key: impl Into<String>,
+        lease_generation: Option<String>,
+    ) -> Self {
+        self.owner_identity = Some(ParallelModePoolSlotOwnerIdentity {
+            agent_id: agent_id.into(),
+            task_id: task_id.into(),
+            session_key: session_key.into(),
+            lease_generation,
+        });
+        self
+    }
+
+    pub fn with_owner_identity_from_lease(self, lease: &ParallelModeSlotLeaseSnapshot) -> Self {
+        self.with_owner_identity(
+            lease.agent_id.clone(),
+            lease.task_id.clone(),
+            lease.session_key(),
+            lease.lease_generation.clone(),
+        )
     }
 
     // lease snapshot에서 온 행은 lease 생명주기를 board 상태로 변환한다. 이 변환은
@@ -458,6 +496,7 @@ impl ParallelModePoolSlotSnapshot {
             worktree_label,
             lease.owner_label(),
         )
+        .with_owner_identity_from_lease(lease)
     }
 }
 

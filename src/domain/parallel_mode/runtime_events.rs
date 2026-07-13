@@ -54,6 +54,10 @@ impl ParallelModeRuntimeEventEntry {
 pub struct ParallelModeRuntimeEventsSnapshot {
     // Entries are ordered newest-first by the port adapter.
     pub entries: Vec<ParallelModeRuntimeEventEntry>,
+    // Monotonic authority cursor for the whole runtime event stream. This is
+    // independent of the requested page/filter, so an empty incremental page
+    // does not erase the caller's observation version.
+    pub event_cursor: Option<i64>,
     // Total matching event count before the request limit is applied.
     pub total_event_count: usize,
     // Copy shown when no event rows are visible.
@@ -66,11 +70,18 @@ impl ParallelModeRuntimeEventsSnapshot {
         total_event_count: usize,
         empty_state: impl Into<String>,
     ) -> Self {
+        let event_cursor = entries.iter().map(|entry| entry.sequence).max();
         Self {
             entries,
+            event_cursor,
             total_event_count,
             empty_state: empty_state.into(),
         }
+    }
+
+    pub fn with_event_cursor(mut self, event_cursor: Option<i64>) -> Self {
+        self.event_cursor = event_cursor;
+        self
     }
 
     pub fn empty(empty_state: impl Into<String>) -> Self {
