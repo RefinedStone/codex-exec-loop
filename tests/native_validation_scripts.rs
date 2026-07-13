@@ -2410,8 +2410,7 @@ printf '200'
     );
 
     let run = |api_token: &str| {
-        let bash = if cfg!(unix) { "/bin/bash" } else { "bash" };
-        Command::new(bash)
+        Command::new("/bin/bash")
             .arg(repo_root().join("scripts/gh-akra.sh"))
             .args(["auth", "write-status"])
             .current_dir(&repo)
