@@ -38,6 +38,7 @@ breadth, tool count, or UI surface count into the product goal.
 | [jcode](jcode/analysis.md) | v0.43.0, `649276753ae11948759192c067dfc4c90fafd47f` | current as of 2026-07-12 (Asia/Seoul) | native TUI performance, multi-session runtime, memory, swarm |
 | [Agent Canvas](agent-canvas/analysis.md) | v1.2.1, `56d51c0767fb6fedc51c466f5138fdfc116a2707` | current as of 2026-07-12 (Asia/Seoul) | browser session inspection, remote backends, durable automation |
 | [OpenCode](opencode/analysis.md) | v1.17.18, `b1fc8113948b518835c2a39ece49553cffe9b30c` | current as of 2026-07-12 (Asia/Seoul) | broad TUI/server/desktop surface, attach continuity, permissions, GitHub automation |
+| [Orca](orca/analysis.md) | v1.4.137, `6013055491943336660e12e5dec93c9ece4575bb` | current as of 2026-07-14 (Asia/Seoul) | worktree-native agent fleet UX, external reconciliation, terminal continuity, and safe retirement |
 
 Next research order:
 

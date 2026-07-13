@@ -83,6 +83,12 @@ product and safety contract; it must declare its status and be compressed into c
 - [competitive/opencode/gap-matrix.md](competitive/opencode/gap-matrix.md): Akra-relative adoption
   boundaries, attach/recovery and permission/secret lessons, reviewed-delivery differentiation, and
   dependency-aware session/TUI amendments
+- [competitive/orca/analysis.md](competitive/orca/analysis.md): Orca v1.4.137 worktree lifecycle,
+  terminal/session continuity, hosted review, recovery, and trust-boundary deep dive
+- [competitive/orca/evidence.md](competitive/orca/evidence.md): installed artifact identity,
+  immutable source ledger, sanitized runtime inventory, Akra baseline, and audit limits
+- [competitive/orca/gap-matrix.md](competitive/orca/gap-matrix.md): repository-wide worktree
+  portfolio adoption, worktree-as-sandbox rejection, and reviewed-delivery differentiation
 
 ## Implemented Surfaces
 
