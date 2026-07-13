@@ -19,7 +19,7 @@ use crate::domain::parallel_mode::{
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
@@ -1874,6 +1874,235 @@ fn sync_resize_race_uses_one_stable_geometry_snapshot() {
 }
 
 #[test]
+fn resize_after_stability_snapshot_defers_history_mutation() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("bottom-anchored inline terminal should initialize");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+    inline_terminal.history_flush.visible_history_rows = 30;
+    append_history_message(runtime.app_mut(), "post-snapshot resize history");
+    let rendered_lines = inline_terminal.history_flush.rendered_lines.clone();
+    let appended_lines = terminal.backend_mut().inner().appended_lines();
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .report_resize_after_size_queries(4, 48, 10);
+
+    assert!(!sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(
+        terminal.backend_mut().inner().appended_lines(),
+        appended_lines
+    );
+    assert_eq!(inline_terminal.history_flush.visible_history_rows, 30);
+    assert_eq!(inline_terminal.history_flush.rendered_lines, rendered_lines);
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(80, 40))
+    );
+    assert!(!inline_terminal.back_buffer_trustworthy());
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(48, 10))
+    );
+    assert_eq!(
+        terminal.backend_mut().inner().appended_lines(),
+        appended_lines
+    );
+    assert!(
+        inline_terminal
+            .history_flush
+            .rendered_lines
+            .iter()
+            .any(|line| line.to_string().contains("post-snapshot resize history"))
+    );
+}
+
+#[test]
+fn resize_after_history_insertion_commits_once_and_marks_row_accounting_dirty() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("bottom-anchored inline terminal should initialize");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    append_history_message(&mut app, "stable baseline history");
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+    inline_terminal.history_flush.visible_history_rows = 5;
+    append_history_message(runtime.app_mut(), "resize-during-insert history");
+    let scroll_region_up_count = terminal.backend_mut().inner().scroll_region_up_count();
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .resize_after_next_scroll_region_up(48, 40);
+
+    assert!(!sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    let committed_visible_rows = inline_terminal.history_flush.visible_history_rows;
+    assert!(committed_visible_rows > 5);
+    assert!(inline_terminal.history_flush.visible_history_rows_dirty);
+    assert!(
+        inline_terminal
+            .history_flush
+            .rendered_lines
+            .iter()
+            .any(|line| line.to_string().contains("resize-during-insert history"))
+    );
+    assert_eq!(
+        terminal.backend_mut().inner().scroll_region_up_count(),
+        scroll_region_up_count + 1
+    );
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(80, 40))
+    );
+    assert!(!inline_terminal.back_buffer_trustworthy());
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(48, 40))
+    );
+    assert!(!inline_terminal.history_flush.visible_history_rows_dirty);
+    assert_eq!(
+        inline_terminal.history_flush.visible_history_rows,
+        committed_visible_rows
+    );
+    assert_eq!(
+        terminal.backend_mut().inner().scroll_region_up_count(),
+        scroll_region_up_count + 1,
+        "a completed insertion must not replay after resize reconciliation"
+    );
+    assert!(
+        inline_terminal
+            .history_flush
+            .rendered_lines
+            .iter()
+            .any(|line| line.to_string().contains("resize-during-insert history"))
+    );
+}
+
+#[test]
+fn coalesced_shrink_restore_event_invalidates_cursor_and_history_accounting() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("bottom-anchored inline terminal should initialize");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+    inline_terminal.history_flush.visible_history_rows = 30;
+    let cursor_queries = terminal.backend_mut().inner().cursor_query_count();
+    let appended_lines = terminal.backend_mut().inner().appended_lines();
+
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .resize_and_clamp_cursor(48, 10);
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .resize_and_clamp_cursor(80, 40);
+    runtime.handle_terminal_event(Event::Resize(48, 10));
+    runtime.handle_terminal_event(Event::Resize(80, 40));
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(runtime.terminal_resize_epoch(), 2);
+    assert_eq!(
+        terminal.backend_mut().inner().cursor_query_count(),
+        cursor_queries + 1,
+        "coalesced resize events must invalidate the same-size cursor cache"
+    );
+    assert_eq!(
+        terminal.backend_mut().inner().appended_lines(),
+        appended_lines
+    );
+    assert_eq!(inline_terminal.history_flush.visible_history_rows, 24);
+    assert!(!inline_terminal.back_buffer_trustworthy());
+}
+
+#[test]
+fn autoresize_retries_sampled_shrink_restore_before_history_mutation() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("bottom-anchored inline terminal should initialize");
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    draw_test_frame(&mut terminal, &mut runtime, &mut inline_terminal);
+    inline_terminal.history_flush.visible_history_rows = 30;
+    let appended_lines = terminal.backend_mut().inner().appended_lines();
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .report_resize_then_restore(2, Size::new(48, 10), 3, Size::new(80, 40));
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert_eq!(
+        terminal.backend_mut().inner().appended_lines(),
+        appended_lines
+    );
+    assert_eq!(
+        inline_terminal.last_known_screen_size(),
+        Some(Size::new(80, 40))
+    );
+    let viewport_area = inline_terminal
+        .viewport_area()
+        .expect("restored viewport should be recorded");
+    assert_eq!(viewport_area.width, 80);
+    assert_eq!(viewport_area.height, 16);
+    assert!(viewport_area.bottom() <= 40);
+    assert_eq!(
+        inline_terminal.history_flush.visible_history_rows,
+        viewport_area.top()
+    );
+    assert!(!inline_terminal.back_buffer_trustworthy());
+}
+
+#[test]
 fn unstable_resize_does_not_spin_or_mutate_history_accounting() {
     let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
     inner
@@ -2316,10 +2545,13 @@ struct CursorQueryCountingBackend {
     inner: TestBackend,
     cursor_query_count: usize,
     appended_lines: u16,
+    scroll_region_up_count: usize,
     resize_on_flush: Option<Size>,
     size_query_count: StdCell<usize>,
     reported_size: StdCell<Option<Size>>,
     resize_on_size_query: StdCell<Option<(usize, Size)>>,
+    restore_on_size_query: StdCell<Option<(usize, Size)>>,
+    resize_after_scroll_region_up: Option<Size>,
     changing_sizes_start: StdCell<Option<usize>>,
 }
 impl CursorQueryCountingBackend {
@@ -2328,10 +2560,13 @@ impl CursorQueryCountingBackend {
             inner,
             cursor_query_count: 0,
             appended_lines: 0,
+            scroll_region_up_count: 0,
             resize_on_flush: None,
             size_query_count: StdCell::new(0),
             reported_size: StdCell::new(None),
             resize_on_size_query: StdCell::new(None),
+            restore_on_size_query: StdCell::new(None),
+            resize_after_scroll_region_up: None,
             changing_sizes_start: StdCell::new(None),
         }
     }
@@ -2340,6 +2575,9 @@ impl CursorQueryCountingBackend {
     }
     fn appended_lines(&self) -> u16 {
         self.appended_lines
+    }
+    fn scroll_region_up_count(&self) -> usize {
+        self.scroll_region_up_count
     }
     fn resize_and_clamp_cursor(&mut self, width: u16, height: u16) {
         let cursor = self
@@ -2362,6 +2600,26 @@ impl CursorQueryCountingBackend {
             self.size_query_count.get() + query_count,
             Size::new(width, height),
         )));
+    }
+    fn report_resize_then_restore(
+        &mut self,
+        resize_query_count: usize,
+        resize_size: Size,
+        restore_query_count: usize,
+        restore_size: Size,
+    ) {
+        let current_query_count = self.size_query_count.get();
+        self.resize_on_size_query.set(Some((
+            current_query_count + resize_query_count,
+            resize_size,
+        )));
+        self.restore_on_size_query.set(Some((
+            current_query_count + restore_query_count,
+            restore_size,
+        )));
+    }
+    fn resize_after_next_scroll_region_up(&mut self, width: u16, height: u16) {
+        self.resize_after_scroll_region_up = Some(Size::new(width, height));
     }
     fn current_reported_size(&self) -> Size {
         self.reported_size
@@ -2428,6 +2686,12 @@ impl Backend for CursorQueryCountingBackend {
             self.reported_size.set(Some(size));
             self.resize_on_size_query.set(None);
         }
+        if let Some((trigger_query, size)) = self.restore_on_size_query.get()
+            && query_count >= trigger_query
+        {
+            self.reported_size.set(Some(size));
+            self.restore_on_size_query.set(None);
+        }
         Ok(self.current_reported_size())
     }
     fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
@@ -2441,7 +2705,12 @@ impl Backend for CursorQueryCountingBackend {
         Ok(())
     }
     fn scroll_region_up(&mut self, region: Range<u16>, line_count: u16) -> Result<(), Self::Error> {
-        self.inner.scroll_region_up(region, line_count)
+        self.scroll_region_up_count = self.scroll_region_up_count.saturating_add(1);
+        self.inner.scroll_region_up(region, line_count)?;
+        if let Some(size) = self.resize_after_scroll_region_up.take() {
+            self.resize_and_clamp_cursor(size.width, size.height);
+        }
+        Ok(())
     }
     fn scroll_region_down(
         &mut self,

@@ -2,6 +2,7 @@ use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::app::{InlineHistoryRenderMode, MAX_CONVERSATION_HISTORY_LINES};
 
+use super::super::backend::InlineResizeBackend;
 use super::super::{HistoryFlushState, HistoryInsertionMode};
 use super::tui_testkit;
 
@@ -27,6 +28,7 @@ fn pending_lines_returns_only_new_suffix_for_appended_history() {
         ],
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
+        visible_history_rows_dirty: false,
     };
     let current_lines = vec![
         Line::from("User:"),
@@ -64,6 +66,7 @@ fn pending_lines_replays_full_history_after_reset() {
         ],
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
+        visible_history_rows_dirty: false,
     };
     let current_lines = vec![
         Line::from("Status:"),
@@ -89,6 +92,7 @@ fn pending_lines_only_inserts_new_suffix_for_shifted_history_window() {
             .collect(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
+        visible_history_rows_dirty: false,
     };
     let current_lines = (3..MAX_CONVERSATION_HISTORY_LINES + 3)
         .map(|idx| Line::from(format!("line {idx}")))
@@ -119,6 +123,7 @@ fn pending_lines_only_inserts_new_suffix_when_history_first_hits_cap() {
             .collect(),
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
+        visible_history_rows_dirty: false,
     };
     let current_lines = (10..MAX_CONVERSATION_HISTORY_LINES + 10)
         .map(|idx| Line::from(format!("line {idx}")))
@@ -153,6 +158,7 @@ fn pending_lines_does_not_treat_small_overlap_as_shifted_history() {
         ],
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
+        visible_history_rows_dirty: false,
     };
     let current_lines = vec![
         Line::from("Status:"),
@@ -190,6 +196,7 @@ fn pending_lines_does_not_shift_uncapped_history_window_even_with_large_overlap(
         ],
         pending_history_lines: Vec::new(),
         visible_history_rows: 0,
+        visible_history_rows_dirty: false,
     };
     let current_lines = vec![
         Line::from("Status:"),
@@ -226,11 +233,13 @@ fn history_sync_reports_insertions_that_need_viewport_redraw() {
         Line::from(""),
     ];
 
+    let snapshot = terminal.backend().resize_snapshot().unwrap();
     assert!(
         state
             .sync(
                 &mut terminal,
                 &current_lines,
+                snapshot,
                 HistoryInsertionMode::StandardScrollRegion,
             )
             .unwrap()
@@ -238,11 +247,13 @@ fn history_sync_reports_insertions_that_need_viewport_redraw() {
     );
 
     // Repeating the same model must be a no-op after the baseline is refreshed.
+    let snapshot = terminal.backend().resize_snapshot().unwrap();
     assert!(
         !state
             .sync(
                 &mut terminal,
                 &current_lines,
+                snapshot,
                 HistoryInsertionMode::StandardScrollRegion,
             )
             .unwrap()
@@ -258,11 +269,13 @@ fn history_sync_reports_insertions_that_need_viewport_redraw() {
         Line::from("  first answer"),
         Line::from(""),
     ];
+    let snapshot = terminal.backend().resize_snapshot().unwrap();
     assert!(
         state
             .sync(
                 &mut terminal,
                 &appended_lines,
+                snapshot,
                 HistoryInsertionMode::StandardScrollRegion,
             )
             .unwrap()
@@ -291,13 +304,16 @@ fn history_sync_for_empty_thread_clears_remembered_history_without_insert() {
         ],
         pending_history_lines: Vec::new(),
         visible_history_rows: 6,
+        visible_history_rows_dirty: false,
     };
 
+    let snapshot = terminal.backend().resize_snapshot().unwrap();
     assert!(
         !state
             .sync(
                 &mut terminal,
                 &[],
+                snapshot,
                 HistoryInsertionMode::StandardScrollRegion,
             )
             .unwrap()

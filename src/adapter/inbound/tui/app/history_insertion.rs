@@ -7,6 +7,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
+use super::inline_terminal_adapter::backend::{InlineResizeBackend, InlineResizeSnapshot};
+
 /*
  * Inline history insertion moves completed transcript rows into the host
  * scrollback while the live shell viewport stays on screen. The normal path uses
@@ -69,6 +71,28 @@ impl HistoryInsertionMode {
 pub(super) struct HistoryInsertionAdapter {
     mode: HistoryInsertionMode,
 }
+
+/*
+ * `completed` means every backend operation for the selected insertion strategy returned
+ * successfully. Geometry can still change immediately afterward; callers then commit the
+ * transcript at-most-once while deferring only visible-row accounting.
+ */
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct GuardedHistoryInsertionResult {
+    completed: bool,
+    stable_geometry: bool,
+}
+
+impl GuardedHistoryInsertionResult {
+    pub(super) fn completed(self) -> bool {
+        self.completed
+    }
+
+    pub(super) fn stable_geometry(self) -> bool {
+        self.stable_geometry
+    }
+}
+
 impl HistoryInsertionAdapter {
     pub(super) fn new(mode: HistoryInsertionMode) -> Self {
         Self { mode }
@@ -90,6 +114,7 @@ impl HistoryInsertionAdapter {
         let rendered_rows = count_rendered_history_rows(lines, width).min(u16::MAX as usize) as u16;
         self.insert_with_rendered_rows(terminal, lines, rendered_rows)
     }
+    #[cfg(test)]
     pub(super) fn insert_with_rendered_rows<B: Backend>(
         self,
         terminal: &mut Terminal<B>,
@@ -119,6 +144,46 @@ impl HistoryInsertionAdapter {
         };
         restore_cursor(terminal, cursor)?;
         result
+    }
+
+    pub(super) fn insert_with_rendered_rows_at_snapshot<B: InlineResizeBackend>(
+        self,
+        terminal: &mut Terminal<B>,
+        lines: &[Line<'static>],
+        rendered_rows: u16,
+        expected: InlineResizeSnapshot,
+    ) -> Result<GuardedHistoryInsertionResult, B::Error> {
+        if !terminal.backend().matches_resize_snapshot(expected)? {
+            return Ok(GuardedHistoryInsertionResult::default());
+        }
+        let width = expected.size.width;
+        if width == 0 || rendered_rows == 0 {
+            return Ok(GuardedHistoryInsertionResult {
+                completed: true,
+                stable_geometry: true,
+            });
+        }
+        let cursor = terminal.get_cursor_position()?;
+        if !terminal.backend().matches_resize_snapshot(expected)? {
+            return Ok(GuardedHistoryInsertionResult::default());
+        }
+        let result = match self.mode {
+            HistoryInsertionMode::StandardScrollRegion => {
+                insert_with_standard_scroll_region(terminal, lines, rendered_rows)
+            }
+            HistoryInsertionMode::NewlineFallback => {
+                let viewport_top = terminal.get_frame().area().top();
+                let buffer =
+                    rendered_history_buffer_with_height(width, rendered_rows, lines.to_vec());
+                insert_with_newline_fallback(terminal, &buffer, viewport_top)
+            }
+        };
+        restore_cursor(terminal, cursor)?;
+        result?;
+        Ok(GuardedHistoryInsertionResult {
+            completed: true,
+            stable_geometry: terminal.backend().matches_resize_snapshot(expected)?,
+        })
     }
 }
 

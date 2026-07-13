@@ -1,3 +1,4 @@
+use std::cell::Cell as StdCell;
 use std::ops::Range;
 
 use ratatui::backend::{Backend, ClearType};
@@ -12,6 +13,29 @@ use ratatui::layout::{Position, Size};
  */
 pub(crate) trait InlineResizeBackend: Backend {
     fn set_resize_append_lines_suppressed(&mut self, suppressed: bool);
+    fn observe_resize_epoch(&mut self, resize_epoch: u64);
+    fn resize_event_epoch(&self) -> u64;
+    fn resize_observation_epoch(&self) -> u64;
+
+    fn resize_snapshot(&self) -> Result<InlineResizeSnapshot, Self::Error> {
+        let size = self.size()?;
+        Ok(InlineResizeSnapshot {
+            size,
+            event_epoch: self.resize_event_epoch(),
+            observation_epoch: self.resize_observation_epoch(),
+        })
+    }
+
+    fn matches_resize_snapshot(&self, expected: InlineResizeSnapshot) -> Result<bool, Self::Error> {
+        Ok(self.resize_snapshot()? == expected)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InlineResizeSnapshot {
+    pub(crate) size: Size,
+    pub(crate) event_epoch: u64,
+    pub(crate) observation_epoch: u64,
 }
 
 /*
@@ -31,12 +55,16 @@ pub(crate) struct InlineTerminalBackend<B> {
      * append_lines가 host scrollback에 새 줄을 밀어 넣지 않도록 이 flag를 켠다.
      */
     suppress_resize_append_lines: bool,
+    resize_epoch: u64,
+    observed_size: StdCell<Option<Size>>,
+    resize_observation_epoch: StdCell<u64>,
     /*
      * ratatui backend의 cursor query는 실제 터미널에 물어볼 수 있어 비용과 부작용이 있다.
      * 한 번 읽거나 설정한 좌표를 기억해 inline history 삽입 뒤에도 shell 위치 계산을 안정화한다.
      */
     tracked_cursor_position: Option<Position>,
     tracked_cursor_size: Option<Size>,
+    tracked_cursor_observation_epoch: Option<u64>,
 }
 
 impl<B> InlineTerminalBackend<B> {
@@ -48,8 +76,12 @@ impl<B> InlineTerminalBackend<B> {
         Self {
             inner,
             suppress_resize_append_lines: false,
+            resize_epoch: 0,
+            observed_size: StdCell::new(None),
+            resize_observation_epoch: StdCell::new(0),
             tracked_cursor_position: None,
             tracked_cursor_size: None,
+            tracked_cursor_observation_epoch: None,
         }
     }
 
@@ -80,6 +112,29 @@ impl<B: Backend> InlineResizeBackend for InlineTerminalBackend<B> {
          */
         self.suppress_resize_append_lines = suppressed;
     }
+
+    fn observe_resize_epoch(&mut self, resize_epoch: u64) {
+        if self.resize_epoch == resize_epoch {
+            return;
+        }
+        /*
+         * Size equality cannot prove cursor-cache validity: a shrink followed by
+         * a restore can be coalesced into one redraw while still moving the
+         * physical cursor. The event epoch makes that ABA transition observable.
+         */
+        self.resize_epoch = resize_epoch;
+        self.tracked_cursor_position = None;
+        self.tracked_cursor_size = None;
+        self.tracked_cursor_observation_epoch = None;
+    }
+
+    fn resize_event_epoch(&self) -> u64 {
+        self.resize_epoch
+    }
+
+    fn resize_observation_epoch(&self) -> u64 {
+        self.resize_observation_epoch.get()
+    }
 }
 
 impl<B: Backend> Backend for InlineTerminalBackend<B> {
@@ -94,7 +149,7 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
          * 크기 밖 cell을 inner에 넘기면 테스트 backend와 vt100 backend가 서로 다르게 반응할 수 있어,
          * wrapper에서 현재 size 안의 cell만 통과시켜 draw의 좌표계를 단일화한다.
          */
-        let size = self.inner.size()?;
+        let size = self.size()?;
         self.inner
             .draw(content.filter(move |(x, y, _)| *x < size.width && *y < size.height))
     }
@@ -132,8 +187,10 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
          * 이렇게 해야 history flush가 여러 번 이어져도 실제 terminal query를 반복하지 않고
          * inline shell positioning이 같은 좌표를 기준으로 계산된다.
          */
-        let size = self.inner.size()?;
+        let size = self.size()?;
+        let observation_epoch = self.resize_observation_epoch.get();
         if self.tracked_cursor_size == Some(size)
+            && self.tracked_cursor_observation_epoch == Some(observation_epoch)
             && let Some(position) = self.tracked_cursor_position
         {
             return Ok(position);
@@ -141,6 +198,7 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
         let position = self.inner.get_cursor_position()?;
         self.tracked_cursor_position = Some(position);
         self.tracked_cursor_size = Some(size);
+        self.tracked_cursor_observation_epoch = Some(observation_epoch);
         Ok(position)
     }
 
@@ -150,10 +208,11 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
          * 이후 append_lines 보정은 이 cached position을 화면 아래쪽으로 밀어 shell cursor를 따라간다.
          */
         let position = position.into();
-        let size = self.inner.size()?;
+        let size = self.size()?;
         self.inner.set_cursor_position(position)?;
         self.tracked_cursor_position = Some(position);
         self.tracked_cursor_size = Some(size);
+        self.tracked_cursor_observation_epoch = Some(self.resize_observation_epoch.get());
         Ok(())
     }
 
@@ -175,7 +234,17 @@ impl<B: Backend> Backend for InlineTerminalBackend<B> {
          * size는 draw clipping과 상위 layout 계산의 공통 기준이다.
          * wrapper가 별도 viewport 크기를 들고 있지 않으므로 inner backend의 현재 크기가 곧 진실이다.
          */
-        self.inner.size()
+        let size = self.inner.size()?;
+        if self
+            .observed_size
+            .get()
+            .is_some_and(|observed_size| observed_size != size)
+        {
+            self.resize_observation_epoch
+                .set(self.resize_observation_epoch.get().saturating_add(1));
+        }
+        self.observed_size.set(Some(size));
+        Ok(size)
     }
 
     fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
@@ -229,14 +298,20 @@ impl<B: Backend> InlineTerminalBackend<B> {
              */
             return;
         };
-        let Ok(size) = self.inner.size() else {
+        let Ok(size) = self.size() else {
             self.tracked_cursor_position = None;
             self.tracked_cursor_size = None;
+            self.tracked_cursor_observation_epoch = None;
             return;
         };
-        if size.height == 0 || self.tracked_cursor_size != Some(size) {
+        let observation_epoch = self.resize_observation_epoch.get();
+        if size.height == 0
+            || self.tracked_cursor_size != Some(size)
+            || self.tracked_cursor_observation_epoch != Some(observation_epoch)
+        {
             self.tracked_cursor_position = None;
             self.tracked_cursor_size = None;
+            self.tracked_cursor_observation_epoch = None;
             return;
         }
         position.x = 0;
@@ -246,6 +321,7 @@ impl<B: Backend> InlineTerminalBackend<B> {
             .min(size.height.saturating_sub(1));
         self.tracked_cursor_position = Some(position);
         self.tracked_cursor_size = Some(size);
+        self.tracked_cursor_observation_epoch = Some(observation_epoch);
     }
 }
 

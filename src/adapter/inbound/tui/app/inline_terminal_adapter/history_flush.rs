@@ -1,12 +1,12 @@
 use ratatui::Terminal;
-use ratatui::backend::Backend;
-use ratatui::layout::{Position, Rect, Size};
+use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 
 use super::super::MAX_CONVERSATION_HISTORY_LINES;
 use super::super::history_insertion::{
     HistoryInsertionAdapter, HistoryInsertionMode, count_rendered_history_rows,
 };
+use super::backend::{InlineResizeBackend, InlineResizeSnapshot};
 
 /*
  * Inline terminal rendering has two histories to keep in sync. Ratatui owns the live frame buffer,
@@ -34,17 +34,33 @@ pub(crate) struct HistoryFlushState {
      * the host scrollback pushes the frame.
      */
     pub(crate) visible_history_rows: u16,
+    /*
+     * A resize that lands after a completed insertion makes row placement uncertain even though
+     * the transcript bytes must remain at-most-once. The next physical reconciliation clears this
+     * flag after clamping the cached row count to the observed viewport.
+     */
+    pub(crate) visible_history_rows_dirty: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HistoryFlushResult {
     inserted_rows: u16,
+    stable_geometry: bool,
+    history_committed: bool,
 }
 
 impl HistoryFlushResult {
     // Callers only need to know whether the host scrollback moved so they can invalidate buffers.
     pub(crate) fn inserted(self) -> bool {
         self.inserted_rows > 0
+    }
+
+    pub(crate) fn stable_geometry(self) -> bool {
+        self.stable_geometry
+    }
+
+    pub(crate) fn history_committed(self) -> bool {
+        self.history_committed
     }
 }
 
@@ -63,8 +79,10 @@ impl HistoryFlushState {
      */
     pub(crate) fn reconcile_physical_resize(&mut self, viewport_area: Rect) -> bool {
         let previous_visible_rows = self.visible_history_rows;
+        let was_dirty = self.visible_history_rows_dirty;
         self.visible_history_rows = self.visible_history_rows.min(viewport_area.top());
-        self.visible_history_rows != previous_visible_rows
+        self.visible_history_rows_dirty = false;
+        was_dirty || self.visible_history_rows != previous_visible_rows
     }
 
     /*
@@ -72,24 +90,33 @@ impl HistoryFlushState {
      * frame than the new viewport can contain. Appending blank lines at the bottom advances the host
      * scrollback until the inline frame has clear space again, then clamps the cache to the new top.
      */
-    pub(crate) fn fit_visible_rows_to_viewport<B: Backend>(
+    pub(crate) fn fit_visible_rows_to_viewport<B: InlineResizeBackend>(
         &mut self,
         terminal: &mut Terminal<B>,
-        terminal_size: Size,
+        expected: InlineResizeSnapshot,
         viewport_area: Rect,
-    ) -> Result<bool, B::Error> {
+    ) -> Result<Option<bool>, B::Error> {
+        if !terminal.backend().matches_resize_snapshot(expected)? {
+            return Ok(None);
+        }
         let viewport_top = viewport_area.top();
         if self.visible_history_rows <= viewport_top {
-            return Ok(false);
+            return Ok(Some(false));
         }
         let overflow_rows = self.visible_history_rows - viewport_top;
         terminal.backend_mut().set_cursor_position(Position {
             x: 0,
-            y: terminal_size.height.saturating_sub(1),
+            y: expected.size.height.saturating_sub(1),
         })?;
+        if !terminal.backend().matches_resize_snapshot(expected)? {
+            return Ok(None);
+        }
         terminal.backend_mut().append_lines(overflow_rows)?;
+        if !terminal.backend().matches_resize_snapshot(expected)? {
+            return Ok(None);
+        }
         self.visible_history_rows = viewport_top;
-        Ok(true)
+        Ok(Some(true))
     }
 
     /*
@@ -99,20 +126,22 @@ impl HistoryFlushState {
      * snapshot. Keeping all four steps together makes viewport invalidation depend on the same row
      * count that actually moved the terminal.
      */
-    pub(crate) fn sync<B: Backend>(
+    pub(crate) fn sync<B: InlineResizeBackend>(
         &mut self,
         terminal: &mut Terminal<B>,
         current_lines: &[Line<'static>],
+        expected: InlineResizeSnapshot,
         insert_mode: HistoryInsertionMode,
     ) -> Result<HistoryFlushResult, B::Error> {
-        self.pending_history_lines = self.pending_lines(current_lines);
-        let terminal_size = terminal.size()?;
-        let width = terminal_size.width;
-        let inserted_rows = if self.pending_history_lines.is_empty() {
+        let pending_history_lines = self.pending_lines(current_lines);
+        if !terminal.backend().matches_resize_snapshot(expected)? {
+            return Ok(HistoryFlushResult::default());
+        }
+        let width = expected.size.width;
+        let inserted_rows = if pending_history_lines.is_empty() {
             0
         } else {
-            count_rendered_history_rows(&self.pending_history_lines, width).min(u16::MAX as usize)
-                as u16
+            count_rendered_history_rows(&pending_history_lines, width).min(u16::MAX as usize) as u16
         };
         /*
          * No pending rows means the app transcript and host scrollback are already aligned. Avoid
@@ -120,23 +149,46 @@ impl HistoryFlushState {
          * stable for the ordinary ratatui frame render.
          */
         if inserted_rows > 0 {
-            HistoryInsertionAdapter::new(insert_mode).insert_with_rendered_rows(
-                terminal,
-                &self.pending_history_lines,
-                inserted_rows,
-            )?;
+            let insertion = HistoryInsertionAdapter::new(insert_mode)
+                .insert_with_rendered_rows_at_snapshot(
+                    terminal,
+                    &pending_history_lines,
+                    inserted_rows,
+                    expected,
+                )?;
+            if !insertion.completed() {
+                return Ok(HistoryFlushResult::default());
+            }
+            if !insertion.stable_geometry() {
+                let viewport_top_after_insert = terminal.get_frame().area().top();
+                self.visible_history_rows = self.visible_rows_after_insert(
+                    pending_history_lines.len(),
+                    current_lines.len(),
+                    inserted_rows,
+                    viewport_top_after_insert,
+                );
+                self.pending_history_lines = pending_history_lines;
+                self.remember(current_lines);
+                self.pending_history_lines.clear();
+                self.visible_history_rows_dirty = true;
+                return Ok(HistoryFlushResult {
+                    inserted_rows,
+                    stable_geometry: false,
+                    history_committed: true,
+                });
+            }
         }
+        self.pending_history_lines = pending_history_lines;
         let viewport_top_after_insert = terminal.get_frame().area().top();
         if current_lines.is_empty() {
             self.visible_history_rows = 0;
         } else if inserted_rows > 0 {
-            self.visible_history_rows = if self.pending_history_lines.len() == current_lines.len() {
-                inserted_rows.min(viewport_top_after_insert)
-            } else {
-                self.visible_history_rows
-                    .saturating_add(inserted_rows)
-                    .min(viewport_top_after_insert)
-            };
+            self.visible_history_rows = self.visible_rows_after_insert(
+                self.pending_history_lines.len(),
+                current_lines.len(),
+                inserted_rows,
+                viewport_top_after_insert,
+            );
         }
         /*
          * The baseline is updated even when no rows were inserted. That covers render modes that
@@ -145,7 +197,12 @@ impl HistoryFlushState {
          */
         self.remember(current_lines);
         self.pending_history_lines.clear();
-        Ok(HistoryFlushResult { inserted_rows })
+        self.visible_history_rows_dirty = false;
+        Ok(HistoryFlushResult {
+            inserted_rows,
+            stable_geometry: true,
+            history_committed: true,
+        })
     }
 
     /*
@@ -157,6 +214,7 @@ impl HistoryFlushState {
         if current_lines.is_empty() {
             self.visible_history_rows = 0;
         }
+        self.visible_history_rows_dirty = false;
         self.pending_history_lines.clear();
         self.remember(current_lines);
     }
@@ -165,8 +223,28 @@ impl HistoryFlushState {
         !self.pending_lines(current_lines).is_empty()
     }
 
+    pub(crate) fn mark_visible_history_rows_dirty(&mut self) {
+        self.visible_history_rows_dirty = true;
+    }
+
     fn remember(&mut self, current_lines: &[Line<'static>]) {
         self.rendered_lines = current_lines.to_vec();
+    }
+
+    fn visible_rows_after_insert(
+        &self,
+        pending_line_count: usize,
+        current_line_count: usize,
+        inserted_rows: u16,
+        viewport_top: u16,
+    ) -> u16 {
+        if pending_line_count == current_line_count {
+            inserted_rows.min(viewport_top)
+        } else {
+            self.visible_history_rows
+                .saturating_add(inserted_rows)
+                .min(viewport_top)
+        }
     }
 
     /*

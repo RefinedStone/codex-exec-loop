@@ -20,10 +20,11 @@ use super::{
     ShellFrontendMode,
 };
 #[path = "inline_terminal_adapter/backend.rs"]
-mod backend;
+pub(super) mod backend;
 #[path = "inline_terminal_adapter/history_flush.rs"]
 mod history_flush;
 
+use self::backend::InlineResizeSnapshot;
 pub(super) use self::backend::{InlineResizeBackend, InlineTerminalBackend};
 use self::history_flush::HistoryFlushState;
 
@@ -193,25 +194,47 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
      * flush so the flush logic knows how many visible rows fit in the current
      * terminal, not the previous frame's dimensions.
      */
-    let Some((terminal_size, physical_terminal_resized)) =
-        autoresize_inline_viewport(terminal, inline_terminal)?
-    else {
+    let resize_event_epoch = runtime.terminal_resize_epoch();
+    terminal
+        .backend_mut()
+        .observe_resize_epoch(resize_event_epoch);
+    let Some(resize_snapshot) = autoresize_inline_viewport(terminal)? else {
         inline_terminal.invalidate_back_buffer();
         return Ok(false);
     };
+    let terminal_size = resize_snapshot.size;
+    let physical_terminal_resized = inline_terminal.physical_terminal_resized(resize_snapshot);
     let viewport_area = current_viewport_area(terminal);
-    let cursor_position = terminal.get_cursor_position()?;
-    inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
     let current_lines = current_inline_history_lines_for_viewport(runtime.app_mut(), viewport_area);
+    if !terminal
+        .backend()
+        .matches_resize_snapshot(resize_snapshot)?
+    {
+        inline_terminal.invalidate_back_buffer();
+        return Ok(false);
+    }
     let Some(insert_mode) = policy.host_insert_mode() else {
         /*
          * ViewportReplay keeps transcript rows inside ratatui rendering and must not
          * mutate host scrollback just because stale host-only row accounting survived
          * from an earlier host-scrollback transaction.
          */
+        let cursor_position = terminal.get_cursor_position()?;
+        if !terminal
+            .backend()
+            .matches_resize_snapshot(resize_snapshot)?
+        {
+            inline_terminal.invalidate_back_buffer();
+            return Ok(false);
+        }
         inline_terminal
             .history_flush
             .remember_without_flush(&current_lines);
+        if physical_terminal_resized {
+            inline_terminal.invalidate_back_buffer();
+        }
+        inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
+        inline_terminal.mark_resize_reconciled(resize_snapshot);
         let tail_frame_changed = inline_terminal.should_draw_inline_frame(
             runtime.app_mut(),
             viewport_area.width,
@@ -219,14 +242,21 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
         );
         return Ok(tail_frame_changed);
     };
-    inline_terminal.viewport.insert_mode = insert_mode;
     let parallel_history_pending = policy.parallel_mode_enabled
         && inline_terminal
             .history_flush
             .has_pending_lines(&current_lines);
     let parallel_history_fit_would_scroll = policy.parallel_mode_enabled
         && inline_terminal.history_flush.visible_history_rows > viewport_area.top();
+    let visible_history_rows_before = inline_terminal.history_flush.visible_history_rows;
     if parallel_history_pending || parallel_history_fit_would_scroll {
+        if !terminal
+            .backend()
+            .matches_resize_snapshot(resize_snapshot)?
+        {
+            inline_terminal.invalidate_back_buffer();
+            return Ok(false);
+        }
         /*
          * Parallel mode streams event rows into host scrollback while redrawing
          * the board as a live inline panel. Any scrollback movement before the
@@ -236,17 +266,35 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
          */
         clear_visible_inline_rows(terminal)?;
         inline_terminal.invalidate_back_buffer();
+        if !terminal
+            .backend()
+            .matches_resize_snapshot(resize_snapshot)?
+        {
+            return Ok(false);
+        }
     }
     let visible_history_adjusted = if physical_terminal_resized {
+        if !terminal
+            .backend()
+            .matches_resize_snapshot(resize_snapshot)?
+        {
+            inline_terminal.invalidate_back_buffer();
+            return Ok(false);
+        }
         inline_terminal
             .history_flush
             .reconcile_physical_resize(viewport_area)
     } else {
-        inline_terminal.history_flush.fit_visible_rows_to_viewport(
+        let Some(adjusted) = inline_terminal.history_flush.fit_visible_rows_to_viewport(
             terminal,
-            terminal_size,
+            resize_snapshot,
             viewport_area,
         )?
+        else {
+            inline_terminal.invalidate_back_buffer();
+            return Ok(false);
+        };
+        adjusted
     };
     if visible_history_adjusted {
         /*
@@ -262,9 +310,29 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
      * in the inline viewport so the operator can scroll back through durable
      * transcript rows without duplicating the live status panel.
      */
-    let history_sync = inline_terminal
-        .history_flush
-        .sync(terminal, &current_lines, insert_mode)?;
+    let history_sync = match inline_terminal.history_flush.sync(
+        terminal,
+        &current_lines,
+        resize_snapshot,
+        insert_mode,
+    ) {
+        Ok(history_sync) => history_sync,
+        Err(error) => {
+            inline_terminal.history_flush.visible_history_rows = visible_history_rows_before;
+            return Err(error);
+        }
+    };
+    if !history_sync.stable_geometry() {
+        if history_sync.history_committed() {
+            inline_terminal
+                .history_flush
+                .mark_visible_history_rows_dirty();
+        } else {
+            inline_terminal.history_flush.visible_history_rows = visible_history_rows_before;
+        }
+        inline_terminal.invalidate_back_buffer();
+        return Ok(false);
+    }
     if history_sync.inserted() {
         inline_terminal.invalidate_back_buffer();
     }
@@ -273,7 +341,22 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
     // comparing the tail-frame signature.
     let viewport_area = current_viewport_area(terminal);
     let cursor_position = terminal.get_cursor_position()?;
+    if !terminal
+        .backend()
+        .matches_resize_snapshot(resize_snapshot)?
+    {
+        inline_terminal
+            .history_flush
+            .mark_visible_history_rows_dirty();
+        inline_terminal.invalidate_back_buffer();
+        return Ok(false);
+    }
+    if physical_terminal_resized {
+        inline_terminal.invalidate_back_buffer();
+    }
+    inline_terminal.viewport.insert_mode = insert_mode;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
+    inline_terminal.mark_resize_reconciled(resize_snapshot);
     let tail_frame_changed = inline_terminal.should_draw_inline_frame(
         runtime.app_mut(),
         viewport_area.width,
@@ -287,8 +370,7 @@ fn current_viewport_area<B: Backend>(terminal: &mut Terminal<B>) -> Rect {
 
 fn autoresize_inline_viewport<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
-    inline_terminal: &InlineTerminalState,
-) -> Result<Option<(Size, bool)>, B::Error> {
+) -> Result<Option<InlineResizeSnapshot>, B::Error> {
     const MAX_STABILITY_ATTEMPTS: usize = 3;
 
     terminal
@@ -297,10 +379,16 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
     let result = (|| {
         let mut observed_size = terminal.size()?;
         for _ in 0..MAX_STABILITY_ATTEMPTS {
+            let observation_epoch_before = terminal.backend().resize_observation_epoch();
             terminal.autoresize()?;
             let terminal_size = terminal.size()?;
-            if terminal_size == observed_size {
-                return Ok(Some(terminal_size));
+            let observation_epoch = terminal.backend().resize_observation_epoch();
+            if terminal_size == observed_size && observation_epoch == observation_epoch_before {
+                return Ok(Some(InlineResizeSnapshot {
+                    size: terminal_size,
+                    event_epoch: terminal.backend().resize_event_epoch(),
+                    observation_epoch,
+                }));
             }
             observed_size = terminal_size;
         }
@@ -309,13 +397,7 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(false);
-    let Some(terminal_size) = result? else {
-        return Ok(None);
-    };
-    Ok(Some((
-        terminal_size,
-        inline_terminal.screen_size_changed(terminal_size),
-    )))
+    result
 }
 
 #[cfg(test)]
@@ -378,6 +460,17 @@ impl InlineTerminalState {
         self.viewport
             .last_known_screen_size
             .is_some_and(|last_known_screen_size| last_known_screen_size != terminal_size)
+    }
+
+    fn physical_terminal_resized(&self, snapshot: InlineResizeSnapshot) -> bool {
+        self.screen_size_changed(snapshot.size)
+            || self.viewport.last_reconciled_resize_event_epoch != snapshot.event_epoch
+            || self.viewport.last_reconciled_resize_observation_epoch != snapshot.observation_epoch
+    }
+
+    fn mark_resize_reconciled(&mut self, snapshot: InlineResizeSnapshot) {
+        self.viewport.last_reconciled_resize_event_epoch = snapshot.event_epoch;
+        self.viewport.last_reconciled_resize_observation_epoch = snapshot.observation_epoch;
     }
 
     fn record_terminal_viewport(
@@ -455,6 +548,8 @@ struct TerminalViewportState {
     viewport_area: Option<Rect>,
     last_known_screen_size: Option<Size>,
     last_known_cursor_pos: Option<Position>,
+    last_reconciled_resize_event_epoch: u64,
+    last_reconciled_resize_observation_epoch: u64,
     back_buffer_trustworthy: bool,
     insert_mode: HistoryInsertionMode,
 }
@@ -465,6 +560,8 @@ impl Default for TerminalViewportState {
             viewport_area: None,
             last_known_screen_size: None,
             last_known_cursor_pos: None,
+            last_reconciled_resize_event_epoch: 0,
+            last_reconciled_resize_observation_epoch: 0,
             back_buffer_trustworthy: true,
             insert_mode: HistoryInsertionMode::default(),
         }

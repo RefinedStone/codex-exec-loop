@@ -1242,10 +1242,14 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
 fn resize_event_requests_redraw() {
     let mut runtime = make_test_runtime();
     runtime.take_redraw_request();
+    assert_eq!(runtime.terminal_resize_epoch(), 0);
 
+    runtime.handle_terminal_event(Event::Resize(48, 10));
+    assert_eq!(runtime.terminal_resize_epoch(), 1);
     runtime.handle_terminal_event(Event::Resize(120, 40));
 
     assert!(runtime.take_redraw_request());
+    assert_eq!(runtime.terminal_resize_epoch(), 2);
 }
 #[test]
 fn resize_event_leaves_transcript_state_unchanged() {

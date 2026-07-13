@@ -26,6 +26,7 @@ pub(super) struct ShellRuntime {
     should_quit: bool,
     quit_after_redraw: bool,
     frame_scheduler: TuiFrameScheduler,
+    terminal_resize_epoch: u64,
     last_live_activity_pulse: Option<u64>,
     background_drain_limited: bool,
 }
@@ -38,6 +39,7 @@ impl ShellRuntime {
             should_quit: false,
             quit_after_redraw: false,
             frame_scheduler: TuiFrameScheduler::new(now),
+            terminal_resize_epoch: 0,
             last_live_activity_pulse: None,
             background_drain_limited: false,
         }
@@ -51,6 +53,9 @@ impl ShellRuntime {
     }
     pub(super) fn should_quit(&self) -> bool {
         self.should_quit
+    }
+    pub(super) fn terminal_resize_epoch(&self) -> u64 {
+        self.terminal_resize_epoch
     }
     #[cfg(test)]
     pub(super) fn take_redraw_request(&mut self) -> bool {
@@ -214,7 +219,16 @@ impl ShellRuntime {
                 self.handle_key_press(key, now);
             }
             Event::Paste(text) => self.handle_paste_text(text, now),
-            Event::Resize(_, _) => self.request_redraw_at(now),
+            Event::Resize(_, _) => {
+                /*
+                 * Several resize events can be drained into one redraw. Preserve
+                 * that fact even when the final dimensions equal the previous
+                 * frame, because the intermediate resize may already have moved
+                 * the physical cursor or host scrollback.
+                 */
+                self.terminal_resize_epoch = self.terminal_resize_epoch.saturating_add(1);
+                self.request_redraw_at(now);
+            }
             Event::FocusGained => self.frame_scheduler.set_focused(true, now),
             Event::FocusLost => self.frame_scheduler.set_focused(false, now),
             _ => {}
