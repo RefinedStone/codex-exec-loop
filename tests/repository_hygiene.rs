@@ -473,6 +473,38 @@ fn temporary_output_directory_is_ignored_and_has_no_tracked_files() {
 }
 
 #[test]
+fn tracked_lf_files_are_normalized_in_the_git_index() {
+    let repo = repo_root();
+    if !repo.join(".git").exists() {
+        return;
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["ls-files", "--eol", "-z"])
+        .output()
+        .expect("git must be available for repository hygiene tests");
+    assert!(output.status.success(), "git ls-files --eol must succeed");
+
+    let records = String::from_utf8(output.stdout)
+        .expect("tracked repository paths and eol metadata must be UTF-8");
+    let non_normalized = records
+        .split('\0')
+        .filter(|record| record.contains("attr/text eol=lf"))
+        .filter_map(|record| {
+            let (metadata, path) = record.split_once('\t')?;
+            (!metadata.split_whitespace().any(|field| field == "i/lf")).then(|| path.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        non_normalized.is_empty(),
+        "tracked files declared as eol=lf must store normalized LF blobs so fresh pool worktrees stay clean: {non_normalized:?}"
+    );
+}
+
+#[test]
 fn oss_application_metrics_are_explicitly_archival_until_refreshed() {
     let document = read(&repo_root().join("docs/plan/14-codex-for-oss-application.md"));
     assert!(document.contains("Archived Public-Signal Snapshot (Not Current)"));
