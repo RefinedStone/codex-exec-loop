@@ -35,9 +35,15 @@ done
 
 [[ -n "$output_path" ]] || { printf '--output is required\n' >&2; exit 2; }
 
-for command in cargo git grep ln node sha256sum tmux; do
+for command in cargo git grep ln sha256sum tmux wc; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'required command is unavailable: %s\n' "$command" >&2
+    exit 1
+  }
+done
+for executable in /usr/bin/env /usr/bin/node; do
+  [[ -x "$executable" ]] || {
+    printf 'required executable is unavailable: %s\n' "$executable" >&2
     exit 1
   }
 done
@@ -80,6 +86,7 @@ workspace="$raw_root/workspace"
 isolated_home="$raw_root/home"
 akra_home="$raw_root/akra-home"
 codex_home="$raw_root/codex-home"
+capture_path="$fake_bin_dir:/usr/bin:/bin"
 mkdir -m 700 "$fake_bin_dir" "$workspace" "$isolated_home" "$akra_home" "$codex_home"
 fake_codex="$fake_bin_dir/codex"
 release_file="$fake_bin_dir/release"
@@ -102,7 +109,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cat >"$fake_codex" <<'NODE'
-#!/usr/bin/env node
+#!/usr/bin/node
 'use strict';
 
 const fs = require('fs');
@@ -290,9 +297,9 @@ TMUX
 chmod 600 "$tmux_config"
 
 launch_command="$(printf \
-  'while test ! -e %q; do sleep 0.01; done; exec env -u WT_SESSION -u AKRA_TRACE -u RUST_LOG -u AKRA_TRACE_SPANS -u AKRA_TRACE_FILE -u AKRA_TOKIO_CONSOLE HOME=%q USERPROFILE=%q AKRA_HOME=%q CODEX_HOME=%q PATH=%q TERM=tmux-256color AKRA_APP_SERVER_PROMPT_LOG=0 AKRA_CAPTURE_SYNTHETIC=1 CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART=0 CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=scrollback CODEX_EXEC_LOOP_HISTORY_INSERT_MODE=standard %q' \
+  'while test ! -e %q; do sleep 0.01; done; exec /usr/bin/env -i HOME=%q USERPROFILE=%q USER=akra-capture LOGNAME=akra-capture SHELL=/bin/bash AKRA_HOME=%q CODEX_HOME=%q PATH=%q LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=tmux-256color AKRA_APP_SERVER_PROMPT_LOG=0 AKRA_CAPTURE_SYNTHETIC=1 CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART=0 CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=scrollback CODEX_EXEC_LOOP_HISTORY_INSERT_MODE=standard %q' \
   "$launch_gate" "$isolated_home" "$isolated_home" "$akra_home" "$codex_home" \
-  "$fake_bin_dir:$PATH" "$binary")"
+  "$capture_path" "$binary")"
 pane_target="$(tmux -L "$socket_name" -f "$tmux_config" new-session -d -P -F '#{pane_id}' \
   -s "$session_name" -x 160 -y 24 -c "$workspace" "$launch_command")"
 raw_pipe_command="$(printf ': > %q; cat > %q; : > %q' \
@@ -359,6 +366,19 @@ wait_for_file() {
   return 1
 }
 
+wait_for_raw_pty_growth() {
+  local previous_bytes="$1"
+  local attempts="$2"
+  for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+    local current_bytes
+    current_bytes="$(wc -c <"$raw_pty" | tr -d ' ')"
+    ((current_bytes > previous_bytes)) && return 0
+    sleep 0.05
+  done
+  printf 'timed out waiting for application output after resize\n' >&2
+  return 1
+}
+
 capture_checkpoint() {
   local name="$1"
   for ((checkpoint_attempt = 1; checkpoint_attempt <= 10; checkpoint_attempt += 1)); do
@@ -385,6 +405,7 @@ capture_checkpoint() {
       'geometry=#{pane_width}x#{pane_height} cursor=#{cursor_x},#{cursor_y} history=#{history_size} dead=#{pane_dead}')"
     if [[ "$before" == "$after" ]]; then
       printf '%s\n' "${before% dead=*}" >"$raw_root/$name.meta"
+      wc -c <"$raw_pty" | tr -d ' ' >"$raw_root/$name.raw-bytes"
       return 0
     fi
     sleep 0.05
@@ -444,6 +465,21 @@ assert_startup_checkpoint() {
   assert_count 0 'D4_RAW_ACTIVITY_SECRET' "$raw_root/$name.full"
 }
 
+assert_transient_tail_absent_from_history() {
+  local name="$1"
+  for marker in \
+    'notice: activity:' \
+    'active:command' \
+    'Working (' \
+    'turn: working' \
+    'input: streaming' \
+    'model:gpt-5.6-synthetic' \
+    'task:' \
+    'prompt: turn running'; do
+    assert_count 0 "$marker" "$raw_root/$name.history"
+  done
+}
+
 assert_active_checkpoint() {
   local name="$1"
   local width="$2"
@@ -456,9 +492,7 @@ assert_active_checkpoint() {
   assert_count 1 'Working (' "$raw_root/$name.current"
   assert_count 1 'prompt: turn running' "$raw_root/$name.current"
   assert_count "$model_count" 'model:gpt-5.6-synthetic' "$raw_root/$name.current"
-  assert_count 0 'notice: activity:' "$raw_root/$name.history"
-  assert_count 0 'active:command' "$raw_root/$name.history"
-  assert_count 0 'prompt: turn running' "$raw_root/$name.history"
+  assert_transient_tail_absent_from_history "$name"
   assert_count 0 'D4_RAW_ACTIVITY_SECRET' "$raw_root/$name.full"
 }
 
@@ -487,15 +521,29 @@ wait_for_current 'notice: activity: cmd:1 lines | active:command' 100
 capture_checkpoint active_narrow
 assert_active_checkpoint active_narrow 48 18 0
 
-tmux -L "$socket_name" resize-window -t "$session_name:0" -x 49 -y 18
-wait_for_geometry 49x18 100
-wait_for_current 'notice: activity: cmd:1 lines | active:command' 100
+raw_bytes_before_transition="$(wc -c <"$raw_pty" | tr -d ' ')"
+tmux -L "$socket_name" resize-window -t "$session_name:0" -x 80 -y 18
+wait_for_geometry 80x18 100
+wait_for_raw_pty_growth "$raw_bytes_before_transition" 100
+wait_for_current 'model:gpt-5.6-synthetic' 100
+capture_checkpoint active_transition_wide
+assert_active_checkpoint active_transition_wide 80 18 1
+raw_bytes_before_repeat="$(wc -c <"$raw_pty" | tr -d ' ')"
 tmux -L "$socket_name" resize-window -t "$session_name:0" -x 48 -y 18
 wait_for_geometry 48x18 100
+wait_for_raw_pty_growth "$raw_bytes_before_repeat" 100
 sleep 0.15
 wait_for_current 'notice: activity: cmd:1 lines | active:command' 100
 capture_checkpoint active_narrow_repeat
 assert_active_checkpoint active_narrow_repeat 48 18 0
+(( $(<"$raw_root/active_transition_wide.raw-bytes") > $(<"$raw_root/active_narrow.raw-bytes") )) || {
+  printf '80-column transition did not produce a later application-output watermark\n' >&2
+  exit 1
+}
+(( $(<"$raw_root/active_narrow_repeat.raw-bytes") > $(<"$raw_root/active_transition_wide.raw-bytes") )) || {
+  printf '48-column repeat did not produce a later application-output watermark\n' >&2
+  exit 1
+}
 normalize_frame "$raw_root/active_narrow.current" >"$raw_root/active_narrow.normalized"
 normalize_frame "$raw_root/active_narrow_repeat.current" \
   >"$raw_root/active_narrow_repeat.normalized"
@@ -522,8 +570,7 @@ capture_checkpoint completed
 assert_count 0 'notice: activity:' "$raw_root/completed.current"
 assert_count 0 'notice: activity:' "$raw_root/completed.history"
 assert_count 0 'active:command' "$raw_root/completed.current"
-assert_count 0 'active:command' "$raw_root/completed.history"
-assert_count 0 'prompt: turn running' "$raw_root/completed.history"
+assert_transient_tail_absent_from_history completed
 assert_count 0 'D4_RAW_ACTIVITY_SECRET' "$raw_root/completed.full"
 assert_count 1 'D4_COMMITTED_OUTPUT_CANARY' "$raw_root/completed.full"
 assert_count 1 'prompt: session ready' "$raw_root/completed.current"
@@ -569,7 +616,7 @@ export AKRA_CAPTURE_RAW_PTY_BYTES="$(wc -c <"$raw_pty" | tr -d ' ')"
 export AKRA_CAPTURE_RAW_CANARY_COUNT="$raw_committed_canary_count"
 export AKRA_CAPTURE_TMUX_VERSION="$(tmux -V)"
 export AKRA_CAPTURE_BASH_VERSION="${BASH_VERSION}"
-export AKRA_CAPTURE_NODE_VERSION="$(node --version)"
+export AKRA_CAPTURE_NODE_VERSION="$(/usr/bin/node --version)"
 export AKRA_CAPTURE_KERNEL="$(uname -srmo)"
 export AKRA_CAPTURE_OS="$(. /etc/os-release; printf '%s' "$PRETTY_NAME")"
 export AKRA_CAPTURE_REPO_ROOT="$repo_root"
@@ -583,7 +630,7 @@ export AKRA_CAPTURE_ARTIFACT_ID="$(basename "$output_path")"
 mkdir -p "$(dirname "$output_path")"
 staging_path="$(mktemp "$(dirname "$output_path")/.typed-activity-rail-e2e.XXXXXX")"
 chmod 600 "$staging_path"
-node - "$staging_path" <<'NODE'
+/usr/bin/node - "$staging_path" <<'NODE'
 'use strict';
 
 const crypto = require('crypto');
@@ -591,7 +638,7 @@ const fs = require('fs');
 
 const outputPath = process.argv[2];
 const root = process.env.AKRA_CAPTURE_RAW_ROOT;
-const names = ['startup', 'active_wide', 'active_narrow', 'active_narrow_repeat', 'active_restored', 'completed'];
+const names = ['startup', 'active_wide', 'active_narrow', 'active_transition_wide', 'active_narrow_repeat', 'active_restored', 'completed'];
 const read = (name, suffix) => fs.readFileSync(`${root}/${name}.${suffix}`);
 const text = (name, suffix) => read(name, suffix).toString('utf8');
 const count = (source, needle) => source.split(needle).length - 1;
@@ -638,6 +685,7 @@ function checkpoint(name) {
     geometry: { width: Number(match[1]), height: Number(match[2]) },
     cursor: { x: Number(match[3]), y: Number(match[4]) },
     historyRows: Number(match[5]),
+    rawPtyBytesObserved: Number(text(name, 'raw-bytes').trim()),
     counts: {
       currentActiveCommand: count(current, 'active:command'),
       currentActivityRail: count(current, 'notice: activity:'),
@@ -647,6 +695,11 @@ function checkpoint(name) {
       currentModelFact: count(current, 'model:gpt-5.6-synthetic'),
       historyActivityRail: count(history, 'notice: activity:'),
       historyActiveCommand: count(history, 'active:command'),
+      historyWorkingState: count(history, 'Working ('),
+      historyTurnWorking: count(history, 'turn: working'),
+      historyInputStreaming: count(history, 'input: streaming'),
+      historyModelFact: count(history, 'model:gpt-5.6-synthetic'),
+      historyTaskFact: count(history, 'task:'),
       historyRunningPrompt: count(history, 'prompt: turn running'),
       fullRawSecret: count(full, 'D4_RAW_ACTIVITY_SECRET'),
       fullCommittedCanary: count(full, 'D4_COMMITTED_OUTPUT_CANARY'),
@@ -706,11 +759,38 @@ const artifact = {
       WT_SESSION: 'unset',
       traceVariables: 'unset',
     },
+    processEnvironment: {
+      inheritance: 'env -i',
+      envExecutable: '/usr/bin/env',
+      nodeExecutable: '/usr/bin/node',
+      variableNames: [
+        'AKRA_APP_SERVER_PROMPT_LOG',
+        'AKRA_CAPTURE_SYNTHETIC',
+        'AKRA_HOME',
+        'CODEX_EXEC_LOOP_HISTORY_INSERT_MODE',
+        'CODEX_EXEC_LOOP_INLINE_HISTORY_MODE',
+        'CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART',
+        'CODEX_HOME',
+        'HOME',
+        'LANG',
+        'LC_ALL',
+        'LOGNAME',
+        'PATH',
+        'SHELL',
+        'TERM',
+        'USER',
+        'USERPROFILE',
+      ],
+      pathEntries: ['synthetic-owner-bin', '/usr/bin', '/bin'],
+    },
   },
   geometryRationale: '48x18 preserves the complete 16-row inline viewport while exercising the checked-in 48-column narrow layout; physical heights below the inline viewport are excluded.',
   checkpoints: names.map(checkpoint),
   rawPtyProof: {
     scope: 'from process launch through the completed checkpoint, excluding terminal teardown',
+    classification: 'ephemeral-local-observation',
+    rawCaptureRetained: false,
+    digestRecomputableFromRepository: false,
     bytes: Number(process.env.AKRA_CAPTURE_RAW_PTY_BYTES),
     sha256: process.env.AKRA_CAPTURE_RAW_PTY_SHA,
     committedCanaryOccurrences: Number(process.env.AKRA_CAPTURE_RAW_CANARY_COUNT),
@@ -721,6 +801,7 @@ const artifact = {
     isolatedStartup: 'pass',
     activeWideRail: 'pass',
     narrowPhysicalResize: 'pass',
+    intermediateResizeFrame: 'pass',
     repeatedNarrowResize: 'pass',
     wideRestore: 'pass',
     committedCompletion: 'pass',
@@ -737,6 +818,7 @@ const artifact = {
     activeRailAbsentFromHostHistory: true,
     runningPromptAbsentFromHostHistory: true,
     rawActivityPayloadAbsentFromRenderedAndRawPtyCapture: true,
+    intermediateResizeRevealedModelFact: true,
     repeatedNarrowResizeIdempotent: true,
     restoredFrameInBounds: true,
     committedCompletionPresentExactlyOnce: true,
@@ -751,6 +833,7 @@ const artifact = {
   nonClaims: [
     'not a released Akra artifact capture',
     'not a released Codex app-server activity capture',
+    'raw PTY bytes are an ephemeral local observation and are not retained for repository recomputation',
     'not an allocator, RSS, latency, or throughput measurement',
     'not evidence for Admin, CLI, Telegram, parallel persistence, durable restart recovery, or reconciliation recovery',
     'not approval-grade E1-E4 primitive validation',
