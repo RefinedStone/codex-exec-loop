@@ -849,6 +849,32 @@ released-runtime activity capture, allocator/RSS result, or comparative latency 
 complete P0-D and adds no Admin, CLI, Telegram, parallel persistence, durable restart recovery, or
 reconciliation recovery projection.
 
+## P0-D4 Supplemental tmux Evidence
+
+The foundational physical-resize fix is pinned at `8b14079b9dc7bcc7cadc55176b731558819bb9e5`,
+the resize-transaction guards at `5907f6a7f1f03f23218a201637ebf06a8e020369`, and the hardened
+deterministic capture candidate at `0a5f06ea345bd5c24998527679158eaf8643d058`.
+The checked-in [E3 capture](captures/typed-activity-rail-e2e-v1-linux-tmux.json) records a source
+build running in a real tmux 3.4 detached PTY under an explicit `env -i` allowlist with
+`HostScrollback` and `StandardScrollRegion` overrides. It covers startup, a 160x24 active frame,
+48x18 shrink, an application-rendered 80x18 model canary, a second 48x18 frame, 160x24 restore,
+committed completion, and clean process exit. Tmux contributes blank host-history reflow rows across
+the 48 -> 80 -> 48 transition, so the raw pane digests and row counts intentionally differ; after
+blank-row and elapsed-time normalization, both narrow semantic current/history digests are
+identical. Every transient activity, working, input, model, task, and running-prompt count remains
+zero in host history. The observed raw PTY reaches the committed canary while the raw ANSI secret
+remains absent. Class: `verified/local`.
+
+This artifact is deliberately `supplemental-unmatched` and `approvalGrade: false`. It uses an
+owner-isolated synthetic app-server and a source build, excludes physical heights below the 16-row
+inline viewport, and is not released-runtime evidence. Its raw PTY bytes are an ephemeral local
+observation: they are not retained and their digest cannot be recomputed from repository contents.
+Because the resize fix changes common terminal primitives, approval-grade E1 Windows Terminal/WSL,
+E2 Windows Terminal/PowerShell, E3
+tmux detached PTY, and E4 direct Linux terminal captures all remain required; this supplemental E3
+environment artifact does not satisfy an approval row. P0-D therefore remains partial, and no
+broader Admin/CLI/Telegram, persistence, recovery, or performance claim follows from this capture.
+
 ## Akra Baseline Evidence
 
 All links below use Akra commit `226e4794b84107704378ecc1ea65f7d5c27750e5`.
