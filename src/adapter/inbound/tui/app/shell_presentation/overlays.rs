@@ -3,6 +3,9 @@
 #[path = "overlays/base.rs"]
 mod base;
 
+#[path = "overlays/activity.rs"]
+mod activity;
+
 #[path = "overlays/directions.rs"]
 mod directions;
 
@@ -21,6 +24,10 @@ mod popup;
 // startup banner는 modal이 아니라 shell boot copy다. 그래도 shell presentation
 // ownership에 속하므로 overlay surface에서 함께 공개한다.
 pub(crate) use base::build_startup_banner_lines;
+
+pub(crate) use activity::{
+    ActivityOverlayDocument, ActivityOverlayView, build_activity_overlay_view,
+};
 
 // directions maintenance는 planning/task popup과 별도 흐름이다. active directions 상태를
 // 점검하고 복구하는 overlay라 DTO와 builder를 독립 surface로 공개한다.

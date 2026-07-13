@@ -41,12 +41,14 @@ pub(super) fn build_inline_terminal_flow_layout(
         MAX_INLINE_INSPECTION_TAIL_HEIGHT
     };
     let tail_height = inline_body_height(tail_lines, area.width, tail_max_height);
+    let inspection_constraint = if app.shell_overlay == ShellOverlay::Activity && area.width <= 48 {
+        Constraint::Length(area.height.saturating_sub(tail_height))
+    } else {
+        Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6))
+    };
     Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6)),
-            Constraint::Length(tail_height),
-        ])
+        .constraints([inspection_constraint, Constraint::Length(tail_height)])
         .split(area)
 }
 

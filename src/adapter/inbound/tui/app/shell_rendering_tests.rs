@@ -300,6 +300,102 @@ fn vt100_progressive_activity_rail_is_transient_and_payload_free() {
 }
 
 #[test]
+fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
+    let secret = "AKRA_ACTIVITY_DETAIL_SECRET";
+    let detail = format!(
+        "한글 wide detail\n@@ -1 +1 @@\n-old value\n+{secret}\u{1b}[31m\n{}",
+        (0..48)
+            .map(|index| format!("detail line {index:02}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_startup_ascii_art = false;
+    let core_snapshot = tui_testkit::set_progressive_command_activity(&mut app, &detail, true);
+    assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
+    assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
+
+    let wide = tui_testkit::render_inline_snapshot(&mut app, 120, 30);
+    assert!(wide.contains("Activity / inline inspection"));
+    assert!(wide.contains("> Diff"));
+    assert!(wide.contains("Retained Diff"));
+    assert!(wide.contains("history:incomplete"));
+    assert!(wide.contains(&format!("{secret}\\x1b[31m")));
+    assert!(!wide.contains('\u{1b}'));
+    assert!(wide.contains("prompt:"));
+    assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
+    assert_snapshot!("inline_progressive_activity_inspector_wide", wide);
+
+    let narrow = tui_testkit::render_inline_snapshot(&mut app, 48, 10);
+    assert!(narrow.contains("Activity / inline inspection"));
+    assert!(narrow.contains("> Diff"));
+    assert!(narrow.contains("Retained Diff"));
+    assert!(narrow.contains("status:"), "{narrow}");
+    assert!(narrow.contains("prompt:"), "{narrow}");
+    assert!(!narrow.contains('\u{1b}'));
+    assert!(
+        narrow.lines().all(|line| {
+            let line = line.strip_prefix('"').unwrap_or(line);
+            let line = line.split("\" Hidden by").next().unwrap_or(line);
+            let line = line.strip_suffix('"').unwrap_or(line);
+            ratatui::text::Line::from(line.to_string()).width() <= 48
+        }),
+        "narrow activity inspector exceeded its viewport:\n{narrow}"
+    );
+    assert_snapshot!("inline_progressive_activity_inspector_narrow", narrow);
+    assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
+
+    assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
+    let vt100 = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
+    assert!(vt100.contains("> Output"));
+    assert!(vt100.contains("Retained Output Tail"));
+    assert!(!vt100.contains("Full Output"));
+    assert!(!vt100.contains('\u{1b}'));
+    assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
+    assert_snapshot!("vt100_progressive_activity_inspector_output", vt100);
+}
+
+#[test]
+fn activity_inspector_resets_page_when_new_turn_reuses_document_sequence() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_startup_ascii_art = false;
+    let first_detail = (0..80)
+        .map(|index| format!("first turn row {index:03}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _first_core_snapshot =
+        tui_testkit::set_progressive_command_activity(&mut app, &first_detail, false);
+    assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
+    let _ = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
+    assert!(
+        app.progressive_activity_overlay_ui_state
+            .move_to_next_page()
+    );
+    assert!(
+        app.progressive_activity_overlay_ui_state
+            .current_page_start()
+            > 0
+    );
+
+    let _second_core_snapshot = tui_testkit::set_progressive_command_activity(
+        &mut app,
+        "SECOND_TURN_SAME_SEQUENCE_CANARY\nnext row",
+        false,
+    );
+    let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
+
+    assert!(rendered.contains("SECOND_TURN_SAME_SEQUENCE_CANARY"));
+    assert!(rendered.contains("Retained Diff / bytes 0.."));
+    assert_eq!(
+        app.progressive_activity_overlay_ui_state
+            .current_page_start(),
+        0
+    );
+}
+
+#[test]
 fn vt100_ready_shell_matches_snapshot() {
     /*
      * vt100 backend snapshot은 real terminal escape output을 통과한 결과를 본다.

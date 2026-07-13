@@ -7,6 +7,7 @@ use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
+use super::progressive_activity_overlay_ui::parse_progressive_activity_detail_kind;
 use super::view_selection_overlay_ui::ConversationViewMode;
 use crate::application::service::planning::PlanningResetTarget;
 use crate::domain::conversation::ConversationReasoningEffort;
@@ -16,6 +17,7 @@ pub(crate) enum InlineShellCommand {
     Diagnostics,
     Parallel,
     Peek,
+    Activity,
     Sessions,
     Reviews,
     Queue,
@@ -66,7 +68,8 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :activity [diff|output]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const ACTIVITY_USAGE: &str = "Type `:activity [diff|output]` to inspect retained turn detail.";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 const MODEL_USAGE: &str = "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults.";
@@ -102,6 +105,15 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         aliases: &[":peek"],
         suggestion_detail: "parallel agent peek",
         buffered_hint: "Press Enter to inspect active parallel agents.",
+        execution_status: None,
+        requires_argument: false,
+    },
+    InlineShellCommandSpec {
+        command: InlineShellCommand::Activity,
+        primary_name: ":activity",
+        aliases: &[":activity", ":act"],
+        suggestion_detail: "turn activity detail",
+        buffered_hint: ACTIVITY_USAGE,
         execution_status: None,
         requires_argument: false,
     },
@@ -258,6 +270,7 @@ impl InlineShellCommandInput {
     pub(super) fn buffered_hint(&self) -> String {
         match self.command {
             InlineShellCommand::Parallel => parallel_argument_hint(self.argument()),
+            InlineShellCommand::Activity => activity_argument_hint(self.argument()),
             InlineShellCommand::PlanningInit => planning_argument_hint(self.argument()),
             InlineShellCommand::Directions => planning_overlay_argument_hint(
                 self.argument(),
@@ -432,6 +445,7 @@ impl InlineShellCommand {
             InlineShellCommand::Diagnostics
             | InlineShellCommand::Parallel
             | InlineShellCommand::Peek
+            | InlineShellCommand::Activity
             | InlineShellCommand::Sessions
             | InlineShellCommand::Reviews
             | InlineShellCommand::Queue
@@ -456,6 +470,7 @@ impl InlineShellCommand {
         match self {
             InlineShellCommand::Parallel => ":parallel [off]",
             InlineShellCommand::Peek => ":peek",
+            InlineShellCommand::Activity => ":activity [diff|output]",
             InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Reviews => ":reviews",
             InlineShellCommand::Directions => ":directions",
@@ -523,6 +538,21 @@ fn parallel_argument_hint(argument: Option<&str>) -> String {
         Err(error) => format!(
             "Press Enter to apply `:parallel {}`. Supported command forms: :parallel, :pa, :parallel off, :pa off.",
             error.argument()
+        ),
+    }
+}
+fn activity_argument_hint(argument: Option<&str>) -> String {
+    let Some(argument) = argument else {
+        return ACTIVITY_USAGE.to_string();
+    };
+    match parse_progressive_activity_detail_kind(argument) {
+        Some(_) => format!(
+            "Press Enter to inspect retained `{}` activity detail.",
+            argument.trim().to_ascii_lowercase()
+        ),
+        None => format!(
+            "`:activity {}` is unsupported; pressing Enter leaves the current overlay unchanged. Supported values: diff, output.",
+            argument.trim()
         ),
     }
 }

@@ -136,6 +136,9 @@ impl NativeTuiApp {
             ShellOverlay::ParallelPeek => {
                 self.parallel_peek_overlay_ui_state.reset();
             }
+            ShellOverlay::Activity => {
+                self.progressive_activity_overlay_ui_state.reset();
+            }
             _ => {}
         }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
@@ -155,6 +158,9 @@ impl NativeTuiApp {
                 self.handle_parallel_shell_command(command_input.argument())
             }
             InlineShellCommand::Peek => self.open_parallel_peek_overlay(command_input.argument()),
+            InlineShellCommand::Activity => {
+                self.handle_activity_shell_command(command_input.argument())
+            }
             InlineShellCommand::Sessions => self.show_session_overlay(),
             InlineShellCommand::Reviews => self.show_reviews_overlay(),
             InlineShellCommand::Queue => self.handle_queue_shell_command(command_input.argument()),
@@ -195,6 +201,34 @@ impl NativeTuiApp {
     }
     fn show_help_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
+    }
+    fn handle_activity_shell_command(&mut self, argument: Option<&str>) {
+        let selected_kind = match argument {
+            None => ProgressiveActivityDetailKind::Diff,
+            Some(argument) => {
+                let Some(selected_kind) = parse_progressive_activity_detail_kind(argument) else {
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: "activity unchanged; supported values: diff, output"
+                            .to_string(),
+                    });
+                    return;
+                };
+                selected_kind
+            }
+        };
+        self.show_progressive_activity_overlay(selected_kind);
+    }
+    pub(super) fn show_progressive_activity_overlay(
+        &mut self,
+        selected_kind: ProgressiveActivityDetailKind,
+    ) -> bool {
+        if self.approval_overlay_active() {
+            return false;
+        }
+        self.progressive_activity_overlay_ui_state
+            .reset_for_kind(selected_kind);
+        self.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
+        true
     }
     pub(super) fn show_model_selection_overlay(&mut self) {
         self.model_selection_overlay_ui_state
@@ -524,8 +558,32 @@ impl NativeTuiApp {
         if self.shell_overlay == ShellOverlay::PlanningInit {
             return self.handle_planning_init_overlay_key(key);
         }
+        if self.shell_overlay == ShellOverlay::Activity {
+            return self.handle_progressive_activity_overlay_key(key);
+        }
 
         self.handle_session_overlay_key(key);
+        true
+    }
+    fn handle_progressive_activity_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        match (key.code, key.modifiers) {
+            (
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right,
+                KeyModifiers::NONE | KeyModifiers::SHIFT,
+            ) => self.progressive_activity_overlay_ui_state.cycle_kind(),
+            (KeyCode::Up | KeyCode::PageUp, KeyModifiers::NONE) => {
+                self.progressive_activity_overlay_ui_state
+                    .move_to_previous_page();
+            }
+            (KeyCode::Down | KeyCode::PageDown, KeyModifiers::NONE) => {
+                self.progressive_activity_overlay_ui_state
+                    .move_to_next_page();
+            }
+            (KeyCode::Home, KeyModifiers::NONE) => self
+                .progressive_activity_overlay_ui_state
+                .reset_navigation(),
+            _ => {}
+        }
         true
     }
     fn handle_approval_overlay_key(&mut self, key: event::KeyEvent) -> bool {
@@ -906,6 +964,20 @@ mod tests {
     fn close_shell_overlay_resets_overlay_local_buffers() {
         let mut app = test_native_tui_app();
 
+        app.shell_overlay = ShellOverlay::Activity;
+        app.progressive_activity_overlay_ui_state
+            .reset_for_kind(ProgressiveActivityDetailKind::Output);
+        app.progressive_activity_overlay_ui_state
+            .select_document(1, Some(8));
+        app.progressive_activity_overlay_ui_state
+            .set_page_window(4, Some(8));
+        app.close_shell_overlay();
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state,
+            ProgressiveActivityOverlayUiState::default()
+        );
+
         for overlay in [
             ShellOverlay::DirectionsMaintenance,
             ShellOverlay::PlanningInit,
@@ -919,6 +991,124 @@ mod tests {
             app.close_shell_overlay();
             assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
         }
+    }
+
+    #[test]
+    fn activity_commands_default_validate_alias_and_preserve_approval_focus() {
+        let mut app = test_native_tui_app();
+
+        app.execute_inline_shell_command_input(command(":activity"));
+        assert_eq!(app.shell_overlay, ShellOverlay::Activity);
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.selected_kind(),
+            ProgressiveActivityDetailKind::Diff
+        );
+
+        app.close_shell_overlay();
+        app.execute_inline_shell_command_input(command(":act output"));
+        assert_eq!(app.shell_overlay, ShellOverlay::Activity);
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.selected_kind(),
+            ProgressiveActivityDetailKind::Output
+        );
+
+        app.close_shell_overlay();
+        app.execute_inline_shell_command_input(command(":activity all"));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            status_text(&app),
+            "activity unchanged; supported values: diff, output"
+        );
+
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+        assert!(!app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+    }
+
+    #[test]
+    fn activity_overlay_keymap_navigates_pages_kinds_home_and_close() {
+        let mut app = test_native_tui_app();
+        assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
+        app.progressive_activity_overlay_ui_state
+            .select_document(1, Some(7));
+        app.progressive_activity_overlay_ui_state
+            .set_page_window(0, Some(10));
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state
+                .current_page_start(),
+            10
+        );
+        app.progressive_activity_overlay_ui_state
+            .set_page_window(10, Some(20));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state
+                .current_page_start(),
+            20
+        );
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageUp)));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Up)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state
+                .current_page_start(),
+            0
+        );
+
+        app.progressive_activity_overlay_ui_state
+            .set_page_window(0, Some(10));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Home)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.selected_kind(),
+            ProgressiveActivityDetailKind::Output
+        );
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state
+                .current_document_sequence(),
+            None
+        );
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state
+                .current_page_start(),
+            0
+        );
+
+        app.progressive_activity_overlay_ui_state
+            .select_document(1, Some(8));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Tab)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.selected_kind(),
+            ProgressiveActivityDetailKind::Diff
+        );
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state
+                .current_document_sequence(),
+            None
+        );
+        assert!(app.handle_shell_overlay_key(modified_key(KeyCode::BackTab, KeyModifiers::SHIFT)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.selected_kind(),
+            ProgressiveActivityDetailKind::Output
+        );
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Left)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.selected_kind(),
+            ProgressiveActivityDetailKind::Diff
+        );
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Right)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.selected_kind(),
+            ProgressiveActivityDetailKind::Output
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state,
+            ProgressiveActivityOverlayUiState::default()
+        );
     }
 
     #[test]

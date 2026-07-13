@@ -1304,6 +1304,8 @@ impl NativeTuiApp {
             session_state: SessionState::Idle,
             supersession_mud_ui_state: super::SupersessionMudUiState::default(),
             parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
+            progressive_activity_overlay_ui_state:
+                super::ProgressiveActivityOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,
             next_manual_prompt_preparation_request_id: 0,

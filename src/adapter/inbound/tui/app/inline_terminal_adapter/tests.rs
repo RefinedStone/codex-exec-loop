@@ -7,8 +7,10 @@ use super::{
 use crate::adapter::inbound::tui::app::{
     ConversationMessage, ConversationMessageKind, ConversationState, ConversationViewMode,
     INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility,
+    ProgressiveActivityDetailKind,
 };
-use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
+use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
+use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -17,6 +19,7 @@ use crate::domain::parallel_mode::{
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
@@ -176,6 +179,231 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
     let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
     assert!(!host_scrollback.contains("activity:"));
     assert!(!host_scrollback.contains(secret));
+}
+
+#[test]
+fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
+    let secret = "AKRA_ACTIVITY_INSPECTOR_SCROLLBACK_SECRET";
+    let detail = format!(
+        "{secret}\u{1b}[31m\n{}",
+        (0..160)
+            .map(|index| format!("bounded activity row {index:03}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    append_history_message(&mut app, "committed history remains durable");
+    let _core_snapshot = tui_testkit::set_progressive_command_activity(&mut app, &detail, true);
+    assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frames = tui_testkit::InlineFrameRecorder::default();
+
+    frames.draw_and_record("open", &mut terminal, &mut runtime, &mut inline_terminal);
+    let next_page_start = runtime
+        .app()
+        .progressive_activity_overlay_ui_state
+        .next_page_start()
+        .expect("long detail should expose a second page");
+    let next_page_fragment = detail[next_page_start..]
+        .lines()
+        .next()
+        .expect("second page should start inside retained detail")
+        .to_string();
+    assert!(
+        runtime
+            .app_mut()
+            .handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,))
+    );
+    assert_eq!(
+        runtime
+            .app()
+            .progressive_activity_overlay_ui_state
+            .current_page_start(),
+        next_page_start
+    );
+    frames.draw_and_record("paged", &mut terminal, &mut runtime, &mut inline_terminal);
+    assert!(
+        runtime
+            .app_mut()
+            .handle_shell_overlay_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE,))
+    );
+    frames.draw_and_record("page-up", &mut terminal, &mut runtime, &mut inline_terminal);
+    assert!(
+        runtime
+            .app_mut()
+            .handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,))
+    );
+    assert!(
+        runtime
+            .app_mut()
+            .handle_shell_overlay_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE,))
+    );
+    frames.draw_and_record("home", &mut terminal, &mut runtime, &mut inline_terminal);
+    assert!(
+        runtime
+            .app_mut()
+            .handle_shell_overlay_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,))
+    );
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 48, 10);
+    frames.draw_and_record("narrow", &mut terminal, &mut runtime, &mut inline_terminal);
+    assert_eq!(
+        runtime
+            .app()
+            .progressive_activity_overlay_ui_state
+            .current_page_start(),
+        0
+    );
+    tui_testkit::resize_inline_history_terminal(&mut terminal, 80, 24);
+    frames.draw_and_record(
+        "restored",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.pending_approval_request = Some(ConversationApprovalRequest {
+        approval_id: "approval-activity".to_string(),
+        server_request_id: "server-activity".to_string(),
+        method: "item/fileChange/requestApproval".to_string(),
+        kind: ConversationApprovalRequestKind::FileChange,
+        summary: "Review the pending file change.".to_string(),
+        details: vec!["A bounded approval detail remains inspectable.".to_string()],
+    });
+    runtime
+        .app_mut()
+        .dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+    frames.draw_and_record(
+        "approval",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    runtime
+        .app_mut()
+        .dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
+    frames.draw_and_record("closed", &mut terminal, &mut runtime, &mut inline_terminal);
+
+    let open = frames.frame("open");
+    assert!(open.screen_text.contains(secret));
+    assert!(open.screen_text.contains("\\x1b[31m"));
+    assert!(!open.screen_text.contains('\u{1b}'));
+    assert!(open.screen_text.contains("bytes 0.."));
+    let paged = frames.frame("paged");
+    assert!(
+        paged
+            .screen_text
+            .contains(&format!("bytes {next_page_start}.."))
+    );
+    assert!(paged.screen_text.contains(&next_page_fragment));
+    assert!(!paged.screen_text.contains(secret));
+    assert!(frames.frame("page-up").screen_text.contains(secret));
+    assert!(frames.frame("page-up").screen_text.contains("bytes 0.."));
+    assert!(frames.frame("home").screen_text.contains(secret));
+    assert!(frames.frame("home").screen_text.contains("bytes 0.."));
+    assert!(frames.frame("narrow").screen_text.contains(secret));
+    assert!(frames.frame("narrow").screen_text.contains("bytes 0.."));
+    assert!(frames.frame("restored").screen_text.contains("bytes 0.."));
+    assert!(
+        frames
+            .frame("approval")
+            .screen_text
+            .contains("Approval Required")
+    );
+    assert!(
+        !frames
+            .frame("approval")
+            .screen_text
+            .contains("Retained Diff")
+    );
+    assert!(!frames.frame("closed").screen_text.contains("Retained Diff"));
+    for label in [
+        "open", "paged", "page-up", "home", "narrow", "restored", "approval", "closed",
+    ] {
+        let frame = frames.frame(label);
+        assert!(!frame.host_scrollback_text.contains(secret), "{label}");
+        assert!(
+            !frame.host_scrollback_text.contains("Retained Diff"),
+            "{label}"
+        );
+        assert!(
+            !frame.host_scrollback_text.contains("activity row"),
+            "{label}"
+        );
+    }
+    assert!(
+        frames
+            .frame("open")
+            .terminal_history_text
+            .contains("committed history remains durable")
+    );
+}
+
+#[test]
+fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
+    let secret = "AKRA_ACTIVITY_INSPECTOR_VT100_SECRET";
+    let detail = format!(
+        "{secret}\u{1b}[32m\n{}",
+        (0..80)
+            .map(|index| format!("vt100 activity row {index:03}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    let _core_snapshot = tui_testkit::set_progressive_command_activity(&mut app, &detail, false);
+    assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    for (width, height) in [(80, 24), (48, 10), (80, 24)] {
+        tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, width, height);
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("activity VT100 draw transaction");
+        let screen = tui_testkit::screen_text(&terminal);
+        assert!(screen.contains("Retained Output Tail"), "{width}x{height}");
+        assert!(!screen.contains('\u{1b}'), "{width}x{height}");
+        let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+        assert!(!host_scrollback.contains(secret), "{width}x{height}");
+        assert!(
+            !host_scrollback.contains("vt100 activity row"),
+            "{width}x{height}"
+        );
+    }
+
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.pending_approval_request = Some(ConversationApprovalRequest {
+        approval_id: "approval-vt100-activity".to_string(),
+        server_request_id: "server-vt100-activity".to_string(),
+        method: "item/commandExecution/requestApproval".to_string(),
+        kind: ConversationApprovalRequestKind::CommandExecution,
+        summary: "Review the VT100 command request.".to_string(),
+        details: vec!["Command: cargo test --lib".to_string()],
+    });
+    runtime
+        .app_mut()
+        .dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("approval-preempted activity VT100 draw transaction");
+    let approval_screen = tui_testkit::screen_text(&terminal);
+    assert!(approval_screen.contains("Approval Required"));
+    assert!(approval_screen.contains("Y: approve once"));
+    assert!(!approval_screen.contains("Retained Output Tail"));
+    let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    assert!(!host_scrollback.contains(secret));
+    assert!(!host_scrollback.contains("vt100 activity row"));
 }
 
 // Any direct history insertion invalidates ratatui's back buffer. The next

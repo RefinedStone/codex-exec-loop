@@ -422,6 +422,9 @@ pub(super) fn reduce_conversation_runtime(
                     activity,
                     rejection,
                 } => {
+                    state
+                        .progressive_activity_detail
+                        .replace_snapshot(&progressive_activity);
                     if let Some(rejection) = rejection {
                         state.extend_runtime_notices([format!(
                             "ignored progressive activity observation: {}",
@@ -891,6 +894,7 @@ fn queue_post_turn_evaluation(
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::app_runtime::core_turn_stream_event_from_application;
+    use crate::adapter::inbound::tui::app::conversation_model::ProgressiveActivityDetailKind;
     use crate::adapter::inbound::tui::app::{
         AutoFollowSubmitContext, ManualIntakeSubmitContext, PromptOrigin,
     };
@@ -999,6 +1003,10 @@ mod tests {
     }
 
     fn progressive_command_event(tail: &str) -> ConversationStreamEvent {
+        progressive_command_event_at(0, tail)
+    }
+
+    fn progressive_command_event_at(sequence: u64, tail: &str) -> ConversationStreamEvent {
         let newline_count = tail
             .as_bytes()
             .iter()
@@ -1006,7 +1014,7 @@ mod tests {
             .count() as u64;
         let batch = ConversationProgressiveActivityBatch::single(
             ConversationProgressiveActivityObservation {
-                sequence: 0,
+                sequence,
                 thread_id: "thread-1".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 item_id: Some("command-1".to_string()),
@@ -1526,6 +1534,12 @@ mod tests {
     #[test]
     fn progressive_command_projects_only_counts_and_clears_on_failure() {
         let secret = "AKRA_RAIL_RAW_COMMAND_SECRET";
+        let mut core = TurnStreamState::new();
+        core.seed_loaded_thread_identity("thread-1", "Runtime thread", "/tmp/workspace");
+        core.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.record_thread_prepared(
             "thread-1".to_string(),
@@ -1537,22 +1551,126 @@ mod tests {
 
         let started =
             reduce_conversation_runtime(state, stream_snapshot_event(command_started_event()));
+        let first = core.apply_stream_event(core_turn_stream_event_from_application(
+            progressive_command_event_at(0, &format!("first line\n{secret}")),
+        ));
         let projected = reduce_conversation_runtime(
             started.state,
-            stream_snapshot_event(progressive_command_event(&format!("first line\n{secret}"))),
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(first)),
         );
 
         assert_eq!(projected.state.progressive_activity.command_line_count(), 2);
         assert!(!format!("{:?}", projected.state.progressive_activity).contains(secret));
+        let document = projected
+            .state
+            .progressive_activity_detail
+            .document(ProgressiveActivityDetailKind::Output)
+            .expect("accepted command output detail");
+        assert_eq!(document.sequence, 0);
+        assert_eq!(document.text(), format!("first line\n{secret}"));
+        assert!(!format!("{document:?}").contains(secret));
+        drop(document);
+
+        let replacement = core.apply_stream_event(core_turn_stream_event_from_application(
+            progressive_command_event_at(1, "replacement output"),
+        ));
+        let replaced = reduce_conversation_runtime(
+            projected.state,
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(replacement)),
+        );
+        assert_eq!(
+            replaced
+                .state
+                .progressive_activity_detail
+                .document(ProgressiveActivityDetailKind::Output)
+                .map(|document| document.text().to_string()),
+            Some(format!("first line\n{secret}replacement output"))
+        );
 
         let failed = reduce_conversation_runtime(
-            projected.state,
+            replaced.state,
             stream_snapshot_event(ConversationStreamEvent::Failed {
                 message: "provider failed".to_string(),
             }),
         );
         assert_eq!(failed.state.progressive_activity.command_line_count(), 0);
         assert_eq!(failed.state.progressive_activity.active_item_kind(), None);
+        assert!(
+            failed
+                .state
+                .progressive_activity_detail
+                .document(ProgressiveActivityDetailKind::Output)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejected_progressive_batch_refreshes_detail_incomplete_history_truth() {
+        let mut core = TurnStreamState::new();
+        core.seed_loaded_thread_identity("thread-1", "Runtime thread", "/tmp/workspace");
+        core.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
+            turn_id: "turn-1".to_string(),
+            runtime_request: Box::default(),
+        });
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.record_thread_prepared(
+            "thread-1".to_string(),
+            "Runtime thread".to_string(),
+            "/tmp/workspace".to_string(),
+        );
+        state.record_turn_started("turn-1".to_string());
+
+        let accepted = core.apply_stream_event(core_turn_stream_event_from_application(
+            progressive_command_event("retained output"),
+        ));
+        let accepted = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(accepted)),
+        );
+        let wrong_turn = ConversationProgressiveActivityBatch::single(
+            ConversationProgressiveActivityObservation {
+                sequence: 1,
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("wrong-turn".to_string()),
+                item_id: Some("command-1".to_string()),
+                kind: ConversationProgressiveActivityKind::CommandOutput,
+                payload: ConversationProgressiveActivityPayload::CommandOutput {
+                    tail: "rejected output".to_string(),
+                    chunk_count: 1,
+                    source_bytes: 15,
+                    newline_count: 0,
+                    ends_with_newline: false,
+                    truncated_bytes: 0,
+                },
+            },
+        )
+        .expect("wrong-turn batch should be structurally valid");
+        let rejected = core.apply_stream_event(
+            crate::core::app::TurnStreamEvent::ProgressiveActivityObserved {
+                batch: Box::new(wrong_turn),
+            },
+        );
+        assert!(matches!(
+            &rejected.update,
+            TurnStreamUpdate::ProgressiveActivityObserved {
+                rejection: Some(_),
+                ..
+            }
+        ));
+
+        let rejected = reduce_conversation_runtime(
+            accepted.state,
+            ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(rejected)),
+        );
+        let document = rejected
+            .state
+            .progressive_activity_detail
+            .document(ProgressiveActivityDetailKind::Output)
+            .expect("accepted detail remains available after rejected batch");
+        assert_eq!(document.text(), "retained output");
+        assert!(document.history_incomplete);
+        assert!(!format!("{document:?}").contains("retained output"));
+        assert!(!format!("{document:?}").contains("rejected output"));
     }
 
     #[test]

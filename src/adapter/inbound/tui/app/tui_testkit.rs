@@ -15,6 +15,7 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use crate::domain::conversation_item_lifecycle::{
     ConversationItemKind, ConversationItemLifecycleConsistency,
@@ -24,8 +25,8 @@ use crate::domain::conversation_item_lifecycle::{
 use crate::domain::conversation_progressive_activity::{
     ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
     ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
-    ConversationProgressiveActivityProjection, ConversationProgressiveTokenUsage,
-    ConversationProgressiveTokenUsageBreakdown,
+    ConversationProgressiveActivityProjection, ConversationProgressiveActivityProjectionSnapshot,
+    ConversationProgressiveTokenUsage, ConversationProgressiveTokenUsageBreakdown,
 };
 
 // VT100-backed helpers keep a larger scrollback than the visible viewport so
@@ -334,7 +335,7 @@ pub(super) fn set_progressive_command_activity(
     app: &mut NativeTuiApp,
     command_tail: &str,
     bounded_history: bool,
-) {
+) -> Arc<ConversationProgressiveActivityProjectionSnapshot> {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");
     };
@@ -459,6 +460,10 @@ pub(super) fn set_progressive_command_activity(
         0,
         0,
     );
+    conversation
+        .progressive_activity_detail
+        .replace_snapshot(&snapshot);
+    snapshot
 }
 
 pub(super) struct Vt100Screen {

@@ -118,6 +118,8 @@ mod planning_shell_command;
 mod planning_worker_debug_preview;
 #[path = "app/post_turn_continuation.rs"]
 mod post_turn_continuation;
+#[path = "app/progressive_activity_overlay_ui.rs"]
+mod progressive_activity_overlay_ui;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/reviews_overlay_ui.rs"]
@@ -181,7 +183,7 @@ pub(super) use conversation_model::AutoFollowDecision;
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationInputState,
-    ConversationState, ConversationViewModel, StopKeywordRule,
+    ConversationState, ConversationViewModel, ProgressiveActivityDetailKind, StopKeywordRule,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
@@ -209,6 +211,9 @@ use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningInitOverlayUiState,
+};
+use progressive_activity_overlay_ui::{
+    ProgressiveActivityOverlayUiState, parse_progressive_activity_detail_kind,
 };
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;
@@ -312,6 +317,7 @@ struct NativeTuiApp {
     session_state: SessionState,
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
+    progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
     next_manual_prompt_preparation_request_id: u64,

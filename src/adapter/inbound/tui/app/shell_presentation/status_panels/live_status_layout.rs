@@ -55,6 +55,7 @@ fn compact_inspection_tail_lines(
     lines: Vec<Line<'static>>,
 ) -> Vec<Line<'static>> {
     const MAX_INSPECTION_TAIL_ROWS: usize = 6;
+    const MAX_ACTIVITY_TAIL_ROWS: usize = 4;
     if content_width == 0
         || app.shell_overlay == ShellOverlay::Hidden
         || context.startup_screen_is_active()
@@ -71,13 +72,19 @@ fn compact_inspection_tail_lines(
     let prompt_start_index = lines.len().saturating_sub(prompt_lines.len());
     let prefix_lines = &lines[..prompt_start_index];
     let prompt_rows = rendered_rows(&prompt_lines, content_width);
-    if prompt_rows >= MAX_INSPECTION_TAIL_ROWS {
+    let compact_activity_tail = app.shell_overlay == ShellOverlay::Activity && content_width <= 48;
+    let max_tail_rows = if compact_activity_tail {
+        MAX_ACTIVITY_TAIL_ROWS
+    } else {
+        MAX_INSPECTION_TAIL_ROWS
+    };
+    if prompt_rows >= max_tail_rows {
         return prompt_lines
             .into_iter()
             .rev()
             .scan(0usize, |rows, line| {
                 let next_rows = rows.saturating_add(wrapped_row_count(line.width(), content_width));
-                if next_rows > MAX_INSPECTION_TAIL_ROWS {
+                if next_rows > max_tail_rows {
                     None
                 } else {
                     *rows = next_rows;
@@ -90,12 +97,15 @@ fn compact_inspection_tail_lines(
             .collect();
     }
 
-    let prefix_row_budget = MAX_INSPECTION_TAIL_ROWS - prompt_rows;
+    let prefix_row_budget = max_tail_rows - prompt_rows;
     let mut compacted = Vec::new();
     let mut used_prefix_rows = 0usize;
     for line in prefix_lines {
         let line_rows = wrapped_row_count(line.width(), content_width);
         if used_prefix_rows.saturating_add(line_rows) > prefix_row_budget {
+            if compact_activity_tail {
+                continue;
+            }
             break;
         }
         compacted.push(line.clone());

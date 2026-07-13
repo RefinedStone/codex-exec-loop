@@ -1,8 +1,9 @@
 use super::super::shell_presentation::{
-    DirectionsMaintenanceOverlayView, HelpOverlayView, LanguageSelectionOverlayView,
-    ModelSelectionOverlayView, OverlayListView, ParallelPeekOverlayView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
+    ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceOverlayView,
+    HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
+    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
+    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
+    ViewSelectionOverlayView, build_activity_overlay_view,
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
@@ -79,6 +80,7 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::ParallelPeek => {
             draw_inline_parallel_peek_inspection(frame, inspection_area, app)
         }
+        ShellOverlay::Activity => draw_inline_activity_inspection(frame, inspection_area, app),
         ShellOverlay::Help => draw_inline_help_inspection(frame, inspection_area),
         ShellOverlay::Reviews => draw_inline_reviews_inspection(frame, inspection_area, app),
         ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
@@ -90,6 +92,93 @@ pub(super) fn draw_inline_shell_inspection(
         }
         ShellOverlay::Approval => draw_inline_approval_inspection(frame, inspection_area, app),
     }
+}
+
+fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
+    let selected_kind = app.progressive_activity_overlay_ui_state.selected_kind();
+    let (lifecycle_epoch, diff_available, output_available, document) =
+        match &app.conversation_state {
+            super::ConversationState::Ready(conversation) => {
+                let detail = &conversation.progressive_activity_detail;
+                (
+                    detail.lifecycle_epoch(),
+                    detail
+                        .document(super::ProgressiveActivityDetailKind::Diff)
+                        .is_some(),
+                    detail
+                        .document(super::ProgressiveActivityDetailKind::Output)
+                        .is_some(),
+                    detail.document(selected_kind),
+                )
+            }
+            super::ConversationState::Loading | super::ConversationState::Failed(_) => {
+                (0, false, false, None)
+            }
+        };
+    app.progressive_activity_overlay_ui_state.select_document(
+        lifecycle_epoch,
+        document.as_ref().map(|document| document.sequence),
+    );
+    let document_view = document.as_ref().map(|document| ActivityOverlayDocument {
+        sequence: document.sequence,
+        text: document.text(),
+        source_bytes: document.source_bytes,
+        retained_bytes: document.retained_bytes,
+        truncated_bytes: document.truncated_bytes,
+        history_incomplete: document.history_incomplete,
+    });
+
+    // Header copy is bounded independently of the retained document. Build it
+    // with a zero-row body first so the real document is scanned only once.
+    let header_view = build_activity_overlay_view(
+        selected_kind,
+        diff_available,
+        output_available,
+        document_view,
+        0,
+        area.width,
+        0,
+    );
+    let desired_header_height = count_rendered_inline_rows(&header_view.header_lines, area.width)
+        .saturating_add(1)
+        .min(usize::from(u16::MAX)) as u16;
+    let header_height = desired_header_height.min(area.height.saturating_sub(2));
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_height), Constraint::Min(2)])
+        .split(area);
+    let body_height = layout[1].height.saturating_sub(1);
+    app.progressive_activity_overlay_ui_state
+        .sync_viewport(layout[1].width, body_height);
+    let requested_page_start = app
+        .progressive_activity_overlay_ui_state
+        .current_page_start();
+    let ActivityOverlayView {
+        header_lines,
+        detail_title,
+        detail_lines,
+        current_page_start,
+        next_page_start,
+    } = build_activity_overlay_view(
+        selected_kind,
+        diff_available,
+        output_available,
+        document_view,
+        requested_page_start,
+        layout[1].width,
+        body_height,
+    );
+    app.progressive_activity_overlay_ui_state
+        .set_page_window(current_page_start, next_page_start);
+
+    render_inline_titled_panel(
+        frame,
+        layout[0],
+        inline_overlay_title("Activity"),
+        header_lines,
+        false,
+    );
+    render_inline_scrolled_panel(frame, layout[1], detail_title, detail_lines, 0);
 }
 
 fn draw_inline_approval_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {

@@ -1,0 +1,20 @@
+---
+source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+expression: vt100
+---
+Akra / Activity / inline inspection
+  Diff    > Output
+source:795 bytes  retained:795 bytes
+truncated:0 bytes  history:incomplete  sequence:0
+Retained Output Tail / bytes 0..91 of 795
+한글 wide detail
+@@ -1 +1 @@
+-old value
++AKRA_ACTIVITY_DETAIL_SECRET\x1b[31m
+detail line 00
+Akra  |  thread: Progressive activity  |  turn: working  |  input: streaming
+status: turn started
+◦ Working (0s • waiting for response / interrupt runtime-...)
+notice: activity: cmd:52 lines | active:command | diff:+1 -1 h1 | ctx:75.00%
+>
+prompt: turn running  |  type now, Enter when idle

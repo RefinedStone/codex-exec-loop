@@ -49,10 +49,11 @@ mod status_panels;
 mod transcript_copy;
 
 pub(super) use overlays::{
-    DirectionsMaintenanceOverlayView, HelpOverlayView, LanguageSelectionOverlayView,
-    ModelSelectionOverlayView, OverlayListView, ParallelPeekOverlayView,
-    PlanningDraftEditorOverlayView, PlanningInitOverlayView, QueueOverlayView, SessionOverlayView,
-    StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
+    ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceOverlayView,
+    HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
+    ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
+    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
+    ViewSelectionOverlayView, build_activity_overlay_view,
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,

@@ -24,6 +24,15 @@ fn parse_recognizes_supported_aliases() {
         (":parallel", Some((InlineShellCommand::Parallel, None))),
         (":pa", Some((InlineShellCommand::Parallel, None))),
         (":peek", Some((InlineShellCommand::Peek, None))),
+        (":activity", Some((InlineShellCommand::Activity, None))),
+        (
+            ":activity diff",
+            Some((InlineShellCommand::Activity, Some("diff"))),
+        ),
+        (
+            ":act OUTPUT",
+            Some((InlineShellCommand::Activity, Some("OUTPUT"))),
+        ),
         (
             ":parallel off",
             Some((InlineShellCommand::Parallel, Some("off"))),
@@ -133,6 +142,7 @@ fn suggestions_show_all_commands_for_colon_only() {
             InlineShellCommand::Diagnostics,
             InlineShellCommand::Parallel,
             InlineShellCommand::Peek,
+            InlineShellCommand::Activity,
             InlineShellCommand::Sessions,
             InlineShellCommand::Reviews,
             InlineShellCommand::Queue,
@@ -170,6 +180,14 @@ fn suggestions_filter_by_prefix() {
     assert_eq!(
         InlineShellCommand::suggestions(":pa"),
         vec![InlineShellCommand::Parallel]
+    );
+    assert_eq!(
+        InlineShellCommand::suggestions(":a"),
+        vec![InlineShellCommand::Activity, InlineShellCommand::Turns]
+    );
+    assert_eq!(
+        InlineShellCommand::suggestions(":act"),
+        vec![InlineShellCommand::Activity]
     );
     assert_eq!(
         InlineShellCommand::suggestions(":q"),
@@ -278,6 +296,7 @@ fn completion_text_uses_canonical_argument_ready_command_forms() {
     );
     assert_eq!(InlineShellCommand::Parallel.completion_text(), ":parallel");
     assert_eq!(InlineShellCommand::Peek.completion_text(), ":peek");
+    assert_eq!(InlineShellCommand::Activity.completion_text(), ":activity");
     assert_eq!(InlineShellCommand::Doctor.completion_text(), ":doctor");
     assert_eq!(InlineShellCommand::Turns.completion_text(), ":turns ");
     assert_eq!(InlineShellCommand::Stop.completion_text(), ":stop");
@@ -314,6 +333,7 @@ fn help_entries_use_renderable_command_forms() {
     assert!(rendered.contains(":diag - diagnostics"));
     assert!(rendered.contains(":parallel [off] - parallel mode"));
     assert!(rendered.contains(":peek - parallel agent peek"));
+    assert!(rendered.contains(":activity [diff|output] - turn activity detail"));
     assert!(!rendered.lines().any(|line| line.starts_with(":pa ")));
     assert!(
         rendered.contains(":turns <positive|infinite|off> - auto-follow opt-in; off or 0 disables")
@@ -436,6 +456,31 @@ fn parallel_command_hint_is_argument_aware() {
     assert_eq!(
         invalid_extra.buffered_hint(),
         "Press Enter to apply `:parallel off now`. Supported command forms: :parallel, :pa, :parallel off, :pa off."
+    );
+}
+
+#[test]
+fn activity_command_hint_is_argument_aware() {
+    let plain = InlineShellCommandInput::parse(":activity").expect("command should parse");
+    let diff = InlineShellCommandInput::parse(":activity diff").expect("command should parse");
+    let output = InlineShellCommandInput::parse(":act OUTPUT").expect("command should parse");
+    let invalid = InlineShellCommandInput::parse(":activity all").expect("command should parse");
+
+    assert_eq!(
+        plain.buffered_hint(),
+        "Type `:activity [diff|output]` to inspect retained turn detail."
+    );
+    assert_eq!(
+        diff.buffered_hint(),
+        "Press Enter to inspect retained `diff` activity detail."
+    );
+    assert_eq!(
+        output.buffered_hint(),
+        "Press Enter to inspect retained `output` activity detail."
+    );
+    assert_eq!(
+        invalid.buffered_hint(),
+        "`:activity all` is unsupported; pressing Enter leaves the current overlay unchanged. Supported values: diff, output."
     );
 }
 
@@ -606,6 +651,7 @@ fn execution_status_stays_alias_neutral() {
         (":queue", Some("opened planning queue inspection")),
         (":doctor", None),
         (":planning", None),
+        (":activity output", None),
         (":turns 5", None),
         (":stop", None),
         (":model gpt-5.4", None),

@@ -17,6 +17,7 @@ pub enum ShellOverlay {
     LanguageSelection,
     Supersession,
     ParallelPeek,
+    Activity,
     Help,
     Reviews,
     Queue,
@@ -110,6 +111,7 @@ pub enum ShellChromeEvent {
     LanguageSelectionOverlayShown,
     SupersessionOverlayShown,
     ParallelPeekOverlayShown,
+    ActivityOverlayShown,
     HelpOverlayShown,
     ReviewsOverlayShown,
     QueueOverlayShown,
@@ -164,6 +166,7 @@ pub fn reduce_shell_chrome(
                 | ShellChromeEvent::LanguageSelectionOverlayShown
                 | ShellChromeEvent::SupersessionOverlayShown
                 | ShellChromeEvent::ParallelPeekOverlayShown
+                | ShellChromeEvent::ActivityOverlayShown
                 | ShellChromeEvent::HelpOverlayShown
                 | ShellChromeEvent::ReviewsOverlayShown
                 | ShellChromeEvent::QueueOverlayShown
@@ -249,6 +252,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::ParallelPeekOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::ParallelPeek;
+        }
+        ShellChromeEvent::ActivityOverlayShown => {
+            state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            state.shell_overlay = ShellOverlay::Activity;
         }
         ShellChromeEvent::HelpOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -633,6 +640,25 @@ mod tests {
         );
         assert_eq!(reduced.state.shell_overlay, ShellOverlay::ParallelPeek);
         assert!(reduced.effects.is_empty());
+    }
+    #[test]
+    fn activity_overlay_obeys_exit_and_approval_focus_priority() {
+        let mut state = ShellChromeState::new();
+        state.exit_confirmation_state = ExitConfirmationState::Visible;
+        let activity = reduce_shell_chrome(state, ShellChromeEvent::ActivityOverlayShown);
+
+        assert_eq!(activity.state.shell_overlay, ShellOverlay::Activity);
+        assert_eq!(
+            activity.state.exit_confirmation_state,
+            ExitConfirmationState::Hidden
+        );
+
+        let approval = reduce_shell_chrome(activity.state, ShellChromeEvent::ApprovalOverlayShown);
+        assert_eq!(approval.state.shell_overlay, ShellOverlay::Approval);
+
+        let blocked = reduce_shell_chrome(approval.state, ShellChromeEvent::ActivityOverlayShown);
+        assert_eq!(blocked.state.shell_overlay, ShellOverlay::Approval);
+        assert!(blocked.effects.is_empty());
     }
     #[test]
     fn toggling_supersession_overlay_hides_exit_confirmation() {
