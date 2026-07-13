@@ -1664,14 +1664,26 @@ mod tests {
         fs::create_dir_all(node.parent().expect("Node should have a parent"))
             .expect("Node Cellar directory should be created");
         make_safe_directory_chain(&root);
+        make_safe_directory_ancestors(&launcher, &root);
+        make_safe_directory_ancestors(&node, &root);
         write_executable(&launcher, "#!/usr/bin/env node\nprocess.exit(0);\n");
         write_native_executable(&node);
         symlink(&launcher, bin.join("codex")).expect("Codex launcher should be linked");
         symlink(&node, bin.join("node")).expect("Node should be linked");
 
         for directory in [bin.as_path(), library.as_path(), cellar.as_path()] {
-            std::os::unix::fs::chown(directory, None, Some(super::MACOS_ADMIN_GROUP_ID))
-                .expect("Homebrew directory should use the macOS admin group");
+            if let Err(error) =
+                std::os::unix::fs::chown(directory, None, Some(super::MACOS_ADMIN_GROUP_ID))
+            {
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    eprintln!(
+                        "skipping Homebrew path integration: cannot assign the macOS admin group"
+                    );
+                    let _ = fs::remove_dir_all(root);
+                    return;
+                }
+                panic!("Homebrew directory should use the macOS admin group: {error}");
+            }
             fs::set_permissions(directory, fs::Permissions::from_mode(0o775))
                 .expect("Homebrew directory should be group-writable");
         }
@@ -2254,6 +2266,19 @@ mod tests {
                 permissions.set_mode(0o755);
                 fs::set_permissions(child, permissions).expect("child should be safe");
             }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn make_safe_directory_ancestors(path: &Path, root: &Path) {
+        for directory in path
+            .parent()
+            .expect("fixture path should have a parent")
+            .ancestors()
+            .take_while(|directory| directory.starts_with(root))
+        {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755))
+                .expect("fixture directory should have deterministic permissions");
         }
     }
 
