@@ -1,0 +1,9 @@
+Akra  |  thread: Untitled thread  |  turn:
+working  |  input: streaming
+status: thread status: active
+runtime: notice: bridge attach...  |  warn: none
+Working (4s)
+planning: stale  |  queue: queue idle
+notice: activity: model:gpt-5.6-sol
+>
+prompt: turn running  |  type now, Enter when

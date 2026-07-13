@@ -1,0 +1,23 @@
+scenario_set: pr1926-e2-r2-actual-runtime-v1
+overall_result: pass; independent review found no Blocker or P2 issue
+
+1. candidate_integrity: pass
+   Exact commit, tree, clean state, Windows candidate SHA, and pinned Codex SHA were unchanged.
+2. startup_and_input_editing: pass
+   Ctrl+j created multiline input; Ctrl+w removed the selected word without losing adjacent lines.
+3. actual_codex_direct_final: pass
+   The intended direct-answer flow made no tool call and produced one exact E2R2 canary final.
+4. active_and_committed_history: pass
+   Active streaming state was visible; the exact final was committed once without stale activity.
+5. help_and_redraw_stability: pass
+   Help open/close and redraw preserved one final without stale rows or duplicate replay.
+6. physical_resize_and_restore: pass
+   Console API geometry reached 48x18 and returned to 133x30 without stale rows or overlap.
+7. clear_reset_live_viewport: pass
+   Ctrl+t produced a clean new-draft live viewport; durable host scrollback remained terminal-owned.
+8. session_switch_restore: pass
+   The selected session restored the prompt and exact final; the private picker was excluded.
+9. clean_exit_and_cleanup: pass
+   Ctrl+q returned runtime exit 0 and the terminal recovered.
+10. artifact_safety: pass
+   Selected PNGs exclude private paths, credentials, full task IDs, and text metadata chunks.

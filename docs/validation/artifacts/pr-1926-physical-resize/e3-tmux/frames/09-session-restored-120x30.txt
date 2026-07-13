@@ -1,0 +1,15 @@
+You:
+  [original-user-prompt]
+  Run sleep 5 in the shell, then reply with exactly E3R2-COMMITTED-CANARY-PR1926 and no other text.
+
+Codex Commentary:
+  <selected non-final commentary omitted>
+
+Codex:
+  E3R2-COMMITTED-CANARY-PR1926
+
+Akra  |  thread: restored session  |  turn: idle  |  input: ready
+status: thread loaded / planning status: ready
+now: Run sleep 5 in the shell, then reply ...  |  next: none
+>
+prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help

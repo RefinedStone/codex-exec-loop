@@ -1,0 +1,31 @@
+artifact_id: pr1926-e2-r2-actual
+capture_role: supplemental-unmatched
+environment_class: first-class E2
+check_profile: pr1926-physical-resize-actual-runtime-r2
+captured_at_utc: 2026-07-13T18:59:43Z
+operator: Codex root agent
+reviewer: Codex /root/e1_e2_terminal_capability
+candidate_commit: 0a5f06ea345bd5c24998527679158eaf8643d058
+candidate_tree: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+candidate_clean: true
+binary_sha256: a64939ac63cff5b9f08d3ffd06fa2c16968be2a57ced18c55867a6efbdf1704e
+binary_target: x86_64-pc-windows-msvc
+source_build: true
+runtime_authority: actual Codex app-server
+codex_version: codex-cli 0.144.1
+codex_binary_sha256: cbacbb9726262ef558b4af0438a1b2a5bba9076132401d947b5b4d2bf92ab0e4
+terminal: Windows Terminal 1.24.11321.0
+shell: Windows PowerShell 5.1.26100.8655
+os: Microsoft Windows 11 Pro 10.0.26200
+frontend: inline
+tty: ConPTY via Windows Terminal
+multiplexer: none
+term: xterm-256color
+initial_geometry: 133x30
+inline_history_render_mode: HostScrollback
+inline_history_render_mode_source: default; override unset
+history_insertion_mode: NewlineFallback
+history_insertion_mode_source: WT_SESSION default; override unset
+wt_session: present
+relevant_overrides: CODEX_EXEC_LOOP_INLINE_HISTORY_MODE unset; CODEX_EXEC_LOOP_HISTORY_INSERT_MODE unset
+runtime_exit_status: 0

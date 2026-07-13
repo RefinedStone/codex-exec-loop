@@ -1,0 +1,23 @@
+scenario_set: pr1926-e4-r2-actual-runtime-v1
+overall_result: pass; independent review found no Blocker or P2 issue
+
+1. candidate_integrity: pass
+   Exact commit, tree, clean state, and Linux candidate binary SHA were unchanged.
+2. startup_and_input_editing: pass
+   Ctrl+j created multiline input; Ctrl+w removed the selected word; Ctrl+u cleared test input.
+3. actual_codex_direct_final: pass
+   The intended direct-answer flow made no tool call and produced one exact E4R2 canary final.
+4. active_and_committed_history: pass
+   Active streaming state was visible; the exact final was committed once without stale activity.
+5. help_and_redraw_stability: pass
+   Help open/close retained one submitted prompt and one exact final without duplicate replay.
+6. physical_resize_and_restore: pass
+   Live stty geometry reached 48x18 and returned to 120x30 without stale rows or overlap.
+7. clear_reset_live_viewport: pass
+   Ctrl+t produced a clean new-draft live viewport; durable host scrollback remained terminal-owned.
+8. session_switch_restore: pass
+   The captured session restored the submitted prompt and exact final; the private picker was excluded.
+9. clean_exit_and_cleanup: pass
+   Ctrl+q returned runtime exit 0, the terminal recovered, and scoped process count was 0.
+10. artifact_safety: pass
+   Selected PNGs exclude paths, UUIDs, credentials, full task IDs, and text metadata chunks.

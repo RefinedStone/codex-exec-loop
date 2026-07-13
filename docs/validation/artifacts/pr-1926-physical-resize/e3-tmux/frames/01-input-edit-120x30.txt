@@ -1,0 +1,4 @@
+Akra  |  Workflows: ready  |  Sessions: 0 loaded  |  Reviews: off
+> E3R2-EDIT-ALPHA
+  E3R2-EDIT-GAMMA
+buffered prompt  |  Enter send  |  Ctrl+j nl

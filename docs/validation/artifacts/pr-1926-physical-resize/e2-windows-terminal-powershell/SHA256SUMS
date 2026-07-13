@@ -1,0 +1,16 @@
+5a5a4b70a7da6fc71c616db6e1fb1d9cf4db9babcf2f5c86c8c75b3671ef1b5a  ./environment-stamp.txt
+e3ba51162ac4ba09234567cc98fa62791abb0037cca02c4956e0379cfcd234dc  ./geometry-narrow.json
+ff28e6b06ea0a1a1b131b78c591e7577ff0086b2be320658994bb8141a08a49e  ./geometry-restored.json
+0c769197de80729d488b2d5b946d73b9a7b2c90c7ffd36b8ae7b01d76797fd01  ./integrity-verification.txt
+f96cb49623c76f7e4028d406ccd62f294365ab0c4cfcd19dac38667dd92dcc5c  ./rollout-verification.txt
+541d2df7759a8da4b86327753ef12c8ff652780182f2c9b5dfaaccb40e7d3570  ./scenario-results.txt
+49ebd9e7be4e732626390462de7d5082b878419b8c97d038036a47f8552cd121  ./screens/01-input-editing.png
+975af699e1e4f3dc3f67d368f06f6883e30ba0f655ba4339fcbc5e89a731990c  ./screens/02-active.png
+00b5cbbf56399f7c98df934f74e18e60774605d219847d086f43582317069e6b  ./screens/04-completed-scrollback.png
+1d051ae67a0269a2b2d6a380f60b9ac090c9ffa3fc3b619c678a78a4af5e32e9  ./screens/05-help.png
+30709cfda0e1772b3dd58d663eb640f4f6d3f6d46003aaaeb3d9571eff04ba6d  ./screens/06-redraw.png
+51991704ff169d591cd46d6d87696a4faf15dcd5495e6a258fbfee4a464e0656  ./screens/07-narrow-48x18.png
+e408e08ad7c456735cad26c4a39a8557e5d146e0226b66401a1f370a8af557bf  ./screens/08-restored-133x30.png
+99a407c9c807165fd377705399fad0204a0f9c67c92e0da4cc0d432c8c4c0743  ./screens/09-clear-reset-safe.png
+45a113b3a431e51b1eda24fa3b9220076118024bd430dbb61bb53cf994818b05  ./screens/10-session-restored.png
+d41a28cad5f24373c8cdb15a974f54df874b7a277736da8d6418bc27a94410c2  ./screens/11-exit.png

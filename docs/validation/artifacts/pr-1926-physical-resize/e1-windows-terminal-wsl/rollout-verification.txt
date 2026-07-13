@@ -1,0 +1,13 @@
+verification_scope: private rollout structural fields only
+rollout_file_count: 1
+rollout_sha256: a2f8ca8cecc7a144cb32a3458f9da9ec678a5c907a4bba1ea5ded5123a452ba7
+parsed_record_count: 16
+runtime_cli_version: 0.144.3
+sleep5_exact_call_count: 1
+sleep5_exit0_count: 1
+assistant_final_count: 1
+assistant_exact_final_count: 1
+exact_final: E1R2_COMMITTED_CANARY_PR1926
+exact_final_sha256: 978b8613ccf3dc92b219fc970cb49b5160044915a961e8e676c362002378480f
+raw_rollout_copied_to_repository: false
+result: pass

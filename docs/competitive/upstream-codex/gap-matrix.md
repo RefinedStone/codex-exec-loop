@@ -22,10 +22,13 @@ completed, failed, interrupted, and unknown outcomes instead of collapsing match
 `7960ecca`, and P0-C1 closed item identity is present at `7514eb05`. This atomic slice implements
 P0-C2 bounded progressive activity. P0-D1's bounded progressive activity rail is present at
 `b53559ca`, P0-D2's transient retained Diff/Output inspector is present at `594859a6`, and P0-D3's
-typed priority rail is present at `89264f6e`. P0-D4 now has a source-build E3 tmux detached-PTY
-supplemental capture at `0a5f06ea`, but P0-D remains partial: the common primitive change still
-requires E1-E4 approval captures. Released-runtime activity capture remains a separate
-absent artifact.
+typed priority rail is present at `89264f6e`. P0-D4 now has both its deterministic supplemental E3
+capture and a reviewed
+[E1-E4 physical-resize artifact](../../validation/artifacts/pr-1926-physical-resize/README.md)
+bound to source-build candidate `0a5f06ea`. The E1-E4 set satisfies the shared terminal-primitive
+manual reviewer obligation. Every capture remains `supplemental-unmatched`, does not count toward
+`terminal-baseline`, and is not released Akra runtime activity evidence. P0-D remains partial only
+because that released Akra runtime activity capture is absent.
 Durable recovery, validation/delivery projection, and broader surface rendering remain separate
 owners rather than implied consequences of P0-A through P0-D3.
 
@@ -502,8 +505,9 @@ including the bundled planning-worker skill path; it does not record raw respons
   Review Center, GitHub review, planning, validation, merge, or delivery authority.
 
 This slice intentionally adds no progressive delta handling, rich lifecycle rail, Admin/CLI/
-Telegram projection, parallel activity persistence, durable restart recovery, or released-runtime
-capture. Those owners consume this typed contract later rather than parsing app-server JSON again.
+Telegram projection, parallel activity persistence, durable restart recovery, or released Akra
+runtime capture. Those owners consume this typed contract later rather than parsing app-server
+JSON again.
 
 #### P0-C2: Bounded Progressive Activity
 
@@ -576,8 +580,9 @@ transport rejection, history-only Core application, stale-generation pruning, an
 At the P0-C2 commit, this slice intentionally added no activity rail or Diff/Output inspector. P0-D1
 later added the bounded summary rail at `b53559ca`, and P0-D2 added transient retained-detail
 inspection at `594859a6`. Admin/CLI/Telegram projection, parallel persistence, durable restart
-recovery, released-runtime capture, and comparative performance evidence remain separate and absent
-from these slices. Deprecated compaction is represented by the P0-C1 `ContextCompaction` item
+recovery, released Akra runtime activity capture, and comparative performance evidence remain
+separate and absent from these slices. Deprecated compaction is represented by the P0-C1
+`ContextCompaction` item
 instead of a second progressive fact; model reroute remains the P0-B applied-envelope owner.
 
 #### P0-D: Core And TUI Projection
@@ -607,11 +612,19 @@ instead of a second progressive fact; model reroute remains the P0-B applied-env
 - P0-D4 candidate `0a5f06ea345bd5c24998527679158eaf8643d058` adds an isolated deterministic
   source-build E3 tmux detached-PTY capture covering wide/narrow/intermediate/repeat/restore and
   completion behavior. The repeated narrow frame is semantically stable after normalizing tmux
-  blank-row reflow and elapsed-time text, and no transient typed fact enters host history. It is
-  supplemental, synthetic-app-server evidence rather than approval-grade E1-E4 or released-runtime
-  evidence. E1-E4 approval captures remain required for the common primitive change. These slices
-  do not claim Admin/CLI/Telegram projection, parallel or durable persistence,
-  restart/reconciliation recovery behavior, or comparative latency/RSS.
+  blank-row reflow and elapsed-time text, and no transient typed fact enters host history. That
+  synthetic-app-server artifact remains `approvalGrade: false` and does not satisfy an E1-E4 row
+  by itself.
+- Separately, the reviewed
+  [E1-E4 physical-resize artifact](../../validation/artifacts/pr-1926-physical-resize/README.md)
+  binds all four first-class environments to the same exact source candidate and per-platform
+  binary digests. Actual Codex app-server sessions cover input, active/final state, help/redraw,
+  physical shrink/restore, clear/reset, session restore, and clean exit. This satisfies the shared
+  primitive-change E1-E4 manual reviewer obligation.
+- These captures remain `supplemental-unmatched`, do not count toward `terminal-baseline`, and are
+  not released Akra runtime activity evidence. P0-D remains partial only for that released Akra
+  runtime activity capture. These slices do not claim Admin/CLI/Telegram projection, parallel or
+  durable persistence, restart/reconciliation recovery behavior, or comparative latency/RSS.
 
 **Required proof**
 
@@ -899,9 +912,10 @@ inseparable. Later rows may begin only after their prerequisite semantic contrac
 | 20 | Session catalog/provenance/fork | P2 existing | recovery and application identity | cursor/filter/lineage/fork TUI then Admin |
 | 21 | File approval/forms/additional inputs | P2 existing | row 16 and canary invariant | bounded typed UI and source-to-sink proof |
 
-Rows 1 through 4 are implemented as separate atomic slices on `prerelease`. Row 5 is partially
-implemented by P0-D1 through P0-D3 plus P0-D4's supplemental E3 source-build capture; all E1-E4
-approval captures and released-runtime capture remain absent. Durable
+Rows 1 through 4 are implemented as separate atomic slices on `prerelease`. Row 5 remains partially
+implemented by P0-D1 through P0-D4. P0-D4's reviewed supplemental E1-E4 manual artifact satisfies
+the shared primitive reviewer obligation, but released Akra runtime activity capture remains
+absent. The manual artifact does not count as `terminal-baseline` matrix rows. Durable
 readback, child-loss CAS,
 validation/delivery/Admin projection, model UI, daemon topology, and broad event rendering remain
 with their later owners.

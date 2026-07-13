@@ -1,0 +1,29 @@
+verification_scope: exact detached candidate and isolated actual runtime capture
+expected_commit: 0a5f06ea345bd5c24998527679158eaf8643d058
+observed_commit_before: 0a5f06ea345bd5c24998527679158eaf8643d058
+observed_commit_after: 0a5f06ea345bd5c24998527679158eaf8643d058
+expected_tree: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+observed_tree_before: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+observed_tree_after: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+expected_binary_sha256: a64939ac63cff5b9f08d3ffd06fa2c16968be2a57ced18c55867a6efbdf1704e
+observed_binary_sha256: a64939ac63cff5b9f08d3ffd06fa2c16968be2a57ced18c55867a6efbdf1704e
+expected_codex_binary_sha256: cbacbb9726262ef558b4af0438a1b2a5bba9076132401d947b5b4d2bf92ab0e4
+observed_codex_binary_sha256: cbacbb9726262ef558b4af0438a1b2a5bba9076132401d947b5b4d2bf92ab0e4
+git_status_before_porcelain_entries: 0
+git_status_after_porcelain_entries: 0
+candidate_worktree_mode: detached
+runtime_workspace_isolated: true
+codex_home_isolated: true
+akra_home_isolated: true
+private_capture_root_acl: inheritance protected; current user, SYSTEM, Administrators FullControl only
+private_auth_file_acl: inheritance protected; current user, SYSTEM, Administrators FullControl only
+private_capture_png_acl: inheritance protected; current user, SYSTEM, Administrators FullControl only
+repository_artifact_mode: 0644
+narrow_geometry: 48x18
+restored_geometry: 133x30
+geometry_authority: Windows console API
+narrow_png_pixels: 480x410
+restored_png_pixels: 1249x635
+runtime_exit_status: 0
+terminal_recovered: true
+result: pass

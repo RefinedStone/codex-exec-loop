@@ -1,0 +1,13 @@
+You:
+  Run sleep 5 in the shell, then reply with exactly E3R2-COMMITTED-CANARY-PR1926 and no other text.
+
+Codex Commentary:
+  <selected non-final commentary omitted>
+
+Akra  |  thread: Untitled thread  |  turn: working  |  input: streaming
+status: thread status: active
+runtime: notice: bridge attach...  |  warn: none
+planning: stale  |  queue: queue idle
+notice: activity: model:gpt-5.6-sol
+>
+prompt: turn running  |  type now, Enter when idle

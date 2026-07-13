@@ -1,0 +1,11 @@
+Akra  |  Workflows: ready  |  Sessions: 0 loaded  |  Reviews: off
+workspace: <redacted>
+diagnostics: codex ok  |  app-server ok  |  account ok
+attachment: provider-launched  |  recovery: provider-thread-id
+warning: <redacted-non-resize-notice>
+ready: send a task or reopen a session
+examples: fix src/...  |  review PR #123  |  explain tests/...
+shortcuts: Ctrl+o sessions  |  Ctrl+d diagnostics  |  :help
+
+>
+prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help

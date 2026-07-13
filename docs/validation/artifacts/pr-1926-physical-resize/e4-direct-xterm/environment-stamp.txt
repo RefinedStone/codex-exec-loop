@@ -1,0 +1,30 @@
+artifact_id: pr1926-e4-r2-actual
+capture_role: supplemental-unmatched
+environment_class: first-class E4
+check_profile: pr1926-physical-resize-actual-runtime-r2
+captured_at_utc: 2026-07-13T18:58:26Z
+operator: Codex capture agent
+reviewer: Codex /root/e1_e2_terminal_capability
+candidate_commit: 0a5f06ea345bd5c24998527679158eaf8643d058
+candidate_tree: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+candidate_clean_before: true
+candidate_clean_after: true
+binary_sha256: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+source_build: true
+runtime_authority: actual Codex app-server
+codex_version: codex-cli 0.144.3
+terminal: xterm 390 via WSLg 1.0.73.2
+multiplexer: none
+shell: bash 5.2.21(1)-release
+os: Ubuntu 24.04.2 LTS / WSL2
+kernel: 6.18.33.2-microsoft-standard-WSL2
+frontend: inline
+term: xterm
+initial_geometry: 120x30
+inline_history_render_mode: HostScrollback
+inline_history_render_mode_source: default; override unset
+history_insertion_mode: StandardScrollRegion
+history_insertion_mode_source: default; override unset and WT_SESSION unset
+wt_session: unset
+relevant_overrides: CODEX_EXEC_LOOP_INLINE_HISTORY_MODE unset; CODEX_EXEC_LOOP_HISTORY_INSERT_MODE unset
+runtime_exit_status: 0

@@ -1,0 +1,20 @@
+
+Codex:
+  E3R2-COMMITTED-CANARY-PR1926
+
+
+
+
+
+
+
+
+
+
+
+Akra  |  thread: # akra-main-sessi...  |  turn: idle  |  input: ready
+status: opened shell command help
+queue: queue head: rank 1 / task-user-20...
+now: Run sleep 5 in the shell, then reply ...  |  next: none
+>
+prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help

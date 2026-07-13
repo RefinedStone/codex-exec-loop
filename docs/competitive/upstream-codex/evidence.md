@@ -845,7 +845,8 @@ P0-D1 is pinned at `b53559ca32e1fddd22f13d2de4aad028feebf9fe`; P0-D2 is pinned a
   Class: `verified/local-test`.
 
 This is deterministic TestBackend/vt100 and source evidence, not a manual real-terminal capture,
-released-runtime activity capture, allocator/RSS result, or comparative latency result. It does not
+released Akra runtime activity capture, allocator/RSS result, or comparative latency result. It
+does not
 complete P0-D and adds no Admin, CLI, Telegram, parallel persistence, durable restart recovery, or
 reconciliation recovery projection.
 
@@ -867,13 +868,25 @@ remains absent. Class: `verified/local`.
 
 This artifact is deliberately `supplemental-unmatched` and `approvalGrade: false`. It uses an
 owner-isolated synthetic app-server and a source build, excludes physical heights below the 16-row
-inline viewport, and is not released-runtime evidence. Its raw PTY bytes are an ephemeral local
-observation: they are not retained and their digest cannot be recomputed from repository contents.
-Because the resize fix changes common terminal primitives, approval-grade E1 Windows Terminal/WSL,
-E2 Windows Terminal/PowerShell, E3
-tmux detached PTY, and E4 direct Linux terminal captures all remain required; this supplemental E3
-environment artifact does not satisfy an approval row. P0-D therefore remains partial, and no
-broader Admin/CLI/Telegram, persistence, recovery, or performance claim follows from this capture.
+inline viewport, and is not released Akra runtime activity evidence. Its raw PTY bytes are an
+ephemeral local observation: they are not retained and their digest cannot be recomputed from
+repository contents.
+Because the resize fix changes common terminal primitives, this supplemental E3 environment
+artifact alone does not satisfy an approval row.
+
+## P0-D4 First-Class Manual Evidence
+
+The reviewed
+[E1-E4 physical-resize artifact](../../validation/artifacts/pr-1926-physical-resize/README.md)
+binds sanitized manual evidence to the exact Akra candidate commit/tree and per-platform
+source-build binary digests. It records actual Codex app-server sessions, machine-authoritative
+geometry, required scenarios, safe frames, and integrity indexes. Authentication state and raw
+rollouts are excluded. Class: `verified/local`.
+
+These four first-class captures satisfy the shared terminal-primitive manual reviewer gate. Each
+remains `supplemental-unmatched`; none changes `terminal-baseline` totals or proves a released Akra
+runtime. P0-D remains partial only for released Akra runtime activity capture. No Admin, CLI,
+Telegram, persistence, recovery, or performance claim follows.
 
 ## Akra Baseline Evidence
 

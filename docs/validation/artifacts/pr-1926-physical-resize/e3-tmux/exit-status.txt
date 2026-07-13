@@ -1,0 +1,4 @@
+runtime_exit_status=0
+pane_process_terminated=true
+private_tmux_server_stopped=true
+scoped_app_processes_after_capture=0

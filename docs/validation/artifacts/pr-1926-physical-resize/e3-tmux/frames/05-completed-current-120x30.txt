@@ -1,0 +1,9 @@
+Codex:
+  E3R2-COMMITTED-CANARY-PR1926
+
+Akra  |  thread: Untitled thread  |  turn: idle  |  input: ready
+status: turn completed / auto-follow disabled
+runtime: notice: bridge attach...  |  warn: none
+now: Run sleep 5 in the shell, then reply ...  |  next: none
+>
+prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help

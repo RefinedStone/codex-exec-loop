@@ -1,0 +1,38 @@
+verification_scope: exact detached candidate and isolated actual runtime capture
+expected_commit: 0a5f06ea345bd5c24998527679158eaf8643d058
+observed_commit_before: 0a5f06ea345bd5c24998527679158eaf8643d058
+observed_commit_after: 0a5f06ea345bd5c24998527679158eaf8643d058
+expected_tree: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+observed_tree_before: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+observed_tree_after: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+expected_binary_sha256: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+observed_binary_sha256_before: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+observed_binary_sha256_after: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+git_status_before_porcelain_entries: 0
+git_status_after_porcelain_entries: 0
+candidate_worktree_mode: detached
+runtime_workspace_isolated: true
+codex_home_isolated: true
+akra_home_isolated: true
+private_capture_root_mode: 0700
+private_auth_copy_mode: 0600
+repository_artifact_mode: 0644
+startup_geometry: 120x30; cursor 2,15; history rows 0
+active_wide_geometry: 120x30; cursor 2,26; history rows 0
+active_narrow_geometry: 48x18; cursor 2,15; history rows 16
+active_restored_geometry: 120x30; cursor 2,16; history rows 1
+completed_geometry: 120x30; cursor 2,19; history rows 1
+session_restored_geometry: 120x30; cursor 2,28; history rows 45
+geometry_authority: tmux machine-observed pane width, height, cursor, and history
+runtime_exit_status: 0
+pane_process_terminated: true
+private_tmux_server_stopped: true
+scoped_app_processes_after_capture: 0
+help_overlay_recaptured_at_utc: 2026-07-13T19:38:06Z
+help_overlay_recapture_binary_sha256: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+help_overlay_recapture_candidate_clean_after: true
+help_overlay_recapture_geometry: 120x30
+help_overlay_safe_frame_rows: selected last 20 plain-text rows from the 120x30 pane
+help_overlay_recapture_runtime_exit_status: 0
+help_overlay_recapture_scoped_processes_after: 0
+result: pass

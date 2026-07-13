@@ -1,0 +1,28 @@
+verification_scope: exact detached candidate and isolated actual runtime capture
+expected_commit: 0a5f06ea345bd5c24998527679158eaf8643d058
+observed_commit_before: 0a5f06ea345bd5c24998527679158eaf8643d058
+observed_commit_after: 0a5f06ea345bd5c24998527679158eaf8643d058
+expected_tree: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+observed_tree_before: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+observed_tree_after: 7e4c0cd0de3b6609a88786eefe58074d1072d5fd
+expected_binary_sha256: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+observed_binary_sha256_before: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+observed_binary_sha256_after: 973e286c590fd9a25cb2f47a4e08caefab15fbe8e49826ddeaa36987c0f42399
+git_status_before_porcelain_entries: 0
+git_status_after_porcelain_entries: 0
+candidate_worktree_mode: detached
+runtime_workspace_isolated: true
+codex_home_isolated: true
+akra_home_isolated: true
+private_capture_root_mode: 0700
+private_auth_copy_mode: 0600
+repository_artifact_mode: 0644
+initial_geometry: 120x30
+narrow_geometry: 48x18
+restored_geometry: 120x30
+geometry_authority: live stty measurement
+safe_png_text_metadata_chunk_count: 0
+runtime_exit_status: 0
+terminal_recovered: true
+scoped_process_count_after_capture: 0
+result: pass

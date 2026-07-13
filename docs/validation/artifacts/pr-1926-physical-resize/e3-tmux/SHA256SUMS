@@ -1,0 +1,14 @@
+f01b4cf090ae8c826d691a543528d74845e316d88faef6832a753d9790516cf9  ./environment-stamp.txt
+d669a47038941914a1f65fadfb940c52062da538ff78a3958d9b1450fe9ecb12  ./exit-status.txt
+0133d5e54cd6173313392760c3ffb33d5de2db7f9696fdfd922c6ec0a5c3c0f0  ./frames/01-input-edit-120x30.txt
+d1bf32885be85b211290cc63f7626a38b2d1db27be48aade4f4d7fb7813986e5  ./frames/02-active-command-wide-120x30.txt
+ef649316e31f52f6109db6c0ade758b8ca2f25ab96c8873c6ec8bfa57b53a36d  ./frames/03-active-command-narrow-48x18.txt
+7f5011707c0f061ba37ff42b8c23abc966e8d956b9f1a111546e4893cd713bc7  ./frames/04-active-command-restored-120x30.txt
+33f8bdd5e05be0495a54a10a8e93a0deb4572dec12f2b4afa86ba750cc687ba6  ./frames/05-completed-current-120x30.txt
+bdc805fb2a75d861a1ea7ccfaea715a0d91ac646aa18e766f75a9a0be4c4de58  ./frames/06-help-open-120x30.txt
+97a4ec2bac53b6f5d208b14531686a1d689bda99f1eb16000bc9549513383baa  ./frames/07-help-closed-120x30.txt
+2d9274deea14d98b05a383402571c677d676b1cf2870353c68bc167bd552d3f8  ./frames/08-new-draft-live-viewport-120x30.txt
+4699aee4836afc23efd87270efa323ab67cc6f10c32a81fefdad715aa11d09fd  ./frames/09-session-restored-120x30.txt
+28e3a6fa2fbfd4d70a8bc6c2c8f423f259d89918eecf7171d4396bdf08ce580f  ./integrity-verification.txt
+b2bb8973a6f05d336ee27360962048dc9729d62a4c44f93bd030cd95d6a264e9  ./rollout-verification.txt
+3a3101556edeba9bdc33383db8b9d9fd5b6a2c30c27ec00872a9f158b6b7bd12  ./scenario-results.txt

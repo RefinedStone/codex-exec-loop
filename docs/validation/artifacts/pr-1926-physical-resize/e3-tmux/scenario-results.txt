@@ -1,0 +1,22 @@
+scenario_set: pr1926-e3-r2-actual-runtime-v1
+overall_result: pass; independent review found no Blocker or P2 issue
+observed_non_resize_notice: a bounded account rate-limit notice did not affect scenario assertions
+
+1. candidate_integrity: pass
+   Exact commit, tree, clean state, and Linux candidate binary SHA were unchanged.
+2. startup_and_input_editing: pass
+   Ctrl+j created multiline input; Ctrl+w removed the selected token; Ctrl+u cleared test input.
+3. actual_codex_command_and_final: pass
+   One exact sleep 5 call exited 0; one assistant final equaled the exact E3R2 canary.
+4. active_command_and_physical_resize: pass
+   The turn stayed active through 120x30 -> 48x18 -> 120x30 and retained the command rail.
+5. completed_history_and_help_redraw: pass
+   Completion and the recaptured Shell Commands overlay open/close retained one exact final.
+6. clear_reset_live_viewport: pass
+   Ctrl+t produced a new-draft live viewport with zero canary occurrences in the selected live tail.
+7. session_switch_restore: pass
+   The only captured session restored one submitted prompt and one exact final.
+8. clean_exit_and_cleanup: pass
+   Ctrl+q returned 0; the pane exited, private tmux server stopped, and scoped process count was 0.
+9. artifact_safety: pass
+   Selected frames exclude paths, PTY IDs, UUIDs, full task IDs, credentials, and control bytes.
