@@ -21,11 +21,12 @@ completed, failed, interrupted, and unknown outcomes instead of collapsing match
 `turn/completed` notifications to generic success. P0-B applied-envelope projection is present at
 `7960ecca`, and P0-C1 closed item identity is present at `7514eb05`. This atomic slice implements
 P0-C2 bounded progressive activity. P0-D1's bounded progressive activity rail is present at
-`b53559ca`, and P0-D2's transient retained Diff/Output inspector is present at `594859a6`. P0-D
-remains partial: effective-model and current-planning-task priority coverage, explicit
-failure-priority proof, a real-terminal capture, and final end-to-end completion evidence remain.
+`b53559ca`, P0-D2's transient retained Diff/Output inspector is present at `594859a6`, and P0-D3's
+typed priority rail is present at `89264f6e`. P0-D remains partial: a real-terminal capture and
+final end-to-end completion evidence remain as P0-D4. Released-runtime activity capture remains a
+separate absent artifact.
 Durable recovery, validation/delivery projection, and broader surface rendering remain separate
-owners rather than implied consequences of P0-A through P0-D2.
+owners rather than implied consequences of P0-A through P0-D3.
 
 ## Authority Boundary
 
@@ -596,9 +597,16 @@ instead of a second progressive fact; model reroute remains the P0-B applied-env
   `:activity [diff|output]` / `:act`, bounded Diff and Retained Output Tail pages, truthful retention
   metadata, approval preemption, lifecycle/resize reset, terminal-safe rendering, and host-scrollback
   negatives.
-- Remaining P0-D work includes uncovered priority-rail facts, real-terminal capture, and final
-  completion evidence. These slices do not claim Admin/CLI/Telegram projection,
-  persistence/recovery, or comparative latency/RSS.
+- P0-D3 (`89264f6e8edf1dec31393e2fd2804054cc26662d`) completes the residual typed rail with
+  `approval > terminal/recovery > active command/patch/plan > context/incomplete-history > applied
+  model > active planning handoff > coarse live lane` priority, bounded control-safe dynamic facts,
+  and whole-fact narrow collapse. Requested model values, stale completed-task handoffs, and
+  previous-turn submitting counts are not rendered as current truth. Raw terminal error detail
+  remains in the existing bounded Status transcript and is not copied into typed rail state or copy.
+- Remaining P0-D4 work is real-terminal capture and final end-to-end completion evidence.
+  Released-runtime activity capture remains separate and absent. These slices do not claim
+  Admin/CLI/Telegram projection, parallel or durable persistence,
+  restart/reconciliation recovery behavior, or comparative latency/RSS.
 
 **Required proof**
 
@@ -887,8 +895,9 @@ inseparable. Later rows may begin only after their prerequisite semantic contrac
 | 21 | File approval/forms/additional inputs | P2 existing | row 16 and canary invariant | bounded typed UI and source-to-sink proof |
 
 Rows 1 through 4 are implemented as separate atomic slices on `prerelease`. Row 5 is partially
-implemented by P0-D1 and P0-D2; it remains open for the residual priority projection, real-terminal
-proof, and final end-to-end evidence. Durable readback, child-loss CAS,
+implemented by P0-D1 through P0-D3; P0-D4 remains open for real-terminal proof and final
+end-to-end evidence, while released-runtime capture remains a separate absent artifact. Durable
+readback, child-loss CAS,
 validation/delivery/Admin projection, model UI, daemon topology, and broad event rendering remain
 with their later owners.
 

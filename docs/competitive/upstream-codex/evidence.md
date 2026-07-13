@@ -792,14 +792,15 @@ The memory assertions above are exact sums of retained `String`/identifier lengt
 accounting, not allocator capacity, RSS, or a comparative performance measurement. At the P0-C2
 commit this was schema-and-fixture plus deterministic local evidence, with no released app-server
 progressive capture, rich TUI rail, Diff/Output inspector, context-pressure UI, restart persistence,
-or comparative latency/RSS result. The later P0-D1/P0-D2 evidence below supersedes only the named
-TUI rail and inspector gaps; the other claims remain with P0-D, recovery, and the later native
+or comparative latency/RSS result. The later P0-D1/P0-D2/P0-D3 evidence below supersedes only the
+named TUI rail and inspector gaps; the other claims remain with P0-D, recovery, and the later native
 performance artifact.
 
-## P0-D1 And P0-D2 TUI Projection Evidence
+## P0-D1 Through P0-D3 TUI Projection Evidence
 
 P0-D1 is pinned at `b53559ca32e1fddd22f13d2de4aad028feebf9fe`; P0-D2 is pinned at
-`594859a621e7213356822b008a496f4d5cfca36f`. These later Akra commits are separate from the
+`594859a621e7213356822b008a496f4d5cfca36f`; P0-D3 is pinned at
+`89264f6e8edf1dec31393e2fd2804054cc26662d`. These later Akra commits are separate from the
 `226e4794...` audit baseline documented below.
 
 - P0-D1's [typed summary reducer](https://github.com/RefinedStone/codex-exec-loop/blob/b53559ca32e1fddd22f13d2de4aad028feebf9fe/src/adapter/inbound/tui/app/conversation_model/progressive_activity.rs)
@@ -823,10 +824,30 @@ P0-D1 is pinned at `b53559ca32e1fddd22f13d2de4aad028feebf9fe`; P0-D2 is pinned a
   cover tab/page navigation, same-sequence new-turn and resize resets, real approval preemption,
   narrow/wide rendering, control escaping, CJK cell width, and raw-detail host-scrollback negatives.
   Class: `verified/local-test`.
+- P0-D3's [payload-free terminal reducer](https://github.com/RefinedStone/codex-exec-loop/blob/89264f6e8edf1dec31393e2fd2804054cc26662d/src/adapter/inbound/tui/app/conversation_model/activity_rail.rs)
+  maps confirmed interrupted/failed/unknown receipts, unconfirmed recovery, and generic runtime
+  failure without retaining raw error detail in the typed marker. Existing bounded Status
+  transcript copy remains the terminal-detail owner. The
+  [priority composer](https://github.com/RefinedStone/codex-exec-loop/blob/89264f6e8edf1dec31393e2fd2804054cc26662d/src/adapter/inbound/tui/app/shell_presentation/status_panels/activity_rail.rs)
+  reads only `runtime_envelope.applied.model`, preserves a planning handoff only when turn start
+  follows a locally correlated submission and while that turn is live,
+  preserves incomplete-history truth ahead of model/task/coarse context, limits dynamic values to a
+  128-character scan and 32/16 terminal cells, sanitizes control, zero-width, and rail-separator
+  characters, and drops lower-priority facts whole. Class:
+  `verified/source-and-local-test`.
+- P0-D3's [runtime reducer tests](https://github.com/RefinedStone/codex-exec-loop/blob/89264f6e8edf1dec31393e2fd2804054cc26662d/src/adapter/inbound/tui/app/conversation_runtime.rs),
+  [narrow/wide snapshots](https://github.com/RefinedStone/codex-exec-loop/blob/89264f6e8edf1dec31393e2fd2804054cc26662d/src/adapter/inbound/tui/app/shell_rendering_tests.rs),
+  and [TestBackend/vt100 transactions](https://github.com/RefinedStone/codex-exec-loop/blob/89264f6e8edf1dec31393e2fd2804054cc26662d/src/adapter/inbound/tui/app/inline_terminal_adapter/tests.rs)
+  cover receipt-state mapping, terminal lifecycle reset, requested-versus-applied model truth,
+  correlated task lifetime and recovered-start clearing, stale submitting-lane suppression,
+  legacy live-fallback suppression, responsive whole-fact collapse, and progressive
+  raw-payload/host-scrollback negatives plus payload-free terminal-marker Debug.
+  Class: `verified/local-test`.
 
 This is deterministic TestBackend/vt100 and source evidence, not a manual real-terminal capture,
 released-runtime activity capture, allocator/RSS result, or comparative latency result. It does not
-complete P0-D and adds no Admin, CLI, Telegram, parallel persistence, or recovery projection.
+complete P0-D and adds no Admin, CLI, Telegram, parallel persistence, durable restart recovery, or
+reconciliation recovery projection.
 
 ## Akra Baseline Evidence
 

@@ -44,13 +44,21 @@ interaction flow and surface roles.
 3. Core submits the turn effect and reduces stream completions into app state.
 4. Live stream output stays in the inline tail until turn completion.
 5. Tool activity, runtime notices, approval-review state, and warnings update the same shell surface.
-6. `:activity` opens a transient inline inspector over the typed Core projection. Diff and Retained
+6. The one-line operator rail resolves `approval > typed terminal/recovery > active
+   command/patch/plan > context/incomplete-history > applied model > active planning handoff >
+   coarse live lane`.
+   Effective model means `runtime_envelope.applied.model`, never a requested-model fallback. The
+   task fact is preserved only when turn start follows a locally submitted prompt with a recorded
+   handoff; an uncorrelated recovered start clears it, and an idle queue head remains planning context.
+   Dynamic model/task text is control-safe, scan-bounded, cell-bounded, and dropped as a whole when
+   the terminal is too narrow.
+7. `:activity` opens a transient inline inspector over the typed Core projection. Diff and Retained
    Output Tail are viewport-paged without copying raw detail into overlay state; source, retained,
    truncated, and incomplete-history metadata remain explicit.
-7. Approval owns focus over the inspector. New thread, turn, completion, and failure boundaries reset
+8. Approval owns focus over the inspector. New thread, turn, completion, and failure boundaries reset
    retained detail, and inspector content never enters host scrollback.
-8. When the turn completes, assistant output is committed into normal scrollback history.
-9. Post-turn evaluation decides whether internal continuation advances, pauses, or stops.
+9. When the turn completes, assistant output is committed into normal scrollback history.
+10. Post-turn evaluation decides whether internal continuation advances, pauses, or stops.
 
 ## Planning And Continuation Flow
 
@@ -83,4 +91,7 @@ interaction flow and surface roles.
 
 - Headless app runtime contracts live under `src/core`.
 - Generic shell state reducers live under `src/adapter/inbound/tui/app`.
+- Typed rail marker types live in `conversation_model/activity_rail.rs`; lifecycle fields and
+  transitions live in `conversation_model/view_model.rs` and `conversation_runtime.rs`; bounded
+  priority composition lives in `shell_presentation/status_panels/activity_rail.rs`.
 - Planning-specific TUI flow lives under `src/adapter/inbound/tui/app/planning`.
