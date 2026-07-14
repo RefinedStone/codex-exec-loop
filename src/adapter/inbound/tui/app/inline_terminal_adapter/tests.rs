@@ -4,6 +4,7 @@ use super::{
     ShellRuntime, current_inline_history_lines, draw_inline_frame, draw_inline_transaction,
     sync_inline_viewport, terminal_options_for_render_mode,
 };
+use crate::adapter::inbound::tui::app::ratatui_frontend::prepare_runtime_for_due_draw;
 use crate::adapter::inbound::tui::app::{
     ConversationMessage, ConversationMessageKind, ConversationState, ConversationViewMode,
     INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility,
@@ -25,6 +26,7 @@ use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use ratatui::{Terminal, Viewport};
 use std::cell::Cell as StdCell;
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -2020,7 +2022,7 @@ fn resize_after_history_insertion_commits_once_and_marks_row_accounting_dirty() 
 }
 
 #[test]
-fn coalesced_shrink_restore_event_invalidates_cursor_and_history_accounting() {
+fn due_draw_drains_shrink_restore_events_before_history_accounting() {
     let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
     inner
         .set_cursor_position(Position::new(0, 39))
@@ -2050,8 +2052,18 @@ fn coalesced_shrink_restore_event_invalidates_cursor_and_history_accounting() {
         .backend_mut()
         .inner_mut()
         .resize_and_clamp_cursor(80, 40);
-    runtime.handle_terminal_event(Event::Resize(48, 10));
-    runtime.handle_terminal_event(Event::Resize(80, 40));
+    assert_eq!(
+        runtime.next_event_poll_timeout(Instant::now(), Duration::from_secs(1)),
+        Duration::ZERO,
+        "a draw must already be due before the queued resize events are drained"
+    );
+    let mut ready_events = VecDeque::from([Event::Resize(48, 10), Event::Resize(80, 40)]);
+
+    assert!(
+        prepare_runtime_for_due_draw(&mut runtime, || Ok(ready_events.pop_front())).unwrap(),
+        "the due draw should be consumed only after both resize events"
+    );
+    assert!(ready_events.is_empty());
 
     assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
     assert_eq!(runtime.terminal_resize_epoch(), 2);

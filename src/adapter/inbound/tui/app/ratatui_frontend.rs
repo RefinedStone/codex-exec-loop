@@ -1,5 +1,5 @@
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::cursor::{MoveToNextLine, Show};
@@ -79,9 +79,14 @@ fn run_event_loop(
         /*
          * app-server stream, startup/session load, post-turn evaluation은 terminal input과 별개로
          * 들어온다. 이벤트 poll 전에 먼저 반영해야 사용자가 입력하지 않아도 화면이 stale하지 않다.
+         * 이미 준비된 terminal event도 draw deadline을 소비하기 전에 반영해야 같은 크기로 돌아온
+         * resize ABA가 cursor와 history 보정에서 누락되지 않는다.
          */
-        runtime.poll_background_messages();
-        if runtime.take_due_draw_request(std::time::Instant::now()) {
+        let draw_due = prepare_runtime_for_due_draw(runtime, read_ready_terminal_event)?;
+        if runtime.should_quit() {
+            break;
+        }
+        if draw_due {
             let transaction_completed = adapter.draw_inline_transaction(runtime)?;
             runtime.finish_pending_quit_after_transaction(transaction_completed);
         }
@@ -106,17 +111,46 @@ fn run_event_loop(
     Ok(())
 }
 
+pub(super) fn prepare_runtime_for_due_draw(
+    runtime: &mut ShellRuntime,
+    mut read_ready_event: impl FnMut() -> Result<Option<event::Event>>,
+) -> Result<bool> {
+    runtime.poll_background_messages();
+    drain_ready_terminal_events_with(runtime, &mut read_ready_event)?;
+    if runtime.should_quit() {
+        return Ok(false);
+    }
+    Ok(runtime.take_due_draw_request(Instant::now()))
+}
+
 fn drain_ready_terminal_events(runtime: &mut ShellRuntime) -> Result<()> {
+    drain_ready_terminal_events_with(runtime, &mut read_ready_terminal_event)
+}
+
+fn read_ready_terminal_event() -> Result<Option<event::Event>> {
+    if !event::poll(Duration::ZERO)? {
+        return Ok(None);
+    }
+    Ok(Some(event::read()?))
+}
+
+fn drain_ready_terminal_events_with(
+    runtime: &mut ShellRuntime,
+    read_ready_event: &mut impl FnMut() -> Result<Option<event::Event>>,
+) -> Result<()> {
     /*
-     * Terminal emulators can queue several key presses while a frame is being
-     * rendered. Draining the events that are already ready lets the scheduler
-     * coalesce them into one redraw instead of painting once per character.
+     * Terminal emulators can queue several input or resize events while a frame
+     * is being rendered. Draining the ready batch lets the scheduler coalesce
+     * them without losing intermediate resize epochs.
      */
     for _ in 0..READY_EVENT_DRAIN_LIMIT {
-        if runtime.should_quit() || !event::poll(Duration::ZERO)? {
+        if runtime.should_quit() {
             break;
         }
-        runtime.handle_terminal_event(event::read()?);
+        let Some(event) = read_ready_event()? else {
+            break;
+        };
+        runtime.handle_terminal_event(event);
     }
     Ok(())
 }
