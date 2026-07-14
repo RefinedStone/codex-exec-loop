@@ -21,6 +21,14 @@ operator는 다음 세 질문에 즉시 답할 수 있어야 한다.
 Delivery slice는 dependency order를 설명하는 proposed design이며 live backlog가 아니다. 구현이 완료되면
 이 문서는 shipped contract로 압축하고 일회성 slice 설명은 제거한다.
 
+### 1.1 Animation map concept review
+
+2026-07-14의 PC 전용 A–E 공간 토폴로지 검토안은
+[`resources/admin-animation-map-concepts/index.html`](./resources/admin-animation-map-concepts/index.html)에
+격리했다. 생성 이미지, 실제 `gamebaljeonguk` atlas 합성, 1회성 semantic transition, FHD/QHD 비교 UI를
+함께 확인할 수 있다. 이 갤러리는 reference-only이며 최종안 선택 전에는 `/admin/akra` 런타임 자산이나
+좌표 계약을 변경하지 않는다.
+
 ## 2. Scope
 
 포함 범위:
