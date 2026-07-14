@@ -415,7 +415,7 @@ fn slot_git_status_copy_covers_all_dirty_labels_and_readiness_gates() {
 
     assert_eq!(
         dirty.detail_label(),
-        "staged changes, unstaged changes, untracked files, ignored files, merge/rebase metadata"
+        "staged changes, unstaged changes, untracked files, ignored files, git operation/lock metadata"
     );
     assert!(!dirty.is_clean_baseline());
     assert!(!untracked_only.is_clean_baseline());

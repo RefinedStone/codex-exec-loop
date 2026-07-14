@@ -155,9 +155,9 @@ pub(super) fn parse_worktree_records(output: &str) -> Vec<GitWorktreeRecord> {
 /*
 git status inspection은 slot을 자동으로 reset하거나 cleanup해도 되는지 판단하는
 공통 안전 게이트이다. porcelain status로 staged, unstaged, untracked 변경을 보고,
-git dir 안의 MERGE_HEAD/rebase-merge/rebase-apply/CHERRY_PICK_HEAD 같은 metadata로 진행 중인
-작업도 감지한다. 파일 변경이 없더라도 실제 operation metadata가 남아 있으면 자동 조작은
-위험하기 때문이다.
+git dir 안의 MERGE_HEAD/rebase-merge/rebase-apply/CHERRY_PICK_HEAD 같은 metadata와 index/HEAD
+lock으로 진행 중인 작업도 감지한다. 파일 변경이 없더라도 실제 operation metadata나 lock이
+남아 있으면 자동 조작은 위험하기 때문이다.
 */
 pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
     slot_path: &Path,
@@ -224,11 +224,19 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
             slot_path.display()
         ))
     })?;
+    // `AUTO_MERGE` is intentionally excluded: Git's ort strategy can retain that ref after a
+    // successful cherry-pick, so its presence alone does not prove an operation is pending.
     status.has_pending_operation = [
         "MERGE_HEAD",
         "rebase-merge",
         "rebase-apply",
         "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "BISECT_START",
+        "sequencer",
+        "index.lock",
+        "HEAD.lock",
     ]
     .into_iter()
     .any(|path| git_dir.join(path).exists());

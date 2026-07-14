@@ -1,5 +1,250 @@
 use super::*;
 
+struct LfNormalizationDriftFixture {
+    slot_path: PathBuf,
+    stale_head: String,
+    target_head: String,
+}
+
+/*
+Build the exact legacy state that made production pool slots look dirty: the old commit stores a
+CRLF blob while its attributes require LF, the raw slot file still equals that malformed index
+blob, and the next baseline commit renormalizes it. No operator byte edit is involved.
+*/
+fn create_lf_normalization_drift_fixture(repo: &TempGitRepo) -> LfNormalizationDriftFixture {
+    create_lf_normalization_drift_fixture_with_primary(repo, b"legacy\r\n")
+}
+
+fn create_lf_normalization_drift_fixture_with_primary(
+    repo: &TempGitRepo,
+    primary_bytes: &[u8],
+) -> LfNormalizationDriftFixture {
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    let repo_root = repo
+        .repo_root
+        .to_str()
+        .expect("fixture repository path should be utf-8");
+    for (path, bytes) in [
+        ("legacy.md", primary_bytes),
+        ("legacy notes.md", b"notes\r\n".as_slice()),
+    ] {
+        fs::write(repo.repo_root.join(path), bytes).expect("legacy CRLF fixture should write");
+        let raw_crlf_oid = run_command(
+            "git",
+            [
+                "-C",
+                repo_root,
+                "hash-object",
+                "-w",
+                "--no-filters",
+                "--",
+                path,
+            ],
+            None,
+        )
+        .expect("raw CRLF blob should be written");
+        run_git(
+            &repo.repo_root,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "100644",
+                raw_crlf_oid.as_str(),
+                path,
+            ],
+        );
+    }
+    run_git(&repo.repo_root, &["commit", "-qm", "add legacy CRLF blob"]);
+    fs::write(repo.repo_root.join(".gitattributes"), b"*.md text eol=lf\n")
+        .expect("LF attributes should write");
+    run_git(&repo.repo_root, &["add", ".gitattributes"]);
+    if !command_succeeds("git", ["-C", repo_root, "diff", "--cached", "--quiet"]) {
+        run_git(
+            &repo.repo_root,
+            &["commit", "-qm", "declare LF normalization"],
+        );
+    }
+    run_git(
+        &repo.repo_root,
+        &["push", "-q", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+    );
+    repo.set_remote_tracking_branch(&remote_standard_branch_name(), POOL_BASELINE_BRANCH);
+
+    let stale_head = repo.head_sha();
+    let slot_path = repo.create_detached_slot(1);
+    fs::write(slot_path.join("legacy.md"), primary_bytes)
+        .expect("slot raw bytes should match the malformed index blob");
+    fs::write(slot_path.join("legacy notes.md"), b"notes\r\n")
+        .expect("spaced slot path should match the malformed index blob");
+    let stale_status = inspect_slot_git_status(&slot_path)
+        .expect("legacy normalization drift status should be readable");
+    assert!(stale_status.has_only_unstaged_changes());
+
+    run_git(
+        &repo.repo_root,
+        &["add", "--renormalize", "legacy.md", "legacy notes.md"],
+    );
+    run_git(&repo.repo_root, &["commit", "-qm", "normalize legacy blob"]);
+    run_git(
+        &repo.repo_root,
+        &["push", "-q", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+    );
+    repo.set_remote_tracking_branch(&remote_standard_branch_name(), POOL_BASELINE_BRANCH);
+
+    LfNormalizationDriftFixture {
+        slot_path,
+        stale_head,
+        target_head: repo.head_sha(),
+    }
+}
+
+fn lf_normalization_test_service() -> ParallelModeService {
+    ParallelModeService::new(
+        Arc::new(NoopPlanningAuthorityPort::default()),
+        Arc::new(FakeGithubAutomationPort::ready()),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    )
+    .with_test_delivery_safety_policy(false, false)
+}
+
+fn fixture_normalization_quarantine(
+    repo: &TempGitRepo,
+    fixture: &LfNormalizationDriftFixture,
+) -> PathBuf {
+    normalization_quarantine_path(&repo.pool_root(), &slot_id(1), &fixture.stale_head)
+        .expect("fixture source identity should produce a quarantine path")
+}
+
+fn fixture_normalization_replacements(
+    repo: &TempGitRepo,
+    fixture: &LfNormalizationDriftFixture,
+) -> Vec<PathBuf> {
+    let prefix = format!(
+        ".normalization-replacement-{}-{}-",
+        slot_id(1),
+        fixture.target_head
+    );
+    let mut paths = fs::read_dir(repo.pool_root())
+        .expect("pool root should be readable")
+        .map(|entry| entry.expect("pool entry should be readable"))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(&prefix))
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn fixture_single_normalization_replacement(
+    repo: &TempGitRepo,
+    fixture: &LfNormalizationDriftFixture,
+) -> PathBuf {
+    let paths = fixture_normalization_replacements(repo, fixture);
+    assert_eq!(
+        paths.len(),
+        1,
+        "expected one replacement artifact: {paths:?}"
+    );
+    paths.into_iter().next().expect("replacement should exist")
+}
+
+fn assert_normalization_quarantine_preserves_legacy_slot(
+    quarantine_path: &Path,
+    fixture: &LfNormalizationDriftFixture,
+) {
+    assert!(quarantine_path.is_dir());
+    assert_eq!(
+        fs::read(quarantine_path.join("legacy.md"))
+            .expect("quarantined legacy file should be readable"),
+        b"legacy\r\n"
+    );
+    assert_eq!(
+        fs::read(quarantine_path.join("legacy notes.md"))
+            .expect("quarantined spaced legacy file should be readable"),
+        b"notes\r\n"
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                quarantine_path
+                    .to_str()
+                    .expect("quarantine path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("quarantined slot head should resolve"),
+        fixture.stale_head
+    );
+}
+
+fn unrelated_session_detail(repo: &TempGitRepo) -> ParallelModeAgentSessionDetailSnapshot {
+    ParallelModeAgentSessionDetailSnapshot::new(
+        "session-elsewhere",
+        "agent-elsewhere",
+        "task-elsewhere",
+        "Task elsewhere",
+        slot_id(2),
+        Some("thread-elsewhere".to_string()),
+        repo.pool_root().join(slot_id(2)).display().to_string(),
+        "akra-agent/slot-2/task-elsewhere",
+        "2026-07-14T00:00:00Z",
+        "running",
+        "running",
+        "unrelated live session",
+        "pending",
+        "pending",
+        None,
+        Vec::new(),
+        "2026-07-14T00:00:00Z",
+    )
+}
+
+fn unrelated_queue_record(repo: &TempGitRepo) -> PlanningAuthorityDistributorQueueRecord {
+    PlanningAuthorityDistributorQueueRecord {
+        queue_item_id: "queue-elsewhere".to_string(),
+        queue_order_key: 1,
+        session_key: "session-elsewhere".to_string(),
+        slot_id: slot_id(2),
+        agent_id: "agent-elsewhere".to_string(),
+        task_id: "task-elsewhere".to_string(),
+        task_title: "Task elsewhere".to_string(),
+        delivery_target: None,
+        source_branch: POOL_BASELINE_BRANCH.to_string(),
+        source_base_commit_sha: repo.head_sha(),
+        source_commit_sha: repo.head_sha(),
+        branch_name: "akra-agent/slot-2/task-elsewhere".to_string(),
+        worktree_path: repo.pool_root().join(slot_id(2)).display().to_string(),
+        commit_sha: repo.head_sha(),
+        original_commit_sha: None,
+        planning_refresh_state: "pending".to_string(),
+        integration_state: "queued".to_string(),
+        integration_base_commit_sha: None,
+        integration_commit_sha: None,
+        conflict_files: Vec::new(),
+        recovery_note: None,
+        validation_summary: "pending".to_string(),
+        authority_refresh_outcome: "pending".to_string(),
+        github_capabilities: None,
+        pull_request_number: None,
+        pull_request_url: None,
+        queue_state: ParallelModeQueueItemState::Queued,
+        integration_note: "queued elsewhere".to_string(),
+        enqueued_at: "2026-07-14T00:00:00Z".to_string(),
+        updated_at: "2026-07-14T00:00:00Z".to_string(),
+        retry_attempts: 0,
+        retry_not_before: None,
+    }
+}
+
 // pool directory가 아직 만들어지지 않은 상태는 장애가 아니라 초기 준비 상태다.
 // board builder는 slot을 임의로 만들지 않고 missing으로만 보고해야 하며, 이때
 // exhausted를 켜지 않아 dispatcher가 "용량 소진"과 "아직 provision 안 됨"을 구분한다.
@@ -396,6 +641,834 @@ fn reconcile_resets_dirty_reusable_detached_baseline_slots() {
         "dirty\n"
     );
     assert!(slot_path.join("scratch.tmp").exists());
+}
+
+#[test]
+fn reconcile_recovers_target_equivalent_lf_normalization_drift() {
+    let repo = TempGitRepo::new("recover-lf-normalization-drift");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE, "pool={pool:#?}");
+    assert_eq!(pool.blocked_slots, 0);
+    assert_eq!(current_branch(&fixture.slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("recovered slot head should resolve"),
+        fixture.target_head
+    );
+    assert!(
+        inspect_slot_git_status(&fixture.slot_path)
+            .expect("recovered slot status should be readable")
+            .is_clean_baseline()
+    );
+    assert_normalization_quarantine_preserves_legacy_slot(&quarantine_path, &fixture);
+    assert!(fixture_normalization_replacements(&repo, &fixture).is_empty());
+    assert!(
+        pool.reconcile_status
+            .contains(&quarantine_path.display().to_string())
+    );
+}
+
+#[test]
+fn completed_normalization_quarantine_does_not_prevent_later_slot_reprovisioning() {
+    let repo = TempGitRepo::new("reprovision-after-normalization-recovery");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    let first_pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(first_pool.idle_slots, DEFAULT_POOL_SIZE);
+    run_git(
+        &repo.repo_root,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            fixture
+                .slot_path
+                .to_str()
+                .expect("slot path should be utf-8"),
+        ],
+    );
+
+    let second_pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(
+        second_pool.idle_slots, DEFAULT_POOL_SIZE,
+        "pool={second_pool:#?}"
+    );
+    assert_normalization_quarantine_preserves_legacy_slot(&quarantine_path, &fixture);
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("reprovisioned slot head should resolve"),
+        fixture.target_head
+    );
+    assert!(
+        second_pool
+            .reconcile_status
+            .contains(&quarantine_path.display().to_string())
+    );
+}
+
+#[test]
+fn completed_normalization_quarantine_does_not_prevent_a_later_recovery() {
+    let repo = TempGitRepo::new("repeat-normalization-recovery");
+    let first_fixture = create_lf_normalization_drift_fixture(&repo);
+    let first_quarantine = fixture_normalization_quarantine(&repo, &first_fixture);
+    let first_pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(first_pool.idle_slots, DEFAULT_POOL_SIZE);
+    run_git(
+        &repo.repo_root,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            first_fixture
+                .slot_path
+                .to_str()
+                .expect("slot path should be utf-8"),
+        ],
+    );
+
+    let second_fixture = create_lf_normalization_drift_fixture(&repo);
+    let second_quarantine = fixture_normalization_quarantine(&repo, &second_fixture);
+    let second_pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(
+        second_pool.idle_slots, DEFAULT_POOL_SIZE,
+        "pool={second_pool:#?}"
+    );
+    assert_eq!(second_pool.blocked_slots, 0);
+    assert!(first_quarantine.is_dir());
+    assert_normalization_quarantine_preserves_legacy_slot(&second_quarantine, &second_fixture);
+    assert!(
+        inspect_slot_git_status(&second_fixture.slot_path)
+            .expect("second recovered slot status should be readable")
+            .is_clean_baseline()
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                second_fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("second recovered slot head should resolve"),
+        second_fixture.target_head
+    );
+}
+
+#[test]
+fn tracked_artifact_shaped_file_does_not_block_missing_slot_provisioning() {
+    let repo = TempGitRepo::new("tracked-artifact-shaped-file");
+    run_git(&repo.repo_root, &["checkout", POOL_BASELINE_BRANCH]);
+    let artifact_shaped_name = format!(
+        ".normalization-replacement-{}-{}-{}",
+        slot_id(2),
+        "a".repeat(40),
+        "b".repeat(32)
+    );
+    fs::write(
+        repo.repo_root.join(&artifact_shaped_name),
+        b"tracked repository data\n",
+    )
+    .expect("artifact-shaped tracked file should write");
+    run_git(&repo.repo_root, &["add", artifact_shaped_name.as_str()]);
+    run_git(
+        &repo.repo_root,
+        &["commit", "-qm", "add artifact-shaped tracked file"],
+    );
+    run_git(
+        &repo.repo_root,
+        &["push", "-q", DEFAULT_PUSH_REMOTE_NAME, POOL_BASELINE_BRANCH],
+    );
+    repo.set_remote_tracking_branch(&remote_standard_branch_name(), POOL_BASELINE_BRANCH);
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE, "pool={pool:#?}");
+    assert_eq!(pool.blocked_slots, 0);
+    assert!(
+        repo.pool_root()
+            .join(slot_id(1))
+            .join(artifact_shaped_name)
+            .is_file()
+    );
+}
+
+#[test]
+fn reconcile_preserves_trailing_space_edits_on_an_lf_normalization_candidate() {
+    let repo = TempGitRepo::new("preserve-trailing-space-lf-normalization-drift");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    fs::write(fixture.slot_path.join("legacy.md"), b"legacy \r\n")
+        .expect("trailing-space operator edit should write");
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE - 1);
+    assert_eq!(pool.blocked_slots, 1);
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("preserved slot head should resolve"),
+        fixture.stale_head
+    );
+    assert_eq!(
+        fs::read(fixture.slot_path.join("legacy.md"))
+            .expect("preserved operator edit should be readable"),
+        b"legacy \r\n"
+    );
+}
+
+#[test]
+fn reconcile_preserves_lf_normalization_drift_with_any_invalid_lease_authority() {
+    let repo = TempGitRepo::new("preserve-invalid-lease-lf-normalization-drift");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let authority = NoopPlanningAuthorityPort::default().with_runtime_projection(
+        PlanningAuthorityRuntimeProjectionSnapshot {
+            invalid_slot_leases: std::collections::BTreeSet::from([slot_id(2)]),
+            ..PlanningAuthorityRuntimeProjectionSnapshot::default()
+        },
+    );
+
+    let pool = reconcile_pool_board(&authority, &test_parallel_runtime(), &repo.workspace_dir());
+
+    assert!(pool.blocked_slots >= 1);
+    assert_eq!(pool.slots[0].owner_label, "operator recovery");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("invalid-lease slot head should resolve"),
+        fixture.stale_head
+    );
+}
+
+#[test]
+fn reconcile_preserves_lf_normalization_drift_with_any_session_or_queue_authority() {
+    for authority_kind in ["session", "queue"] {
+        let repo = TempGitRepo::new(&format!("preserve-{authority_kind}-lf-normalization-drift"));
+        let fixture = create_lf_normalization_drift_fixture(&repo);
+        let mut snapshot = PlanningAuthorityRuntimeProjectionSnapshot::default();
+        match authority_kind {
+            "session" => snapshot
+                .session_details
+                .push(unrelated_session_detail(&repo)),
+            "queue" => snapshot
+                .distributor_queue_records
+                .push(unrelated_queue_record(&repo)),
+            _ => unreachable!(),
+        }
+        let authority = NoopPlanningAuthorityPort::default().with_runtime_projection(snapshot);
+
+        let pool =
+            reconcile_pool_board(&authority, &test_parallel_runtime(), &repo.workspace_dir());
+
+        assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Blocked);
+        assert_eq!(
+            run_command(
+                "git",
+                [
+                    "-C",
+                    fixture
+                        .slot_path
+                        .to_str()
+                        .expect("slot path should be utf-8"),
+                    "rev-parse",
+                    "HEAD",
+                ],
+                None,
+            )
+            .expect("authority-protected slot head should resolve"),
+            fixture.stale_head,
+            "authority kind {authority_kind} must block normalization recovery"
+        );
+    }
+}
+
+#[test]
+fn normalization_recovery_quarantines_a_late_staged_write() {
+    let repo = TempGitRepo::new("quarantine-late-staged-write");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    install_before_normalization_quarantine_hook(&fixture.slot_path, |slot_path| {
+        fs::write(slot_path.join("legacy.md"), b"late staged write\r\n")
+            .expect("late staged write should update the legacy slot");
+        run_git(slot_path, &["add", "legacy.md"]);
+    });
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE, "pool={pool:#?}");
+    assert!(
+        inspect_slot_git_status(&fixture.slot_path)
+            .expect("replacement slot status should be readable")
+            .is_clean_baseline()
+    );
+    assert_eq!(
+        fs::read(quarantine_path.join("legacy.md"))
+            .expect("late write should remain in quarantine"),
+        b"late staged write\r\n"
+    );
+    assert!(!command_succeeds(
+        "git",
+        [
+            "-C",
+            quarantine_path
+                .to_str()
+                .expect("quarantine path should be utf-8"),
+            "diff",
+            "--cached",
+            "--quiet",
+        ],
+    ));
+    assert!(fixture_normalization_replacements(&repo, &fixture).is_empty());
+    assert!(
+        pool.reconcile_status
+            .contains(&quarantine_path.display().to_string())
+    );
+}
+
+#[test]
+fn normalization_recovery_never_checkouts_over_a_late_canonical_path_write() {
+    let repo = TempGitRepo::new("preserve-post-move-canonical-write");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    install_after_normalization_quarantine_move_hook(&fixture.slot_path, |slot_path| {
+        fs::create_dir_all(slot_path).expect("late canonical directory should be recreated");
+        fs::write(slot_path.join("legacy.md"), b"late canonical bytes\n")
+            .expect("late canonical bytes should write");
+    });
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let replacement_path = fixture_single_normalization_replacement(&repo, &fixture);
+
+    assert_eq!(
+        fs::read(fixture.slot_path.join("legacy.md")).expect("late canonical bytes must remain"),
+        b"late canonical bytes\n"
+    );
+    assert_normalization_quarantine_preserves_legacy_slot(&quarantine_path, &fixture);
+    assert!(replacement_path.is_dir());
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                replacement_path
+                    .to_str()
+                    .expect("replacement path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("staged replacement head should resolve"),
+        fixture.target_head
+    );
+    assert!(
+        inspect_slot_git_status(&replacement_path)
+            .expect("staged replacement should be inspectable")
+            .is_clean_baseline()
+    );
+    assert!(
+        pool.reconcile_status
+            .contains("incomplete normalization recovery")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn normalization_recovery_rejects_a_swapped_staging_identity_before_checkout() {
+    use std::os::unix::fs::symlink;
+
+    let repo = TempGitRepo::new("preserve-swapped-normalization-staging");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    let outside_path = repo.root.join("outside-staging-target");
+    let displaced_path = repo.root.join("displaced-empty-staging");
+    fs::create_dir(&outside_path).expect("outside staging target should be created");
+    let outside_for_hook = outside_path.clone();
+    let displaced_for_hook = displaced_path.clone();
+    install_before_normalization_staging_provision_hook(
+        &fixture.slot_path,
+        move |replacement_path| {
+            fs::rename(replacement_path, &displaced_for_hook)
+                .expect("staging directory should be displaced");
+            symlink(&outside_for_hook, replacement_path)
+                .expect("staging path should be replaced by a symlink");
+        },
+    );
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let replacement_path = fixture_single_normalization_replacement(&repo, &fixture);
+
+    assert!(
+        fs::symlink_metadata(&replacement_path)
+            .expect("swapped staging symlink should remain")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_dir(&outside_path)
+            .expect("outside staging target should remain readable")
+            .count(),
+        0
+    );
+    assert_eq!(
+        fs::read_dir(&displaced_path)
+            .expect("displaced staging should remain readable")
+            .count(),
+        0
+    );
+    assert!(!quarantine_path.exists());
+    assert_eq!(current_branch(&fixture.slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("legacy slot head should resolve"),
+        fixture.stale_head
+    );
+    assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Blocked);
+    assert!(
+        pool.reconcile_status
+            .contains(&replacement_path.display().to_string())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn normalization_recovery_atomic_install_does_not_follow_a_late_canonical_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let repo = TempGitRepo::new("preserve-late-canonical-symlink");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    let outside_path = repo.root.join("outside-canonical-target");
+    fs::create_dir(&outside_path).expect("outside canonical target should be created");
+    let outside_for_hook = outside_path.clone();
+    install_before_normalization_atomic_rename_hook(&fixture.slot_path, move |destination| {
+        symlink(&outside_for_hook, destination).expect("late canonical symlink should be created");
+    });
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let replacement_path = fixture_single_normalization_replacement(&repo, &fixture);
+
+    assert!(
+        fs::symlink_metadata(&fixture.slot_path)
+            .expect("late canonical symlink should remain")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_link(&fixture.slot_path).expect("canonical symlink target should be readable"),
+        outside_path
+    );
+    assert_eq!(
+        fs::read_dir(&outside_path)
+            .expect("outside target should remain readable")
+            .count(),
+        0
+    );
+    assert_normalization_quarantine_preserves_legacy_slot(&quarantine_path, &fixture);
+    assert!(replacement_path.is_dir());
+    assert!(
+        pool.reconcile_status
+            .contains("incomplete normalization recovery")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn normalization_recovery_atomic_quarantine_does_not_follow_a_late_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let repo = TempGitRepo::new("preserve-late-quarantine-symlink");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    let outside_path = repo.root.join("outside-quarantine-target");
+    fs::create_dir(&outside_path).expect("outside quarantine target should be created");
+    let outside_for_hook = outside_path.clone();
+    install_before_normalization_atomic_rename_hook(&quarantine_path, move |destination| {
+        symlink(&outside_for_hook, destination).expect("late quarantine symlink should be created");
+    });
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let replacement_path = fixture_single_normalization_replacement(&repo, &fixture);
+
+    assert_eq!(current_branch(&fixture.slot_path), "HEAD");
+    assert_eq!(
+        fs::read(fixture.slot_path.join("legacy.md"))
+            .expect("legacy canonical bytes should remain"),
+        b"legacy\r\n"
+    );
+    assert!(
+        fs::symlink_metadata(&quarantine_path)
+            .expect("late quarantine symlink should remain")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_dir(&outside_path)
+            .expect("outside target should remain readable")
+            .count(),
+        0
+    );
+    assert!(replacement_path.is_dir());
+    assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Blocked);
+}
+
+#[test]
+fn normalization_recovery_preserves_a_late_branch_checkout() {
+    let repo = TempGitRepo::new("preserve-late-branch-checkout");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    install_before_normalization_quarantine_hook(&fixture.slot_path, |slot_path| {
+        run_git(slot_path, &["switch", "-c", "operator-late-branch"]);
+    });
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let replacement_path = fixture_single_normalization_replacement(&repo, &fixture);
+
+    assert_eq!(current_branch(&fixture.slot_path), "operator-late-branch");
+    assert_eq!(
+        fs::read(fixture.slot_path.join("legacy.md"))
+            .expect("late branch legacy bytes should remain"),
+        b"legacy\r\n"
+    );
+    assert!(!quarantine_path.exists());
+    assert!(replacement_path.is_dir());
+    assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Blocked);
+    assert!(
+        pool.reconcile_status
+            .contains(&replacement_path.display().to_string())
+    );
+}
+
+#[test]
+fn normalization_recovery_stops_when_authority_appears_after_the_initial_proof() {
+    let repo = TempGitRepo::new("preserve-late-normalization-authority");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+    let session_detail = unrelated_session_detail(&repo);
+    let shared_projection = Arc::new(Mutex::new(
+        PlanningAuthorityRuntimeProjectionSnapshot::default(),
+    ));
+    let authority = NoopPlanningAuthorityPort::default()
+        .with_shared_runtime_projection(Arc::clone(&shared_projection));
+    install_before_normalization_quarantine_hook(&fixture.slot_path, move |_| {
+        shared_projection
+            .lock()
+            .expect("shared projection should not be poisoned")
+            .session_details
+            .push(session_detail);
+    });
+
+    let pool = reconcile_pool_board(&authority, &test_parallel_runtime(), &repo.workspace_dir());
+    let replacement_path = fixture_single_normalization_replacement(&repo, &fixture);
+
+    assert!(!quarantine_path.exists());
+    assert!(replacement_path.is_dir());
+    assert_eq!(current_branch(&fixture.slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("authority-protected slot head should resolve"),
+        fixture.stale_head
+    );
+    assert!(
+        pool.reconcile_status
+            .contains(&replacement_path.display().to_string())
+    );
+}
+
+#[test]
+fn normalization_recovery_rejects_an_oversized_candidate() {
+    let repo = TempGitRepo::new("preserve-oversized-normalization-candidate");
+    let mut oversized = vec![b'x'; 1024 * 1024];
+    oversized.extend_from_slice(b"\r\n");
+    let fixture = create_lf_normalization_drift_fixture_with_primary(&repo, &oversized);
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Blocked);
+    assert_eq!(
+        fs::metadata(fixture.slot_path.join("legacy.md"))
+            .expect("oversized candidate should remain")
+            .len(),
+        oversized.len() as u64
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("oversized slot head should resolve"),
+        fixture.stale_head
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn normalization_recovery_preserves_a_hardlinked_candidate() {
+    let repo = TempGitRepo::new("preserve-hardlinked-normalization-candidate");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let shared_path = repo.root.join("shared-legacy.md");
+    fs::hard_link(fixture.slot_path.join("legacy.md"), &shared_path)
+        .expect("legacy candidate should be hardlinked");
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+
+    assert_eq!(pool.slots[0].state, ParallelModePoolSlotState::Blocked);
+    assert_eq!(
+        fs::read(&shared_path).expect("shared file should remain"),
+        b"legacy\r\n"
+    );
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("hardlinked slot head should resolve"),
+        fixture.stale_head
+    );
+}
+
+#[test]
+fn parallel_entry_reset_recovers_target_equivalent_lf_normalization_drift() {
+    let repo = TempGitRepo::new("parallel-entry-lf-normalization-drift");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let quarantine_path = fixture_normalization_quarantine(&repo, &fixture);
+
+    let report = lf_normalization_test_service()
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect("parallel entry should recover target-equivalent normalization drift");
+
+    assert!(report.succeeded_reset_slot_ids().contains(&slot_id(1)));
+    assert_eq!(current_branch(&fixture.slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("reset slot head should resolve"),
+        fixture.target_head
+    );
+    assert!(
+        inspect_slot_git_status(&fixture.slot_path)
+            .expect("reset slot status should be readable")
+            .is_clean_baseline()
+    );
+    assert_normalization_quarantine_preserves_legacy_slot(&quarantine_path, &fixture);
+    assert!(fixture_normalization_replacements(&repo, &fixture).is_empty());
+    assert!(
+        report
+            .slot_reports
+            .iter()
+            .any(|slot| slot.reason.contains(&quarantine_path.display().to_string()))
+    );
+}
+
+#[test]
+fn parallel_entry_reset_does_not_reenter_an_incomplete_normalization_recovery() {
+    let repo = TempGitRepo::new("parallel-entry-incomplete-normalization-recovery");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let artifact_path = repo.pool_root().join(format!(
+        ".normalization-replacement-{}-{}-{}",
+        slot_id(1),
+        fixture.target_head,
+        "00".repeat(16)
+    ));
+    fs::create_dir(&artifact_path).expect("incomplete replacement artifact should be created");
+
+    let report = lf_normalization_test_service()
+        .reset_pool_on_parallel_enable_report(&repo.workspace_dir())
+        .expect("parallel entry should preserve an incomplete normalization recovery");
+
+    assert!(!report.succeeded_reset_slot_ids().contains(&slot_id(1)));
+    assert_eq!(
+        fixture_normalization_replacements(&repo, &fixture),
+        vec![artifact_path]
+    );
+    assert_eq!(current_branch(&fixture.slot_path), "HEAD");
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("legacy slot head should resolve"),
+        fixture.stale_head
+    );
 }
 
 // 한 slot이 running인 동안에도 다른 idle baseline들은 표준 remote branch로 정리될 수

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -697,6 +699,7 @@ pub struct NoopPlanningAuthorityPort {
     next_refresh_order: AtomicU64,
     resolve_authority_location_error: Option<&'static str>,
     runtime_projection: Option<PlanningAuthorityRuntimeProjectionSnapshot>,
+    shared_runtime_projection: Option<Arc<Mutex<PlanningAuthorityRuntimeProjectionSnapshot>>>,
     clear_parallel_runtime_projections_error: Option<&'static str>,
     clear_parallel_runtime_projections_for_tasks_error: Option<&'static str>,
     apply_parallel_pool_reset_report_error: Option<&'static str>,
@@ -714,6 +717,14 @@ impl NoopPlanningAuthorityPort {
         snapshot: PlanningAuthorityRuntimeProjectionSnapshot,
     ) -> Self {
         self.runtime_projection = Some(snapshot);
+        self
+    }
+
+    pub fn with_shared_runtime_projection(
+        mut self,
+        snapshot: Arc<Mutex<PlanningAuthorityRuntimeProjectionSnapshot>>,
+    ) -> Self {
+        self.shared_runtime_projection = Some(snapshot);
         self
     }
 
@@ -898,6 +909,12 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         // Workspace partitioning is not provided by the fallback.
         _workspace_dir: &str,
     ) -> Result<PlanningAuthorityRuntimeProjectionSnapshot> {
+        if let Some(snapshot) = &self.shared_runtime_projection {
+            return snapshot
+                .lock()
+                .map(|snapshot| snapshot.clone())
+                .map_err(|_| anyhow!("shared runtime projection lock is poisoned"));
+        }
         Ok(self.runtime_projection.clone().unwrap_or_default())
     }
 

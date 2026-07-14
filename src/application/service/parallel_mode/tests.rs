@@ -12,8 +12,11 @@ use super::{
     inspect_akra_branch, inspect_authority_store, inspect_gh_auth, inspect_gh_binary,
     inspect_git_worktree, inspect_planning_projection, inspect_push_remote,
     inspect_slot_git_status, install_after_distributor_enqueue_pool_busy_hook,
-    install_after_distributor_enqueue_preflight_hook, install_before_distributor_cleanup_lock_hook,
-    lease_session_key, local_branch_ref, normalize_parallel_mode_integration_branch,
+    install_after_distributor_enqueue_preflight_hook,
+    install_after_normalization_quarantine_move_hook, install_before_distributor_cleanup_lock_hook,
+    install_before_normalization_atomic_rename_hook, install_before_normalization_quarantine_hook,
+    install_before_normalization_staging_provision_hook, lease_session_key, local_branch_ref,
+    normalization_quarantine_path, normalize_parallel_mode_integration_branch,
     parallel_mode_integration_branch_for_repo, parse_https_remote,
     read_agent_session_detail_record, reconcile_pool_board, record_assigned_session_detail,
     record_running_session_detail, remote_branch_name, remote_tracking_branch_ref,
@@ -46,7 +49,7 @@ use crate::application::port::outbound::github_automation_port::{
 use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::application::port::outbound::planning_authority_port::{
     NoopPlanningAuthorityPort, PlanningAuthorityDistributorQueueRecord,
-    PlanningAuthorityOfficialRefreshClaimStatus,
+    PlanningAuthorityOfficialRefreshClaimStatus, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
@@ -56,11 +59,12 @@ use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection,
 };
 use crate::domain::parallel_mode::{
-    ParallelModeAutomationTrigger, ParallelModeDispatchBlockReason,
-    ParallelModeDispatchCommandSnapshot, ParallelModePoolResetPolicy,
-    ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome, ParallelModePoolSlotState,
-    ParallelModeQueueItemState, ParallelModeSlotLeaseRequest, ParallelModeSlotLeaseSnapshot,
-    ParallelModeSlotLeaseState, ParallelModeSupervisorState, ParallelModeTaskDispatchBlockSnapshot,
+    ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
+    ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
+    ParallelModePoolResetPolicy, ParallelModePoolResetSlotAction, ParallelModePoolResetSlotOutcome,
+    ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeSlotLeaseRequest,
+    ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState, ParallelModeSupervisorState,
+    ParallelModeTaskDispatchBlockSnapshot,
 };
 use crate::domain::planning::{
     PostTurnContinuationGate, PriorityQueueProjection, PriorityQueueTask, TaskActor,

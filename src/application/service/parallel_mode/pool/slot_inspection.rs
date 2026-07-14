@@ -345,6 +345,7 @@ pub(super) fn summarize_pool_reconcile_status(
     pool_root: &Path,
     baseline_branch: &str,
     execution: Option<PoolReconcileExecution>,
+    normalization_recovery_artifacts: &[PathBuf],
 ) -> String {
     let idle_slots = slots
         .iter()
@@ -378,6 +379,18 @@ pub(super) fn summarize_pool_reconcile_status(
             action_parts.push(format!("cleaned {}", execution.cleaned_slots));
         }
         prefix = format!("actions: {} / ", action_parts.join(", "));
+    }
+    if let Some(first_artifact) = normalization_recovery_artifacts.first() {
+        let additional = normalization_recovery_artifacts.len().saturating_sub(1);
+        let additional = if additional == 0 {
+            String::new()
+        } else {
+            format!(" (+{additional} more)")
+        };
+        prefix.push_str(&format!(
+            "preserved normalization recovery: `{}`{additional} / ",
+            first_artifact.display()
+        ));
     }
     if blocked_slots > 0 {
         if let Some(slot) = find_proof_unavailable_orphan_slot_branch(slots) {
