@@ -80,10 +80,14 @@ use self::pool::{
 #[cfg(test)]
 use self::pool::{
     cleanup_slot_to_ref_with_hooks, delete_cleaned_slot_branch_if_unchanged,
-    install_after_normalization_quarantine_move_hook,
-    install_before_normalization_atomic_rename_hook, install_before_normalization_quarantine_hook,
-    install_before_normalization_staging_provision_hook, normalization_quarantine_path,
-    reconcile_pool_board, reset_slot_worktree_to_ref, slot_id, slot_lease_file_path,
+    install_after_normalization_quarantine_move_hook, install_before_normalization_quarantine_hook,
+    normalization_quarantine_path, reconcile_pool_board, reset_slot_worktree_to_ref, slot_id,
+    slot_lease_file_path,
+};
+#[cfg(all(test, unix))]
+use self::pool::{
+    install_before_normalization_atomic_rename_hook,
+    install_before_normalization_staging_provision_hook,
 };
 use self::readiness::{
     blocked_prerequisite_capability, command_succeeds, inspect_authority_store,

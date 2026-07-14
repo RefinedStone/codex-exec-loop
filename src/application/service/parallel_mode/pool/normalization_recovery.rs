@@ -1316,7 +1316,7 @@ pub(in crate::application::service::parallel_mode) fn install_after_normalizatio
         .push((slot_path.to_path_buf(), Box::new(hook)));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(in crate::application::service::parallel_mode) fn install_before_normalization_atomic_rename_hook(
     destination: &Path,
     hook: impl FnOnce(&Path) + Send + 'static,
@@ -1327,7 +1327,7 @@ pub(in crate::application::service::parallel_mode) fn install_before_normalizati
         .push((destination.to_path_buf(), Box::new(hook)));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(in crate::application::service::parallel_mode) fn install_before_normalization_staging_provision_hook(
     slot_path: &Path,
     hook: impl FnOnce(&Path) + Send + 'static,

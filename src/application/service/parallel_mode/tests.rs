@@ -14,8 +14,7 @@ use super::{
     inspect_slot_git_status, install_after_distributor_enqueue_pool_busy_hook,
     install_after_distributor_enqueue_preflight_hook,
     install_after_normalization_quarantine_move_hook, install_before_distributor_cleanup_lock_hook,
-    install_before_normalization_atomic_rename_hook, install_before_normalization_quarantine_hook,
-    install_before_normalization_staging_provision_hook, lease_session_key, local_branch_ref,
+    install_before_normalization_quarantine_hook, lease_session_key, local_branch_ref,
     normalization_quarantine_path, normalize_parallel_mode_integration_branch,
     parallel_mode_integration_branch_for_repo, parse_https_remote,
     read_agent_session_detail_record, reconcile_pool_board, record_assigned_session_detail,
@@ -24,6 +23,11 @@ use super::{
     resolve_parallel_mode_integration_branch_strict, resolve_parent_high_risk_opt_in,
     resolve_workspace_slot_lease, run_command, sanitize_task_slug, short_branch_slug_hash, slot_id,
     slot_lease_file_path, write_slot_lease,
+};
+#[cfg(unix)]
+use super::{
+    install_before_normalization_atomic_rename_hook,
+    install_before_normalization_staging_provision_hook,
 };
 
 #[test]
