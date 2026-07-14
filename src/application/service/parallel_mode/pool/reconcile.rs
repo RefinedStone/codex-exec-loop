@@ -10,9 +10,9 @@ use super::{
     GitWorktreeRecord, NormalizationRecoveryRequest, PoolMutationLock, ensure_directory_exists,
     ensure_normalization_recovery_authority_is_empty,
     has_normalization_replacement_artifact_for_slot, has_target_equivalent_lf_normalization_drift,
-    inspect_slot_git_status, normalization_quarantine_path,
-    normalization_replacement_artifacts_for_slot, quarantine_normalization_drift_and_replace_slot,
-    reset_slot_worktree_to_ref, slot_id, worktree_paths_match,
+    inspect_slot_git_status, normalization_replacement_artifacts_for_slot,
+    quarantine_normalization_drift_and_replace_slot, reset_slot_worktree_to_ref, slot_id,
+    worktree_paths_match,
 };
 
 pub(super) struct ReusableDetachedBaselineResetContext<'a> {
@@ -294,7 +294,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
         if !slot_status.is_clean_baseline() && !has_normalization_drift {
             continue;
         }
-        let reset_report = if has_normalization_drift {
+        let (reset_report, normalization_quarantine) = if has_normalization_drift {
             if mutation_lock.verify_pool_root(context.pool_root).is_err() {
                 continue;
             }
@@ -304,7 +304,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
                     context.repo_root,
                 )
             };
-            quarantine_normalization_drift_and_replace_slot(
+            let outcome = quarantine_normalization_drift_and_replace_slot(
                 NormalizationRecoveryRequest {
                     repo_root: context.repo_root,
                     pool_root: context.pool_root,
@@ -315,19 +315,17 @@ pub(super) fn reset_reusable_detached_baseline_slots(
                 },
                 mutation_lock,
                 &recheck_unowned_authority,
-            )
+            );
+            (outcome.report, outcome.quarantine_path)
         } else {
-            reset_slot_worktree_to_ref(&slot_path, context.baseline_ref)
+            (
+                reset_slot_worktree_to_ref(&slot_path, context.baseline_ref),
+                None,
+            )
         };
         if reset_report.succeeded() {
             report.reset_slots += 1;
-            if has_normalization_drift
-                && let Some(quarantine_path) = normalization_quarantine_path(
-                    context.pool_root,
-                    &slot_id,
-                    &worktree_record.head_sha,
-                )
-            {
+            if let Some(quarantine_path) = normalization_quarantine {
                 report.normalization_quarantines.push(quarantine_path);
             }
         }

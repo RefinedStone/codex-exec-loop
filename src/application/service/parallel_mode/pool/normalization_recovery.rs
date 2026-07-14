@@ -44,6 +44,11 @@ pub(super) struct NormalizationRecoveryRequest<'a> {
     pub(super) target_ref: &'a str,
 }
 
+pub(super) struct NormalizationRecoveryOutcome {
+    pub(super) report: GitCommandSequenceReport,
+    pub(super) quarantine_path: Option<PathBuf>,
+}
+
 /*
 An old pool baseline can contain CRLF or mixed blobs even though `.gitattributes` declares
 `text eol=lf`. Git then reports a freshly checked-out file as unstaged because its clean
@@ -99,7 +104,9 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
     request: NormalizationRecoveryRequest<'_>,
     mutation_lock: &PoolMutationLock,
     recheck_unowned_authority: &dyn Fn() -> Result<(), String>,
-) -> GitCommandSequenceReport {
+) -> NormalizationRecoveryOutcome {
+    let quarantine_path =
+        new_normalization_quarantine_path(request.pool_root, request.slot_id, request.source_oid);
     let result = (|| {
         mutation_lock.verify_pool_root(request.pool_root)?;
         let canonical_slot_path = request.pool_root.join(request.slot_id);
@@ -123,12 +130,10 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
         }
         let target_oid = resolve_target_oid(request.slot_path, request.target_ref)
             .ok_or_else(|| "normalization recovery target OID could not be resolved".to_string())?;
-        let quarantine_path =
-            normalization_quarantine_path(request.pool_root, request.slot_id, request.source_oid)
-                .ok_or_else(|| "normalization recovery source identity is invalid".to_string())?;
+        let quarantine_path = quarantine_path.as_ref().map_err(Clone::clone)?;
         let replacement_path =
             new_normalization_replacement_path(request.pool_root, request.slot_id, &target_oid)?;
-        ensure_path_absent(&quarantine_path, "quarantine")?;
+        ensure_path_absent(quarantine_path, "quarantine")?;
         ensure_path_absent(&replacement_path, "replacement staging")?;
         let canonical_repo_root = std::fs::canonicalize(request.repo_root).map_err(|error| {
             format!("normalization recovery repository root could not be pinned: {error}")
@@ -148,7 +153,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
         mutation_lock.verify_pool_root(request.pool_root)?;
 
         let git_slot_path = git_worktree_path(&canonical_repo_root, request.slot_path)?;
-        let git_quarantine_path = git_worktree_path(&canonical_repo_root, &quarantine_path)?;
+        let git_quarantine_path = git_worktree_path(&canonical_repo_root, quarantine_path)?;
         let git_replacement_path = git_worktree_path(&canonical_repo_root, &replacement_path)?;
         let staging_directory = create_private_staging_directory(&replacement_path)?;
         mutation_lock.verify_pool_root(request.pool_root)?;
@@ -198,7 +203,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
         let pre_move_validation = (|| {
             mutation_lock.verify_pool_root(request.pool_root)?;
             recheck_unowned_authority()?;
-            ensure_path_absent(&quarantine_path, "quarantine")?;
+            ensure_path_absent(quarantine_path, "quarantine")?;
             verify_registered_detached_worktree(
                 &git_repo_root,
                 request.slot_path,
@@ -222,12 +227,12 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
             return Ok(report);
         }
 
-        run_before_normalization_atomic_rename_hook(&quarantine_path);
+        run_before_normalization_atomic_rename_hook(quarantine_path);
         if !append_atomic_rename_step(
             &mut report,
             "atomically move legacy slot to normalization recovery quarantine",
             request.slot_path,
-            &quarantine_path,
+            quarantine_path,
         ) {
             return Ok(report);
         }
@@ -264,7 +269,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
             ensure_path_absent(request.slot_path, "canonical slot")?;
             verify_registered_detached_worktree(
                 &git_repo_root,
-                &quarantine_path,
+                quarantine_path,
                 request.source_oid,
                 false,
             )?;
@@ -330,7 +335,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
                     verify_completed_recovery(
                         &git_repo_root,
                         request.slot_path,
-                        &quarantine_path,
+                        quarantine_path,
                         &replacement_path,
                         request.source_oid,
                         &target_oid,
@@ -346,7 +351,12 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
         Ok(report)
     })();
 
-    result.unwrap_or_else(normalization_recovery_preflight_failure)
+    let report = result.unwrap_or_else(normalization_recovery_preflight_failure);
+    let completed_quarantine_path = report.succeeded().then(|| quarantine_path.ok()).flatten();
+    NormalizationRecoveryOutcome {
+        report,
+        quarantine_path: completed_quarantine_path,
+    }
 }
 
 pub(in crate::application::service::parallel_mode) fn normalization_quarantine_path(
@@ -369,6 +379,32 @@ pub(in crate::application::service::parallel_mode) fn normalization_quarantine_p
     )))
 }
 
+fn new_normalization_quarantine_path(
+    pool_root: &Path,
+    slot_id: &str,
+    source_oid: &str,
+) -> Result<PathBuf, String> {
+    let base_path = normalization_quarantine_path(pool_root, slot_id, source_oid)
+        .ok_or_else(|| "normalization recovery source identity is invalid".to_string())?;
+    match base_path.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(base_path),
+        Ok(_) => Ok(base_path.with_file_name(format!(
+            "{}-{}",
+            base_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    "normalization recovery quarantine name is not valid Unicode".to_string()
+                })?,
+            random_normalization_nonce()?
+        ))),
+        Err(error) => Err(format!(
+            "normalization quarantine path could not be inspected at `{}`: {error}",
+            base_path.display()
+        )),
+    }
+}
+
 fn new_normalization_replacement_path(
     pool_root: &Path,
     slot_id: &str,
@@ -383,18 +419,19 @@ fn new_normalization_replacement_path(
     {
         return Err("normalization recovery target identity is invalid".to_string());
     }
-    let mut nonce = [0_u8; 16];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut nonce)
-        .map_err(|error| format!("normalization recovery requires OS randomness: {error}"))?;
-    let nonce = nonce
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let nonce = random_normalization_nonce()?;
     Ok(pool_root.join(format!(
         "{NORMALIZATION_REPLACEMENT_PREFIX}{slot_id}-{}-{nonce}",
         target_oid.to_ascii_lowercase()
     )))
+}
+
+fn random_normalization_nonce() -> Result<String, String> {
+    let mut nonce = [0_u8; 16];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| format!("normalization recovery requires OS randomness: {error}"))?;
+    Ok(nonce.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub(super) fn normalization_recovery_artifact_paths(
@@ -432,7 +469,14 @@ pub(super) fn normalization_recovery_artifact_paths(
 
 fn normalization_quarantine_slot_id(name: &str) -> Option<&str> {
     let remainder = name.strip_prefix(NORMALIZATION_QUARANTINE_PREFIX)?;
-    let (slot_id, source_oid) = remainder.rsplit_once('-')?;
+    let (slot_and_oid, last_component) = remainder.rsplit_once('-')?;
+    let (slot_id, source_oid) = if is_hex_identifier(last_component, &[40, 64]) {
+        (slot_and_oid, last_component)
+    } else if is_hex_identifier(last_component, &[32]) {
+        slot_and_oid.rsplit_once('-')?
+    } else {
+        return None;
+    };
     (is_valid_normalization_slot_id(slot_id) && is_hex_identifier(source_oid, &[40, 64]))
         .then_some(slot_id)
 }

@@ -76,8 +76,6 @@ pub(super) use self::lease_store::{
     rollback_slot_lease_write_failure, slot_lease_mirror_matches_or_missing, transition_slot_lease,
     write_slot_lease,
 };
-#[cfg(not(test))]
-use self::normalization_recovery::normalization_quarantine_path;
 use self::normalization_recovery::{
     NormalizationRecoveryRequest, has_normalization_replacement_artifact_for_slot,
     has_target_equivalent_lf_normalization_drift, normalization_recovery_artifact_paths,
@@ -661,14 +659,10 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
             })
         });
         mutation_lock.verify_pool_root(&pool_root)?;
-        let normalization_quarantine = has_normalization_drift
-            .then(|| normalization_quarantine_path(&pool_root, &slot_id, &worktree_record.head_sha))
-            .flatten()
-            .map(|path| path.display().to_string());
-        let reset_report = if has_normalization_drift {
+        let (reset_report, normalization_quarantine) = if has_normalization_drift {
             let recheck_unowned_authority =
                 || ensure_normalization_recovery_authority_is_empty(planning_authority, &repo_root);
-            quarantine_normalization_drift_and_replace_slot(
+            let outcome = quarantine_normalization_drift_and_replace_slot(
                 NormalizationRecoveryRequest {
                     repo_root: &repo_root,
                     pool_root: &pool_root,
@@ -679,9 +673,18 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 },
                 mutation_lock,
                 &recheck_unowned_authority,
+            );
+            (
+                outcome.report,
+                outcome
+                    .quarantine_path
+                    .map(|path| path.display().to_string()),
             )
         } else {
-            reset_slot_worktree_to_ref_with_retry(&slot_path, &integration_target_oid)
+            (
+                reset_slot_worktree_to_ref_with_retry(&slot_path, &integration_target_oid),
+                None,
+            )
         };
         if reset_report.succeeded() {
             collect_reset_projection_keys(&mut report, &context, &slot_id);

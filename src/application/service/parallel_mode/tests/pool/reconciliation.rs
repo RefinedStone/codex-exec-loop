@@ -116,6 +116,31 @@ fn fixture_normalization_quarantine(
         .expect("fixture source identity should produce a quarantine path")
 }
 
+fn fixture_normalization_quarantines(
+    repo: &TempGitRepo,
+    fixture: &LfNormalizationDriftFixture,
+) -> Vec<PathBuf> {
+    let prefix = format!(
+        ".normalization-recovery-{}-{}",
+        slot_id(1),
+        fixture.stale_head
+    );
+    let suffixed_prefix = format!("{prefix}-");
+    let mut paths = fs::read_dir(repo.pool_root())
+        .expect("pool root should be readable")
+        .map(|entry| entry.expect("pool entry should be readable"))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name == prefix || name.starts_with(&suffixed_prefix))
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
 fn fixture_normalization_replacements(
     repo: &TempGitRepo,
     fixture: &LfNormalizationDriftFixture,
@@ -807,6 +832,91 @@ fn completed_normalization_quarantine_does_not_prevent_a_later_recovery() {
         )
         .expect("second recovered slot head should resolve"),
         second_fixture.target_head
+    );
+}
+
+#[test]
+fn completed_quarantine_does_not_block_the_same_source_normalization_recovery() {
+    let repo = TempGitRepo::new("repeat-same-source-normalization-recovery");
+    let fixture = create_lf_normalization_drift_fixture(&repo);
+    let first_pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(first_pool.idle_slots, DEFAULT_POOL_SIZE);
+    run_git(
+        &repo.repo_root,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            fixture
+                .slot_path
+                .to_str()
+                .expect("slot path should be utf-8"),
+        ],
+    );
+    run_git(
+        &repo.repo_root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            fixture
+                .slot_path
+                .to_str()
+                .expect("slot path should be utf-8"),
+            fixture.stale_head.as_str(),
+        ],
+    );
+    fs::write(fixture.slot_path.join("legacy.md"), b"legacy\r\n")
+        .expect("same-source legacy file should be restored");
+    fs::write(fixture.slot_path.join("legacy notes.md"), b"notes\r\n")
+        .expect("same-source spaced legacy file should be restored");
+    assert!(
+        inspect_slot_git_status(&fixture.slot_path)
+            .expect("same-source normalization status should be readable")
+            .has_only_unstaged_changes()
+    );
+
+    let second_pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let quarantines = fixture_normalization_quarantines(&repo, &fixture);
+
+    assert_eq!(
+        second_pool.idle_slots, DEFAULT_POOL_SIZE,
+        "pool={second_pool:#?}"
+    );
+    assert_eq!(second_pool.blocked_slots, 0);
+    assert_eq!(quarantines.len(), 2, "quarantines={quarantines:?}");
+    assert_ne!(quarantines[0], quarantines[1]);
+    for quarantine_path in quarantines {
+        assert_eq!(
+            fs::read(quarantine_path.join("legacy.md"))
+                .expect("same-source quarantine should preserve legacy bytes"),
+            b"legacy\r\n"
+        );
+    }
+    assert_eq!(
+        run_command(
+            "git",
+            [
+                "-C",
+                fixture
+                    .slot_path
+                    .to_str()
+                    .expect("slot path should be utf-8"),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .expect("same-source recovered slot head should resolve"),
+        fixture.target_head
     );
 }
 
