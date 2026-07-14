@@ -113,10 +113,10 @@ fn run_event_loop(
 
 pub(super) fn prepare_runtime_for_due_draw(
     runtime: &mut ShellRuntime,
-    mut read_ready_event: impl FnMut() -> Result<Option<event::Event>>,
+    read_ready_event: impl FnMut() -> Result<Option<event::Event>>,
 ) -> Result<bool> {
     runtime.poll_background_messages();
-    drain_ready_terminal_events_with(runtime, &mut read_ready_event)?;
+    drain_ready_terminal_events_with(runtime, read_ready_event)?;
     if runtime.should_quit() {
         return Ok(false);
     }
@@ -124,7 +124,7 @@ pub(super) fn prepare_runtime_for_due_draw(
 }
 
 fn drain_ready_terminal_events(runtime: &mut ShellRuntime) -> Result<()> {
-    drain_ready_terminal_events_with(runtime, &mut read_ready_terminal_event)
+    drain_ready_terminal_events_with(runtime, read_ready_terminal_event)
 }
 
 fn read_ready_terminal_event() -> Result<Option<event::Event>> {
@@ -136,7 +136,7 @@ fn read_ready_terminal_event() -> Result<Option<event::Event>> {
 
 fn drain_ready_terminal_events_with(
     runtime: &mut ShellRuntime,
-    read_ready_event: &mut impl FnMut() -> Result<Option<event::Event>>,
+    mut read_ready_event: impl FnMut() -> Result<Option<event::Event>>,
 ) -> Result<()> {
     /*
      * Terminal emulators can queue several input or resize events while a frame
