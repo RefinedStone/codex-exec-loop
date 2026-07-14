@@ -92,6 +92,12 @@ pub struct PlanningTaskMutationCommitResult {
     pub applied_command_count: usize,
     pub committed_task_ids: Vec<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlanningTaskCreateCommitResult {
+    pub committed_task: TaskDefinition,
+    pub mutation: PlanningTaskMutationCommitResult,
+}
 #[derive(Clone)]
 pub struct PlanningTaskMutationService {
     planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
@@ -173,6 +179,13 @@ impl PlanningTaskMutationService {
         &self,
         preview: &PlanningTaskCreatePreview,
     ) -> Result<PlanningTaskMutationCommitResult> {
+        Ok(self.commit_create_preview_with_task(preview)?.mutation)
+    }
+
+    pub(crate) fn commit_create_preview_with_task(
+        &self,
+        preview: &PlanningTaskCreatePreview,
+    ) -> Result<PlanningTaskCreateCommitResult> {
         let mut observed_revision = preview.observed_planning_revision;
         let mut next_suffix = preview.collision_suffix;
         /*
@@ -203,6 +216,7 @@ impl PlanningTaskMutationService {
                 )?
             };
             let committed_task_id = task.id.clone();
+            let committed_task = task.clone();
             let mut candidate_task_authority = context.task_authority.clone();
             candidate_task_authority.tasks.push(task);
             let queue_projection =
@@ -216,12 +230,15 @@ impl PlanningTaskMutationService {
                 PlanningTaskAuthorityCommitResult::Committed {
                     planning_revision, ..
                 } => {
-                    return Ok(PlanningTaskMutationCommitResult {
-                        committed_planning_revision: planning_revision,
-                        queue_head: queue_projection.next_task,
-                        task_authority_changed: true,
-                        applied_command_count: 1,
-                        committed_task_ids: vec![committed_task_id],
+                    return Ok(PlanningTaskCreateCommitResult {
+                        committed_task,
+                        mutation: PlanningTaskMutationCommitResult {
+                            committed_planning_revision: planning_revision,
+                            queue_head: queue_projection.next_task,
+                            task_authority_changed: true,
+                            applied_command_count: 1,
+                            committed_task_ids: vec![committed_task_id],
+                        },
                     });
                 }
                 PlanningTaskAuthorityCommitResult::Conflict {

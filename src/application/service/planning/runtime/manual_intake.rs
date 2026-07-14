@@ -109,7 +109,7 @@ impl ManualPromptIntakeService {
                 };
             }
         };
-        let commit = match self.task_intake.commit_task_intake(&proposal) {
+        let commit = match self.task_intake.commit_task_intake_with_task(&proposal) {
             Ok(commit) => commit,
             Err(error) => {
                 return ManualPromptIntakeOutcome::Failed {
@@ -118,13 +118,13 @@ impl ManualPromptIntakeService {
             }
         };
         let handoff = self.runtime_facade.build_manual_intake_task_handoff(
-            &proposal.draft.task,
+            &commit.committed_task,
             &proposal.draft.direction_title,
             transcript_text,
         );
         ManualPromptIntakeOutcome::TaskCommitted {
-            committed_task_id: commit.committed_task_id,
-            committed_planning_revision: commit.committed_planning_revision,
+            committed_task_id: commit.result.committed_task_id,
+            committed_planning_revision: commit.result.committed_planning_revision,
             handoff: ManualPromptMainSessionHandoff {
                 prompt: handoff.prompt,
                 transcript_text: transcript_text.to_string(),
@@ -188,6 +188,7 @@ mod tests {
     use std::process::Command;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -338,6 +339,72 @@ mod tests {
     }
 
     #[test]
+    fn manual_prompt_intake_handoff_uses_the_committed_id_after_a_revision_conflict() {
+        let workspace_dir = create_temp_git_repo("manual-intake-revision-conflict");
+        let workspace = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let bootstrap_planning = PlanningServices::from_ports(
+            workspace.clone(),
+            authority.clone(),
+            authority.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        bootstrap_planning_workspace(&bootstrap_planning, &workspace_dir);
+        let conflict_repository = Arc::new(InterceptingTaskRepositoryPort::conflict_once(
+            authority.clone(),
+        ));
+        let planning = PlanningServices::from_ports(
+            workspace,
+            authority.clone(),
+            conflict_repository.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        let prompt = "Keep the committed task identity after retry";
+
+        let outcome = planning
+            .runtime
+            .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                workspace_directory: workspace_dir.clone(),
+                raw_prompt: prompt.to_string(),
+                legacy_source_turn_id: None,
+                parent_thread_id: None,
+                parent_turn_id: None,
+            });
+
+        let ManualPromptIntakeOutcome::TaskCommitted {
+            committed_task_id,
+            handoff,
+            ..
+        } = outcome
+        else {
+            panic!("manual prompt should commit after retry: {outcome:?}");
+        };
+        let task = handoff
+            .task
+            .expect("manual intake handoff should carry the committed retry task");
+        assert!(conflict_repository.was_intercepted());
+        assert_eq!(task.task_id, committed_task_id);
+        assert!(
+            handoff
+                .prompt
+                .contains(&format!("task_id={committed_task_id}"))
+        );
+        let snapshot = authority
+            .load_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority should exist");
+        let matching_ids = snapshot
+            .task_authority
+            .tasks
+            .iter()
+            .filter(|task| task.title == prompt)
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(matching_ids.len(), 2);
+        assert!(matching_ids.contains(&committed_task_id.as_str()));
+    }
+
+    #[test]
     fn manual_prompt_intake_emits_trace_events_for_committed_and_failed_outcomes() {
         let capture = CaptureWriter::default();
         let subscriber = tracing_subscriber::registry()
@@ -414,9 +481,8 @@ mod tests {
             Arc::new(NoopPlanningWorkerPort),
         );
         bootstrap_planning_workspace(&bootstrap_planning, &workspace_dir);
-        let failing_repository = Arc::new(CommitFailingTaskRepositoryPort {
-            inner: authority.clone(),
-        });
+        let failing_repository =
+            Arc::new(InterceptingTaskRepositoryPort::failing(authority.clone()));
         let direction_snapshot = failing_repository
             .load_direction_authority_snapshot(&workspace_dir)
             .expect("direction authority should load")
@@ -611,11 +677,41 @@ mod tests {
         }
     }
 
-    struct CommitFailingTaskRepositoryPort {
-        inner: Arc<SqlitePlanningAuthorityAdapter>,
+    #[derive(Clone, Copy)]
+    enum TaskCommitInterception {
+        Fail,
+        ConflictOnce,
     }
 
-    impl PlanningTaskRepositoryPort for CommitFailingTaskRepositoryPort {
+    struct InterceptingTaskRepositoryPort {
+        inner: Arc<SqlitePlanningAuthorityAdapter>,
+        interception: TaskCommitInterception,
+        intercepted: AtomicBool,
+    }
+
+    impl InterceptingTaskRepositoryPort {
+        fn failing(inner: Arc<SqlitePlanningAuthorityAdapter>) -> Self {
+            Self {
+                inner,
+                interception: TaskCommitInterception::Fail,
+                intercepted: AtomicBool::new(false),
+            }
+        }
+
+        fn conflict_once(inner: Arc<SqlitePlanningAuthorityAdapter>) -> Self {
+            Self {
+                inner,
+                interception: TaskCommitInterception::ConflictOnce,
+                intercepted: AtomicBool::new(false),
+            }
+        }
+
+        fn was_intercepted(&self) -> bool {
+            self.intercepted.load(Ordering::SeqCst)
+        }
+    }
+
+    impl PlanningTaskRepositoryPort for InterceptingTaskRepositoryPort {
         fn load_direction_authority_snapshot(
             &self,
             workspace_dir: &str,
@@ -648,8 +744,31 @@ mod tests {
             workspace_dir: &str,
             commit: PlanningTaskAuthorityCommit<'_>,
         ) -> anyhow::Result<PlanningTaskAuthorityCommitResult> {
-            if commit.observed_planning_revision.is_some() {
-                return Err(anyhow!("synthetic task authority commit failure"));
+            if let Some(observed_planning_revision) = commit.observed_planning_revision {
+                match self.interception {
+                    TaskCommitInterception::Fail => {
+                        return Err(anyhow!("synthetic task authority commit failure"));
+                    }
+                    TaskCommitInterception::ConflictOnce
+                        if !self.intercepted.swap(true, Ordering::SeqCst) =>
+                    {
+                        let concurrent_result = self
+                            .inner
+                            .commit_task_authority_snapshot(workspace_dir, commit)?;
+                        let PlanningTaskAuthorityCommitResult::Committed {
+                            planning_revision: current_planning_revision,
+                            ..
+                        } = concurrent_result
+                        else {
+                            return Ok(concurrent_result);
+                        };
+                        return Ok(PlanningTaskAuthorityCommitResult::Conflict {
+                            observed_planning_revision,
+                            current_planning_revision,
+                        });
+                    }
+                    TaskCommitInterception::ConflictOnce => {}
+                }
             }
             self.inner
                 .commit_task_authority_snapshot(workspace_dir, commit)

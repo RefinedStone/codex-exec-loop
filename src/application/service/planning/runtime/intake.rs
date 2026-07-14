@@ -80,6 +80,11 @@ pub struct PlanningTaskIntakeCommitResult {
     pub task_authority_committed: bool,
 }
 
+pub(crate) struct PlanningTaskIntakeCommitWithTask {
+    pub committed_task: TaskDefinition,
+    pub result: PlanningTaskIntakeCommitResult,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 // validation error는 test가 볼 machine-readable code와 adapter가 보여 줄 user-facing message를 같이 가진다.
 pub struct PlanningTaskIntakeValidationError {
@@ -304,18 +309,27 @@ impl PlanningTaskIntakeService {
         &self,
         proposal: &PlanningTaskIntakeProposal,
     ) -> Result<PlanningTaskIntakeCommitResult> {
+        Ok(self.commit_task_intake_with_task(proposal)?.result)
+    }
+
+    pub(crate) fn commit_task_intake_with_task(
+        &self,
+        proposal: &PlanningTaskIntakeProposal,
+    ) -> Result<PlanningTaskIntakeCommitWithTask> {
         let result = self
             .mutation_service
-            .commit_create_preview(&proposal.mutation_preview)?;
-        Ok(PlanningTaskIntakeCommitResult {
-            committed_task_id: result
-                .committed_task_ids
-                .first()
-                .cloned()
-                .unwrap_or_else(|| proposal.draft.task.id.clone()),
-            committed_planning_revision: result.committed_planning_revision,
-            queue_head: result.queue_head,
-            task_authority_committed: result.task_authority_changed,
+            .commit_create_preview_with_task(&proposal.mutation_preview)?;
+        let committed_task = result.committed_task;
+        let committed_task_id = committed_task.id.clone();
+        let mutation = result.mutation;
+        Ok(PlanningTaskIntakeCommitWithTask {
+            committed_task,
+            result: PlanningTaskIntakeCommitResult {
+                committed_task_id,
+                committed_planning_revision: mutation.committed_planning_revision,
+                queue_head: mutation.queue_head,
+                task_authority_committed: mutation.task_authority_changed,
+            },
         })
     }
 
