@@ -41,6 +41,7 @@ mod allocation_lock;
 mod board;
 mod cleanup;
 mod lease_store;
+mod normalization_recovery;
 mod paths;
 mod reconcile;
 mod slot_inspection;
@@ -75,6 +76,19 @@ pub(super) use self::lease_store::{
     rollback_slot_lease_write_failure, slot_lease_mirror_matches_or_missing, transition_slot_lease,
     write_slot_lease,
 };
+#[cfg(not(test))]
+use self::normalization_recovery::normalization_quarantine_path;
+use self::normalization_recovery::{
+    NormalizationRecoveryRequest, has_normalization_replacement_artifact_for_slot,
+    has_target_equivalent_lf_normalization_drift, normalization_recovery_artifact_paths,
+    normalization_replacement_artifacts_for_slot, quarantine_normalization_drift_and_replace_slot,
+};
+#[cfg(test)]
+pub(super) use self::normalization_recovery::{
+    install_after_normalization_quarantine_move_hook,
+    install_before_normalization_atomic_rename_hook, install_before_normalization_quarantine_hook,
+    install_before_normalization_staging_provision_hook, normalization_quarantine_path,
+};
 #[cfg(test)]
 use self::paths::resolve_branch_head;
 use self::paths::{
@@ -84,7 +98,10 @@ use self::paths::{
 pub(super) use self::paths::{
     derive_default_pool_root, derive_integration_worktree_path, inspect_slot_git_status,
 };
-use self::reconcile::{provision_missing_slots, reset_reusable_detached_baseline_slots};
+use self::reconcile::{
+    ReusableDetachedBaselineResetContext, git_command_directory, git_worktree_destination,
+    provision_missing_slots, reset_reusable_detached_baseline_slots,
+};
 pub(super) use self::slot_inspection::pool_operator_recovery_notice;
 use self::slot_inspection::summarize_pool_reconcile_status;
 use super::session_detail::agent_session_detail_record_path;
@@ -146,6 +163,16 @@ impl SlotGitStatus {
     pub(super) fn is_clean_for_frozen_delivery(self) -> bool {
         !self.has_staged && !self.has_unstaged && !self.has_untracked && !self.has_pending_operation
     }
+    pub(super) fn has_only_unstaged_changes(self) -> bool {
+        !self.has_staged
+            && self.has_unstaged
+            && !self.has_untracked
+            && !self.has_ignored
+            && !self.has_pending_operation
+    }
+    pub(super) fn has_pending_operation(self) -> bool {
+        self.has_pending_operation
+    }
     pub(super) fn has_ignored_output(self) -> bool {
         self.has_ignored
     }
@@ -164,7 +191,7 @@ impl SlotGitStatus {
             details.push("ignored files");
         }
         if self.has_pending_operation {
-            details.push("merge/rebase metadata");
+            details.push("git operation/lock metadata");
         }
         if details.is_empty() {
             "clean".to_string()
@@ -383,6 +410,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
     mutation_lock.verify_pool_root(&pool_root)?;
     ensure_directory_exists(&pool_root)
         .map_err(|error| format!("pool root could not be created: {error}"))?;
+    let normalization_recovery_artifacts = normalization_recovery_artifact_paths(&pool_root)?;
     let integration_target_oid = target.commit_sha.clone();
     let mut context =
         load_pool_runtime_context_from_roots(planning_authority, &repo_root, &canonical_repo_root)
@@ -481,6 +509,17 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
             });
             continue;
         }
+        if context.invalid_slot_leases.contains(&slot_id) {
+            report
+                .slot_reports
+                .push(ParallelModePoolResetSlotReport::new(
+                    &slot_id,
+                    ParallelModePoolResetSlotAction::PreserveLive,
+                    ParallelModePoolResetSlotOutcome::Blocked,
+                    "invalid slot lease metadata is protected",
+                ));
+            continue;
+        }
         let Some(_worktree_record) = context
             .worktree_records
             .iter()
@@ -523,6 +562,11 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
         });
     }
 
+    let normalization_recovery_is_unowned = context.slot_leases.is_empty()
+        && context.invalid_slot_leases.is_empty()
+        && context.session_details.is_empty()
+        && context.distributor_queue_records.is_empty();
+
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
         let slot_path = pool_root.join(&slot_id);
@@ -533,7 +577,9 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
         else {
             continue;
         };
-        if context.slot_leases.contains_key(&slot_id) {
+        if context.slot_leases.contains_key(&slot_id)
+            || context.invalid_slot_leases.contains(&slot_id)
+        {
             continue;
         }
 
@@ -548,18 +594,6 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 ));
             continue;
         };
-        if !slot_status.is_clean_baseline() {
-            report
-                .slot_reports
-                .push(ParallelModePoolResetSlotReport::new(
-                    &slot_id,
-                    ParallelModePoolResetSlotAction::PreserveLive,
-                    ParallelModePoolResetSlotOutcome::Blocked,
-                    "slot has staged, unstaged, untracked, or pending-operation state; reset was not attempted",
-                ));
-            continue;
-        }
-
         let baseline_branch = pool_baseline_branch_for_repo(&repo_root);
         let reset_is_proven_safe = if worktree_record.detached {
             worktree_record.head_sha == context.baseline_head
@@ -592,6 +626,29 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 ));
             continue;
         }
+        let has_normalization_drift = !slot_status.is_clean_baseline()
+            && worktree_record.detached
+            && normalization_recovery_is_unowned
+            && !has_normalization_replacement_artifact_for_slot(
+                &normalization_recovery_artifacts,
+                &slot_id,
+            )
+            && has_target_equivalent_lf_normalization_drift(
+                &slot_path,
+                slot_status,
+                &integration_target_oid,
+            );
+        if !slot_status.is_clean_baseline() && !has_normalization_drift {
+            report
+                .slot_reports
+                .push(ParallelModePoolResetSlotReport::new(
+                    &slot_id,
+                    ParallelModePoolResetSlotAction::PreserveLive,
+                    ParallelModePoolResetSlotOutcome::Blocked,
+                    "slot changes are not target-equivalent LF normalization drift; reset was not attempted",
+                ));
+            continue;
+        }
 
         event_log::emit_lazy("parallel_pool_slot_reset_started", || {
             serde_json::json!({
@@ -604,17 +661,45 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
             })
         });
         mutation_lock.verify_pool_root(&pool_root)?;
-        let reset_report =
-            reset_slot_worktree_to_ref_with_retry(&slot_path, &integration_target_oid);
+        let normalization_quarantine = has_normalization_drift
+            .then(|| normalization_quarantine_path(&pool_root, &slot_id, &worktree_record.head_sha))
+            .flatten()
+            .map(|path| path.display().to_string());
+        let reset_report = if has_normalization_drift {
+            let recheck_unowned_authority =
+                || ensure_normalization_recovery_authority_is_empty(planning_authority, &repo_root);
+            quarantine_normalization_drift_and_replace_slot(
+                NormalizationRecoveryRequest {
+                    repo_root: &repo_root,
+                    pool_root: &pool_root,
+                    slot_id: &slot_id,
+                    slot_path: &slot_path,
+                    source_oid: &worktree_record.head_sha,
+                    target_ref: &integration_target_oid,
+                },
+                mutation_lock,
+                &recheck_unowned_authority,
+            )
+        } else {
+            reset_slot_worktree_to_ref_with_retry(&slot_path, &integration_target_oid)
+        };
         if reset_report.succeeded() {
             collect_reset_projection_keys(&mut report, &context, &slot_id);
+            let success_reason = normalization_quarantine.as_ref().map_or_else(
+                || "slot worktree reset to baseline".to_string(),
+                |quarantine| {
+                    format!(
+                        "slot worktree replaced at baseline; legacy normalization drift preserved at `{quarantine}`"
+                    )
+                },
+            );
             report
                 .slot_reports
                 .push(ParallelModePoolResetSlotReport::new(
                     &slot_id,
                     ParallelModePoolResetSlotAction::Reset,
                     ParallelModePoolResetSlotOutcome::Succeeded,
-                    "slot worktree reset to baseline",
+                    success_reason,
                 ));
             event_log::emit_lazy("parallel_pool_slot_reset_completed", || {
                 serde_json::json!({
@@ -624,6 +709,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                     "slot_id": slot_id,
                     "slot_path": slot_path,
                     "baseline_branch": pool_baseline_branch_for_repo(&repo_root),
+                    "normalization_quarantine": normalization_quarantine,
                     "succeeded": true,
                 })
             });
@@ -649,6 +735,7 @@ pub(super) fn reset_pool_for_parallel_enable_with_target_locked(
                 "slot_id": slot_id,
                 "slot_path": slot_path,
                 "baseline_branch": pool_baseline_branch_for_repo(&repo_root),
+                "normalization_quarantine": normalization_quarantine,
                 "succeeded": false,
                 "failure": failure_summary,
             })
@@ -983,6 +1070,18 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
             "pool root creation failed".to_string(),
         )));
     }
+    let normalization_recovery_artifacts = normalization_recovery_artifact_paths(&pool_root)
+        .map_err(|detail| {
+            Box::new((
+                build_blocked_pool_board(
+                    planning_authority,
+                    workspace_dir,
+                    "reconcile blocked / normalization recovery artifacts could not be inspected",
+                    &detail,
+                ),
+                detail,
+            ))
+        })?;
     let created_pool_root = !pool_root_existed;
     let mut runtime_projection = load_runtime_projection_snapshot(planning_authority, &repo_root)
         .map_err(|detail| {
@@ -1060,22 +1159,50 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     detached baseline slot은 이미 lease가 없고 clean하면 재사용 가능한 slot이다. reset 후
     worktree inventory를 다시 읽어 provision 단계가 stale head/branch 정보를 보지 않게 한다.
     */
+    let normalization_recovery_is_unowned = runtime_projection.slot_leases.is_empty()
+        && runtime_projection.invalid_slot_leases.is_empty()
+        && runtime_projection.session_details.is_empty()
+        && runtime_projection.distributor_queue_records.is_empty();
     let reset_reusable_baseline_slots = reset_reusable_detached_baseline_slots(
-        &repo_root,
-        &pool_root,
-        &worktree_records,
-        &runtime_projection.slot_leases,
-        &baseline_head,
+        ReusableDetachedBaselineResetContext {
+            repo_root: &repo_root,
+            pool_root: &pool_root,
+            worktree_records: &worktree_records,
+            slot_leases: &runtime_projection.slot_leases,
+            invalid_slot_leases: &runtime_projection.invalid_slot_leases,
+            normalization_recovery_is_unowned,
+            normalization_recovery_artifacts: &normalization_recovery_artifacts,
+            baseline_ref: &baseline_head,
+        },
+        planning_authority,
         mutation_lock,
     );
+    for quarantine_path in &reset_reusable_baseline_slots.normalization_quarantines {
+        event_log::emit_lazy("parallel_pool_normalization_recovery_preserved", || {
+            serde_json::json!({
+                "workspace": workspace_dir,
+                "repo_root": repo_root,
+                "pool_root": pool_root,
+                "quarantine_path": quarantine_path,
+            })
+        });
+    }
+    if reset_reusable_baseline_slots.reset_slots > 0 {
+        event_log::emit_lazy("parallel_pool_baseline_slots_refreshed", || {
+            serde_json::json!({
+                "workspace": workspace_dir,
+                "repo_root": repo_root,
+                "pool_root": pool_root,
+                "reset_slots": reset_reusable_baseline_slots.reset_slots,
+            })
+        });
+    }
     /*
     reset count 자체는 board summary에 직접 드러내지 않는다. reset된 slot은 곧 idle
     baseline으로 다시 관측되며, 사용자가 알아야 하는 action count는 아래 cleanup pass가
     반환하는 "실제로 slot을 돌려놓은 수"에 더 가깝다.
     */
-    if reset_reusable_baseline_slots > 0
-        && let Some(refreshed_records) = load_worktree_records(&repo_root)
-    {
+    if let Some(refreshed_records) = load_worktree_records(&repo_root) {
         worktree_records = refreshed_records;
     }
     let provisioned_slots = provision_missing_slots(
@@ -1088,11 +1215,14 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
         mutation_lock,
     )
     .map_err(|detail| {
-        let reconcile_status = if detail.starts_with("pool provisioning blocked:") {
-            "reconcile blocked / repository Git execution configuration is unsafe"
-        } else {
-            "reconcile failed / slot worktree provisioning failed"
-        };
+        let reconcile_status =
+            if detail.starts_with("pool provisioning blocked: normalization recovery") {
+                "reconcile blocked / incomplete normalization recovery is preserved"
+            } else if detail.starts_with("pool provisioning blocked:") {
+                "reconcile blocked / repository Git execution configuration is unsafe"
+            } else {
+                "reconcile failed / slot worktree provisioning failed"
+            };
         Box::new((
             build_blocked_pool_board(planning_authority, workspace_dir, reconcile_status, &detail),
             detail,
@@ -1151,6 +1281,18 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     // tracking ref here would let a concurrent fetch silently replace the proof.
     context.baseline_head = baseline_head;
     context.integration_target_proof_is_fresh = true;
+    let normalization_recovery_artifacts =
+        normalization_recovery_artifact_paths(&context.pool_root).map_err(|detail| {
+            Box::new((
+                build_blocked_pool_board(
+                    planning_authority,
+                    workspace_dir,
+                    "reconcile blocked / normalization recovery artifacts could not be inspected",
+                    &detail,
+                ),
+                detail,
+            ))
+        })?;
     let pool = build_pool_board_from_context(
         &context,
         summarize_pool_reconcile_status(
@@ -1163,6 +1305,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
                 provisioned_slots,
                 cleaned_slots,
             }),
+            &normalization_recovery_artifacts,
         ),
     );
     Ok((context, pool))
@@ -1192,6 +1335,18 @@ pub(super) fn inspect_pool_board_and_context(
 ) -> PoolBoardWithContextResult {
     match load_pool_runtime_context(planning_authority, workspace_dir) {
         Ok(context) => {
+            let normalization_recovery_artifacts =
+                normalization_recovery_artifact_paths(&context.pool_root).map_err(|detail| {
+                    Box::new((
+                        build_blocked_pool_board(
+                            planning_authority,
+                            workspace_dir,
+                            "inspection blocked / normalization recovery artifacts could not be inspected",
+                            &detail,
+                        ),
+                        detail,
+                    ))
+                })?;
             let pool = build_pool_board_from_context(
                 &context,
                 summarize_pool_reconcile_status(
@@ -1199,6 +1354,7 @@ pub(super) fn inspect_pool_board_and_context(
                     &context.pool_root,
                     &pool_baseline_branch_for_repo(&context.repo_root),
                     None,
+                    &normalization_recovery_artifacts,
                 ),
             );
             Ok((context, pool))
@@ -1409,6 +1565,23 @@ fn load_runtime_projection_snapshot(
         return Err("authority runtime projection contains an invalid slot lease generation");
     }
     Ok(projection)
+}
+
+pub(super) fn ensure_normalization_recovery_authority_is_empty(
+    planning_authority: &dyn PlanningAuthorityPort,
+    workspace_dir: &str,
+) -> Result<(), String> {
+    let projection = load_runtime_projection_snapshot(planning_authority, workspace_dir)
+        .map_err(str::to_string)?;
+    if projection.slot_leases.is_empty()
+        && projection.invalid_slot_leases.is_empty()
+        && projection.session_details.is_empty()
+        && projection.distributor_queue_records.is_empty()
+    {
+        Ok(())
+    } else {
+        Err("normalization recovery stopped because runtime ownership appeared".to_string())
+    }
 }
 
 fn load_worktree_records(repo_root: &str) -> Option<Vec<GitWorktreeRecord>> {

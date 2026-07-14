@@ -1,14 +1,36 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 
 use super::super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::super::{DEFAULT_POOL_SIZE, branch_is_integrated_into};
 use super::{
-    GitWorktreeRecord, PoolMutationLock, ensure_directory_exists, inspect_slot_git_status,
+    GitWorktreeRecord, NormalizationRecoveryRequest, PoolMutationLock, ensure_directory_exists,
+    ensure_normalization_recovery_authority_is_empty,
+    has_normalization_replacement_artifact_for_slot, has_target_equivalent_lf_normalization_drift,
+    inspect_slot_git_status, normalization_quarantine_path,
+    normalization_replacement_artifacts_for_slot, quarantine_normalization_drift_and_replace_slot,
     reset_slot_worktree_to_ref, slot_id, worktree_paths_match,
 };
+
+pub(super) struct ReusableDetachedBaselineResetContext<'a> {
+    pub(super) repo_root: &'a str,
+    pub(super) pool_root: &'a Path,
+    pub(super) worktree_records: &'a [GitWorktreeRecord],
+    pub(super) slot_leases: &'a BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
+    pub(super) invalid_slot_leases: &'a BTreeSet<String>,
+    pub(super) normalization_recovery_is_unowned: bool,
+    pub(super) normalization_recovery_artifacts: &'a [PathBuf],
+    pub(super) baseline_ref: &'a str,
+}
+
+#[derive(Default)]
+pub(super) struct ReusableDetachedBaselineResetReport {
+    pub(super) reset_slots: usize,
+    pub(super) normalization_quarantines: Vec<PathBuf>,
+}
 
 /*
 reconcile은 pool baseline branch가 configured push remote에 이미 존재한다고 가정하고 slot
@@ -70,6 +92,18 @@ pub(super) fn provision_missing_slots(
             */
             continue;
         }
+        let replacement_artifacts =
+            normalization_replacement_artifacts_for_slot(pool_root, &slot_id)?;
+        if !replacement_artifacts.is_empty() {
+            return Err(format!(
+                "pool provisioning blocked: normalization recovery for slot `{slot_id}` is incomplete; preserved artifact(s): {}",
+                replacement_artifacts
+                    .iter()
+                    .map(|path| format!("`{}`", path.display()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         if slot_path.symlink_metadata().is_ok() {
             continue;
         }
@@ -124,7 +158,7 @@ pub(super) fn provision_missing_slots(
     Ok(provisioned_slots)
 }
 
-fn git_command_directory(canonical_repo_root: &Path) -> Result<String, String> {
+pub(super) fn git_command_directory(canonical_repo_root: &Path) -> Result<String, String> {
     let path = canonical_repo_root.to_str().ok_or_else(|| {
         "canonical repository root is not valid Unicode for Git provisioning".to_string()
     })?;
@@ -140,7 +174,7 @@ fn git_command_directory(canonical_repo_root: &Path) -> Result<String, String> {
     }
 }
 
-fn git_worktree_destination(
+pub(super) fn git_worktree_destination(
     canonical_repo_root: &Path,
     slot_path: &Path,
 ) -> Result<PathBuf, String> {
@@ -181,13 +215,10 @@ lease가 있는 slot은 agent 작업이 걸려 있을 수 있으므로 건드리
 reconcile이 pool 위생을 맞추면서도 실행 중인 병렬 작업을 방해하지 않는다.
 */
 pub(super) fn reset_reusable_detached_baseline_slots(
-    repo_root: &str,
-    pool_root: &Path,
-    worktree_records: &[GitWorktreeRecord],
-    slot_leases: &BTreeMap<String, ParallelModeSlotLeaseSnapshot>,
-    baseline_ref: &str,
+    context: ReusableDetachedBaselineResetContext<'_>,
+    planning_authority: &dyn PlanningAuthorityPort,
     mutation_lock: &PoolMutationLock,
-) -> usize {
+) -> ReusableDetachedBaselineResetReport {
     /*
     reusable detached reset은 lease가 없는 idle 후보만 대상으로 한다. 이 함수는 "slot worktree가
     detached baseline이어야 한다"는 pool invariant를 baseline branch 이동 뒤에도 유지한다.
@@ -195,14 +226,17 @@ pub(super) fn reset_reusable_detached_baseline_slots(
     reset하지 않는다.
     */
     // baseline proof가 없으면 reset 기준이 없으므로 모든 slot을 관찰 전용으로 둔다.
-    if baseline_ref.is_empty() || mutation_lock.verify_pool_root(pool_root).is_err() {
-        return 0;
+    if context.baseline_ref.is_empty() || mutation_lock.verify_pool_root(context.pool_root).is_err()
+    {
+        return ReusableDetachedBaselineResetReport::default();
     }
 
-    let mut reset_slots = 0;
+    let mut report = ReusableDetachedBaselineResetReport::default();
     for slot_number in 1..=DEFAULT_POOL_SIZE {
         let slot_id = slot_id(slot_number);
-        if slot_leases.contains_key(&slot_id) {
+        if context.slot_leases.contains_key(&slot_id)
+            || context.invalid_slot_leases.contains(&slot_id)
+        {
             /*
             lease record가 있다는 것은 slot 상태 판단의 권위가 runtime projection에 있다는 뜻이다.
             파일시스템만 보고 reset하면 Running agent나 cleanup pending 작업의 산출물을 잃을 수
@@ -210,8 +244,9 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             */
             continue;
         }
-        let slot_path = pool_root.join(&slot_id);
-        let Some(worktree_record) = worktree_records
+        let slot_path = context.pool_root.join(&slot_id);
+        let Some(worktree_record) = context
+            .worktree_records
             .iter()
             .find(|record| worktree_paths_match(&record.path, &slot_path))
         else {
@@ -226,14 +261,7 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             */
             continue;
         }
-        // head SHA와 worktree dirtiness를 함께 봐야 stale baseline과 dirty idle slot을 모두 잡을 수 있다.
-        let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
-            continue;
-        };
-        if !slot_status.is_clean_baseline() {
-            continue;
-        }
-        if worktree_record.head_sha == baseline_ref {
+        if worktree_record.head_sha == context.baseline_ref {
             /*
             head가 현재 baseline이고 git status도 clean이면 reset은 불필요하다. 불필요한 hard
             reset/clean을 피하면 사용자가 보고 있는 idle worktree timestamp나 git metadata churn도
@@ -241,15 +269,71 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             */
             continue;
         }
-        if !branch_is_integrated_into(repo_root, &worktree_record.head_sha, baseline_ref) {
+        if !branch_is_integrated_into(
+            context.repo_root,
+            &worktree_record.head_sha,
+            context.baseline_ref,
+        ) {
             continue;
         }
-        if reset_slot_worktree_to_ref(&slot_path, baseline_ref).succeeded() {
-            reset_slots += 1;
+        // head SHA와 worktree dirtiness를 함께 봐야 stale baseline과 dirty idle slot을 모두 잡을 수 있다.
+        let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
+            continue;
+        };
+        let has_normalization_drift = !slot_status.is_clean_baseline()
+            && context.normalization_recovery_is_unowned
+            && !has_normalization_replacement_artifact_for_slot(
+                context.normalization_recovery_artifacts,
+                &slot_id,
+            )
+            && has_target_equivalent_lf_normalization_drift(
+                &slot_path,
+                slot_status,
+                context.baseline_ref,
+            );
+        if !slot_status.is_clean_baseline() && !has_normalization_drift {
+            continue;
+        }
+        let reset_report = if has_normalization_drift {
+            if mutation_lock.verify_pool_root(context.pool_root).is_err() {
+                continue;
+            }
+            let recheck_unowned_authority = || {
+                ensure_normalization_recovery_authority_is_empty(
+                    planning_authority,
+                    context.repo_root,
+                )
+            };
+            quarantine_normalization_drift_and_replace_slot(
+                NormalizationRecoveryRequest {
+                    repo_root: context.repo_root,
+                    pool_root: context.pool_root,
+                    slot_id: &slot_id,
+                    slot_path: &slot_path,
+                    source_oid: &worktree_record.head_sha,
+                    target_ref: context.baseline_ref,
+                },
+                mutation_lock,
+                &recheck_unowned_authority,
+            )
+        } else {
+            reset_slot_worktree_to_ref(&slot_path, context.baseline_ref)
+        };
+        if reset_report.succeeded() {
+            report.reset_slots += 1;
+            if has_normalization_drift
+                && let Some(quarantine_path) = normalization_quarantine_path(
+                    context.pool_root,
+                    &slot_id,
+                    &worktree_record.head_sha,
+                )
+            {
+                report.normalization_quarantines.push(quarantine_path);
+            }
         }
     }
 
-    reset_slots
+    report
 }
 
 #[cfg(test)]
