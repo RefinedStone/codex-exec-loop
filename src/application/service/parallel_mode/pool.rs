@@ -83,9 +83,13 @@ use self::normalization_recovery::{
 };
 #[cfg(test)]
 pub(super) use self::normalization_recovery::{
-    install_after_normalization_quarantine_move_hook,
-    install_before_normalization_atomic_rename_hook, install_before_normalization_quarantine_hook,
-    install_before_normalization_staging_provision_hook, normalization_quarantine_path,
+    install_after_normalization_quarantine_move_hook, install_before_normalization_quarantine_hook,
+    normalization_quarantine_path,
+};
+#[cfg(all(test, unix))]
+pub(super) use self::normalization_recovery::{
+    install_before_normalization_atomic_rename_hook,
+    install_before_normalization_staging_provision_hook,
 };
 #[cfg(test)]
 use self::paths::resolve_branch_head;
