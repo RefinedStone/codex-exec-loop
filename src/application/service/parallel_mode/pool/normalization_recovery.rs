@@ -1074,7 +1074,7 @@ fn read_bounded_unshared_regular_file(path: &Path) -> Option<Vec<u8>> {
     let metadata = file.metadata().ok()?;
     if !metadata.file_type().is_file()
         || metadata.len() > MAX_NORMALIZATION_FILE_BYTES as u64
-        || !metadata_has_one_link_and_no_reparse(&metadata)
+        || !opened_file_has_one_link_and_no_reparse(&file, &metadata)
     {
         return None;
     }
@@ -1086,21 +1086,22 @@ fn read_bounded_unshared_regular_file(path: &Path) -> Option<Vec<u8>> {
 }
 
 #[cfg(unix)]
-fn metadata_has_one_link_and_no_reparse(metadata: &std::fs::Metadata) -> bool {
+fn opened_file_has_one_link_and_no_reparse(_file: &File, metadata: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     metadata.nlink() == 1
 }
 
 #[cfg(windows)]
-fn metadata_has_one_link_and_no_reparse(metadata: &std::fs::Metadata) -> bool {
+fn opened_file_has_one_link_and_no_reparse(file: &File, metadata: &std::fs::Metadata) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
     use std::os::windows::fs::MetadataExt;
-    metadata.number_of_links() == Some(1)
-        && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        && crate::private_fs::windows_file_link_count(file).is_ok_and(|links| links == 1)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_has_one_link_and_no_reparse(_metadata: &std::fs::Metadata) -> bool {
+fn opened_file_has_one_link_and_no_reparse(_file: &File, _metadata: &std::fs::Metadata) -> bool {
     true
 }
 
