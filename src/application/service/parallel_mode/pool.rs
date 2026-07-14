@@ -77,9 +77,10 @@ pub(super) use self::lease_store::{
     write_slot_lease,
 };
 use self::normalization_recovery::{
-    NormalizationRecoveryRequest, has_normalization_replacement_artifact_for_slot,
-    has_target_equivalent_lf_normalization_drift, normalization_recovery_artifact_paths,
-    normalization_replacement_artifacts_for_slot, quarantine_normalization_drift_and_replace_slot,
+    NormalizationRecoveryRequest, has_empty_linked_worktree_index,
+    has_normalization_replacement_artifact_for_slot, has_target_equivalent_lf_normalization_drift,
+    normalization_recovery_artifact_paths, normalization_replacement_artifacts_for_slot,
+    quarantine_empty_index_and_replace_slot, quarantine_normalization_drift_and_replace_slot,
 };
 #[cfg(test)]
 pub(super) use self::normalization_recovery::{

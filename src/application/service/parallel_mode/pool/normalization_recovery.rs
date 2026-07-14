@@ -9,6 +9,7 @@ use rand::RngCore;
 use super::super::git_sequence::{
     GitCommandSequenceReport, GitCommandStep, GitCommandStepReport, run_git_sequence,
 };
+use super::paths::{git_dir_has_pending_operation, resolve_git_dir};
 use super::{
     PoolMutationLock, SlotGitStatus, git_command_directory, git_worktree_destination,
     inspect_slot_git_status, parse_worktree_records, worktree_paths_match,
@@ -47,6 +48,12 @@ pub(super) struct NormalizationRecoveryRequest<'a> {
 pub(super) struct NormalizationRecoveryOutcome {
     pub(super) report: GitCommandSequenceReport,
     pub(super) quarantine_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegacySlotStatusProof {
+    Readable,
+    EmptyIndex,
 }
 
 /*
@@ -92,18 +99,60 @@ pub(super) fn has_target_equivalent_lf_normalization_drift(
     }) && differs_only_by_cr_at_eol(slot_path)
 }
 
+pub(super) fn has_empty_linked_worktree_index(slot_path: &Path) -> bool {
+    // A zero-byte index is the narrow interrupted-write signature observed on WSL. Keep every
+    // other status failure blocked, including active Git locks and non-empty malformed indexes.
+    if crate::git_execution_guard::ensure_host_git_execution_config_safe(slot_path).is_err() {
+        return false;
+    }
+    let Some(git_dir) = resolve_git_dir(slot_path) else {
+        return false;
+    };
+    if git_dir_has_pending_operation(&git_dir) {
+        return false;
+    }
+    read_bounded_unshared_regular_file(&git_dir.join("index")).is_some_and(|bytes| bytes.is_empty())
+}
+
 /*
 Proof alone cannot make an external editor or Git process stop writing. Instead of checking out
 over the dirty worktree, provision and verify the clean target at a hidden staging path first.
-Then move the entire legacy worktree (including its index) to quarantine and atomically rename the
-staged worktree into the canonical lane. The canonical path never hosts a Git checkout: a writer
-using an old file descriptor follows the legacy inode into quarantine, while a path-based writer
-that recreates the brief canonical gap makes the final move fail without overwriting those bytes.
+Then move the legacy worktree to quarantine, repair its Git registration, and atomically rename
+the staged worktree into the canonical lane. The canonical path never hosts a Git checkout: a
+writer using an old file descriptor follows the legacy inode into quarantine, while a path-based
+writer that recreates the brief canonical gap makes the final move fail without overwriting bytes.
 */
 pub(super) fn quarantine_normalization_drift_and_replace_slot(
     request: NormalizationRecoveryRequest<'_>,
     mutation_lock: &PoolMutationLock,
     recheck_unowned_authority: &dyn Fn() -> Result<(), String>,
+) -> NormalizationRecoveryOutcome {
+    quarantine_slot_and_replace(
+        request,
+        mutation_lock,
+        recheck_unowned_authority,
+        LegacySlotStatusProof::Readable,
+    )
+}
+
+pub(super) fn quarantine_empty_index_and_replace_slot(
+    request: NormalizationRecoveryRequest<'_>,
+    mutation_lock: &PoolMutationLock,
+    recheck_unowned_authority: &dyn Fn() -> Result<(), String>,
+) -> NormalizationRecoveryOutcome {
+    quarantine_slot_and_replace(
+        request,
+        mutation_lock,
+        recheck_unowned_authority,
+        LegacySlotStatusProof::EmptyIndex,
+    )
+}
+
+fn quarantine_slot_and_replace(
+    request: NormalizationRecoveryRequest<'_>,
+    mutation_lock: &PoolMutationLock,
+    recheck_unowned_authority: &dyn Fn() -> Result<(), String>,
+    source_status_proof: LegacySlotStatusProof,
 ) -> NormalizationRecoveryOutcome {
     let quarantine_path =
         new_normalization_quarantine_path(request.pool_root, request.slot_id, request.source_oid);
@@ -149,6 +198,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
             request.slot_path,
             request.source_oid,
             false,
+            source_status_proof,
         )?;
         mutation_lock.verify_pool_root(request.pool_root)?;
 
@@ -190,6 +240,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
             &replacement_path,
             &target_oid,
             true,
+            LegacySlotStatusProof::Readable,
         ) {
             append_verification_failure(
                 &mut report,
@@ -209,6 +260,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
                 request.slot_path,
                 request.source_oid,
                 false,
+                source_status_proof,
             )?;
             staging_directory.verify()?;
             verify_registered_detached_worktree(
@@ -216,6 +268,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
                 &replacement_path,
                 &target_oid,
                 true,
+                LegacySlotStatusProof::Readable,
             )
         })();
         if let Err(detail) = pre_move_validation {
@@ -272,6 +325,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
                 quarantine_path,
                 request.source_oid,
                 false,
+                source_status_proof,
             )?;
             staging_directory.verify()?;
             verify_registered_detached_worktree(
@@ -279,6 +333,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
                 &replacement_path,
                 &target_oid,
                 true,
+                LegacySlotStatusProof::Readable,
             )
         })();
         if let Err(detail) = pre_install_validation {
@@ -339,6 +394,7 @@ pub(super) fn quarantine_normalization_drift_and_replace_slot(
                         &replacement_path,
                         request.source_oid,
                         &target_oid,
+                        source_status_proof,
                     )
                 });
         if let Err(detail) = completed_validation {
@@ -840,6 +896,7 @@ fn verify_registered_detached_worktree(
     worktree_path: &Path,
     expected_oid: &str,
     require_clean: bool,
+    status_proof: LegacySlotStatusProof,
 ) -> Result<(), String> {
     if !worktree_paths_match(worktree_path, worktree_path) {
         return Err(format!(
@@ -857,6 +914,16 @@ fn verify_registered_detached_worktree(
             "normalization recovery worktree is not registered detached at `{expected_oid}`: `{}`",
             worktree_path.display()
         ));
+    }
+    if status_proof == LegacySlotStatusProof::EmptyIndex {
+        return has_empty_linked_worktree_index(worktree_path)
+            .then_some(())
+            .ok_or_else(|| {
+                format!(
+                    "normalization recovery source no longer has an unowned empty index at `{}`",
+                    worktree_path.display()
+                )
+            });
     }
     let status = inspect_slot_git_status(worktree_path).map_err(|error| {
         format!(
@@ -901,9 +968,22 @@ fn verify_completed_recovery(
     replacement_path: &Path,
     source_oid: &str,
     target_oid: &str,
+    source_status_proof: LegacySlotStatusProof,
 ) -> Result<(), String> {
-    verify_registered_detached_worktree(repo_root, quarantine_path, source_oid, false)?;
-    verify_registered_detached_worktree(repo_root, slot_path, target_oid, true)?;
+    verify_registered_detached_worktree(
+        repo_root,
+        quarantine_path,
+        source_oid,
+        false,
+        source_status_proof,
+    )?;
+    verify_registered_detached_worktree(
+        repo_root,
+        slot_path,
+        target_oid,
+        true,
+        LegacySlotStatusProof::Readable,
+    )?;
     ensure_path_absent(replacement_path, "replacement staging")?;
     let records = load_worktree_inventory(repo_root)?;
     if records.iter().any(|record| record.path == replacement_path) {

@@ -224,9 +224,15 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
             slot_path.display()
         ))
     })?;
+    status.has_pending_operation = git_dir_has_pending_operation(&git_dir);
+
+    Ok(status)
+}
+
+pub(super) fn git_dir_has_pending_operation(git_dir: &Path) -> bool {
     // `AUTO_MERGE` is intentionally excluded: Git's ort strategy can retain that ref after a
     // successful cherry-pick, so its presence alone does not prove an operation is pending.
-    status.has_pending_operation = [
+    [
         "MERGE_HEAD",
         "rebase-merge",
         "rebase-apply",
@@ -239,9 +245,7 @@ pub(in crate::application::service::parallel_mode) fn inspect_slot_git_status(
         "HEAD.lock",
     ]
     .into_iter()
-    .any(|path| git_dir.join(path).exists());
-
-    Ok(status)
+    .any(|path| git_dir.join(path).exists())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

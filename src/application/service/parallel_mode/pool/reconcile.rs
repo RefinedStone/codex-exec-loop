@@ -8,11 +8,11 @@ use super::super::git_sequence::{GitCommandStep, run_git_sequence};
 use super::super::{DEFAULT_POOL_SIZE, branch_is_integrated_into};
 use super::{
     GitWorktreeRecord, NormalizationRecoveryRequest, PoolMutationLock, ensure_directory_exists,
-    ensure_normalization_recovery_authority_is_empty,
+    ensure_normalization_recovery_authority_is_empty, has_empty_linked_worktree_index,
     has_normalization_replacement_artifact_for_slot, has_target_equivalent_lf_normalization_drift,
     inspect_slot_git_status, normalization_replacement_artifacts_for_slot,
-    quarantine_normalization_drift_and_replace_slot, reset_slot_worktree_to_ref, slot_id,
-    worktree_paths_match,
+    quarantine_empty_index_and_replace_slot, quarantine_normalization_drift_and_replace_slot,
+    reset_slot_worktree_to_ref, slot_id, worktree_paths_match,
 };
 
 pub(super) struct ReusableDetachedBaselineResetContext<'a> {
@@ -261,31 +261,64 @@ pub(super) fn reset_reusable_detached_baseline_slots(
             */
             continue;
         }
-        if worktree_record.head_sha == context.baseline_ref {
-            /*
-            head가 현재 baseline이고 git status도 clean이면 reset은 불필요하다. 불필요한 hard
-            reset/clean을 피하면 사용자가 보고 있는 idle worktree timestamp나 git metadata churn도
-            줄어든다.
-            */
-            continue;
-        }
-        if !branch_is_integrated_into(
-            context.repo_root,
-            &worktree_record.head_sha,
-            context.baseline_ref,
-        ) {
+        if worktree_record.head_sha != context.baseline_ref
+            && !branch_is_integrated_into(
+                context.repo_root,
+                &worktree_record.head_sha,
+                context.baseline_ref,
+            )
+        {
             continue;
         }
         // head SHA와 worktree dirtiness를 함께 봐야 stale baseline과 dirty idle slot을 모두 잡을 수 있다.
-        let Ok(slot_status) = inspect_slot_git_status(&slot_path) else {
+        let slot_status = inspect_slot_git_status(&slot_path);
+        let recovery_artifact_exists = has_normalization_replacement_artifact_for_slot(
+            context.normalization_recovery_artifacts,
+            &slot_id,
+        );
+        let has_empty_index = slot_status.is_err()
+            && context.normalization_recovery_is_unowned
+            && !recovery_artifact_exists
+            && has_empty_linked_worktree_index(&slot_path);
+        if worktree_record.head_sha == context.baseline_ref && !has_empty_index {
+            continue;
+        }
+        let Ok(slot_status) = slot_status else {
+            if !has_empty_index {
+                continue;
+            }
+            if mutation_lock.verify_pool_root(context.pool_root).is_err() {
+                continue;
+            }
+            let recheck_unowned_authority = || {
+                ensure_normalization_recovery_authority_is_empty(
+                    planning_authority,
+                    context.repo_root,
+                )
+            };
+            let outcome = quarantine_empty_index_and_replace_slot(
+                NormalizationRecoveryRequest {
+                    repo_root: context.repo_root,
+                    pool_root: context.pool_root,
+                    slot_id: &slot_id,
+                    slot_path: &slot_path,
+                    source_oid: &worktree_record.head_sha,
+                    target_ref: context.baseline_ref,
+                },
+                mutation_lock,
+                &recheck_unowned_authority,
+            );
+            if outcome.report.succeeded() {
+                report.reset_slots += 1;
+                if let Some(quarantine_path) = outcome.quarantine_path {
+                    report.normalization_quarantines.push(quarantine_path);
+                }
+            }
             continue;
         };
         let has_normalization_drift = !slot_status.is_clean_baseline()
             && context.normalization_recovery_is_unowned
-            && !has_normalization_replacement_artifact_for_slot(
-                context.normalization_recovery_artifacts,
-                &slot_id,
-            )
+            && !recovery_artifact_exists
             && has_target_equivalent_lf_normalization_drift(
                 &slot_path,
                 slot_status,

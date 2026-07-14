@@ -2837,6 +2837,67 @@ fn reconcile_preserves_detached_slot_index_lock() {
     );
 }
 
+#[test]
+fn reconcile_quarantines_unowned_detached_slot_with_empty_index() {
+    let repo = TempGitRepo::new("recover-empty-slot-index");
+    let initial_pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    assert_eq!(initial_pool.idle_slots, DEFAULT_POOL_SIZE);
+    let slot_path = repo.pool_root().join(slot_id(1));
+    let source_head = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be utf-8"),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .expect("slot head should resolve before index corruption");
+    let git_dir = run_command(
+        "git",
+        [
+            "-C",
+            slot_path.to_str().expect("slot path should be utf-8"),
+            "rev-parse",
+            "--git-dir",
+        ],
+        None,
+    )
+    .expect("slot git dir should resolve before index corruption");
+    let index_path = Path::new(git_dir.trim()).join("index");
+    fs::write(slot_path.join("operator-note.txt"), "preserve me\n")
+        .expect("operator note should be written");
+    fs::write(&index_path, []).expect("slot index should be truncated");
+
+    let pool = reconcile_pool_board(
+        &NoopPlanningAuthorityPort::default(),
+        &test_parallel_runtime(),
+        &repo.workspace_dir(),
+    );
+    let quarantine_path =
+        normalization_quarantine_path(&repo.pool_root(), &slot_id(1), &source_head)
+            .expect("empty-index quarantine path should resolve");
+
+    assert_eq!(pool.idle_slots, DEFAULT_POOL_SIZE, "pool={pool:#?}");
+    assert_eq!(pool.blocked_slots, 0, "pool={pool:#?}");
+    assert_eq!(
+        fs::read_to_string(quarantine_path.join("operator-note.txt"))
+            .expect("quarantine should preserve operator bytes"),
+        "preserve me\n"
+    );
+    assert!(!slot_path.join("operator-note.txt").exists());
+    assert!(
+        inspect_slot_git_status(&slot_path)
+            .expect("replacement slot status should be readable")
+            .is_clean_baseline()
+    );
+}
+
 // agent slot worktree에서 reconcile을 호출해도 canonical 표준 branch는 agent
 // branch HEAD로 갱신되면 안 된다. root detection이 slot workspace를 원본 repo로
 // 되돌려 계산하는지 확인하는 회귀 테스트다.
