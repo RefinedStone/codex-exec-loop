@@ -156,12 +156,6 @@ impl PlanningRuntimeFacadeService {
         queue_head: Option<&PriorityQueueTask>,
         original_prompt: &str,
     ) -> PlanningMainSessionHandoff {
-        if let Some(queue_head) = queue_head
-            && queue_head.task_id.trim() != task.id.trim()
-        {
-            return self.build_main_session_task_handoff(queue_head);
-        }
-
         let task_prompt = manual_intake_task_prompt(task, direction_title, original_prompt);
         let prompt = self
             .turn_prompt_assembly_service
@@ -170,6 +164,7 @@ impl PlanningRuntimeFacadeService {
             })
             .expect("manual intake task handoff prompt should not be empty");
         let handoff_task = queue_head
+            .filter(|queue_task| queue_task.task_id.trim() == task.id.trim())
             .map(manual_intake_handoff_from_queue_head)
             .unwrap_or_else(|| manual_intake_handoff_from_task(task, direction_title));
 

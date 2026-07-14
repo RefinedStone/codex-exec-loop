@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_prompt_intake_handoff_follows_existing_ready_queue_head() {
+    fn manual_prompt_intake_handoff_uses_the_new_task_when_queue_has_an_existing_head() {
         let workspace_dir = create_temp_git_repo("manual-intake-existing-ready-head");
         let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
         let planning = PlanningServices::from_ports(
@@ -335,16 +335,22 @@ mod tests {
                 parent_turn_id: None,
             });
 
-        let ManualPromptIntakeOutcome::TaskCommitted { handoff, .. } = outcome else {
+        let ManualPromptIntakeOutcome::TaskCommitted {
+            committed_task_id,
+            handoff,
+            ..
+        } = outcome
+        else {
             panic!("manual prompt should still commit as a task: {outcome:?}");
         };
         let task = handoff
             .task
-            .expect("manual intake handoff should carry the queue head task");
-        assert_eq!(task.task_id, "task-existing");
-        assert_eq!(task.task_title, "Existing ready task");
+            .expect("manual intake handoff should carry the newly committed task");
+        assert_eq!(task.task_id, committed_task_id);
+        assert_eq!(task.task_title, prompt);
         assert_eq!(handoff.transcript_text, prompt);
-        assert!(handoff.prompt.contains("Existing ready task"));
+        assert!(handoff.prompt.contains(prompt));
+        assert!(!handoff.prompt.contains("Existing ready task"));
     }
 
     #[test]
