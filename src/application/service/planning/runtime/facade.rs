@@ -9,8 +9,7 @@ use crate::application::service::planning::repair::reconciliation::{
     PlanningExecutionSnapshot, PlanningReconciliationResult, PlanningReconciliationService,
 };
 use crate::application::service::planning::runtime::manual_intake::{
-    manual_intake_handoff_from_queue_head, manual_intake_handoff_from_task,
-    manual_intake_task_prompt,
+    manual_intake_handoff_from_task, manual_intake_task_prompt,
 };
 use crate::application::service::planning::runtime::policy::{
     PlanningAutoFollowBlockReason, PlanningAutoFollowPolicyDecision, PlanningAutoFollowPromptMode,
@@ -153,7 +152,6 @@ impl PlanningRuntimeFacadeService {
         &self,
         task: &TaskDefinition,
         direction_title: &str,
-        queue_head: Option<&PriorityQueueTask>,
         original_prompt: &str,
     ) -> PlanningMainSessionHandoff {
         let task_prompt = manual_intake_task_prompt(task, direction_title, original_prompt);
@@ -163,10 +161,7 @@ impl PlanningRuntimeFacadeService {
                 user_prompt: &task_prompt,
             })
             .expect("manual intake task handoff prompt should not be empty");
-        let handoff_task = queue_head
-            .filter(|queue_task| queue_task.task_id.trim() == task.id.trim())
-            .map(manual_intake_handoff_from_queue_head)
-            .unwrap_or_else(|| manual_intake_handoff_from_task(task, direction_title));
+        let handoff_task = manual_intake_handoff_from_task(task, direction_title);
 
         PlanningMainSessionHandoff {
             prompt,

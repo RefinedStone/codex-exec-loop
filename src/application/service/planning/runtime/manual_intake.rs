@@ -1,6 +1,4 @@
-use crate::application::service::planning::runtime::facade::{
-    PlanningRuntimeFacadeService, PlanningTaskHandoff,
-};
+use crate::application::service::planning::runtime::facade::PlanningRuntimeFacadeService;
 use crate::application::service::planning::runtime::intake::{
     PlanningTaskIntakeRequest, PlanningTaskIntakeService,
 };
@@ -9,7 +7,7 @@ use crate::domain::planning::{
     ManualPromptIntakeOutcome as DomainManualPromptIntakeOutcome,
     ManualPromptIntakeRequest as DomainManualPromptIntakeRequest,
     ManualPromptMainSessionHandoff as DomainManualPromptMainSessionHandoff, OriginSessionKind,
-    PriorityQueueTask, TaskDefinition, TaskHandoff as DomainTaskHandoff, TaskMutationProvenance,
+    TaskDefinition, TaskHandoff as DomainTaskHandoff, TaskMutationProvenance,
 };
 use serde_json::json;
 
@@ -122,7 +120,6 @@ impl ManualPromptIntakeService {
         let handoff = self.runtime_facade.build_manual_intake_task_handoff(
             &proposal.draft.task,
             &proposal.draft.direction_title,
-            commit.queue_head.as_ref(),
             transcript_text,
         );
         ManualPromptIntakeOutcome::TaskCommitted {
@@ -148,19 +145,6 @@ pub(super) fn manual_intake_handoff_from_task(
         combined_priority: task.combined_priority(),
         updated_at: task.updated_at.trim().to_string(),
         status_label: task.status.label().to_string(),
-    }
-}
-
-pub(super) fn manual_intake_handoff_from_queue_head(
-    queue_head: &PriorityQueueTask,
-) -> PlanningTaskHandoff {
-    PlanningTaskHandoff {
-        task_id: queue_head.task_id.trim().to_string(),
-        task_title: queue_head.task_title.trim().to_string(),
-        direction_id: queue_head.direction_id.trim().to_string(),
-        combined_priority: queue_head.combined_priority,
-        updated_at: queue_head.updated_at.trim().to_string(),
-        status_label: queue_head.status.label().to_string(),
     }
 }
 
