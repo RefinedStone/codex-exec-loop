@@ -34,6 +34,8 @@ agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
 screenshot_path="${output_dir}/admin-graphic.png"
 compact_screenshot_path="${output_dir}/admin-graphic-compact.png"
+full_hd_screenshot_path="${output_dir}/admin-graphic-full-hd.png"
+qhd_screenshot_path="${output_dir}/admin-graphic-qhd.png"
 admin_token=""
 admin_host=""
 auth_tmp_dir=""
@@ -184,7 +186,9 @@ capture_with_browser() {
     --browser="${browser}" \
     --url="${url}" \
     --screenshot="${screenshot_path}" \
-    --compact-screenshot="${compact_screenshot_path}"
+    --compact-screenshot="${compact_screenshot_path}" \
+    --full-hd-screenshot="${full_hd_screenshot_path}" \
+    --qhd-screenshot="${qhd_screenshot_path}"
 }
 
 cleanup() {
@@ -342,7 +346,13 @@ for token in \
   'background: var(--office-bg-image) 0 0 / 100% 100% no-repeat' \
   'final-draft-map-sprite.png' \
   'office-map-image' \
-  'width: min(100%, 1040px)' \
+  'max-width: 1784px' \
+  'max-width: 1280px' \
+  'align-content: start' \
+  'grid-template-columns: 220px minmax(500px, 1280px) 260px' \
+  'data-standby-character="true"' \
+  'data-presence-kind="configured_standby"' \
+  '대기 프로필 3' \
   'background-size: 384px 504px' \
   'avatar-Artificer' \
   'grid-template-columns: minmax(0, 1fr)' \
@@ -367,6 +377,7 @@ for token in \
   'openDetailDrawer' \
   'openRefreshDetail' \
   'createActorButton' \
+  'createStandbyPresence' \
   'renderActors' \
   'sceneSignature' \
   'dashboardRequest' \
@@ -384,6 +395,8 @@ for token in \
   'sprite_fd_desk_1.png' \
   'sprite_fd_event_log_tower.png' \
   'inspectScene' \
+  'configured_standby' \
+  'sceneStandbyCount' \
   'Promise.allSettled' \
   'PixiJS - The MIT License'; do
   require_contains "${game_js}" "${token}"
@@ -583,7 +596,9 @@ if browser_path="$(find_browser)"; then
   if capture_with_browser "${browser_path}" "${graphic_url}"; then
     sha256sum "${screenshot_path}" >"${output_dir}/admin-graphic.sha256"
     sha256sum "${compact_screenshot_path}" >"${output_dir}/admin-graphic-compact.sha256"
-    echo "admin graphic screenshots captured: ${compact_screenshot_path}, ${screenshot_path}"
+    sha256sum "${full_hd_screenshot_path}" >"${output_dir}/admin-graphic-full-hd.sha256"
+    sha256sum "${qhd_screenshot_path}" >"${output_dir}/admin-graphic-qhd.sha256"
+    echo "admin graphic screenshots captured: ${compact_screenshot_path}, ${screenshot_path}, ${full_hd_screenshot_path}, ${qhd_screenshot_path}"
   else
     exit 1
   fi

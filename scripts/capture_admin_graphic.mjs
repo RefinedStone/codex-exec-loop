@@ -10,11 +10,21 @@ const browserPath = options.browser;
 const targetUrl = options.url;
 const screenshotPath = options.screenshot;
 const compactScreenshotPath = options["compact-screenshot"];
+const fullHdScreenshotPath = options["full-hd-screenshot"];
+const qhdScreenshotPath = options["qhd-screenshot"];
 const token = process.env.AKRA_ADMIN_VISUAL_TOKEN;
 
-if (!browserPath || !targetUrl || !screenshotPath || !compactScreenshotPath || !token) {
+if (
+  !browserPath ||
+  !targetUrl ||
+  !screenshotPath ||
+  !compactScreenshotPath ||
+  !fullHdScreenshotPath ||
+  !qhdScreenshotPath ||
+  !token
+) {
   throw new Error(
-    "browser, url, screenshot, compact-screenshot, and AKRA_ADMIN_VISUAL_TOKEN are required",
+    "browser, url, screenshot, compact-screenshot, full-hd-screenshot, qhd-screenshot, and AKRA_ADMIN_VISUAL_TOKEN are required",
   );
 }
 
@@ -199,8 +209,228 @@ try {
       const canvasActors = window.AkraAdminGame?.inspectScene?.()?.actors || [];
       return { dom, canvasActors };
     });
-    if (JSON.stringify(actorParity.dom) !== JSON.stringify(actorParity.canvasActors.map(({ x, y, ...actor }) => actor))) {
+    if (
+      JSON.stringify(actorParity.dom) !==
+      JSON.stringify(
+        actorParity.canvasActors.map(
+          ({ x, y, resolvedAtlasFrameIndex, poseFallback, ...actor }) => actor,
+        ),
+      )
+    ) {
       throw new Error(`${label} DOM/canvas actor identity mismatch: ${JSON.stringify(actorParity)}`);
+    }
+    const standbyParity = await page.evaluate(() => {
+      const dom = [...document.querySelectorAll("[data-standby-character]")].map((node) => ({
+        characterId: node.dataset.characterId,
+        presenceKind: node.dataset.presenceKind,
+        agentId: node.dataset.agentId,
+        visualState: node.dataset.visualState,
+        pose: node.dataset.staticPose,
+        locationIndex: Number(node.dataset.sceneStandbyIndex),
+      }));
+      const scene = window.AkraAdminGame?.inspectScene?.();
+      const restArea = document.querySelector("[data-standby-rest-area]");
+      return {
+        dom,
+        canvasCharacters: scene?.standbyCharacters || [],
+        actorCount: scene?.actorCount,
+        characterCount: scene?.characterCount,
+        standbyCount: scene?.standbyCount,
+        standbyTotalCount: Number(restArea?.dataset.standbyTotalCount),
+      };
+    });
+    const canvasStandbyIdentity = standbyParity.canvasCharacters.map(
+      ({ x, y, resolvedAtlasFrameIndex, poseFallback, ...character }) => character,
+    );
+    const expectedStandbyPoints = [
+      { x: 730, y: 805 },
+      { x: 805, y: 805 },
+      { x: 880, y: 805 },
+    ];
+    const expectedStandbyPoses = ["laptop", "sit", "laptop"];
+    const expectedStandbyFrames = [40, 47, 48];
+    const standbyCoordinateKeys = new Set(
+      standbyParity.canvasCharacters.map((character) => `${character.x}:${character.y}`),
+    );
+    const standbyPointsMatch = standbyParity.canvasCharacters.every((character) => {
+      const expected = expectedStandbyPoints[character.locationIndex - 1];
+      return (
+        expected &&
+        character.x === expected.x &&
+        character.y === expected.y &&
+        character.x > 0 &&
+        character.x < 1671 &&
+        character.y > 0 &&
+        character.y < 941
+      );
+    });
+    const standbySpacingIsSafe = standbyParity.canvasCharacters.every((character, index, all) =>
+      all.slice(index + 1).every(
+        (other) => Math.hypot(character.x - other.x, character.y - other.y) >= 60,
+      ),
+    );
+    if (
+      standbyParity.dom.length === 0 ||
+      JSON.stringify(standbyParity.dom) !== JSON.stringify(canvasStandbyIdentity) ||
+      standbyParity.standbyCount !== standbyParity.dom.length ||
+      !Number.isInteger(standbyParity.standbyTotalCount) ||
+      standbyParity.standbyTotalCount < standbyParity.standbyCount ||
+      standbyParity.characterCount !== standbyParity.actorCount + standbyParity.standbyCount ||
+      standbyCoordinateKeys.size !== standbyParity.canvasCharacters.length ||
+      !standbyPointsMatch ||
+      !standbySpacingIsSafe ||
+      standbyParity.canvasCharacters.some((character) => {
+        const index = character.locationIndex - 1;
+        return (
+          character.pose !== expectedStandbyPoses[index] ||
+          character.resolvedAtlasFrameIndex !== expectedStandbyFrames[index] ||
+          character.poseFallback
+        );
+      })
+    ) {
+      throw new Error(
+        `${label} configured standby characters are missing or not using seated atlas poses: ${JSON.stringify(standbyParity)}`,
+      );
+    }
+    if (width === 1920) {
+      const baselineActorCount = firstScene.actorCount;
+      await page.evaluate(() => {
+        const board = document.querySelector(".office-board");
+        if (!board) throw new Error("active pose probe cannot find the office board");
+        const probe = document.createElement("button");
+        probe.hidden = true;
+        probe.className = "scene-object desk agent-1 severity-success";
+        probe.dataset.visualActivePoseProbe = "true";
+        Object.assign(probe.dataset, {
+          characterId: "visual-probe-session",
+          presenceKind: "active",
+          actorId: "visual-probe-session",
+          agentId: "visual-probe-agent",
+          slotId: "visual-probe-slot",
+          sceneSeatIndex: "1",
+          archetypeKey: "Artificer",
+          visualState: "working",
+          staticPose: "laptop",
+          detailSeverity: "success",
+        });
+        board.insertBefore(probe, board.querySelector(".distributor-desk"));
+        window.dispatchEvent(new CustomEvent("akra:scene-rendered"));
+      });
+      await page.waitForFunction(
+        (expectedActorCount) =>
+          window.AkraAdminGame?.inspectScene?.()?.actorCount === expectedActorCount,
+        baselineActorCount + 1,
+      );
+      const activePoseProbe = await page.evaluate(() =>
+        window.AkraAdminGame
+          ?.inspectScene?.()
+          ?.actors.find((actor) => actor.actorId === "visual-probe-session"),
+      );
+      if (
+        !activePoseProbe ||
+        activePoseProbe.visualState !== "working" ||
+        activePoseProbe.pose !== "laptop" ||
+        activePoseProbe.resolvedAtlasFrameIndex !== 40 ||
+        activePoseProbe.poseFallback
+      ) {
+        throw new Error(
+          `${label} active actor did not resolve the laptop pose frame: ${JSON.stringify(activePoseProbe)}`,
+        );
+      }
+      await page.evaluate(() => {
+        const probe = document.querySelector("[data-visual-active-pose-probe]");
+        if (!probe) throw new Error("blocked pose probe cannot find the active actor");
+        probe.dataset.archetypeKey = "Guardian";
+        probe.dataset.visualState = "blocked";
+        probe.dataset.staticPose = "alert";
+        probe.dataset.detailSeverity = "danger";
+        window.dispatchEvent(new CustomEvent("akra:scene-rendered"));
+      });
+      await page.waitForFunction(() =>
+        window.AkraAdminGame
+          ?.inspectScene?.()
+          ?.actors.some(
+            (actor) =>
+              actor.actorId === "visual-probe-session" && actor.visualState === "blocked",
+          ),
+      );
+      const blockedPoseProbe = await page.evaluate(() =>
+        window.AkraAdminGame
+          ?.inspectScene?.()
+          ?.actors.find((actor) => actor.actorId === "visual-probe-session"),
+      );
+      if (
+        !blockedPoseProbe ||
+        blockedPoseProbe.pose !== "alert" ||
+        blockedPoseProbe.resolvedAtlasFrameIndex !== null ||
+        !blockedPoseProbe.poseFallback
+      ) {
+        throw new Error(
+          `${label} Guardian alert did not report its explicit neutral fallback: ${JSON.stringify(blockedPoseProbe)}`,
+        );
+      }
+      await page.evaluate(() => {
+        document.querySelector("[data-visual-active-pose-probe]")?.remove();
+        window.dispatchEvent(new CustomEvent("akra:scene-rendered"));
+      });
+      await page.waitForFunction(
+        (expectedActorCount) =>
+          window.AkraAdminGame?.inspectScene?.()?.actorCount === expectedActorCount,
+        baselineActorCount,
+      );
+      const baselineStandbyCount = firstScene.standbyCount;
+      await page.evaluate(() => {
+        const board = document.querySelector(".office-board");
+        if (!board) throw new Error("Ranger standby probe cannot find the office board");
+        const probe = document.createElement("span");
+        probe.hidden = true;
+        probe.dataset.visualRangerStandbyProbe = "true";
+        Object.assign(probe.dataset, {
+          standbyCharacter: "true",
+          characterId: "standby:visual-ranger-probe",
+          presenceKind: "configured_standby",
+          agentId: "visual-ranger-probe",
+          sceneStandbyIndex: "1",
+          archetypeKey: "Ranger",
+          visualState: "idle",
+          staticPose: "neutral",
+          detailSeverity: "muted",
+        });
+        board.insertBefore(probe, board.querySelector(".distributor-desk"));
+        window.dispatchEvent(new CustomEvent("akra:scene-rendered"));
+      });
+      await page.waitForFunction(
+        (expectedStandbyCount) =>
+          window.AkraAdminGame?.inspectScene?.()?.standbyCount === expectedStandbyCount,
+        baselineStandbyCount + 1,
+      );
+      const rangerStandbyProbe = await page.evaluate(() =>
+        window.AkraAdminGame
+          ?.inspectScene?.()
+          ?.standbyCharacters.find(
+            (character) => character.characterId === "standby:visual-ranger-probe",
+          ),
+      );
+      if (
+        !rangerStandbyProbe ||
+        rangerStandbyProbe.pose !== "neutral" ||
+        rangerStandbyProbe.resolvedAtlasFrameIndex !== null ||
+        rangerStandbyProbe.poseFallback
+      ) {
+        throw new Error(
+          `${label} Ranger standby did not keep its explicit neutral pose: ${JSON.stringify(rangerStandbyProbe)}`,
+        );
+      }
+      await page.evaluate(() => {
+        document.querySelector("[data-visual-ranger-standby-probe]")?.remove();
+        window.dispatchEvent(new CustomEvent("akra:scene-rendered"));
+      });
+      await page.waitForFunction(
+        (expectedStandbyCount) =>
+          window.AkraAdminGame?.inspectScene?.()?.standbyCount === expectedStandbyCount,
+        baselineStandbyCount,
+      );
+      await page.waitForTimeout(50);
     }
     await analysisPage.close();
 
@@ -213,12 +443,34 @@ try {
       const refresh = document.querySelector(".stage-hud [data-refresh-dashboard]");
       const sidebar = document.querySelector(".sidebar");
       const commandAlert = document.querySelector(".command-alert");
+      const topbar = document.querySelector(".draft-topbar");
+      const mainGrid = document.querySelector(".draft-main-grid");
+      const shell = document.querySelector(".shell");
+      const graphic = document.querySelector("[data-admin-graphic]");
+      const boardRow = document.querySelector(".draft-main-grid > .board-row");
+      const leftStack = document.querySelector(".draft-main-grid > .left-stack");
+      const rightStack = document.querySelector(".draft-main-grid > .right-stack");
+      const bottomGrid = document.querySelector(".bottom-grid");
       const canvasRect = canvas?.getBoundingClientRect();
       const boardRect = board?.getBoundingClientRect();
       const hudRect = hud?.getBoundingClientRect();
       const refreshRect = refresh?.getBoundingClientRect();
       const sidebarRect = sidebar?.getBoundingClientRect();
       const commandAlertRect = commandAlert?.getBoundingClientRect();
+      const topbarRect = topbar?.getBoundingClientRect();
+      const mainGridRect = mainGrid?.getBoundingClientRect();
+      const shellRect = shell?.getBoundingClientRect();
+      const graphicRect = graphic?.getBoundingClientRect();
+      const boardRowRect = boardRow?.getBoundingClientRect();
+      const leftStackRect = leftStack?.getBoundingClientRect();
+      const rightStackRect = rightStack?.getBoundingClientRect();
+      const bottomGridRect = bottomGrid?.getBoundingClientRect();
+      const shellStyle = shell ? window.getComputedStyle(shell) : null;
+      const shellContentWidth = shellRect
+        ? shellRect.width -
+          Number.parseFloat(shellStyle?.paddingLeft || "0") -
+          Number.parseFloat(shellStyle?.paddingRight || "0")
+        : 0;
       const isVisible = (element, rect) => {
         if (!element || !rect || rect.width <= 0 || rect.height <= 0) return false;
         const style = window.getComputedStyle(element);
@@ -274,6 +526,27 @@ try {
         refreshHeight: refreshRect?.height ?? 0,
         sidebarVisible: isVisible(sidebar, sidebarRect),
         commandAlertVisible: isVisible(commandAlert, commandAlertRect),
+        topbarHeight: topbarRect?.height ?? 0,
+        commandAlertHeight: commandAlertRect?.height ?? 0,
+        graphicCentered:
+          Boolean(graphicRect && shellRect) &&
+          Math.abs(
+            (graphicRect.left + graphicRect.right) / 2 -
+              (shellRect.left + shellRect.right) / 2,
+          ) <= 1.5,
+        graphicWidth: graphicRect?.width ?? 0,
+        shellContentWidth,
+        boardWidth: boardRect?.width ?? 0,
+        boardAspectRatio:
+          boardRect && boardRect.height > 0 ? boardRect.width / boardRect.height : 0,
+        leftBoardGap:
+          leftStackRect && boardRowRect ? boardRowRect.left - leftStackRect.right : null,
+        boardRightGap:
+          boardRowRect && rightStackRect ? rightStackRect.left - boardRowRect.right : null,
+        bottomStartsInFirstViewport:
+          Boolean(bottomGridRect) && bottomGridRect.top <= window.innerHeight + 1,
+        mainBottomGap:
+          mainGridRect && bottomGridRect ? bottomGridRect.top - mainGridRect.bottom : null,
         boardInFirstViewport:
           Boolean(boardRect) &&
           boardRect.top >= -1 &&
@@ -281,8 +554,15 @@ try {
         boardRect: rectValue(boardRect),
         sidebarRect: rectValue(sidebarRect),
         commandAlertRect: rectValue(commandAlertRect),
+        topbarRect: rectValue(topbarRect),
+        mainGridRect: rectValue(mainGridRect),
         hudRect: rectValue(hudRect),
         refreshRect: rectValue(refreshRect),
+        graphicRect: rectValue(graphicRect),
+        boardRowRect: rectValue(boardRowRect),
+        leftStackRect: rectValue(leftStackRect),
+        rightStackRect: rectValue(rightStackRect),
+        bottomGridRect: rectValue(bottomGridRect),
       };
     });
     if (layout.documentWidth > layout.viewportWidth + 1 || layout.bodyWidth > layout.viewportWidth + 1) {
@@ -310,6 +590,32 @@ try {
         `${label} refresh control is hidden, clipped, occluded, or too small: ${JSON.stringify(layout)}`,
       );
     }
+    if (width >= 1920) {
+      const expectedBoardAspectRatio = 1671 / 941;
+      const expectedGraphicWidth = Math.min(1784, layout.shellContentWidth);
+      const expectedBoardWidth = expectedGraphicWidth - 504;
+      const gapIsSupported = (gap) => typeof gap === "number" && gap >= 8 && gap <= 24;
+      if (
+        !layout.graphicCentered ||
+        layout.graphicWidth > 1785 ||
+        Math.abs(layout.graphicWidth - expectedGraphicWidth) > 2 ||
+        layout.boardWidth > 1281 ||
+        Math.abs(layout.boardWidth - expectedBoardWidth) > 2 ||
+        Math.abs(layout.boardAspectRatio - expectedBoardAspectRatio) > 0.02 ||
+        !gapIsSupported(layout.leftBoardGap) ||
+        !gapIsSupported(layout.boardRightGap) ||
+        !layout.bottomStartsInFirstViewport ||
+        typeof layout.mainBottomGap !== "number" ||
+        layout.mainBottomGap < 7 ||
+        layout.mainBottomGap > 16 ||
+        layout.topbarHeight > 90 ||
+        layout.commandAlertHeight > 120
+      ) {
+        throw new Error(
+          `${label} widescreen layout is stretched, off-center, or clipped: ${JSON.stringify(layout)}`,
+        );
+      }
+    }
     await page.screenshot({ path, fullPage: true });
     await page.close();
   };
@@ -325,6 +631,18 @@ try {
     height: 1000,
     path: screenshotPath,
     label: "wide desktop",
+  });
+  await captureViewport({
+    width: 1920,
+    height: 1080,
+    path: fullHdScreenshotPath,
+    label: "full HD desktop",
+  });
+  await captureViewport({
+    width: 2560,
+    height: 1440,
+    path: qhdScreenshotPath,
+    label: "QHD desktop",
   });
 
   const navigationPage = await context.newPage();

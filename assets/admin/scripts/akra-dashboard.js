@@ -547,6 +547,8 @@
   };
 
   const actorDetailDataset = (actor) => ({
+    characterId: actor.actorId,
+    presenceKind: "active",
     actorId: actor.actorId,
     agentId: actor.agentId,
     slotId: actor.slotId,
@@ -568,6 +570,27 @@
     detailProgress: actor.progressLabel,
     detailSummary: actor.latestSummary
   });
+
+  const standbyPresenceDataset = (character) => ({
+    standbyCharacter: "true",
+    characterId: character.characterId,
+    presenceKind: character.presenceKind || "configured_standby",
+    agentId: character.agentId,
+    sceneStandbyIndex: character.locationIndex,
+    archetypeKey: character.archetypeKey,
+    visualState: character.visualState,
+    staticPose: character.staticPose,
+    detailSeverity: character.severity
+  });
+
+  const createStandbyPresence = (character) => {
+    const presence = document.createElement("span");
+    presence.className = "scene-standby-presence";
+    presence.hidden = true;
+    presence.setAttribute("aria-hidden", "true");
+    setDataset(presence, standbyPresenceDataset(character));
+    return presence;
+  };
 
   const createActorButton = (actor) => {
     const button = document.createElement("button");
@@ -628,12 +651,32 @@
     const nextSignature = JSON.stringify({
       stations: asArray(scene.stations),
       actors: asArray(scene.actors),
+      standbyProfileCount: scene.standbyProfileCount,
+      standbyCharacters: asArray(scene.standbyCharacters),
       diagnostics: asArray(scene.diagnostics)
     });
     if (root.dataset.sceneSignature === nextSignature) return;
-    for (const node of board.querySelectorAll(".desk[data-actor-id]")) node.remove();
+    for (const node of board.querySelectorAll(".desk[data-actor-id], [data-standby-character]")) node.remove();
     const anchor = board.querySelector(".distributor-desk") || board.querySelector(".event-board");
     for (const actor of asArray(scene.actors)) board.insertBefore(createActorButton(actor), anchor);
+    for (const character of asArray(scene.standbyCharacters)) {
+      board.insertBefore(createStandbyPresence(character), anchor);
+    }
+    const standbyCharacters = asArray(scene.standbyCharacters);
+    const standbyProfileCount = Number(scene.standbyProfileCount ?? standbyCharacters.length);
+    const restArea = board.querySelector("[data-standby-rest-area]");
+    if (restArea) {
+      restArea.dataset.standbyCount = String(standbyCharacters.length);
+      restArea.dataset.standbyTotalCount = String(standbyProfileCount);
+      restArea.setAttribute(
+        "aria-label",
+        `대기 프로필 총 ${standbyProfileCount}명 중 ${standbyCharacters.length}명 표시 · 작업 미할당`
+      );
+      const speech = restArea.querySelector(".speech");
+      if (speech) speech.textContent = standbyProfileCount > 0 ? "업무 배정 대기" : "대기 프로필 없음";
+      const label = restArea.querySelector(".object-label strong");
+      if (label) label.textContent = `대기 프로필 ${standbyCharacters.length}/${standbyProfileCount}`;
+    }
     root.querySelector("[data-scene-actor-list]")?.replaceChildren(
       ...asArray(scene.actors).map(createActorListButton)
     );

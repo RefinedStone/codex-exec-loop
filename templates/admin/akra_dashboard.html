@@ -813,6 +813,10 @@
   .akra-game {
     display: grid;
     gap: 8px;
+    align-content: start;
+    width: 100%;
+    max-width: 1784px;
+    margin-inline: auto;
     min-height: calc(100vh - 12px);
   }
   .draft-topbar {
@@ -1014,13 +1018,15 @@
   }
   .draft-main-grid {
     display: grid;
-    grid-template-columns: 220px minmax(500px, 1fr) 260px;
+    grid-template-columns: 220px minmax(500px, 1280px) 260px;
     gap: 12px;
     align-items: start;
+    justify-content: center;
   }
   .draft-main-grid .board-row {
-    justify-self: center;
-    width: min(100%, 1040px);
+    justify-self: stretch;
+    width: 100%;
+    max-width: 1280px;
   }
   .left-stack,
   .right-stack {
@@ -1492,6 +1498,8 @@
         <button
           type="button"
           class="scene-object desk agent-{{ actor.seat_index }} severity-{{ actor.severity }}"
+          data-character-id="{{ actor.actor_id }}"
+          data-presence-kind="active"
           data-actor-id="{{ actor.actor_id }}"
           data-agent-id="{{ actor.agent_id }}"
           data-slot-id="{{ actor.slot_id }}"
@@ -1522,6 +1530,23 @@
             <small>{{ actor.status_label }} · {{ actor.duration_label }}</small>
           </span>
         </button>
+        {% endfor %}
+
+        {% for character in dashboard.scene.standby_characters %}
+        <span
+          class="scene-standby-presence"
+          data-standby-character="true"
+          data-character-id="{{ character.character_id }}"
+          data-presence-kind="{{ character.presence_kind }}"
+          data-agent-id="{{ character.agent_id }}"
+          data-scene-standby-index="{{ character.location_index }}"
+          data-archetype-key="{{ character.archetype_key }}"
+          data-visual-state="{{ character.visual_state }}"
+          data-static-pose="{{ character.static_pose }}"
+          data-detail-severity="{{ character.severity }}"
+          hidden
+          aria-hidden="true"
+        ></span>
         {% endfor %}
 
         <button
@@ -1587,9 +1612,15 @@
           </span>
         </button>
 
-        <div class="scene-object rest-area" aria-hidden="true">
-          <span class="speech">잠깐 쉬었다 갈까?</span>
-          <span class="object-label"><strong>휴식 공간</strong></span>
+        <div
+          class="scene-object rest-area"
+          data-standby-rest-area
+          data-standby-count="{{ dashboard.scene.standby_characters.len() }}"
+          data-standby-total-count="{{ dashboard.scene.standby_profile_count }}"
+          aria-label="대기 프로필 총 {{ dashboard.scene.standby_profile_count }}명 중 {{ dashboard.scene.standby_characters.len() }}명 표시 · 작업 미할당"
+        >
+          <span class="speech">{% if dashboard.scene.standby_profile_count == 0 %}대기 프로필 없음{% else %}업무 배정 대기{% endif %}</span>
+          <span class="object-label"><strong>대기 프로필 {{ dashboard.scene.standby_characters.len() }}/{{ dashboard.scene.standby_profile_count }}</strong></span>
         </div>
       </div>
 
@@ -1598,6 +1629,8 @@
         <button
           type="button"
           class="scene-actor-row severity-{{ actor.severity }}"
+          data-character-id="{{ actor.actor_id }}"
+          data-presence-kind="active"
           data-actor-id="{{ actor.actor_id }}"
           data-agent-id="{{ actor.agent_id }}"
           data-slot-id="{{ actor.slot_id }}"

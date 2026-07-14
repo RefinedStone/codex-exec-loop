@@ -307,6 +307,15 @@ precedence는 서로 다른 component가 잠시 겹쳐 보일 때의 reconciliat
 | typed activity older than `fresh_until` | `stale` overlay | timestamp가 없으면 stale이 아니라 unknown |
 | unmapped typed enum/legacy label | unknown diagnostic | no motion; mapper contract test를 실패시킨다 |
 
+첫 정적 구현에서는 enabled profile을 runtime actor와 분리한 `configured_standby` presence로 휴게 구역에
+최대 3명까지 표시한다. 전체 eligible profile 수와 실제 표시 수는 별도로 내려 truncation을 숨기지 않는다. 이
+presence는 `actor_id`, slot, task, session, lease identity를 갖지 않으며 active actor count에도 포함하지 않는다.
+같은 `agent_id`가 raw roster, pool owner identity, active distributor queue 중 하나에라도 나타나면 identity 검증
+성공 여부와 무관하게 standby에서 제외한다. 따라서 roster refresh lag나 identity mismatch를 대기 캐릭터로
+위장하지 않고 diagnostic을 유지하며, 빈 station은 계속 빈 desk로 남는다. standby pose는 avatar별 검증된
+laptop/sit frame을 사용하고 좌식 frame이 없는 Ranger는 explicit neutral pose로 표시한다. standby는 random roam,
+packet, ticker를 만들지 않고 snapshot이 바뀔 때만 정적으로 다시 투영한다.
+
 precedence와 lifecycle mapping은 Rust Admin projection 한 곳에서만 계산한다. TypeScript는 closed visual state와
 scene event를 exhaustive하게 render할 뿐 precedence나 policy를 다시 판단하지 않는다. 현재 string label은
 typed enum/identity로 내려가는 migration을 거치며, unmapped label은 silent fallback하지 않는다.

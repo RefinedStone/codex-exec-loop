@@ -3,6 +3,7 @@ import * as PIXI_RUNTIME from "pixi.js";
 
 type StatusSeverity = "normal" | "success" | "warning" | "danger" | "info" | "muted";
 type VisualState =
+  | "idle"
   | "starting"
   | "working"
   | "awaiting_review"
@@ -10,6 +11,7 @@ type VisualState =
   | "delivering"
   | "cleanup";
 type StaticPose = "neutral" | "laptop" | "callout" | "alert" | "sit";
+type PresenceKind = "active" | "configured_standby";
 type Facing = "down" | "side" | "up";
 type ArchetypeKey = "planner" | "coffee_addict" | "ai_researcher" | "designer";
 type AssetKey =
@@ -89,6 +91,8 @@ interface AgentFrameSet {
 }
 
 interface AgentUnit {
+  characterId: string;
+  presenceKind: PresenceKind;
   actorId: string;
   agentId: string;
   slotId: string;
@@ -99,6 +103,8 @@ interface AgentUnit {
   sprite: PixiSprite | null;
   marker: PixiGraphics;
   point: Point;
+  resolvedAtlasFrameIndex: number | null;
+  poseFallback: boolean;
 }
 
 interface StructureSpec {
@@ -119,6 +125,8 @@ interface StructureSprite {
 interface SceneInspection {
   ready: boolean;
   actorCount: number;
+  characterCount: number;
+  standbyCount: number;
   packetCount: 0;
   semanticMotionCount: 0;
   renderCount: number;
@@ -128,6 +136,20 @@ interface SceneInspection {
     slotId: string;
     visualState: VisualState;
     pose: StaticPose;
+    resolvedAtlasFrameIndex: number | null;
+    poseFallback: boolean;
+    x: number;
+    y: number;
+  }>;
+  standbyCharacters: Array<{
+    characterId: string;
+    presenceKind: "configured_standby";
+    agentId: string;
+    visualState: VisualState;
+    pose: StaticPose;
+    locationIndex: number;
+    resolvedAtlasFrameIndex: number | null;
+    poseFallback: boolean;
     x: number;
     y: number;
   }>;
@@ -165,6 +187,12 @@ const SLOT_SEATS: Point[] = [
   { x: 1030, y: 570 },
 ];
 
+const STANDBY_LOUNGE_POINTS: Point[] = [
+  { x: 730, y: 805 },
+  { x: 805, y: 805 },
+  { x: 880, y: 805 },
+];
+
 const STRUCTURE_SPECS: StructureSpec[] = [
   { key: "fdDesk1", x: 470, y: 405, scale: 0.62 },
   { key: "fdDesk2", x: 660, y: 330, scale: 0.62 },
@@ -180,13 +208,22 @@ const STRUCTURE_SPECS: StructureSpec[] = [
   { key: "fdPlant", x: 1185, y: 620, scale: 0.7 },
 ];
 
-const STATIC_POSE_MANIFEST: Record<VisualState, { facing: Facing; frameIndex: number }> = {
+const NEUTRAL_FRAME_MANIFEST: Record<VisualState, { facing: Facing; frameIndex: number }> = {
+  idle: { facing: "down", frameIndex: 0 },
   starting: { facing: "side", frameIndex: 0 },
   working: { facing: "down", frameIndex: 0 },
   awaiting_review: { facing: "up", frameIndex: 0 },
   blocked: { facing: "side", frameIndex: 0 },
   delivering: { facing: "up", frameIndex: 0 },
   cleanup: { facing: "down", frameIndex: 0 },
+};
+
+// `null` is intentional: a visually similar emote must not be mislabeled as another pose.
+const STATIC_POSE_MANIFEST: Record<ArchetypeKey, Record<StaticPose, number | null>> = {
+  planner: { neutral: null, laptop: 40, callout: null, alert: 41, sit: null },
+  coffee_addict: { neutral: null, laptop: 44, callout: null, alert: 45, sit: 47 },
+  ai_researcher: { neutral: null, laptop: 48, callout: null, alert: null, sit: null },
+  designer: { neutral: null, laptop: null, callout: 50, alert: 49, sit: null },
 };
 
 const ARCHETYPE_BY_PROFILE: Record<string, ArchetypeKey> = {
@@ -228,6 +265,7 @@ declare global {
     value === "muted";
 
   const isVisualState = (value: string | undefined): value is VisualState =>
+    value === "idle" ||
     value === "starting" ||
     value === "working" ||
     value === "awaiting_review" ||
@@ -241,6 +279,9 @@ declare global {
     value === "callout" ||
     value === "alert" ||
     value === "sit";
+
+  const isPresenceKind = (value: string | undefined): value is PresenceKind =>
+    value === "active" || value === "configured_standby";
 
   const isPixiTexture = (texture: PixiTexture | null): texture is PixiTexture =>
     texture !== null;
@@ -311,18 +352,34 @@ declare global {
     let ready = false;
 
     const syncInspectionDataset = (): void => {
+      const activeUnits = agentUnits.filter((unit) => unit.presenceKind === "active");
+      const standbyUnits = agentUnits.filter(
+        (unit) => unit.presenceKind === "configured_standby"
+      );
       container.dataset.sceneReady = String(ready);
-      container.dataset.sceneActorCount = String(agentUnits.length);
+      container.dataset.sceneActorCount = String(activeUnits.length);
+      container.dataset.sceneCharacterCount = String(agentUnits.length);
+      container.dataset.sceneStandbyCount = String(standbyUnits.length);
       container.dataset.scenePacketCount = "0";
       container.dataset.sceneSemanticMotionCount = "0";
       container.dataset.sceneRenderCount = String(renderCount);
       container.dataset.sceneActorSignature = JSON.stringify(
-        agentUnits.map((unit) => ({
+        activeUnits.map((unit) => ({
           actorId: unit.actorId,
           agentId: unit.agentId,
           slotId: unit.slotId,
           visualState: unit.visualState,
           pose: unit.pose,
+        }))
+      );
+      container.dataset.sceneStandbySignature = JSON.stringify(
+        standbyUnits.map((unit) => ({
+          characterId: unit.characterId,
+          agentId: unit.agentId,
+          visualState: unit.visualState,
+          pose: unit.pose,
+          resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
+          poseFallback: unit.poseFallback,
         }))
       );
     };
@@ -372,6 +429,12 @@ declare global {
         )
       );
     };
+
+    const makeAtlasFrameByIndex = (
+      texture: PixiTexture | undefined,
+      atlasFrameIndex: number
+    ): PixiTexture | null =>
+      makeAtlasFrame(texture, atlasFrameIndex % 8, Math.floor(atlasFrameIndex / 8));
 
     const makeFrameRow = (
       texture: PixiTexture | undefined,
@@ -448,6 +511,10 @@ declare global {
       ARCHETYPE_BY_PROFILE[node.dataset.archetypeKey || ""] || "coffee_addict";
 
     const pointFor = (node: HTMLElement): Point => {
+      if (node.dataset.presenceKind === "configured_standby") {
+        const standbyIndex = Number(node.dataset.sceneStandbyIndex || "") - 1;
+        return STANDBY_LOUNGE_POINTS[standbyIndex] || STANDBY_LOUNGE_POINTS[0];
+      }
       const seatIndex = Number(node.dataset.sceneSeatIndex || "") - 1;
       return SLOT_SEATS[seatIndex] || SLOT_SEATS[0];
     };
@@ -484,21 +551,70 @@ declare global {
       }
     };
 
+    const resolveAgentTexture = (
+      archetype: ArchetypeKey,
+      visualState: VisualState,
+      pose: StaticPose
+    ): {
+      texture: PixiTexture | null;
+      resolvedAtlasFrameIndex: number | null;
+      poseFallback: boolean;
+    } => {
+      const atlasFrameIndex = STATIC_POSE_MANIFEST[archetype][pose];
+      if (atlasFrameIndex !== null) {
+        const texture = makeAtlasFrameByIndex(textures.agentAtlas, atlasFrameIndex);
+        if (texture) {
+          return { texture, resolvedAtlasFrameIndex: atlasFrameIndex, poseFallback: false };
+        }
+      }
+      const neutralFrame = NEUTRAL_FRAME_MANIFEST[visualState];
+      const frames = agentFrameSets[archetype]?.[neutralFrame.facing] || [];
+      return {
+        texture: frames[neutralFrame.frameIndex] || frames[0] || null,
+        resolvedAtlasFrameIndex: null,
+        poseFallback: pose !== "neutral",
+      };
+    };
+
     const makeAgentUnit = (node: HTMLElement): AgentUnit | null => {
       const visualState = node.dataset.visualState;
       if (!isVisualState(visualState)) return null;
       const pose = isStaticPose(node.dataset.staticPose) ? node.dataset.staticPose : "neutral";
+      const presenceKind = isPresenceKind(node.dataset.presenceKind)
+        ? node.dataset.presenceKind
+        : "active";
+      const characterId = node.dataset.characterId || node.dataset.actorId || "";
       const actorId = node.dataset.actorId || "";
       const agentId = node.dataset.agentId || "";
       const slotId = node.dataset.slotId || "";
-      if (!actorId || !agentId || !slotId) return null;
+      if (!characterId || !agentId) return null;
+      if (presenceKind === "active" && (!actorId || !slotId)) return null;
+      const standbyRuntimeIdentityKeys = [
+        "actorId",
+        "taskId",
+        "slotId",
+        "sessionKey",
+        "ownerAgentId",
+        "ownerSessionKey",
+        "leaseGeneration",
+        "branchName",
+        "queueItemId",
+      ] as const;
+      if (
+        presenceKind === "configured_standby" &&
+        standbyRuntimeIdentityKeys.some((key) => Boolean(node.dataset[key]))
+      ) {
+        return null;
+      }
 
       const severity = parseSeverity(node);
       const color = statusPalette[severity] || statusPalette.normal;
-      const frameSet = agentFrameSets[archetypeFor(node)];
-      const poseFrame = STATIC_POSE_MANIFEST[visualState];
-      const frames = frameSet?.[poseFrame.facing] || [];
-      const texture = frames[poseFrame.frameIndex] || frames[0] || null;
+      const archetype = archetypeFor(node);
+      const { texture, resolvedAtlasFrameIndex, poseFallback } = resolveAgentTexture(
+        archetype,
+        visualState,
+        pose
+      );
       const group = new PIXI.Container();
       const shadow = new PIXI.Graphics();
       shadow.beginFill(0x000000, 0.26);
@@ -514,11 +630,13 @@ declare global {
       } else {
         group.addChild(shadow, marker);
       }
-      group.alpha = severity === "muted" ? 0.58 : 0.95;
+      group.alpha = presenceKind === "configured_standby" ? 0.84 : 0.95;
       agentLayer.addChild(group);
 
       const point = pointFor(node);
       const unit: AgentUnit = {
+        characterId,
+        presenceKind,
         actorId,
         agentId,
         slotId,
@@ -529,15 +647,19 @@ declare global {
         sprite,
         marker,
         point,
+        resolvedAtlasFrameIndex,
+        poseFallback,
       };
-      node.addEventListener("pointerenter", () => {
-        group.scale.set(1.08);
-        requestSceneRender();
-      });
-      node.addEventListener("pointerleave", () => {
-        group.scale.set(1);
-        requestSceneRender();
-      });
+      if (presenceKind === "active") {
+        node.addEventListener("pointerenter", () => {
+          group.scale.set(1.08);
+          requestSceneRender();
+        });
+        node.addEventListener("pointerleave", () => {
+          group.scale.set(1);
+          requestSceneRender();
+        });
+      }
       return unit;
     };
 
@@ -575,7 +697,11 @@ declare global {
     const rebuildAgentUnits = (): void => {
       for (const child of agentLayer.removeChildren()) child.destroy({ children: true });
       agentUnits = root
-        ? [...root.querySelectorAll<HTMLElement>(".desk[data-actor-id]")]
+        ? [
+            ...root.querySelectorAll<HTMLElement>(
+              ".desk[data-actor-id], [data-standby-character][data-character-id]"
+            ),
+          ]
             .map(makeAgentUnit)
             .filter((unit): unit is AgentUnit => unit !== null)
         : [];
@@ -583,22 +709,44 @@ declare global {
       syncLayout(true);
     };
 
-    const inspectScene = (): SceneInspection => ({
-      ready,
-      actorCount: agentUnits.length,
-      packetCount: 0,
-      semanticMotionCount: 0,
-      renderCount,
-      actors: agentUnits.map((unit) => ({
-        actorId: unit.actorId,
-        agentId: unit.agentId,
-        slotId: unit.slotId,
-        visualState: unit.visualState,
-        pose: unit.pose,
-        x: Math.round(unit.point.x),
-        y: Math.round(unit.point.y),
-      })),
-    });
+    const inspectScene = (): SceneInspection => {
+      const activeUnits = agentUnits.filter((unit) => unit.presenceKind === "active");
+      const standbyUnits = agentUnits.filter(
+        (unit) => unit.presenceKind === "configured_standby"
+      );
+      return {
+        ready,
+        actorCount: activeUnits.length,
+        characterCount: agentUnits.length,
+        standbyCount: standbyUnits.length,
+        packetCount: 0,
+        semanticMotionCount: 0,
+        renderCount,
+        actors: activeUnits.map((unit) => ({
+          actorId: unit.actorId,
+          agentId: unit.agentId,
+          slotId: unit.slotId,
+          visualState: unit.visualState,
+          pose: unit.pose,
+          resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
+          poseFallback: unit.poseFallback,
+          x: Math.round(unit.point.x),
+          y: Math.round(unit.point.y),
+        })),
+        standbyCharacters: standbyUnits.map((unit) => ({
+          characterId: unit.characterId,
+          presenceKind: "configured_standby" as const,
+          agentId: unit.agentId,
+          visualState: unit.visualState,
+          pose: unit.pose,
+          locationIndex: Number(unit.node.dataset.sceneStandbyIndex || ""),
+          resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
+          poseFallback: unit.poseFallback,
+          x: Math.round(unit.point.x),
+          y: Math.round(unit.point.y),
+        })),
+      };
+    };
 
     const loadTextures = async (): Promise<void> => {
       textures = {};

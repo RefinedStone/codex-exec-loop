@@ -19,6 +19,7 @@ use crate::git_subprocess;
 
 const DASHBOARD_EVENT_LIMIT: usize = 20;
 const ADMIN_RUNTIME_MODE_LABEL: &str = "read-only projection";
+const STANDBY_CHARACTER_LIMIT: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,6 +147,8 @@ pub(super) struct AgentView {
 pub(super) struct GameSceneView {
     pub stations: Vec<GameStationView>,
     pub actors: Vec<GameActorView>,
+    pub standby_profile_count: usize,
+    pub standby_characters: Vec<GameStandbyCharacterView>,
     pub diagnostics: Vec<GameSceneDiagnosticView>,
 }
 
@@ -184,9 +187,28 @@ pub(super) struct GameActorView {
     pub bubble_label: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GameStandbyCharacterView {
+    pub character_id: String,
+    pub agent_id: String,
+    pub location_index: usize,
+    pub display_name: String,
+    pub archetype_key: String,
+    pub role_label: String,
+    pub presence_kind: String,
+    pub visual_state: GameVisualState,
+    pub static_pose: GameStaticPose,
+    pub severity: String,
+    pub status_label: String,
+    pub summary: String,
+    pub bubble_label: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum GameVisualState {
+    Idle,
     Starting,
     Working,
     AwaitingReview,
@@ -198,6 +220,7 @@ pub(super) enum GameVisualState {
 impl GameVisualState {
     fn key(self) -> &'static str {
         match self {
+            Self::Idle => "idle",
             Self::Starting => "starting",
             Self::Working => "working",
             Self::AwaitingReview => "awaiting_review",
@@ -209,6 +232,7 @@ impl GameVisualState {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Idle => "대기",
             Self::Starting => "시작 준비",
             Self::Working => "작업 중",
             Self::AwaitingReview => "검토 대기",
@@ -224,11 +248,13 @@ impl GameVisualState {
             Self::Cleanup => "warning",
             Self::Delivering | Self::AwaitingReview | Self::Starting => "info",
             Self::Working => "success",
+            Self::Idle => "muted",
         }
     }
 
     fn pose(self) -> GameStaticPose {
         match self {
+            Self::Idle => GameStaticPose::Neutral,
             Self::Starting => GameStaticPose::Neutral,
             Self::Working => GameStaticPose::Laptop,
             Self::AwaitingReview | Self::Delivering => GameStaticPose::Callout,
@@ -644,6 +670,30 @@ fn map_game_scene(
 ) -> GameSceneView {
     let mut actors = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut claimed_agent_ids = supervisor
+        .roster
+        .entries
+        .iter()
+        .map(|entry| entry.agent_id.clone())
+        .collect::<HashSet<_>>();
+    claimed_agent_ids.extend(
+        supervisor
+            .pool
+            .slots
+            .iter()
+            .filter_map(|slot| slot.owner_identity.as_ref())
+            .map(|owner| owner.agent_id.clone())
+            .filter(|agent_id| !agent_id.trim().is_empty()),
+    );
+    claimed_agent_ids.extend(
+        supervisor
+            .distributor
+            .queue_items
+            .iter()
+            .filter(|item| item.queue_state.is_active())
+            .map(|item| item.source_agent.clone())
+            .filter(|agent_id| !agent_id.trim().is_empty()),
+    );
     let mut seen_agent_ids = HashSet::new();
     let mut seen_slot_ids = HashSet::new();
 
@@ -785,10 +835,51 @@ fn map_game_scene(
         })
         .collect();
 
+    let standby_profiles = agent_profiles
+        .enabled_profiles()
+        .into_iter()
+        .filter(|profile| !claimed_agent_ids.contains(&profile.agent_id))
+        .collect::<Vec<_>>();
+    let standby_profile_count = standby_profiles.len();
+    let standby_characters = standby_profiles
+        .into_iter()
+        .take(STANDBY_CHARACTER_LIMIT)
+        .enumerate()
+        .map(|(index, profile)| {
+            let static_pose = standby_pose_for_avatar_class(&profile.avatar_class);
+            GameStandbyCharacterView {
+                character_id: format!("standby:{}", profile.agent_id),
+                agent_id: profile.agent_id,
+                location_index: index + 1,
+                display_name: profile.display_name,
+                archetype_key: profile.avatar_class,
+                role_label: profile.role,
+                presence_kind: "configured_standby".to_string(),
+                visual_state: GameVisualState::Idle,
+                static_pose,
+                severity: GameVisualState::Idle.severity().to_string(),
+                status_label: "대기 프로필".to_string(),
+                summary: "작업 미할당 · runtime actor 아님".to_string(),
+                bubble_label: "업무 배정 대기".to_string(),
+            }
+        })
+        .collect();
+
     GameSceneView {
         stations,
         actors,
+        standby_profile_count,
+        standby_characters,
         diagnostics,
+    }
+}
+
+fn standby_pose_for_avatar_class(avatar_class: &str) -> GameStaticPose {
+    match avatar_class {
+        "Artificer" | "Seer" | "Guardian" => GameStaticPose::Laptop,
+        "Scribe" | "Runner" => GameStaticPose::Sit,
+        "Ranger" => GameStaticPose::Neutral,
+        _ => GameStaticPose::Sit,
     }
 }
 
@@ -2020,6 +2111,8 @@ mod tests {
         assert_eq!(scene.stations[0].actor_id.as_deref(), Some("session-one"));
         assert_eq!(scene.stations[1].actor_id, None);
         assert_eq!(scene.stations[2].actor_id, None);
+        assert_eq!(scene.standby_profile_count, 0);
+        assert!(scene.standby_characters.is_empty());
         assert_eq!(scene.diagnostics.len(), 1);
         assert_eq!(
             scene.diagnostics[0].code,
@@ -2073,6 +2166,148 @@ mod tests {
         assert_eq!(campaign.intel_cards[0].severity, "danger");
         assert_eq!(campaign.intel_cards[2].severity, "danger");
         assert_eq!(campaign.intel_cards[3].note, "latest #12");
+    }
+
+    #[test]
+    fn game_scene_projects_configured_standby_profiles_without_fabricating_runtime_actors() {
+        let mut supervisor = scene_supervisor("running", ParallelModePoolSlotState::Running);
+        supervisor.roster.entries.clear();
+        let mut profiles = ParallelAgentProfileConfig::default();
+        profiles.profiles.push(ParallelAgentProfile {
+            agent_id: "agent-overflow".to_string(),
+            display_name: "오버플로".to_string(),
+            role: "예비 담당".to_string(),
+            persona_prompt: "Wait for assignment".to_string(),
+            avatar_class: "Runner".to_string(),
+            capabilities: Vec::new(),
+            enabled: true,
+        });
+
+        let scene = map_game_scene(&supervisor, &profiles);
+
+        assert!(scene.actors.is_empty());
+        assert!(scene.diagnostics.is_empty());
+        assert_eq!(scene.standby_profile_count, 4);
+        assert_eq!(scene.standby_characters.len(), STANDBY_CHARACTER_LIMIT);
+        assert_eq!(
+            scene
+                .standby_characters
+                .iter()
+                .map(|character| character.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent-artificer", "agent-scribe", "agent-guardian"]
+        );
+        assert_eq!(
+            scene
+                .standby_characters
+                .iter()
+                .map(|character| character.location_index)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            scene
+                .standby_characters
+                .iter()
+                .map(|character| character.static_pose)
+                .collect::<Vec<_>>(),
+            vec![
+                GameStaticPose::Laptop,
+                GameStaticPose::Sit,
+                GameStaticPose::Laptop
+            ]
+        );
+        for character in &scene.standby_characters {
+            assert_eq!(character.presence_kind, "configured_standby");
+            assert_eq!(character.visual_state, GameVisualState::Idle);
+            assert_eq!(character.severity, "muted");
+            assert_eq!(character.status_label, "대기 프로필");
+        }
+        let standby_json = serde_json::to_value(&scene.standby_characters[0])
+            .expect("standby character should serialize");
+        for runtime_identity in [
+            "actorId",
+            "taskId",
+            "slotId",
+            "sessionKey",
+            "ownerAgentId",
+            "ownerSessionKey",
+            "leaseGeneration",
+            "branchName",
+            "queueItemId",
+        ] {
+            assert!(
+                standby_json.get(runtime_identity).is_none(),
+                "standby presence must not fabricate {runtime_identity}"
+            );
+        }
+        assert!(
+            scene
+                .stations
+                .iter()
+                .all(|station| station.actor_id.is_none())
+        );
+    }
+
+    #[test]
+    fn game_scene_excludes_every_profile_claimed_by_pool_or_active_delivery() {
+        let mut supervisor = scene_supervisor("running", ParallelModePoolSlotState::Running);
+        supervisor.roster.entries.clear();
+        supervisor.pool.slots[0]
+            .owner_identity
+            .as_mut()
+            .expect("scene fixture should have typed station ownership")
+            .agent_id = "agent-artificer".to_string();
+        supervisor.distributor.queue_items = vec![ParallelModeDistributorQueueItem::new(
+            "agent-scribe",
+            "Deliver queued work",
+            ParallelModeQueueItemState::Queued,
+            "akra-agent/slot-2/task-2",
+            "abc1234",
+            "queued",
+        )];
+
+        let claimed = map_game_scene(&supervisor, &ParallelAgentProfileConfig::default());
+        assert_eq!(claimed.standby_profile_count, 1);
+        assert_eq!(claimed.standby_characters.len(), 1);
+        assert_eq!(claimed.standby_characters[0].agent_id, "agent-guardian");
+
+        supervisor.distributor.queue_items[0].queue_state = ParallelModeQueueItemState::Done;
+        let terminal_queue = map_game_scene(&supervisor, &ParallelAgentProfileConfig::default());
+        assert_eq!(terminal_queue.standby_profile_count, 2);
+        assert_eq!(
+            terminal_queue
+                .standby_characters
+                .iter()
+                .map(|character| character.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent-scribe", "agent-guardian"]
+        );
+    }
+
+    #[test]
+    fn game_scene_gives_ranger_standby_an_explicit_neutral_pose() {
+        let mut supervisor = scene_supervisor("running", ParallelModePoolSlotState::Running);
+        supervisor.roster.entries.clear();
+        let profiles = ParallelAgentProfileConfig {
+            profiles: vec![ParallelAgentProfile {
+                agent_id: "agent-ranger".to_string(),
+                display_name: "레인저".to_string(),
+                role: "탐색 담당".to_string(),
+                persona_prompt: "Wait at the lounge".to_string(),
+                avatar_class: "Ranger".to_string(),
+                capabilities: Vec::new(),
+                enabled: true,
+            }],
+        };
+
+        let scene = map_game_scene(&supervisor, &profiles);
+
+        assert_eq!(scene.standby_profile_count, 1);
+        assert_eq!(
+            scene.standby_characters[0].static_pose,
+            GameStaticPose::Neutral
+        );
     }
 
     #[test]
@@ -2200,6 +2435,7 @@ mod tests {
         branch_mismatch.pool.slots[0].branch_name = "other-branch".to_string();
         let scene = map_game_scene(&branch_mismatch, &profile_config());
         assert!(scene.actors.is_empty());
+        assert!(scene.standby_characters.is_empty());
         assert_eq!(scene.diagnostics[0].code, "station_branch_mismatch");
     }
 

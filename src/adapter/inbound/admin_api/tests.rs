@@ -67,6 +67,8 @@ const AKRA_DASHBOARD_TEMPLATE: &str =
 const AKRA_METRICS_TEMPLATE: &str = include_str!("../../../../templates/admin/akra_metrics.html");
 const ADMIN_GRAPHIC_VISUAL_SCRIPT: &str =
     include_str!("../../../../scripts/check_admin_graphic_visual.sh");
+const ADMIN_GRAPHIC_CAPTURE_SCRIPT: &str =
+    include_str!("../../../../scripts/capture_admin_graphic.mjs");
 const GAMEBALJEONGUK_SPRITE_PACK_README: &str =
     include_str!("../../../../templates/admin/resources/gamebaljeonguk_sprite_pack/README.txt");
 const GAMEBALJEONGUK_SPRITE_METADATA: &str = include_str!(
@@ -1251,8 +1253,40 @@ async fn admin_akra_json_snapshot_routes_render_read_only_views() {
             assert!(body["eventFeed"]["eventCursor"].is_null());
             assert!(body["scene"]["stations"].is_array());
             assert!(body["scene"]["actors"].is_array());
+            assert!(body["scene"]["standbyCharacters"].is_array());
             assert!(body["scene"]["diagnostics"].is_array());
             assert_eq!(body["scene"]["actors"].as_array().map(Vec::len), Some(0));
+            assert_eq!(body["scene"]["standbyProfileCount"], 3);
+            assert_eq!(
+                body["scene"]["standbyCharacters"].as_array().map(Vec::len),
+                Some(3)
+            );
+            assert_eq!(
+                body["scene"]["standbyCharacters"][0]["presenceKind"],
+                "configured_standby"
+            );
+            assert_eq!(
+                body["scene"]["standbyCharacters"][0]["staticPose"],
+                "laptop"
+            );
+            for runtime_identity in [
+                "actorId",
+                "taskId",
+                "slotId",
+                "sessionKey",
+                "ownerAgentId",
+                "ownerSessionKey",
+                "leaseGeneration",
+                "branchName",
+                "queueItemId",
+            ] {
+                assert!(
+                    body["scene"]["standbyCharacters"][0]
+                        .get(runtime_identity)
+                        .is_none(),
+                    "standby profile must not fabricate {runtime_identity}"
+                );
+            }
             assert!(
                 body["scene"]["stations"]
                     .as_array()
@@ -2578,6 +2612,9 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "stage-refresh-btn",
         "detailSourceKey(node) === nextKey",
         "data-actor-id",
+        "data-standby-character",
+        "data-presence-kind",
+        "대기 프로필",
         "data-visual-state",
         "data-scene-diagnostics",
         "prependEventRows",
@@ -2662,6 +2699,8 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "Promise.allSettled",
         "inspectScene",
         "buildAgentFrameSets",
+        "makeAtlasFrameByIndex",
+        "STANDBY_LOUNGE_POINTS",
     ] {
         assert!(
             AKRA_DIORAMA_TS.contains(token),
@@ -2796,7 +2835,9 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "type Facing = \"down\" | \"side\" | \"up\"",
         "interface AgentFrameSet",
         "type VisualState",
+        "type PresenceKind",
         "const STATIC_POSE_MANIFEST",
+        "STATIC_POSE_MANIFEST[archetype][pose]",
         "const ARCHETYPE_BY_PROFILE",
         "const drawStaticMarker",
         "const AGENT_FRAME_WIDTH = 128",
@@ -2847,7 +2888,10 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "background-position: -288px 0",
         "final-draft-map-sprite.png",
         "office-map-image",
-        "width: min(100%, 1040px)",
+        "max-width: 1784px",
+        "max-width: 1280px",
+        "align-content: start",
+        "grid-template-columns: 220px minmax(500px, 1280px) 260px",
         "sprite_fd_desk_1.png",
         "sprite_fd_event_log_tower.png",
         "background: var(--office-bg-image) 0 0 / 100% 100% no-repeat",
@@ -2873,6 +2917,11 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "{% for actor in dashboard.scene.actors %}",
         "class=\"scene-object desk agent-{{ actor.seat_index }} severity-{{ actor.severity }}\"",
         "data-actor-id=\"{{ actor.actor_id }}\"",
+        "{% for character in dashboard.scene.standby_characters %}",
+        "data-standby-character=\"true\"",
+        "data-presence-kind=\"{{ character.presence_kind }}\"",
+        "data-scene-standby-index=\"{{ character.location_index }}\"",
+        "대기 프로필 {{ dashboard.scene.standby_characters.len() }}/{{ dashboard.scene.standby_profile_count }}",
         "data-agent-id=\"{{ actor.agent_id }}\"",
         "data-visual-state=\"{{ actor.visual_state }}\"",
         "data-static-pose=\"{{ actor.static_pose }}\"",
@@ -2883,6 +2932,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "data-scene-actor-list",
         "data-scene-diagnostics",
         "GameSceneView",
+        "GameStandbyCharacterView",
         "map_game_scene",
         "분배관 호출",
         "optionalText(distributor.bubbleLabel, \"배포 파이프라인\")",
@@ -2919,6 +2969,12 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "lastLayoutWidth",
         "statusPalette",
         "STATIC_POSE_MANIFEST",
+        "STANDBY_LOUNGE_POINTS",
+        "makeAtlasFrameByIndex",
+        "configured_standby",
+        "sceneStandbyCount",
+        "standbyRuntimeIdentityKeys",
+        "standby_pose_for_avatar_class",
         "requestSceneRender",
         "Promise.allSettled",
         "inspectScene",
@@ -3077,11 +3133,17 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "cookie_jar",
         "--screenshot=",
         "--compact-screenshot=",
+        "--full-hd-screenshot=",
+        "--qhd-screenshot=",
         "admin-graphic-compact.png",
+        "admin-graphic-full-hd.png",
+        "admin-graphic-qhd.png",
+        "mainBottomGap",
         "admin graphic visual contract ok",
     ] {
         assert!(
-            ADMIN_GRAPHIC_VISUAL_SCRIPT.contains(token),
+            ADMIN_GRAPHIC_VISUAL_SCRIPT.contains(token)
+                || ADMIN_GRAPHIC_CAPTURE_SCRIPT.contains(token),
             "visual regression script should keep {token}"
         );
     }
