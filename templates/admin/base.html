@@ -77,14 +77,8 @@
       body.akra-graphic .page-header {
         display: none;
       }
-      body.akra-dashboard-page .admin-layout {
-        grid-template-columns: minmax(0, 1fr);
-      }
-      body.akra-dashboard-page .sidebar {
-        display: none;
-      }
       body.akra-dashboard-page .shell {
-        padding: 6px;
+        padding: 10px 10px 18px;
       }
       .graphic-brand {
         display: grid;
@@ -131,14 +125,14 @@
         vertical-align: middle;
       }
       .graphic-nav {
-        gap: 8px;
+        gap: 5px;
       }
       .graphic-nav a {
         display: grid;
         grid-template-columns: 24px minmax(0, 1fr);
         gap: 9px;
         align-items: center;
-        min-height: 40px;
+        min-height: 36px;
         color: #dce7f6;
       }
       .graphic-nav a.active {
@@ -159,7 +153,7 @@
       }
       .graphic-progress {
         display: grid;
-        gap: 16px;
+        gap: 10px;
         margin-top: auto;
         padding-top: 14px;
         border-top: 1px solid rgba(255,255,255,0.1);
@@ -180,19 +174,6 @@
         color: #071120;
         background: linear-gradient(135deg, #f4c84a, #35d07f);
         font-weight: 900;
-      }
-      .graphic-chip-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-      .graphic-chip {
-        padding: 6px 8px;
-        border-radius: 999px;
-        border: 1px solid rgba(255,255,255,0.18);
-        background: rgba(255,255,255,0.06);
-        color: #dce7f6;
-        font-size: 12px;
       }
       .graphic-note {
         color: #9eb0c6;
@@ -221,6 +202,7 @@
         padding: 20px 16px;
         background: var(--sidebar);
         color: white;
+        overflow-y: auto;
       }
       .brand {
         display: grid;
@@ -518,7 +500,7 @@
         cursor: pointer;
       }
       .entity-row[open] summary {
-        background: #f9fbfd;
+        background: var(--panel-strong);
         border-bottom: 1px solid var(--line-soft);
       }
       .entity-main, .entity-meta {
@@ -540,7 +522,7 @@
       }
       .entity-detail {
         padding: 16px;
-        background: #fbfcfe;
+        background: var(--panel);
       }
       .status-pill {
         border-radius: 999px;
@@ -769,6 +751,11 @@
         padding: 0;
         margin: 0;
       }
+      @media (min-width: 981px) and (max-height: 840px) {
+        body.akra-graphic .graphic-progress {
+          display: none;
+        }
+      }
       @media (max-width: 980px) {
         .admin-layout {
           grid-template-columns: 1fr;
@@ -847,7 +834,7 @@
   {% set is_akra = current_nav == "akra_dashboard" || current_nav == "akra_metrics" || current_nav == "akra_directions" || current_nav == "akra_tasks" %}
   <body class="{% if is_akra %}akra-graphic{% endif %}{% if current_nav == "akra_dashboard" %} akra-dashboard-page{% endif %}">
     <div class="admin-layout">
-      <aside class="sidebar">
+      <aside class="sidebar"{% if is_akra %} lang="ko"{% endif %}>
         {% if is_akra %}
         <div class="graphic-brand">
           <span class="graphic-building" aria-hidden="true"></span>
@@ -858,15 +845,18 @@
         </div>
         <nav class="nav graphic-nav" aria-label="Admin navigation">
           <div class="nav-label">메뉴</div>
-          <a href="/admin/akra" class="{% if current_nav == "akra_dashboard" %}active{% endif %}"><span class="nav-icon">D</span><span>대시보드</span></a>
-          <a href="/admin/akra#pool"><span class="nav-icon">P</span><span>워크트리 풀</span></a>
-          <a href="/admin/akra#agents"><span class="nav-icon">A</span><span>요원 관리</span></a>
-          <a href="/admin/akra/directions" class="{% if current_nav == "akra_directions" %}active{% endif %}"><span class="nav-icon">G</span><span>작전 방향</span></a>
-          <a href="/admin/akra/tasks" class="{% if current_nav == "akra_tasks" %}active{% endif %}"><span class="nav-icon">T</span><span>작업 관리</span></a>
-          <a href="/admin/akra#pipeline"><span class="nav-icon">R</span><span>배포 파이프라인</span></a>
-          <a href="/admin/akra#events"><span class="nav-icon">E</span><span>이벤트 로그</span></a>
-          <a href="/admin/akra/metrics#metrics" class="{% if current_nav == "akra_metrics" %}active{% endif %}"><span class="nav-icon">M</span><span>메트릭스</span></a>
-          <a href="/admin/akra/metrics#system"><span class="nav-icon">C</span><span>시스템</span></a>
+          <a href="/admin/akra" class="{% if current_nav == "akra_dashboard" %}active{% endif %}"{% if current_nav == "akra_dashboard" %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">D</span><span>대시보드</span></a>
+          <a href="/admin/akra#pool"><span class="nav-icon" aria-hidden="true">P</span><span>워크트리 풀</span></a>
+          <a href="/admin/akra#agents"><span class="nav-icon" aria-hidden="true">A</span><span>요원 관리</span></a>
+          <a href="/admin/akra/directions" class="{% if current_nav == "akra_directions" %}active{% endif %}"{% if current_nav == "akra_directions" %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">G</span><span>작전 방향</span></a>
+          <a href="/admin/akra/tasks" class="{% if current_nav == "akra_tasks" %}active{% endif %}"{% if current_nav == "akra_tasks" %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">T</span><span>작업 관리</span></a>
+          <a href="/admin/akra#pipeline"><span class="nav-icon" aria-hidden="true">R</span><span>배포 파이프라인</span></a>
+          <a href="/admin/akra#events"><span class="nav-icon" aria-hidden="true">E</span><span>이벤트 로그</span></a>
+          <a href="/admin/akra/metrics#metrics" class="{% if current_nav == "akra_metrics" %}active{% endif %}"{% if current_nav == "akra_metrics" %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">M</span><span>메트릭스</span></a>
+          <a href="/admin/akra/metrics#system"><span class="nav-icon" aria-hidden="true">C</span><span>시스템</span></a>
+          <div class="nav-label">운영 도구</div>
+          <a href="/admin"><span class="nav-icon" aria-hidden="true">P</span><span>Planning</span></a>
+          <a href="/admin/controls"><span class="nav-icon" aria-hidden="true">O</span><span>Controls</span></a>
         </nav>
         <div class="graphic-progress">
           <div>
@@ -880,20 +870,7 @@
               </div>
             </div>
           </div>
-          <div>
-            <div class="nav-label">바로가기 안내</div>
-            <div class="graphic-chip-row" aria-label="AKRA admin navigation hints">
-              <span class="graphic-chip">대시보드</span>
-              <span class="graphic-chip">워크트리 풀</span>
-              <span class="graphic-chip">작전 방향</span>
-              <span class="graphic-chip">작업 관리</span>
-              <span class="graphic-chip">메트릭스</span>
-            </div>
-          </div>
-          <div>
-            <small>AKRA graphic admin shell</small><br>
-            <small class="graphic-note">이 사이드바는 브랜딩과 탐색을 위한 고정 레이아웃입니다.</small>
-          </div>
+          <small class="graphic-note">상태와 작업 사실은 본문 스냅샷을 기준으로 표시합니다.</small>
         </div>
         {% else %}
         <div class="brand">

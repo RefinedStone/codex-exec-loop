@@ -262,6 +262,7 @@ declare global {
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
       autoStart: false,
+      preserveDrawingBuffer: true,
       hello: false,
     });
     container.appendChild(app.view);
@@ -305,6 +306,8 @@ declare global {
     let resizeObserver: ResizeObserver | null = null;
     let renderRequestId = 0;
     let renderCount = 0;
+    let lastLayoutWidth = 0;
+    let lastLayoutHeight = 0;
     let ready = false;
 
     const syncInspectionDataset = (): void => {
@@ -554,9 +557,16 @@ declare global {
       }
     };
 
-    const syncLayout = (): void => {
+    const syncLayout = (force = false): void => {
       const { width, height } = boardSize();
-      if (width > 0 && height > 0) app.renderer.resize(width, height);
+      const layoutWidth = Math.round(width);
+      const layoutHeight = Math.round(height);
+      if (layoutWidth <= 0 || layoutHeight <= 0) return;
+      const sizeChanged = layoutWidth !== lastLayoutWidth || layoutHeight !== lastLayoutHeight;
+      if (!force && !sizeChanged) return;
+      if (sizeChanged) app.renderer.resize(layoutWidth, layoutHeight);
+      lastLayoutWidth = layoutWidth;
+      lastLayoutHeight = layoutHeight;
       syncStructureSprites();
       syncAgentUnits();
       requestSceneRender();
@@ -570,7 +580,7 @@ declare global {
             .filter((unit): unit is AgentUnit => unit !== null)
         : [];
       syncInspectionDataset();
-      syncLayout();
+      syncLayout(true);
     };
 
     const inspectScene = (): SceneInspection => ({
@@ -626,7 +636,7 @@ declare global {
       window.addEventListener("akra:scene-rendered", rebuildAgentUnits);
       window.addEventListener("resize", onResize);
       if (typeof ResizeObserver !== "undefined") {
-        resizeObserver = new ResizeObserver(syncLayout);
+        resizeObserver = new ResizeObserver(() => syncLayout());
         resizeObserver.observe(boardEl);
       }
     });

@@ -16,11 +16,21 @@
     --game-violet: #9d7cff;
     --office-bg-image: url("/admin/assets/graphics/final-draft-map-sprite.png");
     --agent-sprite-sheet: url("/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png");
-    --office-board-height: clamp(520px, 56vw, 650px);
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
   }
   .akra-game * { min-width: 0; }
+  .akra-page-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .akra-game::before {
     content: "";
     position: fixed;
@@ -53,8 +63,6 @@
   .drawer-close:active,
   .slot-card:active,
   .campaign-lane:active,
-  .attempt-row:active,
-  .intel-card:active,
   .scene-object:active,
   .event-row:active,
   .queue-row[data-detail-type]:active {
@@ -65,13 +73,6 @@
     outline: 3px solid rgba(93, 169, 255, 0.78);
     outline-offset: 3px;
   }
-  .kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(8, minmax(116px, 1fr));
-    gap: 12px;
-    margin: 16px 0 12px;
-  }
-  .kpi,
   .game-panel,
   .office-board,
   .pool-overlay {
@@ -80,56 +81,6 @@
     background: linear-gradient(180deg, var(--game-panel-strong), rgba(8, 18, 32, 0.98));
     box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.6);
   }
-  .kpi {
-    min-height: 96px;
-    padding: 14px;
-    display: grid;
-    gap: 8px;
-    transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease;
-  }
-  .kpi.is-loading { opacity: 0.72; }
-  .kpi.is-fresh { border-color: rgba(93, 169, 255, 0.44); }
-  .kpi.is-error { border-color: rgba(255, 107, 107, 0.58); background: rgba(255, 107, 107, 0.09); }
-  .kpi.has-changed {
-    animation: akraKpiFlash 520ms ease-out;
-  }
-  .kpi .kpi-head {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    color: var(--game-muted);
-    font-size: 12px;
-    font-weight: 700;
-  }
-  .kpi strong {
-    font-size: 26px;
-    line-height: 1;
-  }
-  .kpi small.positive { color: var(--game-green); }
-  .kpi small.negative { color: var(--game-red); }
-  .kpi-icon {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 0;
-    border: 2px solid rgba(255,255,255,0.2);
-    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3);
-    color: #061525;
-    background: var(--game-blue);
-    font-size: 12px;
-    font-weight: 900;
-  }
-  .kpi-icon.green { background: var(--game-green); }
-  .kpi-icon.yellow { background: var(--game-yellow); }
-  .kpi-icon.red { background: var(--game-red); }
-  .kpi-icon.violet { background: var(--game-violet); color: #fff; }
-  .campaign-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.05fr) minmax(280px, 0.85fr);
-    gap: 12px;
-    margin: 0 0 12px;
-  }
   .campaign-summary {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -137,9 +88,7 @@
     margin-bottom: 10px;
   }
   .campaign-summary span,
-  .campaign-lane,
-  .attempt-row,
-  .intel-card {
+  .campaign-lane {
     border: 2px solid rgba(255,255,255,0.12);
     border-radius: 0;
     background: rgba(255,255,255,0.05);
@@ -153,18 +102,14 @@
     font-size: 20px;
     line-height: 1;
   }
-  .campaign-lanes,
-  .attempt-list,
-  .intel-grid {
+  .campaign-lanes {
     display: grid;
     gap: 8px;
   }
   .campaign-lanes {
     grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
   }
-  .campaign-lane,
-  .attempt-row,
-  .intel-card {
+  .campaign-lane {
     appearance: none;
     width: 100%;
     color: inherit;
@@ -179,11 +124,7 @@
     padding: 10px;
   }
   .campaign-lane strong,
-  .campaign-lane small,
-  .attempt-row strong,
-  .attempt-row small,
-  .intel-card strong,
-  .intel-card small {
+  .campaign-lane small {
     display: block;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -199,42 +140,10 @@
     font-weight: 900;
     white-space: nowrap;
   }
-  .attempt-row {
-    display: grid;
-    grid-template-columns: 86px minmax(0, 1fr) 96px;
-    gap: 10px;
-    align-items: center;
-    padding: 10px;
-  }
-  .attempt-state {
-    padding: 6px 8px;
-    border: 2px solid rgba(93,169,255,0.34);
-    color: var(--game-blue);
-    background: rgba(93,169,255,0.1);
-    text-align: center;
-    font-size: 11px;
-    font-weight: 900;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .intel-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .intel-card {
-    padding: 10px;
-  }
-  .campaign-lane.severity-success,
-  .attempt-row.severity-success,
-  .intel-card.severity-success { border-color: rgba(53, 208, 127, 0.44); background: rgba(53, 208, 127, 0.08); }
-  .campaign-lane.severity-warning,
-  .attempt-row.severity-warning,
-  .intel-card.severity-warning { border-color: rgba(245, 200, 75, 0.44); background: rgba(245, 200, 75, 0.09); }
-  .campaign-lane.severity-danger,
-  .attempt-row.severity-danger,
-  .intel-card.severity-danger { border-color: rgba(255, 107, 107, 0.48); background: rgba(255, 107, 107, 0.1); }
-  .campaign-lane.severity-info,
-  .attempt-row.severity-info,
-  .intel-card.severity-info { border-color: rgba(93, 169, 255, 0.38); background: rgba(93, 169, 255, 0.08); }
+  .campaign-lane.severity-success { border-color: rgba(53, 208, 127, 0.44); background: rgba(53, 208, 127, 0.08); }
+  .campaign-lane.severity-warning { border-color: rgba(245, 200, 75, 0.44); background: rgba(245, 200, 75, 0.09); }
+  .campaign-lane.severity-danger { border-color: rgba(255, 107, 107, 0.48); background: rgba(255, 107, 107, 0.1); }
+  .campaign-lane.severity-info { border-color: rgba(93, 169, 255, 0.38); background: rgba(93, 169, 255, 0.08); }
   .board-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -261,7 +170,6 @@
   .scene-diagnostics span { color: var(--game-muted); }
   .office-board {
     position: relative;
-    min-height: var(--office-board-height);
     overflow: hidden;
     isolation: isolate;
     background: var(--office-bg-image) 0 0 / 100% 100% no-repeat #0a1628;
@@ -303,8 +211,6 @@
       repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 6px);
     opacity: 0.22;
     mix-blend-mode: screen;
-    transform: translateX(-42%);
-    animation: akraStageScan 8s linear infinite;
   }
   .stage-hud {
     position: absolute;
@@ -428,8 +334,6 @@
   .slot-card.is-selected,
   .scene-object.is-selected,
   .campaign-lane.is-selected,
-  .attempt-row.is-selected,
-  .intel-card.is-selected,
   .event-row.is-selected,
   .queue-row.is-selected {
     border-color: rgba(245, 200, 75, 0.72);
@@ -446,17 +350,6 @@
   .slot-card.severity-warning { border-color: rgba(245, 200, 75, 0.38); background: rgba(245, 200, 75, 0.1); }
   .slot-card.severity-danger { border-color: rgba(255, 107, 107, 0.38); background: rgba(255, 107, 107, 0.1); }
   .slot-card.severity-muted { border-color: rgba(160, 172, 190, 0.25); background: rgba(160, 172, 190, 0.08); }
-  .mini-server {
-    height: 48px;
-    border-radius: 0;
-    border: 2px solid rgba(255,255,255,0.16);
-    background:
-      radial-gradient(circle at 24px 11px, var(--game-green) 0 3px, transparent 4px),
-      radial-gradient(circle at 34px 25px, var(--game-blue) 0 3px, transparent 4px),
-      linear-gradient(90deg, #263d5d 0 48%, #0f1b2d 48% 100%);
-    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.1);
-    animation: akraServerBlink 1.7s step-end infinite;
-  }
   .scene-object {
     appearance: none;
     color: inherit;
@@ -659,9 +552,6 @@
     align-items: start;
     cursor: pointer;
   }
-  .event-row:first-of-type {
-    animation: akraEventPulse 2.4s ease-in-out infinite;
-  }
   .event-row.is-new {
     animation: akraNewEvent 1.2s ease-out;
   }
@@ -689,30 +579,6 @@
   .event-row.severity-danger .event-icon { background: var(--game-red); color: #fff; }
   .event-row.severity-warning .event-icon { background: var(--game-yellow); }
   .event-row.severity-success .event-icon { background: var(--game-green); }
-  .radar {
-    position: relative;
-    width: 174px;
-    height: 136px;
-    margin: 8px auto 2px;
-    background:
-      radial-gradient(circle, rgba(53,208,127,0.16) 0 28%, transparent 29%),
-      linear-gradient(30deg, transparent 48%, rgba(53,208,127,0.32) 49% 51%, transparent 52%),
-      linear-gradient(90deg, transparent 48%, rgba(53,208,127,0.24) 49% 51%, transparent 52%),
-      linear-gradient(150deg, transparent 48%, rgba(53,208,127,0.24) 49% 51%, transparent 52%);
-    clip-path: polygon(50% 5%, 94% 35%, 78% 92%, 22% 92%, 6% 35%);
-    border: 1px solid rgba(53,208,127,0.34);
-  }
-  .radar::after {
-    content: "";
-    position: absolute;
-    inset: 26px 36px;
-    background: rgba(53,208,127,0.22);
-    clip-path: polygon(50% 0, 88% 40%, 72% 96%, 24% 82%, 8% 38%);
-  }
-  .bottom-grid {
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.05fr) minmax(0, 0.9fr);
-    margin-top: 12px;
-  }
   .progress-track {
     width: 100%;
     height: 12px;
@@ -728,14 +594,6 @@
     border-radius: 0;
     background: var(--game-green);
     box-shadow: inset -2px -2px 0 rgba(0,0,0,0.2), inset 2px 2px 0 rgba(255,255,255,0.3);
-  }
-  .progress-fill::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
-    transform: translateX(-120%);
-    animation: akraStepSweep 1.8s linear infinite;
   }
   .timeline {
     display: grid;
@@ -803,14 +661,6 @@
   }
   .step.done::before,
   .step.active::before { background: var(--game-green); }
-  .step.active::after {
-    content: "";
-    position: absolute;
-    inset: 2px;
-    background: linear-gradient(90deg, transparent, rgba(53, 208, 127, 0.3), transparent);
-    transform: translateX(-120%);
-    animation: akraStepSweep 1.4s linear infinite;
-  }
   .step.blocked,
   .step.failed {
     color: var(--game-ink);
@@ -855,40 +705,6 @@
     background: rgba(93,169,255,0.12);
     text-align: center;
     font-size: 12px;
-  }
-  .badges,
-  .system-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .badge,
-  .system-chip {
-    padding: 7px 9px;
-    border: 2px solid rgba(53, 208, 127, 0.42);
-    border-radius: 0;
-    color: var(--game-green);
-    background: rgba(53, 208, 127, 0.08);
-    font-size: 12px;
-  }
-  .system-chip {
-    flex: 1 1 116px;
-    border-radius: 0;
-    text-align: center;
-  }
-  .event-detail {
-    margin: 12px 0;
-    padding: 12px;
-    border: 2px solid rgba(130, 155, 193, 0.22);
-    border-radius: 0;
-    background: rgba(255,255,255,0.04);
-  }
-  .event-detail[hidden] { display: none; }
-  .event-detail pre {
-    margin: 8px 0 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    color: var(--game-muted);
   }
   .admin-detail-drawer {
     position: fixed;
@@ -990,85 +806,22 @@
   .poll-status.is-error {
     color: var(--game-yellow);
   }
-  .skeleton-line {
-    min-height: 1em;
-    border-radius: 999px;
-    background: linear-gradient(90deg, rgba(255,255,255,0.07), rgba(255,255,255,0.16), rgba(255,255,255,0.07));
-    background-size: 220% 100%;
-    animation: akraSkeleton 1.2s linear infinite;
-  }
-  @keyframes akraSkeleton {
-    from { background-position: 220% 0; }
-    to { background-position: -220% 0; }
-  }
-  @keyframes akraKpiFlash {
-    from { box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 0 0 0 0 rgba(53,208,127,0.55); }
-    to { box-shadow: inset 2px 2px 0 rgba(255,255,255,0.1), inset -2px -2px 0 rgba(0,0,0,0.4), 0 0 0 16px rgba(53,208,127,0); }
-  }
-  @keyframes akraStageScan {
-    from { transform: translateX(-42%); }
-    to { transform: translateX(42%); }
-  }
-  @keyframes akraServerBlink {
-    0%, 48% { filter: brightness(1); }
-    50%, 54% { filter: brightness(1.45); }
-    56%, 100% { filter: brightness(1); }
-  }
-  @keyframes akraEventPulse {
-    0%, 100% { background: transparent; }
-    50% { background: rgba(93, 169, 255, 0.08); }
-  }
   @keyframes akraNewEvent {
     from { transform: translateY(-8px); background: rgba(53, 208, 127, 0.16); }
     to { transform: translateY(0); background: transparent; }
   }
-  @keyframes akraStepSweep {
-    from { transform: translateX(-120%); }
-    to { transform: translateX(120%); }
-  }
   .akra-game {
     display: grid;
-    gap: 10px;
+    gap: 8px;
     min-height: calc(100vh - 12px);
   }
   .draft-topbar {
     display: grid;
-    grid-template-columns: 292px minmax(210px, 0.9fr) repeat(3, minmax(170px, 0.7fr)) 244px;
-    gap: 12px;
+    grid-template-columns: minmax(210px, 1.35fr) repeat(3, minmax(112px, 0.68fr)) minmax(178px, 0.9fr);
+    gap: 8px;
     align-items: stretch;
   }
-  .draft-nav {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .draft-nav a {
-    display: flex;
-    min-width: 0;
-    min-height: 40px;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid rgba(0, 205, 255, 0.28);
-    border-radius: 6px;
-    color: #dce7f6;
-    background: rgba(7, 26, 43, 0.92);
-    text-decoration: none;
-  }
-  .draft-nav a[aria-current="page"] {
-    border-color: rgba(53, 208, 127, 0.62);
-    color: #ffffff;
-    background: rgba(53, 208, 127, 0.13);
-  }
-  .draft-nav a:hover {
-    background: rgba(93, 169, 255, 0.16);
-  }
-  .draft-nav a:focus-visible {
-    outline: 3px solid #f4c84a;
-    outline-offset: 2px;
-  }
-  .draft-brand,
+  .command-summary,
   .draft-stat,
   .draft-clock,
   .game-panel {
@@ -1080,63 +833,122 @@
       inset 0 0 0 1px rgba(98, 210, 255, 0.06),
       0 10px 22px rgba(0, 0, 0, 0.28);
   }
-  .draft-brand {
+  .command-summary {
     display: grid;
-    grid-template-columns: 54px minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
     align-items: center;
     min-height: 58px;
-    padding: 8px 10px;
-    border-color: transparent;
-    background: transparent;
-    box-shadow: none;
+    padding: 9px 14px;
+    border-color: rgba(53, 208, 127, 0.42);
   }
-  .draft-brand-mark {
-    position: relative;
-    width: 44px;
-    height: 44px;
-    border: 2px solid rgba(72, 210, 255, 0.64);
-    border-radius: 7px;
-    background:
-      radial-gradient(circle at 50% 50%, #071120 0 7px, transparent 8px),
-      linear-gradient(180deg, #55d4ff 0 44%, #0876a5 44% 100%);
-    box-shadow: inset -3px -3px 0 rgba(0,0,0,0.28), inset 3px 3px 0 rgba(255,255,255,0.18);
+  .command-summary.state-blocked,
+  .command-summary.state-degraded {
+    border-color: rgba(255, 107, 107, 0.58);
   }
-  .draft-brand-mark::before,
-  .draft-brand-mark::after {
-    content: "";
-    position: absolute;
-    top: -7px;
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: #ff4c5f;
-    box-shadow: 0 0 0 2px rgba(0,0,0,0.28);
-  }
-  .draft-brand-mark::before { left: 9px; }
-  .draft-brand-mark::after { right: 9px; background: #35d07f; }
-  .draft-brand h1 {
-    margin: 0;
-    font-size: 26px;
-    line-height: 1;
-    letter-spacing: 0;
-  }
-  .draft-brand small {
-    display: block;
-    margin-top: 4px;
-    color: #a8bad0;
+  .command-summary small {
+    color: var(--game-muted);
     font-size: 11px;
+  }
+  .command-summary strong {
+    margin: 0;
+    color: var(--game-ink);
+    font-size: 22px;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .command-summary .command-revision {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+    color: var(--game-blue);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .command-alert {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px 14px;
+    align-items: center;
+    min-height: 46px;
+    padding: 8px 12px;
+    border: 1px solid rgba(93, 169, 255, 0.34);
+    border-left: 4px solid var(--game-blue);
+    border-radius: 6px;
+    color: var(--game-ink);
+    background: rgba(8, 23, 39, 0.94);
+  }
+  .command-alert.state-blocked,
+  .command-alert.state-degraded {
+    border-left-color: var(--game-red);
+  }
+  .command-alert-label {
+    color: var(--game-yellow);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+  .command-alert-copy {
+    display: grid;
+    gap: 2px;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    line-height: 1.4;
+  }
+  .command-alert-copy strong {
+    font-size: 13px;
+  }
+  .command-alert-copy small {
+    color: var(--game-muted);
+    overflow-wrap: anywhere;
+  }
+  .command-diagnostic {
+    margin-top: 2px;
+    color: var(--game-muted);
+    font-size: 11px;
+  }
+  .command-diagnostic[hidden] {
+    display: none;
+  }
+  .command-diagnostic summary {
+    width: fit-content;
+    color: var(--game-blue);
+    cursor: pointer;
+  }
+  .command-diagnostic summary:focus-visible {
+    outline: 3px solid var(--game-yellow);
+    outline-offset: 2px;
+  }
+  .command-diagnostic p {
+    margin: 6px 0 0;
+    padding: 7px 9px;
+    border-left: 2px solid rgba(93, 169, 255, 0.38);
+    background: rgba(4, 15, 27, 0.64);
+    overflow-wrap: anywhere;
+  }
+  .command-alert a {
+    padding: 7px 9px;
+    border: 1px solid rgba(93, 169, 255, 0.38);
+    border-radius: 4px;
+    color: var(--game-ink);
+    background: rgba(93, 169, 255, 0.12);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .command-alert a:hover {
+    border-color: rgba(53, 208, 127, 0.56);
+    background: rgba(53, 208, 127, 0.13);
+  }
+  .command-alert a:focus-visible {
+    outline: 3px solid var(--game-yellow);
+    outline-offset: 2px;
   }
   .draft-stat {
     display: grid;
     grid-template-columns: 36px minmax(0, 1fr) auto;
-    gap: 12px;
+    gap: 8px;
     align-items: center;
     min-height: 58px;
-    padding: 10px 16px;
-  }
-  .draft-stat-wide {
-    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 10px;
   }
   .draft-stat-icon {
     display: grid;
@@ -1161,26 +973,21 @@
     color: #bdcadb;
     font-size: 12px;
   }
-  .draft-progress {
-    grid-column: 1 / -1;
-    height: 6px;
-    border-radius: 0;
-    background: rgba(255,255,255,0.11);
-    overflow: hidden;
-  }
-  .draft-progress span {
-    display: block;
-    width: 0;
-    height: 100%;
-    background: var(--game-muted);
-  }
   .draft-clock {
     display: grid;
-    grid-template-columns: 10px minmax(0, 1fr) 92px 34px;
-    gap: 12px;
+    grid-template-columns: 10px auto minmax(64px, 1fr) 30px;
+    gap: 6px;
     align-items: center;
     min-height: 58px;
-    padding: 10px 14px;
+    padding: 10px;
+  }
+  .draft-clock small {
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .draft-clock strong {
+    font-size: 16px;
+    text-align: right;
   }
   .live-dot {
     width: 10px;
@@ -1200,11 +1007,16 @@
     font: inherit;
     cursor: pointer;
   }
+  .clock-gear:disabled,
+  .stage-refresh-btn:disabled {
+    opacity: 0.62;
+    cursor: wait;
+  }
   .draft-main-grid {
     display: grid;
-    grid-template-columns: 244px minmax(0, 1fr) 250px;
+    grid-template-columns: 220px minmax(500px, 1fr) 260px;
     gap: 12px;
-    align-items: stretch;
+    align-items: start;
   }
   .draft-main-grid .board-row {
     justify-self: center;
@@ -1273,8 +1085,8 @@
     padding: 14px;
   }
   .slot-card {
-    grid-template-columns: 46px minmax(0, 1fr) 48px;
-    min-height: 80px;
+    grid-template-columns: 46px minmax(0, 1fr);
+    min-height: 74px;
     gap: 10px;
     border-radius: 6px;
     border-width: 1px;
@@ -1324,50 +1136,6 @@
   .slot-card.severity-warning .slot-state { color: var(--game-yellow); }
   .slot-card.severity-danger .slot-state { color: var(--game-red); }
   .slot-card.severity-info .slot-state { color: var(--game-blue); }
-  .slot-meter {
-    grid-column: 2 / -1;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 34px;
-    gap: 8px;
-    align-items: center;
-  }
-  .slot-meter-track {
-    height: 5px;
-    background: rgba(124, 151, 177, 0.22);
-  }
-  .slot-meter-fill {
-    display: block;
-    width: 0;
-    height: 100%;
-    background: var(--game-muted);
-  }
-  .slot-progress-label {
-    color: #c9d6e7;
-    font-size: 11px;
-    text-align: right;
-  }
-  .system-list {
-    display: grid;
-    gap: 8px;
-  }
-  .system-meter {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 48px;
-    gap: 8px;
-    align-items: center;
-    color: #b9c8da;
-    font-size: 12px;
-  }
-  .system-meter > span {
-    grid-column: 1 / -1;
-    height: 5px;
-    background: rgba(124,151,177,0.22);
-  }
-  .system-meter > span b {
-    display: block;
-    height: 100%;
-    background: #32d98d;
-  }
   .scene-object {
     z-index: 5;
     border: 0;
@@ -1478,112 +1246,46 @@
   .right-stack #events {
     max-height: 420px;
   }
-  .notice-card {
-    min-height: 174px;
+  .right-stack #campaign {
+    max-height: 300px;
+    overflow: auto;
   }
-  .notice-body {
+  .right-stack #campaign .campaign-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .right-stack #campaign .panel-title {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 54px;
-    gap: 10px;
-    align-items: center;
-    min-height: 108px;
-    padding: 14px 12px;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 6px;
-    background: rgba(7, 28, 43, 0.72);
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    align-items: start;
+    justify-content: stretch;
   }
-  .notice-mascot {
-    display: grid;
-    place-items: center;
-    width: 48px;
-    height: 48px;
-    border-radius: 6px;
-    color: #05111d;
-    background: #f4f7ff;
-    font-size: 25px;
-  }
-  .draft-pager {
-    display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) 40px;
-    gap: 10px;
-    align-items: center;
-    margin-top: 12px;
-  }
-  .draft-pager button {
-    height: 28px;
-    border: 1px solid rgba(98, 213, 255, 0.2);
-    border-radius: 5px;
-    color: #dfeeff;
-    background: rgba(98, 213, 255, 0.08);
-    font: inherit;
-  }
-  .draft-pager span {
-    color: #c5d4e5;
-    text-align: center;
-  }
-  .bottom-grid {
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.1fr) minmax(0, 1fr);
-    margin-top: 0;
-  }
-  .system-summary {
-    min-height: 144px;
-  }
-  .system-summary-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 6px;
-    overflow: hidden;
-  }
-  .system-summary-item {
-    display: grid;
-    grid-template-columns: 32px minmax(0, 1fr);
-    gap: 10px;
-    align-items: center;
-    min-height: 70px;
-    padding: 10px;
-    border-right: 1px solid rgba(255,255,255,0.08);
-  }
-  .system-summary-item:last-child {
-    border-right: 0;
-  }
-  .system-summary-icon {
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 5px;
-    background: rgba(93, 169, 255, 0.16);
-  }
-  .system-summary-item strong,
-  .system-summary-item small {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .right-stack #campaign .panel-title h3 {
     white-space: nowrap;
   }
-  .system-summary-item strong {
-    font-size: 14px;
+  .right-stack #campaign .panel-title small {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
-  .system-summary-item .progress-track {
-    height: 5px;
-    margin-top: 7px;
-    border-width: 0;
+  .bottom-grid {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr);
+    margin-top: 0;
   }
-  @media (max-width: 1320px) {
-    .draft-topbar {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+  @media (max-width: 1360px) {
+    .draft-main-grid {
+      grid-template-columns: 210px minmax(0, 1fr);
     }
-    .draft-brand {
-      grid-column: 1 / -1;
-    }
-    .draft-main-grid,
-    .board-row,
-    .bottom-grid { grid-template-columns: 1fr; }
-    .left-stack,
     .right-stack {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-column: 1 / -1;
+      grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    }
+    .right-stack #campaign,
+    .right-stack #events {
+      max-height: 320px;
     }
   }
   @media (max-width: 860px) {
@@ -1594,12 +1296,8 @@
     .pipeline,
     .timeline { grid-template-columns: 1fr; }
     .left-stack,
-    .right-stack,
-    .system-summary-grid {
+    .right-stack {
       grid-template-columns: 1fr;
-    }
-    .draft-nav {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .office-board {
       aspect-ratio: 1671 / 941;
@@ -1675,29 +1373,24 @@
 
 <section
   class="akra-game"
+  lang="ko"
   aria-label="게임발전국 AKRA Admin Control Center"
   data-admin-graphic
   data-poll-interval-ms="{{ polling_interval_ms }}"
   data-latest-event-sequence="{{ dashboard.event_feed.newest_sequence.unwrap_or(0) }}"
-  data-event-cursor="{{ dashboard.event_feed.event_cursor_data }}"
   data-event-total-count="{{ dashboard.event_feed.total_event_count }}"
 >
+  <h1 class="akra-page-title">게임발전국 AKRA Admin Control Center</h1>
   <div class="draft-topbar" aria-label="게임발전국 operation summary">
-    <div class="draft-brand">
-      <span class="draft-brand-mark" aria-hidden="true"></span>
-      <div>
-        <h1>게임발전국</h1>
-        <small>AKRA ADMIN CONTROL CENTER</small>
-      </div>
-    </div>
-    <div class="draft-stat draft-stat-wide" aria-label="전체 진행률">
-      <small>전체 진행률</small>
-      <strong>미집계</strong>
-      <span class="draft-progress" aria-hidden="true"><span></span></span>
+    <div class="command-summary state-{{ dashboard.workspace.readiness }}" aria-label="운영 준비 상태">
+      <small>COMMAND STATUS</small>
+      <strong data-command-readiness>{{ dashboard.workspace.readiness }}</strong>
+      <small data-command-branch>{{ dashboard.workspace.branch.as_deref().unwrap_or("not-a-git-worktree") }}</small>
+      <small class="command-revision" data-planning-revision>{{ dashboard.planning_revision_label }}</small>
     </div>
     <div class="draft-stat" aria-label="가동 중 에이전트">
       <span class="draft-stat-icon" aria-hidden="true">A</span>
-      <small>가동 중 에이전트</small>
+      <small>가동 요원</small>
       <strong data-summary-active-agents>{{ dashboard.kpis.active_agents }} / {{ dashboard.kpis.total_agents }}</strong>
     </div>
     <div class="draft-stat" aria-label="대기 슬롯">
@@ -1718,17 +1411,30 @@
     </div>
   </div>
 
-  <nav class="draft-nav" aria-label="AKRA dashboard navigation">
-    <a href="/admin/akra" aria-current="page"><span class="nav-icon" aria-hidden="true">D</span><span>대시보드</span></a>
-    <a href="/admin/akra/directions"><span class="nav-icon" aria-hidden="true">G</span><span>작전 방향</span></a>
-    <a href="/admin/akra/tasks"><span class="nav-icon" aria-hidden="true">T</span><span>작업 관리</span></a>
-    <a href="/admin/akra/metrics"><span class="nav-icon" aria-hidden="true">M</span><span>메트릭스</span></a>
-    <a href="/admin"><span class="nav-icon" aria-hidden="true">P</span><span>Planning</span></a>
-    <a href="/admin/controls"><span class="nav-icon" aria-hidden="true">C</span><span>Controls</span></a>
-  </nav>
+  <section
+    class="command-alert state-{{ dashboard.workspace.readiness }}"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  >
+    <span class="command-alert-label">OPERATOR BRIEF</span>
+    <div class="command-alert-copy">
+      <strong data-operational-notice>{{ dashboard.workspace.readiness_notice }}</strong>
+      <small data-operational-action>{{ dashboard.workspace.blocked_action }}</small>
+      <details class="command-diagnostic" data-operational-detail-group{% if dashboard.workspace.top_notice.is_none() %} hidden{% endif %}>
+        <summary>최근 진단 보기</summary>
+        {% if let Some(top_notice) = dashboard.workspace.top_notice %}
+        <p data-operational-detail>{{ top_notice }}</p>
+        {% else %}
+        <p data-operational-detail></p>
+        {% endif %}
+      </details>
+    </div>
+    <a href="/admin/controls">운영 도구</a>
+  </section>
 
   <div class="draft-main-grid">
-    <aside class="left-stack" aria-label="워크트리 풀과 시스템 상태">
+    <aside class="left-stack" aria-label="워크트리 풀">
       <section class="game-panel pool-overlay" id="pool">
         <div class="panel-title">
           <h3>워크트리 풀</h3>
@@ -1765,23 +1471,8 @@
             <small>{{ slot.task_id.as_deref().unwrap_or("-") }}</small>
             <small class="slot-state">{{ slot.label }}</small>
           </div>
-          <span class="slot-progress-label">미집계</span>
-          <span class="slot-meter" aria-hidden="true">
-            <span class="slot-meter-track"><span class="slot-meter-fill"></span></span>
-          </span>
         </button>
         {% endfor %}
-      </section>
-
-      <section class="game-panel" id="system-mini">
-        <div class="panel-title"><h3>시스템 상태</h3><small data-summary-readiness>{{ dashboard.workspace.readiness }}</small></div>
-        <div class="system-list" aria-label="compact system status">
-          <div class="system-meter is-uncollected"><small>서버 가동률</small><strong>미집계</strong></div>
-          <div class="system-meter is-uncollected"><small>API 처리속도</small><strong>미집계</strong></div>
-          <div class="system-meter is-uncollected"><small>네트워크 대기</small><strong>미집계</strong></div>
-          <div class="system-meter is-uncollected"><small>오류율</small><strong>미집계</strong></div>
-          <div class="system-row"><small>readiness snapshot</small><strong data-summary-readiness>{{ dashboard.workspace.readiness }}</strong></div>
-        </div>
       </section>
     </aside>
 
@@ -1943,9 +1634,49 @@
       </section>
     </div>
 
-    <aside class="right-stack" aria-label="이벤트와 공지">
+    <aside class="right-stack" aria-label="임무 현황과 이벤트">
+      <section class="game-panel" id="campaign">
+        <div class="panel-title"><h3>임무 현황</h3><small>{{ dashboard.campaign.summary }}</small></div>
+        <div class="campaign-summary" aria-label="임무 현황 요약">
+          <span><small>활성 레인</small><strong>{{ dashboard.campaign.active_lane_count }}</strong></span>
+          <span><small>정보 신호</small><strong>{{ dashboard.campaign.signal_count }}</strong></span>
+        </div>
+        {% if dashboard.campaign.lane_cards.is_empty() %}
+        <p>{{ dashboard.agents.empty_state }}</p>
+        {% else %}
+        <div class="campaign-lanes">
+          {% for lane in dashboard.campaign.lane_cards %}
+          <button
+            type="button"
+            class="campaign-lane severity-{{ lane.severity }}"
+            data-agent-id="{{ lane.agent_id }}"
+            data-slot-id="{{ lane.slot_id }}"
+            data-detail-type="campaignLane"
+            data-detail-title="시도 레인 · {{ lane.agent_id }}"
+            data-detail-subtitle="{{ lane.class_label }} / {{ lane.slot_id }}"
+            data-detail-state="{{ lane.state }}"
+            data-detail-severity="{{ lane.severity }}"
+            data-detail-agent="{{ lane.agent_id }}"
+            data-detail-slot="{{ lane.slot_id }}"
+            data-detail-task="{{ lane.task_title }}"
+            data-detail-progress="{{ lane.progress_label }}"
+            data-detail-summary="{{ lane.summary }}"
+          >
+            <span>
+              <strong>{{ lane.agent_id }} · {{ lane.class_label }}</strong>
+              <small>{{ lane.task_title }}</small>
+              <small>{{ lane.summary }}</small>
+            </span>
+            <span class="score-chip">{{ lane.state }}</span>
+          </button>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </section>
+
       <section class="game-panel" id="events">
         <div class="panel-title"><h3>실시간 이벤트</h3><small data-event-feed-status>{{ dashboard.event_feed.status_label }}</small></div>
+        <div class="event-list" data-event-list>
         {% if dashboard.events.is_empty() %}
         <p data-event-empty>{{ dashboard.event_feed.empty_state }}</p>
         {% else %}
@@ -1953,10 +1684,7 @@
         <button
           type="button"
           class="event-row severity-{{ event.severity }}"
-          data-event-detail="{{ event.summary }}"
-          data-event-kind="{{ event.event_kind }}"
           data-event-sequence="{{ event.sequence }}"
-          data-event-target="{{ event.projection_kind }}:{{ event.projection_key }}"
           data-projection-kind="{{ event.projection_kind }}"
           data-projection-key="{{ event.projection_key }}"
           data-detail-type="event"
@@ -1978,21 +1706,6 @@
         </button>
         {% endfor %}
         {% endif %}
-        <div class="event-detail" data-event-drawer hidden>
-          <strong data-event-drawer-title>event detail</strong>
-          <pre data-event-drawer-body></pre>
-        </div>
-      </section>
-
-      <section class="game-panel notice-card" id="notices">
-        <div class="panel-title"><h3>운영 알림</h3><small>snapshot</small></div>
-        <div class="notice-body">
-          {% if let Some(top_notice) = dashboard.workspace.top_notice %}
-          <p data-operational-notice>{{ top_notice }}</p>
-          {% else %}
-          <p data-operational-notice>{{ dashboard.workspace.readiness_notice }}</p>
-          {% endif %}
-          <span class="notice-mascot" aria-hidden="true">M</span>
         </div>
       </section>
     </aside>
@@ -2067,34 +1780,25 @@
       {% endif %}
     </section>
 
-    <section class="game-panel system-summary" id="system">
-      <div class="panel-title"><h3>시스템 상태 요약</h3><small>수집 여부</small></div>
-      <div class="system-summary-grid">
-        <div class="system-summary-item is-uncollected">
-          <span class="system-summary-icon" aria-hidden="true">C</span>
-          <div><small>CPU 사용률</small><strong>미집계</strong></div>
-        </div>
-        <div class="system-summary-item is-uncollected">
-          <span class="system-summary-icon" aria-hidden="true">M</span>
-          <div><small>메모리 사용률</small><strong>미집계</strong></div>
-        </div>
-        <div class="system-summary-item is-uncollected">
-          <span class="system-summary-icon" aria-hidden="true">N</span>
-          <div><small>네트워크</small><strong>미집계</strong></div>
-        </div>
-        <div class="system-summary-item is-uncollected">
-          <span class="system-summary-icon" aria-hidden="true">D</span>
-          <div><small>DB 상태</small><strong>미집계</strong></div>
-        </div>
-      </div>
-    </section>
   </div>
 
-  <aside class="admin-detail-drawer" id="akra-detail-drawer" data-detail-drawer hidden aria-live="polite" aria-hidden="true">
+  <aside
+    class="admin-detail-drawer"
+    id="akra-detail-drawer"
+    data-detail-drawer
+    role="dialog"
+    aria-modal="false"
+    aria-labelledby="akra-detail-drawer-title"
+    aria-describedby="akra-detail-drawer-subtitle"
+    aria-live="polite"
+    aria-hidden="true"
+    tabindex="-1"
+    hidden
+  >
     <div class="drawer-head">
       <div>
-        <h3 data-detail-drawer-title>상세</h3>
-        <small data-detail-drawer-subtitle>선택한 항목</small>
+        <h3 id="akra-detail-drawer-title" data-detail-drawer-title>상세</h3>
+        <small id="akra-detail-drawer-subtitle" data-detail-drawer-subtitle>선택한 항목</small>
       </div>
       <button type="button" class="drawer-close" data-detail-close aria-label="Close detail">×</button>
     </div>

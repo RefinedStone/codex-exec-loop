@@ -12,6 +12,7 @@ fi
 port="${ADMIN_GRAPHIC_PORT:-18444}"
 capture_mode="${ADMIN_GRAPHIC_CAPTURE:-auto}"
 output_dir="${ADMIN_GRAPHIC_OUTPUT_DIR:-target/admin-graphic-visual}"
+tmp_root="${ADMIN_GRAPHIC_TMP_DIR:-${repo_root}/target/admin-graphic-tmp}"
 server_log="${output_dir}/akra-admin.log"
 admin_html="${output_dir}/admin.html"
 metrics_html="${output_dir}/admin-metrics.html"
@@ -32,13 +33,14 @@ final_draft_tower_asset="${output_dir}/sprite_fd_event_log_tower.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
 screenshot_path="${output_dir}/admin-graphic.png"
-mobile_screenshot_path="${output_dir}/admin-graphic-mobile.png"
+compact_screenshot_path="${output_dir}/admin-graphic-compact.png"
 admin_token=""
 admin_host=""
 auth_tmp_dir=""
 cookie_jar=""
 
 mkdir -p "${output_dir}"
+mkdir -p "${tmp_root}"
 
 curl_no_config() {
   if [[ -n "${admin_host}" ]]; then
@@ -182,7 +184,7 @@ capture_with_browser() {
     --browser="${browser}" \
     --url="${url}" \
     --screenshot="${screenshot_path}" \
-    --mobile-screenshot="${mobile_screenshot_path}"
+    --compact-screenshot="${compact_screenshot_path}"
 }
 
 cleanup() {
@@ -204,7 +206,7 @@ if [[ "${ADMIN_GAME_BUILD:-1}" != "0" ]]; then
   npm --prefix assets/admin/game run build
 fi
 
-auth_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/akra-admin-visual-auth.XXXXXX")"
+auth_tmp_dir="$(mktemp -d "${tmp_root}/akra-admin-visual-auth.XXXXXX")"
 chmod 700 "${auth_tmp_dir}"
 cookie_jar="${auth_tmp_dir}/cookies.txt"
 login_form="${auth_tmp_dir}/login-form.txt"
@@ -305,30 +307,32 @@ for token in \
   'data-detail-worktree="' \
   'data-detail-owner="' \
   'title="슬롯' \
+  'id="campaign"' \
   'id="events"' \
-  'id="notices"' \
-  'id="system-mini"' \
   'id="pipeline"' \
-  '운영 알림' \
-  '시스템 상태 요약' \
+  'COMMAND STATUS' \
+  'OPERATOR BRIEF' \
+  'data-command-readiness' \
+  'data-operational-action' \
+  '임무 현황' \
   'AKRA ADMIN CONTROL CENTER' \
-  'class="draft-nav" aria-label="AKRA dashboard navigation"' \
-  'href="/admin/akra" aria-current="page"' \
-  'href="/admin/akra/metrics"' \
+  'class="nav graphic-nav" aria-label="Admin navigation"' \
+  'href="/admin/akra" class="active" aria-current="page"' \
+  'href="/admin/akra/metrics#metrics"' \
   'href="/admin/controls"' \
   'href="/admin/akra/directions"' \
   'href="/admin/akra/tasks"' \
   '작전 방향' \
   'MISSION FLOW' \
   'stage-refresh-btn' \
-  '--office-board-height: clamp(520px, 56vw, 650px)' \
   '/admin/assets/game/akra-diorama.js' \
   'data-admin-graphic' \
   'data-planning-revision' \
   'data-poll-interval-ms' \
   'data-focus-target="pipeline"' \
-  'data-event-drawer' \
+  'data-event-list' \
   'data-detail-drawer' \
+  'role="dialog"' \
   'data-refresh-dashboard' \
   'data-scene-actor-list' \
   'data-scene-diagnostics' \
@@ -341,8 +345,6 @@ for token in \
   'width: min(100%, 1040px)' \
   'background-size: 384px 504px' \
   'avatar-Artificer' \
-  'skeleton-line' \
-  'grid-template-columns: repeat(8' \
   'grid-template-columns: minmax(0, 1fr)' \
   'body.akra-graphic .admin-layout {' \
   'overflow: auto' \
@@ -400,6 +402,16 @@ for token in \
   '게임화 정책' \
   '도메인 매핑' \
   'blocked slot은 operator recovery' \
+  '전체 진행률' \
+  'class="draft-nav"' \
+  'id="system-mini"' \
+  '시스템 상태 요약' \
+  'class="game-panel notice-card"' \
+  'data-event-drawer' \
+  'akraStageScan' \
+  'akraServerBlink' \
+  'akraEventPulse' \
+  'akraStepSweep' \
   'is-bursting' \
   'blocked-copy'; do
   require_not_contains "${admin_html}" "${token}"
@@ -461,7 +473,7 @@ require_not_contains "${admin_html}" 'href="/admin/tasks"'
 
 for token in \
   '<body class="akra-graphic">' \
-  'href="/admin/akra/tasks" class="active"><span class="nav-icon">T</span><span>작업 관리</span></a>' \
+  'href="/admin/akra/tasks" class="active" aria-current="page"><span class="nav-icon" aria-hidden="true">T</span><span>작업 관리</span></a>' \
   '<summary>Add task</summary>' \
   'Task catalog view' \
   'Skipped tasks' \
@@ -570,8 +582,8 @@ browser_path=""
 if browser_path="$(find_browser)"; then
   if capture_with_browser "${browser_path}" "${graphic_url}"; then
     sha256sum "${screenshot_path}" >"${output_dir}/admin-graphic.sha256"
-    sha256sum "${mobile_screenshot_path}" >"${output_dir}/admin-graphic-mobile.sha256"
-    echo "admin graphic screenshots captured: ${screenshot_path}, ${mobile_screenshot_path}"
+    sha256sum "${compact_screenshot_path}" >"${output_dir}/admin-graphic-compact.sha256"
+    echo "admin graphic screenshots captured: ${compact_screenshot_path}, ${screenshot_path}"
   else
     exit 1
   fi

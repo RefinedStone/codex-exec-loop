@@ -5,27 +5,18 @@
   const pollIntervalMs = Number(root.dataset.pollIntervalMs || "10000");
   const dashboardUrl = "/api/admin/akra/dashboard";
   const eventsUrl = "/api/admin/akra/events";
-  const kpiMap = {
-    totalTasks: "totalTasks",
-    successRate: "successRate",
-    todayThroughput: "todayThroughput",
-    agents: "agents",
-    pool: "pool",
-    queueDepth: "queueDepth",
-    readiness: "readiness",
-    distributor: "distributor"
-  };
-
-  const setKpiState = (state) => {
-    for (const card of root.querySelectorAll("[data-kpi]")) {
-      card.classList.remove("is-loading", "is-fresh", "is-error");
-      card.classList.add(`is-${state}`);
-    }
-  };
 
   const setText = (selector, value) => {
-    const node = root.querySelector(selector);
-    if (node) node.textContent = value;
+    for (const node of root.querySelectorAll(selector)) {
+      if (node.textContent !== value) node.textContent = value;
+    }
+  };
+  const setOperationalState = (selector, readiness) => {
+    const state = ["ready", "degraded", "blocked"].includes(readiness) ? readiness : "degraded";
+    for (const node of root.querySelectorAll(selector)) {
+      node.classList.remove("state-ready", "state-degraded", "state-blocked");
+      node.classList.add(`state-${state}`);
+    }
   };
 
   const formatValue = (value, fallback = "-") => value === null || value === undefined ? fallback : String(value);
@@ -72,20 +63,14 @@
     const panel = root.querySelector(selector);
     if (panel) panel.replaceChildren(...children);
   };
-  const updateKpiNote = (key, value, className = "") => {
-    const note = root.querySelector(`[data-kpi="${key}"] small:last-child`);
-    if (!note) return;
-    note.className = className;
-    note.textContent = formatValue(value);
-  };
-  const eventPanel = root.querySelector("#events");
-  const eventDrawer = root.querySelector("[data-event-drawer]");
+  const eventList = root.querySelector("[data-event-list]");
   const eventFeedStatus = root.querySelector("[data-event-feed-status]");
   const eventLimit = 50;
   const detailDrawer = root.querySelector("[data-detail-drawer]");
   const detailDrawerTitle = root.querySelector("[data-detail-drawer-title]");
   const detailDrawerSubtitle = root.querySelector("[data-detail-drawer-subtitle]");
   const detailDrawerBody = root.querySelector("[data-detail-drawer-body]");
+  let detailTrigger = null;
   const detailRowsByType = {
     slot: [
       ["상태", "detailState", "chip"],
@@ -146,18 +131,7 @@
       ["슬롯", "detailSlot"],
       ["작업", "detailTask"],
       ["진행률", "detailProgress"],
-      ["점수", "detailScore"],
       ["최근 신호", "detailSummary"]
-    ],
-    campaignAttempt: [
-      ["상태", "detailState", "chip"],
-      ["시간", "detailTime"],
-      ["점수", "detailScore"],
-      ["요약", "detailSummary"]
-    ],
-    campaignIntel: [
-      ["상태", "detailState", "chip"],
-      ["정보", "detailNote"]
     ],
     refresh: [
       ["상태", "detailState", "chip"],
@@ -178,7 +152,6 @@
 
   const detailSourceSelector = "[data-detail-type]";
   const linkedSourceSelector = "[data-slot-id], [data-agent-id], [data-task-id], [data-projection-kind], [data-projection-key]";
-  const selectedDetailSelector = `${detailSourceSelector}.is-selected`;
 
   const detailSourceKey = (source) => {
     if (!source) return "";
@@ -198,7 +171,6 @@
     if (!source) return;
     source.setAttribute("aria-controls", "akra-detail-drawer");
     if (!source.hasAttribute("aria-expanded")) source.setAttribute("aria-expanded", "false");
-    if (!source.hasAttribute("aria-pressed")) source.setAttribute("aria-pressed", "false");
   };
 
   const initializeDetailControls = () => {
@@ -212,7 +184,6 @@
     for (const node of root.querySelectorAll(detailSourceSelector)) {
       const selected = Boolean(source) && detailSourceKey(node) === nextKey;
       node.classList.toggle("is-selected", selected);
-      node.setAttribute("aria-pressed", selected ? "true" : "false");
       node.setAttribute("aria-expanded", selected && detailDrawer && !detailDrawer.hidden ? "true" : "false");
     }
     if (nextKey) {
@@ -296,7 +267,8 @@
       .find((node) => detailSourceKey(node) === selectedKey);
     if (source) {
       if (detailDrawer?.classList.contains("is-open")) {
-        openDetailDrawer(source);
+        if (!detailTrigger?.isConnected) detailTrigger = source;
+        openDetailDrawer(source, { focusDrawer: false, rememberTrigger: false });
       } else {
         setSelectedDetail(source);
         markRelated(source);
@@ -329,8 +301,12 @@
     return row;
   };
 
-  const openDetailDrawer = (source) => {
+  const openDetailDrawer = (
+    source,
+    { focusDrawer = true, rememberTrigger = true, trigger = source } = {}
+  ) => {
     if (!source || !detailDrawer || !detailDrawerBody) return;
+    if (rememberTrigger) detailTrigger = trigger?.isConnected ? trigger : null;
     const type = source.dataset.detailType;
     const rows = detailRowsByType[type] || [];
     detailDrawerTitle.textContent = source.dataset.detailTitle || "상세";
@@ -342,15 +318,18 @@
     );
     detailDrawer.hidden = false;
     detailDrawer.setAttribute("aria-hidden", "false");
-    window.requestAnimationFrame(() => detailDrawer.classList.add("is-open"));
+    window.requestAnimationFrame(() => {
+      detailDrawer.classList.add("is-open");
+      if (focusDrawer) detailDrawer.focus({ preventScroll: true });
+    });
     setSelectedDetail(source);
     markRelated(source);
-    if (type === "event") openEventPanelDrawer(source);
   };
 
   const closeDetailDrawer = () => {
     if (!detailDrawer) return;
-    const selected = root.querySelector(selectedDetailSelector);
+    const trigger = detailTrigger;
+    detailTrigger = null;
     detailDrawer.classList.remove("is-open");
     detailDrawer.setAttribute("aria-hidden", "true");
     setSelectedDetail(null);
@@ -358,22 +337,12 @@
     window.setTimeout(() => {
       if (!detailDrawer.classList.contains("is-open")) detailDrawer.hidden = true;
     }, 180);
-    selected?.focus({ preventScroll: true });
+    if (trigger?.isConnected && trigger.getClientRects().length > 0) {
+      trigger.focus({ preventScroll: true });
+    }
   };
 
-  const openEventPanelDrawer = (eventRow) => {
-    if (!eventRow) return;
-    for (const row of root.querySelectorAll("[data-event-detail]")) row.classList.remove("is-selected");
-    eventRow.classList.add("is-selected");
-    const drawer = root.querySelector("[data-event-drawer]");
-    if (!drawer) return;
-    drawer.hidden = false;
-    drawer.querySelector("[data-event-drawer-title]").textContent =
-      `#${eventRow.dataset.eventSequence} ${eventRow.dataset.eventKind} · ${eventRow.dataset.eventTarget}`;
-    drawer.querySelector("[data-event-drawer-body]").textContent = eventRow.dataset.eventDetail || "";
-  };
-
-  const openRefreshDetail = (snapshotState, eventsState) => {
+  const openRefreshDetail = (snapshotState, eventsState, trigger) => {
     const source = document.createElement("span");
     source.dataset.detailType = "refresh";
     source.dataset.detailTitle = "Refresh";
@@ -383,17 +352,14 @@
     source.dataset.detailSnapshot = snapshotState;
     source.dataset.detailEvents = eventsState;
     source.dataset.detailNote = "pool reconcile, distributor tick, queue mutation은 호출하지 않습니다.";
-    openDetailDrawer(source);
+    openDetailDrawer(source, { trigger });
   };
 
   const createEventRow = (event) => {
     const row = document.createElement("button");
     row.type = "button";
     row.className = `event-row ${severityClass(event.severity)}`;
-    row.dataset.eventDetail = event.summary || "";
-    row.dataset.eventKind = event.eventKind || "";
     row.dataset.eventSequence = String(event.sequence || "");
-    row.dataset.eventTarget = `${event.projectionKind || ""}:${event.projectionKey || ""}`;
     row.dataset.projectionKind = event.projectionKind || "";
     row.dataset.projectionKey = event.projectionKey || "";
     row.dataset.detailType = "event";
@@ -434,25 +400,31 @@
   };
 
   const replaceEventRows = (events) => {
-    if (!eventPanel || !eventDrawer) return;
-    for (const row of eventPanel.querySelectorAll("[data-event-sequence]")) row.remove();
+    if (!eventList) return;
+    for (const row of eventList.querySelectorAll("[data-event-sequence]")) row.remove();
     removeEmptyEventCopy();
-    for (const event of events) eventPanel.insertBefore(createEventRow(event), eventDrawer);
+    if (events.length === 0) {
+      const empty = createText("p", "", "표시할 이벤트가 없습니다.");
+      empty.dataset.eventEmpty = "";
+      eventList.appendChild(empty);
+    } else {
+      eventList.append(...events.map(createEventRow));
+    }
     trimEventRows();
     setEventStatus();
     syncSelectedDetail();
   };
 
   const prependEventRows = (events) => {
-    if (!eventPanel || !eventDrawer || events.length === 0) return;
+    if (!eventList || events.length === 0) return;
     removeEmptyEventCopy();
-    const existing = new Set([...eventPanel.querySelectorAll("[data-event-sequence]")].map((row) => row.dataset.eventSequence));
+    const existing = new Set([...eventList.querySelectorAll("[data-event-sequence]")].map((row) => row.dataset.eventSequence));
     for (const event of [...events].reverse()) {
       const sequence = String(event.sequence || "");
       if (!sequence || existing.has(sequence)) continue;
       const row = createEventRow(event);
       row.classList.add("is-new");
-      eventPanel.insertBefore(row, eventPanel.querySelector("[data-event-sequence]") || eventDrawer);
+      eventList.insertBefore(row, eventList.querySelector("[data-event-sequence]"));
       existing.add(sequence);
     }
     trimEventRows();
@@ -474,7 +446,6 @@
       detailSlot: lane.slotId,
       detailTask: lane.taskTitle,
       detailProgress: lane.progressLabel,
-      detailScore: lane.scoreLabel,
       detailSummary: lane.summary,
       agentId: lane.agentId,
       slotId: lane.slotId
@@ -485,56 +456,7 @@
       createText("small", "", lane.taskTitle),
       createText("small", "", lane.summary)
     );
-    button.append(body, createText("span", "score-chip", lane.scoreLabel));
-    initializeDetailControl(button);
-    return button;
-  };
-
-  const createCampaignAttempt = (attempt) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `attempt-row ${severityClass(attempt.severity)}`;
-    setDataset(button, {
-      detailType: "campaignAttempt",
-      detailTitle: attempt.label,
-      detailSubtitle: attempt.source,
-      detailState: attempt.state,
-      detailSeverity: attempt.severity,
-      detailTime: attempt.timestamp,
-      detailScore: attempt.scoreLabel,
-      detailSummary: attempt.summary
-    });
-    const body = document.createElement("div");
-    body.append(
-      createText("small", "", `${optionalText(attempt.source)} · ${optionalText(attempt.timestamp)}`),
-      createText("strong", "", attempt.summary)
-    );
-    button.append(
-      createText("strong", "", attempt.label),
-      body,
-      createText("span", "attempt-state", attempt.state)
-    );
-    initializeDetailControl(button);
-    return button;
-  };
-
-  const createCampaignIntel = (intel) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `intel-card ${severityClass(intel.severity)}`;
-    setDataset(button, {
-      detailType: "campaignIntel",
-      detailTitle: `정보 · ${optionalText(intel.label)}`,
-      detailSubtitle: intel.value,
-      detailState: intel.value,
-      detailSeverity: intel.severity,
-      detailNote: intel.note
-    });
-    button.append(
-      createText("small", "", intel.label),
-      createText("strong", "", intel.value),
-      createText("small", "", intel.note)
-    );
+    button.append(body, createText("span", "score-chip", lane.state));
     initializeDetailControl(button);
     return button;
   };
@@ -544,8 +466,7 @@
     const summary = document.createElement("div");
     summary.className = "campaign-summary";
     for (const [label, value] of [
-      ["활성 시도", campaign.activeLaneCount],
-      ["최근 로그", campaign.visibleAttemptCount],
+      ["활성 레인", campaign.activeLaneCount],
       ["정보 신호", campaign.signalCount]
     ]) {
       const item = document.createElement("span");
@@ -563,31 +484,9 @@
         })()
       : createText("p", "", dashboard.agents?.emptyState || "표시할 시도 레인이 없습니다.");
     updatePanel("#campaign", [
-      panelTitle("시도 보드", campaign.summary || ""),
+      panelTitle("임무 현황", campaign.summary || ""),
       summary,
       laneBody
-    ]);
-
-    const attempts = asArray(campaign.attempts);
-    const attemptBody = attempts.length > 0
-      ? (() => {
-          const list = document.createElement("div");
-          list.className = "attempt-list";
-          list.append(...attempts.map(createCampaignAttempt));
-          return list;
-        })()
-      : createText("p", "", "아직 표시할 시도 로그가 없습니다.");
-    updatePanel("#attempts", [
-      panelTitle("최근 시도 로그", `${formatValue(campaign.visibleAttemptCount, "0")}/${formatValue(campaign.attemptCount, "0")}`),
-      attemptBody
-    ]);
-
-    const intelGrid = document.createElement("div");
-    intelGrid.className = "intel-grid";
-    intelGrid.append(...asArray(campaign.intelCards).map(createCampaignIntel));
-    updatePanel("#intel", [
-      panelTitle("정보 카드", "read-only signals"),
-      intelGrid
     ]);
   };
 
@@ -633,19 +532,7 @@
       createText("small", "", slotTaskId),
       createText("small", "slot-state", slotStateLabel)
     );
-    const progress = document.createElement("span");
-    progress.className = "slot-progress-label";
-    progress.textContent = "미집계";
-    const meter = document.createElement("span");
-    meter.className = "slot-meter";
-    meter.setAttribute("aria-hidden", "true");
-    const track = document.createElement("span");
-    track.className = "slot-meter-track";
-    const fill = document.createElement("span");
-    fill.className = "slot-meter-fill";
-    track.appendChild(fill);
-    meter.appendChild(track);
-    button.append(stationIcon, body, progress, meter);
+    button.append(stationIcon, body);
     initializeDetailControl(button);
     return button;
   };
@@ -943,8 +830,6 @@
   };
 
   const updateDashboard = (dashboard) => {
-    root.dataset.eventCursor =
-      dashboard.eventFeed?.eventCursor == null ? "" : String(dashboard.eventFeed.eventCursor);
     setText(
       "[data-planning-revision]",
       dashboard.planningRevision == null ? "미집계" : `rev ${dashboard.planningRevision}`,
@@ -953,39 +838,20 @@
     setText("[data-summary-idle-slots]", formatValue(dashboard.kpis.poolIdle, "0"));
     setText("[data-summary-queue-depth]", formatValue(dashboard.kpis.queueDepth, "0"));
     setText("[data-summary-generated-time]", optionalText(dashboard.generatedTimeLabel));
-    for (const node of root.querySelectorAll("[data-summary-readiness]")) {
-      node.textContent = optionalText(dashboard.workspace.readiness, "미집계");
-    }
+    setText("[data-command-readiness]", optionalText(dashboard.workspace.readiness, "미집계"));
+    setText("[data-command-branch]", optionalText(dashboard.workspace.branch, "not-a-git-worktree"));
     setText(
       "[data-operational-notice]",
-      optionalText(dashboard.workspace.topNotice || dashboard.workspace.readinessNotice, "운영 알림 미집계")
+      optionalText(dashboard.workspace.readinessNotice, "운영 알림 미집계")
     );
-    const values = {
-      totalTasks: formatValue(dashboard.kpis.totalTasks),
-      successRate: dashboard.kpis.successRate == null ? "-" : `${dashboard.kpis.successRate}%`,
-      todayThroughput: formatValue(dashboard.kpis.todayThroughput),
-      agents: `${dashboard.kpis.activeAgents} / ${dashboard.kpis.totalAgents}`,
-      pool: `${dashboard.kpis.poolRunning} / ${dashboard.kpis.poolConfiguredSize}`,
-      queueDepth: String(dashboard.kpis.queueDepth),
-      readiness: dashboard.workspace.readiness,
-      distributor: dashboard.kpis.distributorState
-    };
-    for (const [key, valueKey] of Object.entries(kpiMap)) {
-      const node = root.querySelector(`[data-kpi="${key}"] [data-value]`);
-      if (node && node.textContent !== values[valueKey]) {
-        node.textContent = values[valueKey];
-        node.closest("[data-kpi]")?.classList.add("has-changed");
-        window.setTimeout(() => node.closest("[data-kpi]")?.classList.remove("has-changed"), 520);
-      }
+    setText("[data-operational-action]", optionalText(dashboard.workspace.blockedAction, "운영 조치 미집계"));
+    const operationalDetail = dashboard.workspace.topNotice || "";
+    setText("[data-operational-detail]", operationalDetail);
+    for (const group of root.querySelectorAll("[data-operational-detail-group]")) {
+      group.hidden = operationalDetail === "";
+      if (group.hidden) group.open = false;
     }
-    updateKpiNote("totalTasks", dashboard.kpis.metricSourceLabel, "positive");
-    updateKpiNote("successRate", dashboard.kpis.successRate == null ? "미집계" : dashboard.kpis.metricSourceLabel);
-    updateKpiNote("todayThroughput", dashboard.kpis.todayThroughput == null ? "미집계" : dashboard.kpis.metricSourceLabel);
-    updateKpiNote("agents", "roster snapshot", "positive");
-    updateKpiNote("pool", `여유 ${formatValue(dashboard.kpis.poolIdle, "0")}`);
-    updateKpiNote("queueDepth", dashboard.kpis.queueDepthBasis);
-    updateKpiNote("readiness", "readiness snapshot");
-    updateKpiNote("distributor", dashboard.distributor?.note || "");
+    setOperationalState(".command-summary, .command-alert", dashboard.workspace.readiness);
     const previousSignature = root.dataset.dashboardSignature || "";
     const nextSignature = dashboardSignature(dashboard);
     if (previousSignature !== nextSignature) {
@@ -999,7 +865,7 @@
   };
 
   const selectableSources = () => [...root.querySelectorAll(detailSourceSelector)]
-    .filter((source) => !source.disabled && !source.closest("[hidden]"));
+    .filter((source) => !source.disabled && !source.closest("[hidden]") && source.getClientRects().length > 0);
 
   const navigateDetailSelection = (source, direction) => {
     const sources = selectableSources();
@@ -1008,7 +874,23 @@
     const next = sources[(index + direction + sources.length) % sources.length];
     next.focus({ preventScroll: true });
     next.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-    openDetailDrawer(next);
+    openDetailDrawer(next, { focusDrawer: false });
+  };
+
+  const setManualRefreshState = (busy) => {
+    root.setAttribute("aria-busy", busy ? "true" : "false");
+    for (const button of root.querySelectorAll("[data-refresh-dashboard]")) {
+      if (!button.dataset.refreshIdleText) {
+        button.dataset.refreshIdleText = button.textContent || "R";
+        button.dataset.refreshIdleLabel = button.getAttribute("aria-label") || "Refresh dashboard snapshot";
+      }
+      button.disabled = busy;
+      button.textContent = busy ? "…" : button.dataset.refreshIdleText;
+      button.setAttribute(
+        "aria-label",
+        busy ? "Refreshing dashboard snapshot" : button.dataset.refreshIdleLabel
+      );
+    }
   };
 
   initializeDetailControls();
@@ -1019,15 +901,20 @@
       return;
     }
 
-    if (event.target.closest("[data-refresh-dashboard]")) {
-      Promise.allSettled([pollDashboard(), pollEvents()]).then(([snapshot, events]) => {
-        const snapshotOk = snapshot.status === "fulfilled" && snapshot.value === true;
-        const eventsOk = events.status === "fulfilled" && events.value === true;
-        openRefreshDetail(
-          snapshotOk ? "ok" : "error",
-          eventsOk ? "ok" : "error"
-        );
-      });
+    const refreshButton = event.target.closest("[data-refresh-dashboard]");
+    if (refreshButton) {
+      setManualRefreshState(true);
+      Promise.allSettled([pollDashboard(), pollEvents()])
+        .then(([snapshot, events]) => {
+          const snapshotOk = snapshot.status === "fulfilled" && snapshot.value === true;
+          const eventsOk = events.status === "fulfilled" && events.value === true;
+          openRefreshDetail(
+            snapshotOk ? "ok" : "error",
+            eventsOk ? "ok" : "error",
+            refreshButton
+          );
+        })
+        .finally(() => setManualRefreshState(false));
       return;
     }
 
@@ -1065,8 +952,26 @@
 
   const pollStatus = document.createElement("small");
   pollStatus.className = "poll-status";
-  pollStatus.textContent = "snapshot loaded";
+  pollStatus.setAttribute("role", "status");
+  pollStatus.setAttribute("aria-live", "polite");
+  pollStatus.setAttribute("aria-atomic", "true");
   root.querySelector(".stage-hud")?.appendChild(pollStatus);
+
+  const pollState = { snapshot: "live", events: "live", snapshotError: "", eventsError: "" };
+  const renderPollStatus = () => {
+    const snapshotLabel = pollState.snapshot === "error"
+      ? `stale snapshot${pollState.snapshotError ? `: ${pollState.snapshotError}` : ""}`
+      : "live snapshot";
+    const eventsLabel = pollState.events === "error"
+      ? `stale events${pollState.eventsError ? `: ${pollState.eventsError}` : ""}`
+      : "live events";
+    const nextText = `${snapshotLabel} · ${eventsLabel}`;
+    if (pollStatus.textContent !== nextText) pollStatus.textContent = nextText;
+    const stale = pollState.snapshot === "error" || pollState.events === "error";
+    pollStatus.classList.toggle("is-stale", stale);
+    pollStatus.classList.toggle("is-error", pollState.snapshot === "error");
+  };
+  renderPollStatus();
 
   let dashboardRequest = null;
   let eventsRequest = null;
@@ -1074,21 +979,19 @@
   const pollDashboard = () => {
     if (dashboardRequest) return dashboardRequest;
     dashboardRequest = (async () => {
-      setKpiState("loading");
-      pollStatus.textContent = "refreshing snapshot";
-      pollStatus.classList.remove("is-stale", "is-error");
       try {
         const response = await fetch(dashboardUrl, { headers: { "Accept": "application/json" } });
         if (!response.ok) throw new Error(`dashboard ${response.status}`);
         const dashboard = await response.json();
         updateDashboard(dashboard);
-        setKpiState("fresh");
-        pollStatus.textContent = "live snapshot";
+        pollState.snapshot = "live";
+        pollState.snapshotError = "";
+        renderPollStatus();
         return true;
       } catch (error) {
-        setKpiState("error");
-        pollStatus.textContent = `stale snapshot: ${error.message}`;
-        pollStatus.classList.add("is-stale", "is-error");
+        pollState.snapshot = "error";
+        pollState.snapshotError = error.message;
+        renderPollStatus();
         return false;
       }
     })().finally(() => {
@@ -1119,10 +1022,14 @@
           root.dataset.eventTotalCount = String(payload.feed.totalEventCount);
         }
         setEventStatus();
+        pollState.events = "live";
+        pollState.eventsError = "";
+        renderPollStatus();
         return true;
-      } catch (_error) {
-        pollStatus.textContent = "stale events";
-        pollStatus.classList.add("is-stale");
+      } catch (error) {
+        pollState.events = "error";
+        pollState.eventsError = error.message;
+        renderPollStatus();
         return false;
       }
     })().finally(() => {

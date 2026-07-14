@@ -1468,6 +1468,10 @@ fn blocked_action(readiness: &ParallelModeReadinessSnapshot, pool: &PoolBoardVie
         "blocked slot은 operator recovery 또는 명시적 pool reset으로 복구하세요."
     } else if pool.summary.missing > 0 || pool.summary.unavailable > 0 {
         "missing/unavailable slot은 worktree 경로와 권한을 확인하세요."
+    } else if readiness.readiness == ParallelModeReadinessState::Degraded {
+        "degraded capability와 최근 진단을 확인하고 복구하세요."
+    } else if readiness.readiness == ParallelModeReadinessState::Repairing {
+        "capability 복구가 끝나고 readiness가 ready로 수렴하는지 확인하세요."
     } else {
         "운영 액션 없이 read-only 관제 중입니다."
     }
@@ -2603,6 +2607,12 @@ mod tests {
             Vec::new(),
             Some("integration checkout blocked".to_string()),
         );
+        let degraded = ParallelModeReadinessSnapshot::new(
+            "/tmp/workspace",
+            ParallelModeReadinessState::Degraded,
+            Vec::new(),
+            Some("push readiness degraded".to_string()),
+        );
         let pool = PoolBoardView {
             configured_size: 3,
             reconcile_status: "ready".to_string(),
@@ -2622,6 +2632,7 @@ mod tests {
         assert!(readiness_notice(&ready).contains("준비 완료"));
         assert!(readiness_notice(&blocked).contains("차단됨"));
         assert!(blocked_action(&blocked, &pool).contains("readiness blocker"));
+        assert!(blocked_action(&degraded, &pool).contains("최근 진단"));
     }
 
     #[test]

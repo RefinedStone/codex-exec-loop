@@ -1318,17 +1318,24 @@ async fn admin_html_page_routes_render_live_templates() {
             assert!(body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
             assert!(body.contains(r#"<a href="/admin/akra">Graphic dashboard</a>"#));
             assert!(!body.contains(r#"<body class="akra-graphic">"#));
+            assert!(!body.contains(r#"<aside class="sidebar" lang="ko">"#));
         }
         if uri == "/admin/akra" {
             assert!(
-                body.contains(r#"<nav class="draft-nav" aria-label="AKRA dashboard navigation">"#)
+                body.contains(r#"<nav class="nav graphic-nav" aria-label="Admin navigation">"#)
             );
-            assert!(body.contains(r#"<a href="/admin/akra" aria-current="page">"#));
-            assert!(body.contains(r#"<a href="/admin/akra/directions">"#));
-            assert!(body.contains(r#"<a href="/admin/akra/tasks">"#));
-            assert!(body.contains(r#"<a href="/admin/akra/metrics">"#));
+            assert!(body.contains(r#"<body class="akra-graphic akra-dashboard-page">"#));
+            assert!(body.contains(r#"<aside class="sidebar" lang="ko">"#));
+            assert!(body.contains(
+                r#"class="akra-game"
+  lang="ko""#
+            ));
+            assert!(body.contains(r#"<a href="/admin/akra" class="active" aria-current="page">"#));
+            assert!(body.contains("href=\"/admin/akra/directions\""));
+            assert!(body.contains("href=\"/admin/akra/tasks\""));
+            assert!(body.contains("href=\"/admin/akra/metrics#metrics\""));
             assert!(body.contains(r#"<a href="/admin"><span class="nav-icon" aria-hidden="true">P</span><span>Planning</span></a>"#));
-            assert!(body.contains(r#"<a href="/admin/controls"><span class="nav-icon" aria-hidden="true">C</span><span>Controls</span></a>"#));
+            assert!(body.contains(r#"<a href="/admin/controls"><span class="nav-icon" aria-hidden="true">O</span><span>Controls</span></a>"#));
         }
         if uri == "/admin/app-server-prompts" {
             assert!(body.contains(
@@ -1337,12 +1344,12 @@ async fn admin_html_page_routes_render_live_templates() {
         }
         if uri == "/admin/akra/directions" {
             assert!(body.contains(r#"<body class="akra-graphic">"#));
-            assert!(body.contains(r#"<a href="/admin/akra/directions" class="active"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
+            assert!(body.contains(r#"<a href="/admin/akra/directions" class="active" aria-current="page"><span class="nav-icon" aria-hidden="true">G</span><span>작전 방향</span></a>"#));
             assert!(!body.contains(r#"<a href="/admin/directions" class="active">Directions</a>"#));
         }
         if uri == "/admin/akra/tasks" {
             assert!(body.contains(r#"<body class="akra-graphic">"#));
-            assert!(body.contains(r#"<a href="/admin/akra/tasks" class="active"><span class="nav-icon">T</span><span>작업 관리</span></a>"#));
+            assert!(body.contains(r#"<a href="/admin/akra/tasks" class="active" aria-current="page"><span class="nav-icon" aria-hidden="true">T</span><span>작업 관리</span></a>"#));
             assert!(!body.contains(r#"<a href="/admin/tasks" class="active">Tasks</a>"#));
         }
         if uri == "/admin/reviews" {
@@ -2380,9 +2387,9 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     assert!(
         ADMIN_SHELL_JS.contains("window.addEventListener(\"hashchange\", redirectAkraHashTab)")
     );
-    assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/directions" class="{% if current_nav == "akra_directions" %}active{% endif %}"><span class="nav-icon">G</span><span>작전 방향</span></a>"#));
-    assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/tasks" class="{% if current_nav == "akra_tasks" %}active{% endif %}"><span class="nav-icon">T</span><span>작업 관리</span></a>"#));
-    assert!(BASE_TEMPLATE.contains("AKRA graphic admin shell"));
+    assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/directions" class="{% if current_nav == "akra_directions" %}active{% endif %}"{% if current_nav == "akra_directions" %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">G</span><span>작전 방향</span></a>"#));
+    assert!(BASE_TEMPLATE.contains(r#"href="/admin/akra/tasks" class="{% if current_nav == "akra_tasks" %}active{% endif %}"{% if current_nav == "akra_tasks" %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">T</span><span>작업 관리</span></a>"#));
+    assert!(BASE_TEMPLATE.contains("AKRA Admin"));
     assert!(BASE_TEMPLATE.contains("실시간 상태와 빌드 정보는 각 화면 본문에서 확인"));
     assert!(!BASE_TEMPLATE.contains("AKRA v0.9.0-beta"));
     assert!(!BASE_TEMPLATE.contains("모든 시스템 정상"));
@@ -2517,20 +2524,23 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
     for copy in [
         "게임발전국",
         "AKRA ADMIN CONTROL CENTER",
-        "전체 진행률",
+        "COMMAND STATUS",
+        "OPERATOR BRIEF",
         "data-summary-active-agents",
         "data-summary-idle-slots",
         "data-summary-queue-depth",
         "data-summary-generated-time",
-        "data-summary-readiness",
+        "data-command-readiness",
+        "data-command-branch",
         "data-operational-notice",
+        "data-operational-action",
         "미집계",
         "워크트리 풀",
         "배포 파이프라인",
         "실시간 이벤트",
-        "운영 알림",
-        "시스템 상태 요약",
+        "임무 현황",
         "data-admin-graphic",
+        "class=\"akra-page-title\"",
         "data-poll-interval-ms",
         "gamebaljeonguk_atlas_64x96.png",
         "background-image: var(--agent-sprite-sheet)",
@@ -2545,12 +2555,11 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "role-distributor",
         "role-events",
         "data-focus-target=\"pipeline\"",
-        "data-event-drawer",
+        "data-event-list",
         "data-detail-drawer",
         "id=\"akra-detail-drawer\"",
+        "role=\"dialog\"",
         "detailType: \"campaignLane\"",
-        "detailType: \"campaignAttempt\"",
-        "detailType: \"campaignIntel\"",
         "data-projection-kind",
         "data-agent-id=\"{{ item.source_agent }}\"",
         "data-refresh-dashboard",
@@ -2559,9 +2568,11 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "selectionTokens",
         "projectionSlotToken",
         "aria-controls",
-        "aria-pressed",
+        "aria-expanded",
         "relatedSelectionCount",
         "openRefreshDetail",
+        "setManualRefreshState",
+        "aria-busy",
         "data-event-feed-status",
         "MISSION FLOW",
         "stage-refresh-btn",
@@ -2569,9 +2580,9 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "data-actor-id",
         "data-visual-state",
         "data-scene-diagnostics",
-        "has-changed",
         "prependEventRows",
         "stale snapshot",
+        "pollState",
         "pollEvents",
         "/admin/assets/game/akra-diorama.js",
         "/admin/assets/scripts/admin-shell.js",
@@ -2595,8 +2606,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "workspace: dashboard.workspace || null",
         "eventFeed: dashboard.eventFeed || null",
         "events: asArray(dashboard.events)",
-        "skeleton-line",
-        "campaign-grid",
         "score-chip",
     ] {
         assert!(
@@ -2613,9 +2622,8 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "id=\"agents\"",
         "id=\"pipeline\"",
         "id=\"events\"",
-        "id=\"notices\"",
-        "id=\"system-mini\"",
-        "id=\"system\"",
+        "id=\"campaign\"",
+        "id=\"tasks\"",
     ] {
         assert!(
             AKRA_DASHBOARD_TEMPLATE.contains(anchor),
@@ -2702,8 +2710,10 @@ fn akra_admin_never_reports_uncollected_health_as_success() {
             "dashboard should render collected snapshot signal {snapshot_copy}"
         );
     }
-    assert!(AKRA_DASHBOARD_TEMPLATE.matches(">미집계<").count() >= 9);
-    assert!(AKRA_DASHBOARD_JS.contains("setKpiState(\"fresh\")"));
+    assert!(!AKRA_DASHBOARD_TEMPLATE.contains(">미집계<"));
+    assert!(!AKRA_DASHBOARD_TEMPLATE.contains("id=\"system-mini\""));
+    assert!(!AKRA_DASHBOARD_TEMPLATE.contains("시스템 상태 요약"));
+    assert!(AKRA_DASHBOARD_JS.contains("const pollState"));
     assert!(AKRA_DASHBOARD_TEMPLATE.contains("진행률 미집계"));
     assert!(AKRA_DASHBOARD_RS.contains("\"stage 미집계\""));
     assert!(AKRA_METRICS_TEMPLATE.contains("Git 상태 미집계"));
@@ -2828,7 +2838,6 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
 #[test]
 fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     for token in [
-        "grid-template-columns: repeat(8",
         "class=\"office-board\" id=\"agents\"",
         "class=\"game-panel pool-overlay\" id=\"pool\"",
         "class=\"scene-object boss-seat\"",
@@ -2836,7 +2845,6 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "background-image: var(--agent-sprite-sheet)",
         "background-size: 384px 504px",
         "background-position: -288px 0",
-        "--office-board-height: clamp(520px, 56vw, 650px)",
         "final-draft-map-sprite.png",
         "office-map-image",
         "width: min(100%, 1040px)",
@@ -2894,7 +2902,6 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "detailOwnerSession: optionalText(slot.ownerSessionKey, \"-\")",
         "detailLeaseGeneration: optionalText(slot.leaseGeneration, \"-\")",
         "dashboard.planningRevision == null ? \"미집계\"",
-        "data-event-cursor=\"{{ dashboard.event_feed.event_cursor_data }}\"",
         "title=\"{{ slot.display_slot_label }} · {{ slot.label }} · task",
         "const slotDisplayLabel = optionalText(slot.displaySlotLabel || slot.slotId, \"슬롯\")",
         "const slotTaskId = optionalText(slot.taskId, \"-\")",
@@ -2909,7 +2916,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "MAP_HEIGHT = 941",
         "STRUCTURE_SPECS",
         "designToBoardPoint",
-        "akraStageScan",
+        "lastLayoutWidth",
         "statusPalette",
         "STATIC_POSE_MANIFEST",
         "requestSceneRender",
@@ -2962,6 +2969,17 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "renderMetrics",
         "renderSystem",
         "error-notice",
+        "전체 진행률",
+        "class=\"draft-nav\"",
+        "id=\"system-mini\"",
+        "시스템 상태 요약",
+        "class=\"game-panel notice-card\"",
+        "data-event-drawer",
+        "aria-pressed",
+        "akraStageScan",
+        "akraServerBlink",
+        "akraEventPulse",
+        "akraStepSweep",
     ] {
         assert!(
             !AKRA_DASHBOARD_TEMPLATE.contains(removed),
@@ -3030,8 +3048,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/api/admin/akra/events?afterSequence=0&limit=50",
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "${HOME}/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        "id=\"notices\"",
-        "id=\"system-mini\"",
+        "id=\"campaign\"",
+        "OPERATOR BRIEF",
         "id=\"system\"",
         "Task catalog view",
         "Skipped tasks",
@@ -3058,6 +3076,8 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "authenticated_curl",
         "cookie_jar",
         "--screenshot=",
+        "--compact-screenshot=",
+        "admin-graphic-compact.png",
         "admin graphic visual contract ok",
     ] {
         assert!(

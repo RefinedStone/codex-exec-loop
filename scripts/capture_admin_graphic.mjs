@@ -9,12 +9,12 @@ const options = Object.fromEntries(
 const browserPath = options.browser;
 const targetUrl = options.url;
 const screenshotPath = options.screenshot;
-const mobileScreenshotPath = options["mobile-screenshot"];
+const compactScreenshotPath = options["compact-screenshot"];
 const token = process.env.AKRA_ADMIN_VISUAL_TOKEN;
 
-if (!browserPath || !targetUrl || !screenshotPath || !mobileScreenshotPath || !token) {
+if (!browserPath || !targetUrl || !screenshotPath || !compactScreenshotPath || !token) {
   throw new Error(
-    "browser, url, screenshot, mobile-screenshot, and AKRA_ADMIN_VISUAL_TOKEN are required",
+    "browser, url, screenshot, compact-screenshot, and AKRA_ADMIN_VISUAL_TOKEN are required",
   );
 }
 
@@ -89,7 +89,7 @@ try {
       await document.fonts.ready;
       return {
         regular: document.fonts.check("12px Galmuri11", "게임발전국"),
-        bold: document.fonts.check("700 12px Galmuri11", "운영 알림"),
+        bold: document.fonts.check("700 12px Galmuri11", "운영 상태"),
         bodyFamily: window.getComputedStyle(document.body).fontFamily,
       };
     });
@@ -112,8 +112,7 @@ try {
     const canvas = page.locator("#pixi-diorama canvas");
     const analysisPage = await context.newPage();
     const inspectCanvasFrame = async () => {
-      const png = await canvas.screenshot({ type: "png" });
-      const imageUrl = `data:image/png;base64,${png.toString("base64")}`;
+      const imageUrl = await canvas.evaluate((element) => element.toDataURL("image/png"));
       return analysisPage.evaluate(
         (source) =>
           new Promise((resolve) => {
@@ -177,7 +176,9 @@ try {
       }
     }
     if (firstFrame.checksum !== secondFrame.checksum) {
-      throw new Error(`${label} static WebGL canvas changed without a typed transition`);
+      throw new Error(
+        `${label} static WebGL canvas changed without a typed transition: ${JSON.stringify({ firstFrame, secondFrame, firstScene, secondScene })}`,
+      );
     }
     for (const scene of [firstScene, secondScene]) {
       if (!scene || scene.packetCount !== 0 || scene.semanticMotionCount !== 0) {
@@ -203,7 +204,6 @@ try {
     }
     await analysisPage.close();
 
-    await page.locator(".office-board").scrollIntoViewIfNeeded();
     const layout = await page.evaluate(() => {
       const root = document.documentElement;
       const body = document.body;
@@ -211,10 +211,14 @@ try {
       const board = document.querySelector(".office-board");
       const hud = document.querySelector(".stage-hud");
       const refresh = document.querySelector(".stage-hud [data-refresh-dashboard]");
+      const sidebar = document.querySelector(".sidebar");
+      const commandAlert = document.querySelector(".command-alert");
       const canvasRect = canvas?.getBoundingClientRect();
       const boardRect = board?.getBoundingClientRect();
       const hudRect = hud?.getBoundingClientRect();
       const refreshRect = refresh?.getBoundingClientRect();
+      const sidebarRect = sidebar?.getBoundingClientRect();
+      const commandAlertRect = commandAlert?.getBoundingClientRect();
       const isVisible = (element, rect) => {
         if (!element || !rect || rect.width <= 0 || rect.height <= 0) return false;
         const style = window.getComputedStyle(element);
@@ -268,7 +272,15 @@ try {
           !refresh.disabled,
         refreshWidth: refreshRect?.width ?? 0,
         refreshHeight: refreshRect?.height ?? 0,
+        sidebarVisible: isVisible(sidebar, sidebarRect),
+        commandAlertVisible: isVisible(commandAlert, commandAlertRect),
+        boardInFirstViewport:
+          Boolean(boardRect) &&
+          boardRect.top >= -1 &&
+          boardRect.bottom <= window.innerHeight + 1,
         boardRect: rectValue(boardRect),
+        sidebarRect: rectValue(sidebarRect),
+        commandAlertRect: rectValue(commandAlertRect),
         hudRect: rectValue(hudRect),
         refreshRect: rectValue(refreshRect),
       };
@@ -278,6 +290,11 @@ try {
     }
     if (!layout.canvasInsideBoard) {
       throw new Error(`${label} canvas is not framed inside the office board`);
+    }
+    if (!layout.sidebarVisible || !layout.commandAlertVisible || !layout.boardInFirstViewport) {
+      throw new Error(
+        `${label} PC command layout does not keep navigation, alert, and office board in the first viewport: ${JSON.stringify(layout)}`,
+      );
     }
     if (!layout.hudVisible || !layout.hudInsideBoard || !layout.hudHitTestable) {
       throw new Error(`${label} mission HUD is hidden, clipped, or occluded: ${JSON.stringify(layout)}`);
@@ -298,16 +315,16 @@ try {
   };
 
   await captureViewport({
+    width: 1280,
+    height: 800,
+    path: compactScreenshotPath,
+    label: "compact desktop",
+  });
+  await captureViewport({
     width: 1600,
     height: 1000,
     path: screenshotPath,
-    label: "desktop",
-  });
-  await captureViewport({
-    width: 390,
-    height: 844,
-    path: mobileScreenshotPath,
-    label: "mobile",
+    label: "wide desktop",
   });
 
   const navigationPage = await context.newPage();
@@ -334,13 +351,13 @@ try {
       navigationErrors.push(`external request: ${url}`);
     }
   });
-  await navigationPage.setViewportSize({ width: 390, height: 844 });
+  await navigationPage.setViewportSize({ width: 1280, height: 800 });
 
   const planningResponse = await navigationPage.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
   });
   if (!planningResponse?.ok()) {
-    throw new Error(`mobile planning admin returned ${planningResponse?.status() ?? "no response"}`);
+    throw new Error(`desktop planning admin returned ${planningResponse?.status() ?? "no response"}`);
   }
   const graphicEntry = navigationPage.getByRole("link", {
     name: "Graphic dashboard",
@@ -361,13 +378,18 @@ try {
 
   const expectedDashboardLinks = [
     "/admin/akra",
+    "/admin/akra#pool",
+    "/admin/akra#agents",
     "/admin/akra/directions",
     "/admin/akra/tasks",
-    "/admin/akra/metrics",
+    "/admin/akra#pipeline",
+    "/admin/akra#events",
+    "/admin/akra/metrics#metrics",
+    "/admin/akra/metrics#system",
     "/admin",
     "/admin/controls",
   ];
-  const dashboardLinks = navigationPage.locator(".draft-nav a");
+  const dashboardLinks = navigationPage.locator(".graphic-nav a");
   const dashboardLinkLayout = await dashboardLinks.evaluateAll((links) =>
     links.map((link) => {
       const rect = link.getBoundingClientRect();
@@ -378,7 +400,7 @@ try {
           style.display !== "none" &&
           style.visibility !== "hidden" &&
           rect.width > 0 &&
-          rect.height >= 40,
+          rect.height >= 36,
         insideViewport: rect.left >= -1 && rect.right <= window.innerWidth + 1,
       };
     }),
@@ -388,19 +410,19 @@ try {
       JSON.stringify(expectedDashboardLinks) ||
     dashboardLinkLayout.some((link) => !link.visible || !link.insideViewport)
   ) {
-    throw new Error(`mobile dashboard navigation is missing or clipped: ${JSON.stringify(dashboardLinkLayout)}`);
+    throw new Error(`desktop dashboard navigation is missing or clipped: ${JSON.stringify(dashboardLinkLayout)}`);
   }
 
   await navigationPage.locator("body").click({ position: { x: 1, y: 1 } });
   const keyboardTrail = [];
-  for (let index = 0; index < expectedDashboardLinks.length + 1; index += 1) {
+  for (let index = 0; index < expectedDashboardLinks.length; index += 1) {
     await navigationPage.keyboard.press("Tab");
     keyboardTrail.push(
       await navigationPage.evaluate(() => document.activeElement?.getAttribute("href") ?? null),
     );
   }
   if (
-    JSON.stringify(keyboardTrail.slice(1)) !== JSON.stringify(expectedDashboardLinks)
+    JSON.stringify(keyboardTrail) !== JSON.stringify(expectedDashboardLinks)
   ) {
     throw new Error(`dashboard keyboard order is incomplete: ${JSON.stringify(keyboardTrail)}`);
   }
@@ -414,7 +436,7 @@ try {
       waitUntil: "networkidle",
     });
     if (!response?.ok()) {
-      throw new Error(`mobile admin navigation failed for ${path}: ${response?.status() ?? "no response"}`);
+      throw new Error(`desktop admin navigation failed for ${path}: ${response?.status() ?? "no response"}`);
     }
     const widths = await navigationPage.evaluate(() => ({
       document: document.documentElement.scrollWidth,
@@ -422,7 +444,7 @@ try {
       body: document.body.scrollWidth,
     }));
     if (widths.document > widths.viewport + 1 || widths.body > widths.viewport + 1) {
-      throw new Error(`mobile admin route overflows at ${path}: ${JSON.stringify(widths)}`);
+      throw new Error(`desktop admin route overflows at ${path}: ${JSON.stringify(widths)}`);
     }
   }
   if (navigationErrors.length > 0) {
