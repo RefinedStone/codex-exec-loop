@@ -213,7 +213,18 @@ try {
       JSON.stringify(actorParity.dom) !==
       JSON.stringify(
         actorParity.canvasActors.map(
-          ({ x, y, resolvedAtlasFrameIndex, poseFallback, ...actor }) => actor,
+          ({
+            x,
+            y,
+            displayWidth,
+            displayHeight,
+            opacity,
+            boardX,
+            boardY,
+            resolvedAtlasFrameIndex,
+            poseFallback,
+            ...actor
+          }) => actor,
         ),
       )
     ) {
@@ -230,9 +241,12 @@ try {
       }));
       const scene = window.AkraAdminGame?.inspectScene?.();
       const restArea = document.querySelector("[data-standby-rest-area]");
+      const canvas = document.querySelector("#pixi-diorama canvas");
       return {
         dom,
         canvasCharacters: scene?.standbyCharacters || [],
+        canvasWidth: canvas?.clientWidth || 0,
+        canvasHeight: canvas?.clientHeight || 0,
         actorCount: scene?.actorCount,
         characterCount: scene?.characterCount,
         standbyCount: scene?.standbyCount,
@@ -240,12 +254,23 @@ try {
       };
     });
     const canvasStandbyIdentity = standbyParity.canvasCharacters.map(
-      ({ x, y, resolvedAtlasFrameIndex, poseFallback, ...character }) => character,
+      ({
+        x,
+        y,
+        displayWidth,
+        displayHeight,
+        opacity,
+        boardX,
+        boardY,
+        resolvedAtlasFrameIndex,
+        poseFallback,
+        ...character
+      }) => character,
     );
     const expectedStandbyPoints = [
-      { x: 730, y: 805 },
-      { x: 805, y: 805 },
-      { x: 880, y: 805 },
+      { x: 685, y: 790 },
+      { x: 805, y: 790 },
+      { x: 925, y: 790 },
     ];
     const expectedStandbyPoses = ["laptop", "sit", "laptop"];
     const expectedStandbyFrames = [40, 47, 48];
@@ -266,8 +291,36 @@ try {
     });
     const standbySpacingIsSafe = standbyParity.canvasCharacters.every((character, index, all) =>
       all.slice(index + 1).every(
-        (other) => Math.hypot(character.x - other.x, character.y - other.y) >= 60,
+        (other) => Math.hypot(character.x - other.x, character.y - other.y) >= 110,
       ),
+    );
+    const minimumStandbyWidth = width >= 1920 ? 64 : 53;
+    const minimumStandbyHeight = width >= 1920 ? 96 : 80;
+    const standbyCharactersAreLegible = standbyParity.canvasCharacters.every(
+      (character) =>
+        character.displayWidth >= minimumStandbyWidth &&
+        character.displayHeight >= minimumStandbyHeight &&
+        character.opacity >= 0.98 &&
+        character.y / 941 <= 0.84,
+    );
+    const standbyBoundsAreInsideCanvas = standbyParity.canvasCharacters.every(
+      (character) =>
+        character.boardX - character.displayWidth / 2 >= 0 &&
+        character.boardX + character.displayWidth / 2 <= standbyParity.canvasWidth &&
+        character.boardY - character.displayHeight >= 0 &&
+        character.boardY <= standbyParity.canvasHeight,
+    );
+    const standbyScreenSpacingIsSafe = standbyParity.canvasCharacters.every(
+      (character, index, all) =>
+        all.slice(index + 1).every((other) => {
+          const centerDistance = Math.hypot(
+            character.boardX - other.boardX,
+            character.boardY - other.boardY,
+          );
+          const nonOverlappingDistance =
+            (character.displayWidth + other.displayWidth) / 2 + 4;
+          return centerDistance >= nonOverlappingDistance;
+        }),
     );
     if (
       standbyParity.dom.length === 0 ||
@@ -279,6 +332,9 @@ try {
       standbyCoordinateKeys.size !== standbyParity.canvasCharacters.length ||
       !standbyPointsMatch ||
       !standbySpacingIsSafe ||
+      !standbyCharactersAreLegible ||
+      !standbyBoundsAreInsideCanvas ||
+      !standbyScreenSpacingIsSafe ||
       standbyParity.canvasCharacters.some((character) => {
         const index = character.locationIndex - 1;
         return (
@@ -330,6 +386,9 @@ try {
         !activePoseProbe ||
         activePoseProbe.visualState !== "working" ||
         activePoseProbe.pose !== "laptop" ||
+        activePoseProbe.displayWidth < 64 ||
+        activePoseProbe.displayHeight < 96 ||
+        activePoseProbe.opacity < 0.98 ||
         activePoseProbe.resolvedAtlasFrameIndex !== 40 ||
         activePoseProbe.poseFallback
       ) {

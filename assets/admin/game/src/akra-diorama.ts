@@ -65,6 +65,8 @@ interface PixiContainer extends PixiDisplayObject {
 interface PixiSprite extends PixiDisplayObject {
   anchor: PixiScale;
   texture: PixiTexture;
+  width: number;
+  height: number;
 }
 
 interface PixiTexture {
@@ -138,6 +140,11 @@ interface SceneInspection {
     pose: StaticPose;
     resolvedAtlasFrameIndex: number | null;
     poseFallback: boolean;
+    displayWidth: number;
+    displayHeight: number;
+    opacity: number;
+    boardX: number;
+    boardY: number;
     x: number;
     y: number;
   }>;
@@ -150,6 +157,11 @@ interface SceneInspection {
     locationIndex: number;
     resolvedAtlasFrameIndex: number | null;
     poseFallback: boolean;
+    displayWidth: number;
+    displayHeight: number;
+    opacity: number;
+    boardX: number;
+    boardY: number;
     x: number;
     y: number;
   }>;
@@ -171,7 +183,7 @@ interface AkraAdminGameBridge {
 
 const AGENT_FRAME_WIDTH = 128;
 const AGENT_FRAME_HEIGHT = 192;
-const AGENT_SPRITE_SCALE = 0.4675;
+const AGENT_SPRITE_SCALE = 0.72;
 const AGENT_SHADOW_WIDTH = 26.35;
 const AGENT_SHADOW_HEIGHT = 6.8;
 const AGENT_MARKER_WIDTH = 21.25;
@@ -188,9 +200,9 @@ const SLOT_SEATS: Point[] = [
 ];
 
 const STANDBY_LOUNGE_POINTS: Point[] = [
-  { x: 730, y: 805 },
-  { x: 805, y: 805 },
-  { x: 880, y: 805 },
+  { x: 685, y: 790 },
+  { x: 805, y: 790 },
+  { x: 925, y: 790 },
 ];
 
 const STRUCTURE_SPECS: StructureSpec[] = [
@@ -522,13 +534,15 @@ declare global {
     const drawStaticMarker = (
       marker: PixiGraphics,
       visualState: VisualState,
-      color: number
+      color: number,
+      presenceKind: PresenceKind
     ): void => {
-      const scale = boardVisualScale();
-      const width = AGENT_MARKER_WIDTH * scale;
-      const height = AGENT_MARKER_HEIGHT * scale;
+      const scale = clamp(boardVisualScale(), 0.58, 1.08);
+      const emphasis = presenceKind === "configured_standby" ? 1.2 : 1;
+      const width = AGENT_MARKER_WIDTH * scale * emphasis;
+      const height = AGENT_MARKER_HEIGHT * scale * emphasis;
       marker.clear();
-      marker.lineStyle(2, color, 0.78);
+      marker.lineStyle(2, color, presenceKind === "configured_standby" ? 1 : 0.9);
       if (visualState === "blocked") {
         marker.moveTo(-width * 0.7, -height);
         marker.lineTo(width * 0.7, height);
@@ -542,7 +556,9 @@ declare global {
         marker.endFill();
         return;
       }
+      if (presenceKind === "configured_standby") marker.beginFill(color, 0.14);
       marker.drawEllipse(0, 0, width, height);
+      if (presenceKind === "configured_standby") marker.endFill();
       if (visualState === "awaiting_review") marker.drawEllipse(0, 0, width * 0.66, height * 0.66);
       if (visualState === "working") {
         marker.beginFill(color, 0.16);
@@ -617,11 +633,11 @@ declare global {
       );
       const group = new PIXI.Container();
       const shadow = new PIXI.Graphics();
-      shadow.beginFill(0x000000, 0.26);
+      shadow.beginFill(0x000000, presenceKind === "configured_standby" ? 0.36 : 0.3);
       shadow.drawEllipse(0, 0, AGENT_SHADOW_WIDTH, AGENT_SHADOW_HEIGHT);
       shadow.endFill();
       const marker = new PIXI.Graphics();
-      drawStaticMarker(marker, visualState, color);
+      drawStaticMarker(marker, visualState, color, presenceKind);
       const sprite = texture ? new PIXI.Sprite(texture) : null;
       if (sprite) {
         sprite.anchor.set(0.5, 1);
@@ -630,7 +646,7 @@ declare global {
       } else {
         group.addChild(shadow, marker);
       }
-      group.alpha = presenceKind === "configured_standby" ? 0.84 : 0.95;
+      group.alpha = 1;
       agentLayer.addChild(group);
 
       const point = pointFor(node);
@@ -674,7 +690,8 @@ declare global {
         drawStaticMarker(
           unit.marker,
           unit.visualState,
-          statusPalette[parseSeverity(unit.node)] || statusPalette.normal
+          statusPalette[parseSeverity(unit.node)] || statusPalette.normal,
+          unit.presenceKind
         );
       }
     };
@@ -730,6 +747,11 @@ declare global {
           pose: unit.pose,
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
+          displayWidth: Math.round(unit.sprite?.width || 0),
+          displayHeight: Math.round(unit.sprite?.height || 0),
+          opacity: unit.group.alpha,
+          boardX: Math.round(unit.group.x),
+          boardY: Math.round(unit.group.y),
           x: Math.round(unit.point.x),
           y: Math.round(unit.point.y),
         })),
@@ -742,6 +764,11 @@ declare global {
           locationIndex: Number(unit.node.dataset.sceneStandbyIndex || ""),
           resolvedAtlasFrameIndex: unit.resolvedAtlasFrameIndex,
           poseFallback: unit.poseFallback,
+          displayWidth: Math.round(unit.sprite?.width || 0),
+          displayHeight: Math.round(unit.sprite?.height || 0),
+          opacity: unit.group.alpha,
+          boardX: Math.round(unit.group.x),
+          boardY: Math.round(unit.group.y),
           x: Math.round(unit.point.x),
           y: Math.round(unit.point.y),
         })),

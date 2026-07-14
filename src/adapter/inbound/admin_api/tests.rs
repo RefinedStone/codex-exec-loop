@@ -2842,7 +2842,12 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
         "const drawStaticMarker",
         "const AGENT_FRAME_WIDTH = 128",
         "const AGENT_FRAME_HEIGHT = 192",
-        "const AGENT_SPRITE_SCALE = 0.4675",
+        "const AGENT_SPRITE_SCALE = 0.72",
+        "displayWidth: Math.round(unit.sprite?.width || 0)",
+        "displayHeight: Math.round(unit.sprite?.height || 0)",
+        "boardX: Math.round(unit.group.x)",
+        "boardY: Math.round(unit.group.y)",
+        "group.alpha = 1",
         "gamebaljeonguk_atlas_128x192.png",
     ] {
         assert!(
