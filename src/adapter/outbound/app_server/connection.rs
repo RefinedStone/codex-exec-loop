@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalResolution,
+    ConversationTurnSteerReceipt,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeLaunchEnvironment, ConversationRuntimeProcessEnvironment,
@@ -43,10 +44,12 @@ use super::approval::{
 use super::protocol::{
     AccountReadResponse, ActiveTurnNotificationState, AppServerNotification, InitializeResponse,
     ThreadListParams, ThreadListResponse, ThreadReadResponse, ThreadResumeParams,
-    ThreadResumeResponse, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
-    TurnInterruptResponse, TurnNotificationHandling, TurnStartParams, TurnStartResponse,
+    ThreadResumeResponse, ThreadSetNameParams, ThreadSetNameResponse, ThreadStartParams,
+    ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse, TurnNotificationHandling,
+    TurnStartParams, TurnStartResponse, TurnSteerParams, TurnSteerResponse,
     handle_turn_notification,
 };
+use super::steering::{AppServerTurnSteerBinding, AppServerTurnSteerBroker};
 use super::{AppServerEventSender, AppServerEventTrySendError, bounded_terminal_receipt};
 
 const RESPONSE_TIMEOUT_ENV_VAR: &str = "CODEX_EXEC_LOOP_APP_SERVER_RESPONSE_TIMEOUT_SECS";
@@ -860,6 +863,13 @@ enum ResponseWaitFailureKind {
     // A matching JSON-RPC error proves that the peer consumed this exact request,
     // so a bounded retry cannot be confused with a late response from the prior id.
     ExplicitRemoteError,
+    // A matching response id proves request ownership even when its result
+    // violates the method schema. The caller fails, but the stream stays usable.
+    CorrelatedResponseInvalid,
+    // The active turn reached an authoritative terminal notification before a
+    // turn/steer acknowledgement. The caller cannot claim success, but the
+    // stream must drain the already-buffered terminal instead of failing.
+    TurnTerminalDeferred,
     // Timeout, transport, framing, and local serialization failures leave request
     // consumption ambiguous. The connection must not be reused for cancellation.
     CorrelationUnknown,
@@ -882,6 +892,20 @@ impl ResponseWaitFailure {
     fn explicit_remote_error(error: impl Into<anyhow::Error>) -> Self {
         Self {
             kind: ResponseWaitFailureKind::ExplicitRemoteError,
+            error: error.into(),
+        }
+    }
+
+    fn correlated_response_invalid(error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            kind: ResponseWaitFailureKind::CorrelatedResponseInvalid,
+            error: error.into(),
+        }
+    }
+
+    fn turn_terminal_deferred(error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            kind: ResponseWaitFailureKind::TurnTerminalDeferred,
             error: error.into(),
         }
     }
@@ -1197,6 +1221,13 @@ impl AppServerConnection {
         self.send_request("thread/list", serde_json::to_value(params)?)
     }
 
+    pub(super) fn set_thread_name(&mut self, params: ThreadSetNameParams) -> Result<()> {
+        self.ensure_initialized()?;
+        let _: ThreadSetNameResponse =
+            self.send_request("thread/name/set", serde_json::to_value(params)?)?;
+        Ok(())
+    }
+
     #[tracing::instrument(
         level = "trace",
         skip(self, thread_id),
@@ -1311,6 +1342,33 @@ impl AppServerConnection {
         )
     }
 
+    fn steer_turn_with_event_sender_classified(
+        &mut self,
+        params: TurnSteerParams,
+        event_sender: &dyn AppServerEventSender,
+        approval_context: BoundApprovalContext<'_>,
+        interrupt_context: ApprovalInterruptContext<'_>,
+    ) -> std::result::Result<TurnSteerResponse, ResponseWaitFailure> {
+        self.ensure_initialized()
+            .map_err(ResponseWaitFailure::correlation_unknown)?;
+        let response_timeout = self.config.response_timeout;
+        let response_value: Value = self.send_request_with_approval_context_classified(
+            "turn/steer",
+            serde_json::to_value(params).map_err(ResponseWaitFailure::correlation_unknown)?,
+            Some(event_sender),
+            Some(approval_context),
+            Some(RequestInterruptContext {
+                signal: interrupt_context.signal,
+                observed_generation: interrupt_context.observed_generation,
+                method: "turn/steer",
+            }),
+            response_timeout,
+        )?;
+        serde_json::from_value(response_value)
+            .context("failed to deserialize app-server response for turn/steer")
+            .map_err(ResponseWaitFailure::correlated_response_invalid)
+    }
+
     pub(super) fn wait_for_turn_stream(
         &mut self,
         thread_id: &str,
@@ -1318,6 +1376,57 @@ impl AppServerConnection {
         interrupt_signal: &AppServerTurnInterruptSignal,
         observed_interrupt_generation: u64,
         event_sender: &dyn AppServerEventSender,
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        self.wait_for_turn_stream_inner(
+            thread_id,
+            turn_id,
+            interrupt_signal,
+            observed_interrupt_generation,
+            event_sender,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn wait_for_turn_stream_with_steering(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+        event_sender: &dyn AppServerEventSender,
+        broker: &AppServerTurnSteerBroker,
+        binding: AppServerTurnSteerBinding,
+    ) -> Result<ConversationTurnTerminalReceipt> {
+        let binding_id = binding.binding_id();
+        let result = self.wait_for_turn_stream_inner(
+            thread_id,
+            turn_id,
+            interrupt_signal,
+            observed_interrupt_generation,
+            event_sender,
+            Some((broker, &binding)),
+        );
+        broker.unbind(
+            binding_id,
+            if result.is_ok() {
+                "active turn completed before steering was applied"
+            } else {
+                "active turn connection ended before steering was applied"
+            },
+        );
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn wait_for_turn_stream_inner(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+        event_sender: &dyn AppServerEventSender,
+        mut turn_steering: Option<(&AppServerTurnSteerBroker, &AppServerTurnSteerBinding)>,
     ) -> Result<ConversationTurnTerminalReceipt> {
         /*
          * Turn streaming interleaves three input sources: child process exit, global interrupt generation, and
@@ -1410,6 +1519,26 @@ impl AppServerConnection {
             )?;
             if !self.pending_notifications.is_empty() {
                 continue;
+            }
+
+            if let Some((broker, binding)) = turn_steering {
+                if interrupt_sent || non_retry_error_candidate.is_some() {
+                    broker.unbind(
+                        binding.binding_id(),
+                        "active turn is no longer accepting steering",
+                    );
+                    turn_steering = None;
+                } else {
+                    self.process_pending_turn_steering(
+                        thread_id,
+                        turn_id,
+                        event_sender,
+                        interrupt_signal,
+                        observed_interrupt_generation,
+                        broker,
+                        binding,
+                    )?;
+                }
             }
 
             let grace_expired = non_retry_error_candidate
@@ -1505,6 +1634,123 @@ impl AppServerConnection {
                     ));
                 }
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_pending_turn_steering(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        event_sender: &dyn AppServerEventSender,
+        interrupt_signal: &AppServerTurnInterruptSignal,
+        observed_interrupt_generation: u64,
+        broker: &AppServerTurnSteerBroker,
+        binding: &AppServerTurnSteerBinding,
+    ) -> Result<()> {
+        let Some(command) = binding.try_receive()? else {
+            return Ok(());
+        };
+        let binding_id = command.binding_id();
+        let request_id = command.request_id();
+        if binding_id != binding.binding_id()
+            || command.request.thread_id != thread_id
+            || command.request.expected_turn_id != turn_id
+        {
+            self.complete_turn_steer_caller(
+                broker,
+                binding_id,
+                request_id,
+                Err("turn steering command no longer matched the active turn".to_string()),
+            );
+            return Ok(());
+        }
+
+        let interrupt_context = ApprovalInterruptContext {
+            signal: interrupt_signal,
+            observed_generation: observed_interrupt_generation,
+        };
+        let response = self.steer_turn_with_event_sender_classified(
+            TurnSteerParams {
+                thread_id: command.request.thread_id,
+                input: vec![super::protocol::TurnInputItem::text(command.request.prompt)],
+                expected_turn_id: command.request.expected_turn_id,
+            },
+            event_sender,
+            BoundApprovalContext {
+                thread_id,
+                turn_id,
+                interrupt: interrupt_context,
+            },
+            interrupt_context,
+        );
+
+        match response {
+            Ok(response) if response.turn_id == turn_id => {
+                self.complete_turn_steer_caller(
+                    broker,
+                    binding_id,
+                    request_id,
+                    Ok(ConversationTurnSteerReceipt {
+                        turn_id: response.turn_id,
+                    }),
+                );
+                Ok(())
+            }
+            Ok(_) => {
+                self.diagnostics.record_warning(
+                    "app-server turn/steer response did not match the active turn".to_string(),
+                );
+                self.complete_turn_steer_caller(
+                    broker,
+                    binding_id,
+                    request_id,
+                    Err("turn/steer response turnId did not match the active turn".to_string()),
+                );
+                Ok(())
+            }
+            Err(failure) => {
+                let failure_kind = failure.kind;
+                let error = failure.into_error();
+                self.complete_turn_steer_caller(
+                    broker,
+                    binding_id,
+                    request_id,
+                    Err(error.to_string()),
+                );
+                match failure_kind {
+                    ResponseWaitFailureKind::ExplicitRemoteError => {
+                        self.diagnostics.record_warning(
+                            "app-server rejected turn/steer; the active stream remains connected"
+                                .to_string(),
+                        );
+                        Ok(())
+                    }
+                    ResponseWaitFailureKind::CorrelatedResponseInvalid => {
+                        self.diagnostics.record_warning(
+                            "app-server returned an invalid turn/steer response; the active stream remains connected"
+                                .to_string(),
+                        );
+                        Ok(())
+                    }
+                    ResponseWaitFailureKind::TurnTerminalDeferred => Ok(()),
+                    ResponseWaitFailureKind::CorrelationUnknown => Err(error),
+                }
+            }
+        }
+    }
+
+    fn complete_turn_steer_caller(
+        &mut self,
+        broker: &AppServerTurnSteerBroker,
+        binding_id: u64,
+        request_id: u64,
+        result: std::result::Result<ConversationTurnSteerReceipt, String>,
+    ) {
+        if broker.complete(binding_id, request_id, result).is_err() {
+            self.diagnostics.record_warning(
+                "turn steering result arrived after its caller stopped waiting".to_string(),
+            );
         }
     }
 
@@ -1962,7 +2208,7 @@ impl AppServerConnection {
          * Normal requests wait for exactly one matching response id. Notifications that arrive during this wait are
          * either downgraded to diagnostics or buffered for the turn stream if they are stream-owned methods.
          */
-        let deadline = Instant::now() + response_timeout;
+        let mut deadline = Instant::now() + response_timeout;
 
         loop {
             self.ensure_transport_healthy()
@@ -2039,13 +2285,20 @@ impl AppServerConnection {
                         .parse_json_line(&line)
                         .map_err(ResponseWaitFailure::correlation_unknown)?;
 
+                    let interactive_approval_started_at = value
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .filter(|method| INTERACTIVE_APPROVAL_METHODS.contains(method))
+                        .map(|_| Instant::now());
                     if self
                         .handle_server_request(&value, event_sender, approval_context)
                         .map_err(ResponseWaitFailure::correlation_unknown)?
                     {
-                        // Response waits never own interactive approvals. Rejected or
-                        // locally handled server requests therefore cannot extend the
-                        // enclosing request deadline indefinitely.
+                        if let Some(started_at) = interactive_approval_started_at {
+                            deadline += started_at.elapsed();
+                        }
+                        // Operator review has its own bounded deadline. Other server
+                        // requests remain inside the enclosing response budget.
                         continue;
                     }
 
@@ -2069,7 +2322,7 @@ impl AppServerConnection {
                             return Ok(result.clone());
                         }
 
-                        return Err(ResponseWaitFailure::correlation_unknown(
+                        return Err(ResponseWaitFailure::correlated_response_invalid(
                             self.error_with_diagnostics(format!(
                                 "app-server returned response id {request_id} without a result payload"
                             )),
@@ -2077,8 +2330,20 @@ impl AppServerConnection {
                     }
 
                     if let Some(notification) = AppServerNotification::from_value(value) {
+                        let terminal_preempts_steer_response = response_interrupt_context
+                            .is_some_and(|context| context.method == "turn/steer")
+                            && approval_context.is_some_and(|context| {
+                                Self::notification_matches_bound_terminal(&notification, context)
+                            });
                         self.handle_response_wait_notification(request_id, notification)
                             .map_err(ResponseWaitFailure::correlation_unknown)?;
+                        if terminal_preempts_steer_response {
+                            return Err(ResponseWaitFailure::turn_terminal_deferred(
+                                anyhow::anyhow!(
+                                    "active turn completed before app-server confirmed turn/steer; draft kept"
+                                ),
+                            ));
+                        }
                         continue;
                     }
 
@@ -2096,6 +2361,24 @@ impl AppServerConnection {
                 }
             }
         }
+    }
+
+    fn notification_matches_bound_terminal(
+        notification: &AppServerNotification,
+        context: BoundApprovalContext<'_>,
+    ) -> bool {
+        if notification.method() != "turn/completed" {
+            return false;
+        }
+        let params = notification.params();
+        let observed_thread_id = params.get("threadId").and_then(Value::as_str);
+        let observed_turn_id = params
+            .get("turn")
+            .and_then(Value::as_object)
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str);
+        observed_thread_id.is_none_or(|thread_id| thread_id == context.thread_id)
+            && observed_turn_id.is_none_or(|turn_id| turn_id == context.turn_id)
     }
 
     fn handle_response_wait_notification(
@@ -3455,14 +3738,17 @@ mod tests {
     };
     use crate::adapter::outbound::app_server::protocol::{
         AppServerNotification, ReasoningEffortValue, ThreadListParams, ThreadResumeParams,
-        ThreadStartParams, TurnInputItem, TurnInterruptParams, TurnStartParams,
+        ThreadSetNameParams, ThreadStartParams, TurnInputItem, TurnInterruptParams,
+        TurnStartParams,
     };
+    use crate::adapter::outbound::app_server::steering::AppServerTurnSteerBroker;
     use crate::application::service::conversation_runtime_event::{
         CONVERSATION_STREAM_CHANNEL_CAPACITY, ConversationStreamEvent, conversation_stream_channel,
     };
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
     use crate::domain::conversation::{
-        ConversationApprovalDecision, ConversationApprovalResolution,
+        ConversationApprovalDecision, ConversationApprovalResolution, ConversationTurnSteerReceipt,
+        ConversationTurnSteerRequest,
     };
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservationGap,
@@ -4323,6 +4609,10 @@ mod tests {
 
         assert_not_initialized(harness.connection.read_account());
         assert_not_initialized(harness.connection.list_threads(ThreadListParams::default()));
+        assert_not_initialized(harness.connection.set_thread_name(ThreadSetNameParams {
+            thread_id: "thread-1".to_string(),
+            name: "renamed".to_string(),
+        }));
         assert_not_initialized(harness.connection.read_thread("thread-1", true));
         assert_not_initialized(
             harness
@@ -4353,6 +4643,25 @@ mod tests {
         }));
 
         assert!(harness.logged_json_lines(0).is_empty());
+    }
+
+    #[test]
+    fn thread_name_set_sends_exact_thread_and_name() {
+        let mut harness = TestConnection::new(true);
+        harness.send_stdout(json!({ "id": 1, "result": {} }));
+
+        harness
+            .connection
+            .set_thread_name(ThreadSetNameParams {
+                thread_id: "thread-exact".to_string(),
+                name: "Release follow-up".to_string(),
+            })
+            .expect("thread/name/set should succeed");
+
+        let logged = harness.logged_json_lines(1);
+        assert_eq!(logged[0]["method"], "thread/name/set");
+        assert_eq!(logged[0]["params"]["threadId"], "thread-exact");
+        assert_eq!(logged[0]["params"]["name"], "Release follow-up");
     }
 
     #[test]
@@ -5469,6 +5778,391 @@ mod tests {
             .wait_for_response(1)
             .expect_err("closed reader channel should be reported");
         assert!(error.to_string().contains("pipe closed"));
+    }
+
+    #[test]
+    fn same_connection_turn_steering_writes_exact_request_and_keeps_stream_open() {
+        let mut harness = TestConnection::new(true);
+        let broker = Arc::new(AppServerTurnSteerBroker::default());
+        let binding = broker.bind("thread-1", "turn-1").expect("bind active turn");
+        let caller_broker = broker.clone();
+        let caller = thread::spawn(move || {
+            caller_broker.submit(ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "correct course".to_string(),
+            })
+        });
+        while broker.pending_count() == 0 {
+            thread::yield_now();
+        }
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": { "turnId": "turn-1" }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, _event_receiver) = mpsc::channel();
+
+        let terminal = harness
+            .connection
+            .wait_for_turn_stream_with_steering(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+                &broker,
+                binding,
+            )
+            .expect("steering success must not end the active stream");
+
+        assert!(terminal.is_completed_and_confirmed());
+        assert_eq!(
+            caller
+                .join()
+                .expect("steering caller should finish")
+                .expect("matching response should reach caller"),
+            ConversationTurnSteerReceipt {
+                turn_id: "turn-1".to_string()
+            }
+        );
+        assert_eq!(
+            harness.logged_json_lines(1),
+            vec![json!({
+                "id": 1,
+                "method": "turn/steer",
+                "params": {
+                    "threadId": "thread-1",
+                    "input": [{ "type": "text", "text": "correct course" }],
+                    "expectedTurnId": "turn-1"
+                }
+            })]
+        );
+    }
+
+    #[test]
+    fn approval_review_time_does_not_consume_turn_steer_response_deadline() {
+        let mut harness = TestConnection::new(true);
+        harness.connection.config.response_timeout = Duration::from_millis(10);
+        harness.connection.config.approval_timeout = Duration::from_secs(1);
+        let broker = Arc::new(AppServerTurnSteerBroker::default());
+        let binding = broker.bind("thread-1", "turn-1").expect("bind active turn");
+        let caller_broker = broker.clone();
+        let caller = thread::spawn(move || {
+            caller_broker.submit(ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "steer after approval".to_string(),
+            })
+        });
+        while broker.pending_count() == 0 {
+            thread::yield_now();
+        }
+        harness.send_stdout(json!({
+            "id": "approval-before-steer",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "command-1",
+                "startedAtMs": 1,
+                "command": "cargo test",
+                "availableDecisions": ["accept", "decline"]
+            }
+        }));
+        harness.send_stdout(json!({
+            "id": 1,
+            "result": { "turnId": "turn-1" }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, event_receiver) = mpsc::channel();
+        let approval_broker = harness.connection.approval_broker.clone();
+        let resolver = thread::spawn(move || {
+            let event = event_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("approval should reach the operator");
+            let ConversationStreamEvent::ApprovalRequested { request } = event else {
+                panic!("expected approval request, got {event:?}");
+            };
+            thread::sleep(Duration::from_millis(40));
+            approval_broker
+                .resolve(&request.approval_id, ConversationApprovalDecision::Accept)
+                .expect("approval should resolve");
+            event_receiver
+        });
+
+        let terminal = harness
+            .connection
+            .wait_for_turn_stream_with_steering(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+                &broker,
+                binding,
+            )
+            .expect("operator review must not expire the steer response budget");
+
+        let _event_receiver = resolver.join().expect("approval resolver should finish");
+        assert!(terminal.is_completed_and_confirmed());
+        assert_eq!(
+            caller
+                .join()
+                .expect("steering caller should finish")
+                .expect("steering should succeed after approval"),
+            ConversationTurnSteerReceipt {
+                turn_id: "turn-1".to_string()
+            }
+        );
+        let logged = harness.logged_json_lines(2);
+        assert_eq!(logged[0]["method"], "turn/steer");
+        assert_eq!(logged[1]["id"], "approval-before-steer");
+        assert_eq!(logged[1]["result"]["decision"], "accept");
+    }
+
+    #[test]
+    fn terminal_before_steer_response_preserves_authoritative_terminal_and_fails_caller() {
+        let mut harness = TestConnection::new(true);
+        let broker = Arc::new(AppServerTurnSteerBroker::default());
+        let binding = broker.bind("thread-1", "turn-1").expect("bind active turn");
+        let caller_broker = broker.clone();
+        let caller = thread::spawn(move || {
+            caller_broker.submit(ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "late correction".to_string(),
+            })
+        });
+        while broker.pending_count() == 0 {
+            thread::yield_now();
+        }
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, _event_receiver) = mpsc::channel();
+
+        let terminal = harness
+            .connection
+            .wait_for_turn_stream_with_steering(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+                &broker,
+                binding,
+            )
+            .expect("terminal notification must win over the missing steer response");
+        let caller_error = caller
+            .join()
+            .expect("steering caller should finish")
+            .expect_err("unacknowledged steering must keep the caller draft");
+
+        assert!(terminal.is_completed_and_confirmed());
+        assert!(
+            caller_error
+                .to_string()
+                .contains("before app-server confirmed")
+        );
+        assert_eq!(harness.logged_json_lines(1)[0]["method"], "turn/steer");
+    }
+
+    #[test]
+    fn turn_steering_remote_error_fails_only_caller_and_preserves_terminal_stream() {
+        let mut harness = TestConnection::new(true);
+        let broker = Arc::new(AppServerTurnSteerBroker::default());
+        let binding = broker.bind("thread-1", "turn-1").expect("bind active turn");
+        let caller_broker = broker.clone();
+        let caller = thread::spawn(move || {
+            caller_broker.submit(ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "late correction".to_string(),
+            })
+        });
+        while broker.pending_count() == 0 {
+            thread::yield_now();
+        }
+        harness.send_stdout(json!({
+            "id": 1,
+            "error": { "code": -32602, "message": "active turn is not steerable" }
+        }));
+        harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+        let (event_sender, _event_receiver) = mpsc::channel();
+
+        let terminal = harness
+            .connection
+            .wait_for_turn_stream_with_steering(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+                &broker,
+                binding,
+            )
+            .expect("explicit steering rejection must leave the stream healthy");
+        let caller_error = caller
+            .join()
+            .expect("steering caller should finish")
+            .expect_err("remote error must fail the steering caller");
+
+        assert!(terminal.is_completed_and_confirmed());
+        assert!(caller_error.to_string().contains("not steerable"));
+        assert_eq!(harness.logged_json_lines(1)[0]["method"], "turn/steer");
+        assert!(
+            harness
+                .connection
+                .take_warnings()
+                .iter()
+                .any(|warning| warning.contains("stream remains connected"))
+        );
+    }
+
+    #[test]
+    fn invalid_turn_steering_responses_fail_caller_without_ending_stream() {
+        for (response, expected_error) in [
+            (
+                json!({ "id": 1, "result": { "turnId": "turn-other" } }),
+                "did not match",
+            ),
+            (json!({ "id": 1, "result": {} }), "failed to deserialize"),
+            (json!({ "id": 1 }), "without a result payload"),
+        ] {
+            let mut harness = TestConnection::new(true);
+            let broker = Arc::new(AppServerTurnSteerBroker::default());
+            let binding = broker.bind("thread-1", "turn-1").expect("bind active turn");
+            let caller_broker = broker.clone();
+            let caller = thread::spawn(move || {
+                caller_broker.submit(ConversationTurnSteerRequest {
+                    thread_id: "thread-1".to_string(),
+                    expected_turn_id: "turn-1".to_string(),
+                    prompt: "keep this draft".to_string(),
+                })
+            });
+            while broker.pending_count() == 0 {
+                thread::yield_now();
+            }
+            harness.send_stdout(response);
+            harness.send_stdout(completed_turn_notification("thread-1", "turn-1"));
+            let (event_sender, _event_receiver) = mpsc::channel();
+
+            let terminal = harness
+                .connection
+                .wait_for_turn_stream_with_steering(
+                    "thread-1",
+                    "turn-1",
+                    &AppServerTurnInterruptSignal::default(),
+                    0,
+                    &event_sender,
+                    &broker,
+                    binding,
+                )
+                .expect("an invalid correlated response must leave the stream usable");
+            let caller_error = caller
+                .join()
+                .expect("steering caller should finish")
+                .expect_err("an invalid response must fail the steering caller");
+
+            assert!(terminal.is_completed_and_confirmed());
+            assert!(caller_error.to_string().contains(expected_error));
+            assert_eq!(
+                harness.logged_json_lines(1)[0]["params"]["input"],
+                json!([{ "type": "text", "text": "keep this draft" }])
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_before_steering_dispatch_rejects_pending_caller_without_writing() {
+        let mut harness = TestConnection::new(true);
+        let broker = Arc::new(AppServerTurnSteerBroker::default());
+        let binding = broker.bind("thread-1", "turn-1").expect("bind active turn");
+        let caller_broker = broker.clone();
+        let caller = thread::spawn(move || {
+            caller_broker.submit(ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "too late".to_string(),
+            })
+        });
+        while broker.pending_count() == 0 {
+            thread::yield_now();
+        }
+        assert!(
+            harness
+                .connection
+                .pending_notifications
+                .try_push(notification(completed_turn_notification(
+                    "thread-1", "turn-1"
+                )))
+        );
+        let (event_sender, _event_receiver) = mpsc::channel();
+
+        let terminal = harness
+            .connection
+            .wait_for_turn_stream_with_steering(
+                "thread-1",
+                "turn-1",
+                &AppServerTurnInterruptSignal::default(),
+                0,
+                &event_sender,
+                &broker,
+                binding,
+            )
+            .expect("queued terminal should remain authoritative");
+        let caller_error = caller
+            .join()
+            .expect("steering caller should finish")
+            .expect_err("terminal unbind must reject pending steering");
+
+        assert!(terminal.is_completed_and_confirmed());
+        assert!(caller_error.to_string().contains("completed"));
+        assert!(harness.logged_json_lines(0).is_empty());
+    }
+
+    #[test]
+    fn turn_steering_transport_error_unbinds_pending_caller_without_writing() {
+        let mut harness = TestConnection::new(true);
+        let broker = Arc::new(AppServerTurnSteerBroker::default());
+        let binding = broker.bind("thread-1", "turn-1").expect("bind active turn");
+        let caller_broker = broker.clone();
+        let caller = thread::spawn(move || {
+            caller_broker.submit(ConversationTurnSteerRequest {
+                thread_id: "thread-1".to_string(),
+                expected_turn_id: "turn-1".to_string(),
+                prompt: "preserve after disconnect".to_string(),
+            })
+        });
+        while broker.pending_count() == 0 {
+            thread::yield_now();
+        }
+        harness
+            .connection
+            .transport_failure
+            .record("synthetic steering transport failure");
+        let (event_sender, _event_receiver) = mpsc::channel();
+
+        assert!(
+            harness
+                .connection
+                .wait_for_turn_stream_with_steering(
+                    "thread-1",
+                    "turn-1",
+                    &AppServerTurnInterruptSignal::default(),
+                    0,
+                    &event_sender,
+                    &broker,
+                    binding,
+                )
+                .is_err()
+        );
+        let caller_error = caller
+            .join()
+            .expect("steering caller should finish")
+            .expect_err("transport failure must reject pending steering");
+
+        assert!(caller_error.to_string().contains("connection ended"));
+        assert!(harness.logged_json_lines(0).is_empty());
     }
 
     #[test]

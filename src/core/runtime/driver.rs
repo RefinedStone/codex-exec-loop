@@ -101,12 +101,11 @@ mod tests {
     use super::*;
     use crate::application::service::manual_prompt_preparation::ManualPromptPreparationRequest;
     use crate::core::app::{
-        AppEvent, CoreEffectCompletion, CorePromptOrigin, SessionCatalogReadySnapshot,
-        SessionCatalogSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
-        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSubmissionRequest,
+        AppEvent, CoreEffectCompletion, CorePromptOrigin, StartupAttachmentSnapshot,
+        StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
+        TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
-    use crate::domain::recent_sessions::RecentSessions;
 
     #[test]
     fn core_input_channel_applies_backpressure_and_reports_disconnect() {
@@ -345,55 +344,16 @@ mod tests {
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects, rx);
 
-        tx.send(CoreInput::EffectCompleted(
-            CoreEffectCompletion::SessionCatalogLoaded(Ok(SessionCatalogReadySnapshot {
-                catalog: Box::new(
-                    RecentSessions {
-                        items: Vec::new(),
-                        warnings: Vec::new(),
-                        next_cursor: None,
-                    }
-                    .into(),
-                ),
-                tier_label: "provider-backed catalog".to_string(),
-                item_count: 0,
-                warnings: Vec::new(),
-            })),
-        ))
-        .unwrap();
-        tx.send(CoreInput::EffectCompleted(
-            CoreEffectCompletion::SessionCatalogLoaded(Err("second result".to_string())),
-        ))
-        .unwrap();
+        tx.send(CoreInput::Command(AppCommand::Noop)).unwrap();
+        tx.send(CoreInput::Command(AppCommand::Noop)).unwrap();
 
         let first_batch = runtime.drain_pending_inputs(1);
 
         assert_eq!(first_batch.len(), 1);
-        assert_eq!(
-            runtime.snapshot().session_catalog,
-            SessionCatalogSnapshot::Ready(SessionCatalogReadySnapshot {
-                catalog: Box::new(
-                    RecentSessions {
-                        items: Vec::new(),
-                        warnings: Vec::new(),
-                        next_cursor: None,
-                    }
-                    .into(),
-                ),
-                tier_label: "provider-backed catalog".to_string(),
-                item_count: 0,
-                warnings: Vec::new(),
-            })
-        );
 
         let second_batch = runtime.drain_pending_inputs(1);
 
         assert_eq!(second_batch.len(), 1);
-        assert_eq!(
-            runtime.snapshot().session_catalog,
-            SessionCatalogSnapshot::Failed {
-                message: "second result".to_string()
-            }
-        );
+        assert!(runtime.drain_pending_inputs(1).is_empty());
     }
 }

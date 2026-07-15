@@ -26,7 +26,9 @@ pub use conversation::{
 pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
-pub use request::{ConversationLoadCorrelation, StartupCheckCorrelation};
+pub use request::{
+    ConversationLoadCorrelation, SessionCatalogLoadCorrelation, StartupCheckCorrelation,
+};
 pub use session::{SessionCatalogReadySnapshot, SessionCatalogSnapshot, SessionCatalogState};
 pub use snapshot::AppSnapshot;
 pub use startup::{

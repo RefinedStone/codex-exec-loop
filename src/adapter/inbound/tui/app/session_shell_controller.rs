@@ -1,9 +1,10 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::{
-    ConversationIntentEvent, NativeTuiApp, SESSION_PAGE_SIZE, SessionState, ShellChromeEvent,
-    ShellOverlay,
+    BackgroundMessage, ConversationInputEvent, ConversationIntentEvent, NativeTuiApp,
+    SESSION_PAGE_SIZE, SessionState, ShellChromeEvent, ShellOverlay,
 };
+use crate::domain::recent_sessions::SessionRenameRequest;
 use crate::domain::session_browser::{
     SessionBrowserPage, SessionBrowserSelection, build_session_browser_page,
 };
@@ -222,6 +223,155 @@ impl NativeTuiApp {
         true
     }
 
+    pub(super) fn is_session_rename_editing(&self) -> bool {
+        self.session_overlay_ui_state.is_rename_editing()
+    }
+
+    pub(super) fn start_session_rename_edit(&mut self) {
+        if self.shell_overlay != ShellOverlay::Sessions {
+            return;
+        }
+        let Some(session) = self.current_session() else {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: self.tui_language.session_rename_select_status().to_string(),
+            });
+            return;
+        };
+        let thread_id = session.id.clone();
+        let name = session
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| session.title());
+        self.session_overlay_ui_state
+            .start_rename_edit(thread_id, name);
+    }
+
+    pub(super) fn handle_session_rename_editor_key(&mut self, key: event::KeyEvent) -> bool {
+        if self.shell_overlay != ShellOverlay::Sessions || !self.is_session_rename_editing() {
+            return false;
+        }
+        match key.code {
+            KeyCode::Enter if key.modifiers.is_empty() => self.submit_session_rename(),
+            KeyCode::Esc => self
+                .session_overlay_ui_state
+                .cancel_rename_edit(self.tui_language),
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => self
+                .session_overlay_ui_state
+                .cancel_rename_edit(self.tui_language),
+            KeyCode::Backspace => self.session_overlay_ui_state.pop_rename_character(),
+            KeyCode::Char(character)
+                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.session_overlay_ui_state
+                    .push_rename_character(character);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    pub(super) fn handle_session_rename_paste(&mut self, text: &str) -> bool {
+        if self.shell_overlay != ShellOverlay::Sessions || !self.is_session_rename_editing() {
+            return false;
+        }
+        self.session_overlay_ui_state.push_rename_text(text);
+        true
+    }
+
+    fn submit_session_rename(&mut self) {
+        let Some((request_id, request)) = self
+            .session_overlay_ui_state
+            .prepare_rename_request(self.tui_language)
+        else {
+            if let Some(feedback) = self
+                .session_overlay_ui_state
+                .rename_editor_feedback()
+                .map(str::to_string)
+            {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: feedback,
+                });
+            }
+            return;
+        };
+
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: self
+                .tui_language
+                .session_rename_started_status(&request.name),
+        });
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = application.rename_session(request.clone());
+            let _ = tx.send(BackgroundMessage::SessionRenameCompleted {
+                request_id,
+                request,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn apply_session_rename_completion(
+        &mut self,
+        request_id: u64,
+        request: SessionRenameRequest,
+        result: Result<(), String>,
+    ) {
+        if !self
+            .session_overlay_ui_state
+            .pending_rename_matches(request_id, &request)
+        {
+            return;
+        }
+
+        match result {
+            Ok(()) => {
+                if let SessionState::Ready(crate::domain::recent_sessions::SessionCatalog::Ready {
+                    recent_sessions,
+                    ..
+                }) = &mut self.session_state
+                    && let Some(session) = recent_sessions
+                        .items
+                        .iter_mut()
+                        .find(|session| session.id == request.thread_id)
+                {
+                    session.name = Some(request.name.clone());
+                }
+                if self
+                    .active_session
+                    .as_ref()
+                    .map(|session| session.id.as_str())
+                    == Some(request.thread_id.as_str())
+                    && let Some(active_session) = &mut self.active_session
+                {
+                    active_session.name = Some(request.name.clone());
+                }
+                if let super::ConversationState::Ready(conversation) = &mut self.conversation_state
+                    && conversation.thread_id == request.thread_id
+                {
+                    conversation.title = request.name.clone();
+                }
+                self.session_overlay_ui_state.finish_rename_success();
+                self.session_overlay_ui_state
+                    .set_selected_session_id(Some(request.thread_id.clone()));
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self.tui_language.session_renamed_status(&request.name),
+                });
+            }
+            Err(reason) => {
+                self.session_overlay_ui_state
+                    .finish_rename_failure(&reason, self.tui_language);
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self.tui_language.session_rename_failed_status(&reason),
+                });
+            }
+        }
+    }
+
     pub(super) fn handle_session_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         /*
          * This is the Sessions overlay keymap. Commands either refresh the catalog, change browser
@@ -244,6 +394,7 @@ impl NativeTuiApp {
             KeyCode::Char('/') if key.modifiers.is_empty() => {
                 self.start_session_search_query_edit()
             }
+            KeyCode::Char('e') if key.modifiers.is_empty() => self.start_session_rename_edit(),
             KeyCode::Tab if key.modifiers.is_empty() => self.cycle_session_project_filter(1),
             KeyCode::BackTab => self.cycle_session_project_filter(-1),
             KeyCode::Home if key.modifiers.is_empty() => self.jump_to_first_session(),
@@ -279,6 +430,7 @@ impl NativeTuiApp {
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::ConversationState;
+    use crate::adapter::inbound::tui::app::language::TuiLanguage;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
     use crate::domain::session_browser::SessionProjectFilter;
@@ -493,5 +645,134 @@ mod tests {
             Some("thread-beta")
         );
         assert!(matches!(app.conversation_state, ConversationState::Loading));
+    }
+
+    #[test]
+    fn rename_editor_prefills_selected_name_and_cancel_preserves_catalog() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![session("thread-alpha", "Alpha draft", "/tmp/root")],
+        );
+
+        assert!(app.handle_session_overlay_key(key(KeyCode::Char('e'))));
+        assert!(app.is_session_rename_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_thread_id(),
+            Some("thread-alpha")
+        );
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_buffer(),
+            "Alpha draft"
+        );
+
+        assert!(app.handle_session_rename_editor_key(key(KeyCode::Char('x'))));
+        assert!(app.handle_session_rename_editor_key(key(KeyCode::Backspace)));
+        assert!(app.handle_session_rename_editor_key(key(KeyCode::Esc)));
+
+        assert!(!app.is_session_rename_editing());
+        assert_eq!(selected_session_id(&app), Some("thread-alpha"));
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Alpha draft")
+        );
+
+        if let SessionState::Ready(crate::domain::recent_sessions::SessionCatalog::Ready {
+            recent_sessions,
+            ..
+        }) = &mut app.session_state
+        {
+            recent_sessions.items[0].name = None;
+            recent_sessions.items[0].preview = "Fallback preview title\nsecond line".to_string();
+        }
+        app.start_session_rename_edit();
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_buffer(),
+            "Fallback preview title"
+        );
+        app.session_overlay_ui_state
+            .cancel_rename_edit(TuiLanguage::English);
+    }
+
+    #[test]
+    fn rename_completion_updates_exact_row_and_failure_keeps_editor_draft() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![
+                session("thread-alpha", "Alpha draft", "/tmp/root"),
+                session("thread-beta", "Beta draft", "/tmp/root"),
+            ],
+        );
+        app.move_selection(1);
+        app.active_session = app.current_session().cloned();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test conversation should be ready");
+        };
+        conversation.thread_id = "thread-beta".to_string();
+        conversation.title = "Beta draft".to_string();
+        app.start_session_rename_edit();
+        let (failed_request_id, failed_request) = app
+            .session_overlay_ui_state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("rename request should prepare");
+
+        app.apply_session_rename_completion(
+            failed_request_id,
+            failed_request,
+            Err("provider unavailable".to_string()),
+        );
+
+        assert!(app.is_session_rename_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_buffer(),
+            "Beta draft"
+        );
+
+        let (retry_request_id, retry_request) = app
+            .session_overlay_ui_state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("same-value retry should prepare");
+        app.apply_session_rename_completion(failed_request_id, retry_request.clone(), Ok(()));
+        assert!(app.session_overlay_ui_state.is_rename_pending());
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Beta draft")
+        );
+        app.apply_session_rename_completion(
+            retry_request_id,
+            retry_request,
+            Err("retry required".to_string()),
+        );
+
+        app.session_overlay_ui_state.pop_rename_character();
+        app.session_overlay_ui_state.push_rename_character('2');
+        let (success_request_id, success_request) = app
+            .session_overlay_ui_state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("retry should prepare");
+        app.apply_session_rename_completion(success_request_id, success_request, Ok(()));
+
+        assert!(!app.is_session_rename_editing());
+        assert_eq!(selected_session_id(&app), Some("thread-beta"));
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Beta draf2")
+        );
+        assert_eq!(
+            app.active_session
+                .as_ref()
+                .and_then(|session| session.name.as_deref()),
+            Some("Beta draf2")
+        );
+        assert!(matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation) if conversation.title == "Beta draf2"
+        ));
+        app.move_selection(-1);
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Alpha draft")
+        );
     }
 }

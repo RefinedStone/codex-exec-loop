@@ -85,10 +85,106 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     } else if app.parallel_mode_enabled() {
         draw_inline_parallel_mode_inspection(frame, layout[0], app);
     }
+    if app.is_turn_steer_confirmation_visible() {
+        draw_turn_steer_confirmation(frame, app);
+    }
     // exit confirmation은 모든 shell/overlay state 위의 modal이므로 마지막 draw operation이어야 한다.
     if app.is_exit_confirmation_visible() {
         draw_exit_confirmation(frame);
     }
+}
+
+fn draw_turn_steer_confirmation(frame: &mut Frame<'_>, app: &NativeTuiApp) {
+    let Some(intent) = app.turn_steer_confirmation.as_ref() else {
+        return;
+    };
+    let request = &intent.request;
+    let title = AkraTheme::title_line(
+        app.tui_language.turn_steer_confirmation_title(),
+        " / exact turn",
+    );
+    let (prompt_preview, prompt_truncated) = steer_prompt_preview(&request.prompt, 240, 6);
+    let mut lines = vec![
+        Line::from(app.tui_language.turn_steer_confirmation_question()),
+        Line::from(format!(
+            "thread: {}  |  turn: {}",
+            compact_steer_identity(&request.thread_id),
+            compact_steer_identity(&request.expected_turn_id),
+        )),
+        Line::from(""),
+        Line::from("prompt:"),
+    ];
+    lines.extend(prompt_preview.into_iter().map(Line::from));
+    if prompt_truncated {
+        lines.push(Line::from(app.tui_language.turn_steer_preview_truncated()));
+    }
+    lines.extend([
+        Line::from(""),
+        AkraTheme::key_line(app.tui_language.turn_steer_confirmation_keys()),
+    ]);
+    let desired_width = lines
+        .iter()
+        .map(Line::width)
+        .chain(std::iter::once(title.width()))
+        .max()
+        .unwrap_or(1)
+        .saturating_add(2)
+        .min(72)
+        .min(usize::from(u16::MAX)) as u16;
+    let popup_width = desired_width.min(frame.area().width);
+    let rendered_body_rows = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(popup_width.saturating_sub(2));
+    let content_height = rendered_body_rows
+        .saturating_add(2)
+        .min(usize::from(u16::MAX)) as u16;
+    let popup_area = centered_fixed_rect(popup_width, content_height, frame.area());
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(AkraTheme::panel_block(title))
+            .wrap(Wrap { trim: false }),
+        popup_area,
+    );
+}
+
+fn compact_steer_identity(value: &str) -> String {
+    let mut compact = value.chars().take(12).collect::<String>();
+    if value.chars().count() > 12 {
+        compact.push_str("...");
+    }
+    compact
+}
+
+fn steer_prompt_preview(value: &str, max_chars: usize, max_lines: usize) -> (Vec<String>, bool) {
+    let mut preview = Vec::new();
+    let mut remaining_chars = max_chars;
+    let mut source_lines = value.split('\n').peekable();
+    let mut truncated = false;
+
+    while let Some(line) = source_lines.next() {
+        if preview.len() >= max_lines {
+            truncated = true;
+            break;
+        }
+        let line_chars = line.chars().count();
+        if line_chars > remaining_chars {
+            preview.push(line.chars().take(remaining_chars).collect());
+            truncated = true;
+            break;
+        }
+        preview.push(line.to_string());
+        remaining_chars -= line_chars;
+        if source_lines.peek().is_some() {
+            if remaining_chars == 0 {
+                truncated = true;
+                break;
+            }
+            remaining_chars -= 1;
+        }
+    }
+
+    (preview, truncated)
 }
 
 fn draw_exit_confirmation(frame: &mut Frame<'_>) {

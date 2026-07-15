@@ -136,6 +136,8 @@ pub(super) enum SharedRuntimeRequestKind {
     StartupChecks,
     // RecentSessions는 session list mapping이 필요하지만 긴 turn stream과 독립적으로 요청될 수 있다.
     RecentSessions,
+    // SessionRename is a short metadata mutation that can run on an isolated connection while a turn streams.
+    SessionRename,
     // ConversationSnapshot은 기존 thread 재개 전 현재 conversation projection을 짧게 조회하는 경로다.
     ConversationSnapshot,
 }
@@ -146,6 +148,7 @@ impl SharedRuntimeRequestKind {
         match self {
             Self::StartupChecks => "startup checks request",
             Self::RecentSessions => "recent sessions request",
+            Self::SessionRename => "session rename request",
             Self::ConversationSnapshot => "conversation snapshot request",
         }
     }

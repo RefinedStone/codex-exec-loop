@@ -17,7 +17,7 @@ expression: rendered
 "task-2(in_progress))                                                            "
 "recent codex: previous transcript should remain vis...                          "
 ">                                                                               "
-"prompt: type now  |  Enter when idle                                            "
+"prompt: Enter queue | Tab steer | Ctrl+j nl                                     "
 "                                                                                "
 "                                                                                "
 "                                                                                "

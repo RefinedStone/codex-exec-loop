@@ -16,7 +16,7 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
     ConversationLoadCorrelation, ConversationReadySnapshot, ConversationThreadReviewSnapshot,
-    SessionCatalogReadySnapshot, StartupCheckCorrelation,
+    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, StartupCheckCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -76,10 +76,11 @@ impl CoreEffectRunner {
                 None
             }
             CoreEffect::LoadSessionCatalog {
+                correlation,
                 limit,
                 workspace_directory,
             } => {
-                self.spawn_session_catalog_load(limit, workspace_directory);
+                self.spawn_session_catalog_load(correlation, limit, workspace_directory);
                 None
             }
             CoreEffect::LoadConversation {
@@ -115,13 +116,20 @@ impl CoreEffectRunner {
         }
     }
 
-    pub fn spawn_session_catalog_load(&self, limit: usize, workspace_directory: String) {
+    pub fn spawn_session_catalog_load(
+        &self,
+        correlation: SessionCatalogLoadCorrelation,
+        limit: usize,
+        workspace_directory: String,
+    ) {
         let session_service = self.session_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
             let request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
-            let completion =
-                session_catalog_completion(session_service.load_session_catalog(request));
+            let completion = session_catalog_completion(
+                correlation,
+                session_service.load_session_catalog(request),
+            );
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -199,12 +207,16 @@ fn startup_checks_completion(
     }
 }
 
-fn session_catalog_completion(result: Result<SessionCatalog>) -> CoreEffectCompletion {
-    CoreEffectCompletion::SessionCatalogLoaded(
-        result
+fn session_catalog_completion(
+    correlation: SessionCatalogLoadCorrelation,
+    result: Result<SessionCatalog>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::SessionCatalogLoaded {
+        correlation,
+        result: result
             .map(SessionCatalogReadySnapshot::from_catalog)
             .map_err(|error| error.to_string()),
-    )
+    }
 }
 
 fn conversation_snapshot_completion(
@@ -290,6 +302,10 @@ mod tests {
         StartupCheckCorrelation::new(7)
     }
 
+    fn session_catalog_correlation() -> SessionCatalogLoadCorrelation {
+        SessionCatalogLoadCorrelation::new(8)
+    }
+
     fn conversation_correlation(thread_id: &str) -> ConversationLoadCorrelation {
         ConversationLoadCorrelation::new(9, thread_id)
     }
@@ -373,30 +389,39 @@ mod tests {
         .into();
 
         assert_eq!(
-            session_catalog_completion(Ok(catalog)),
-            CoreEffectCompletion::SessionCatalogLoaded(Ok(SessionCatalogReadySnapshot {
-                catalog: Box::new(
-                    RecentSessions {
-                        items: Vec::new(),
-                        warnings: vec!["partial catalog".to_string()],
-                        next_cursor: None,
-                    }
-                    .into(),
-                ),
-                tier_label: SessionCatalogTier::ProviderBackedCatalog
-                    .label()
-                    .to_string(),
-                item_count: 0,
-                warnings: vec!["partial catalog".to_string()],
-            }))
+            session_catalog_completion(session_catalog_correlation(), Ok(catalog)),
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(),
+                result: Ok(SessionCatalogReadySnapshot {
+                    catalog: Box::new(
+                        RecentSessions {
+                            items: Vec::new(),
+                            warnings: vec!["partial catalog".to_string()],
+                            next_cursor: None,
+                        }
+                        .into(),
+                    ),
+                    tier_label: SessionCatalogTier::ProviderBackedCatalog
+                        .label()
+                        .to_string(),
+                    item_count: 0,
+                    warnings: vec!["partial catalog".to_string()],
+                })
+            }
         );
     }
 
     #[test]
     fn session_catalog_error_maps_to_core_completion() {
         assert_eq!(
-            session_catalog_completion(Err(anyhow::anyhow!("catalog unavailable"))),
-            CoreEffectCompletion::SessionCatalogLoaded(Err("catalog unavailable".to_string()))
+            session_catalog_completion(
+                session_catalog_correlation(),
+                Err(anyhow::anyhow!("catalog unavailable"))
+            ),
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(),
+                result: Err("catalog unavailable".to_string())
+            }
         );
     }
 

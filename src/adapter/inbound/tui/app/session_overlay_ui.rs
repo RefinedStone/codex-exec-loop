@@ -1,6 +1,9 @@
 use ratatui::widgets::ListState;
 
+use crate::domain::recent_sessions::SessionRenameRequest;
 use crate::domain::session_browser::{SessionBrowserState, SessionProjectFilter};
+
+use super::language::TuiLanguage;
 
 // 세션 오버레이의 검색 입력은 즉시 커밋되는 필터가 아니라 편집 중인 초안이다.
 // Enter가 눌릴 때만 `SessionBrowserState`로 넘어가야 하므로 커밋된 쿼리와 버퍼를
@@ -9,6 +12,14 @@ use crate::domain::session_browser::{SessionBrowserState, SessionProjectFilter};
 struct SessionSearchQueryEditorState {
     is_editing: bool,
     buffer: String,
+}
+
+#[derive(Debug, Default)]
+struct SessionRenameEditorState {
+    thread_id: Option<String>,
+    buffer: String,
+    pending_request: Option<(u64, SessionRenameRequest)>,
+    feedback: Option<String>,
 }
 
 // TUI 어댑터가 세션 브라우저 도메인 상태와 ratatui 렌더링 상태를 묶어 들고 있는
@@ -26,6 +37,8 @@ pub(super) struct SessionOverlayUiState {
     // 선택된 행과 별도로 세션 식별자를 보관한다.
     selected_session_id: Option<String>,
     search_query_editor: SessionSearchQueryEditorState,
+    rename_editor: SessionRenameEditorState,
+    next_rename_request_id: u64,
 }
 
 impl Default for SessionOverlayUiState {
@@ -43,6 +56,8 @@ impl SessionOverlayUiState {
             browser_state: SessionBrowserState::new(page_size),
             selected_session_id: None,
             search_query_editor: SessionSearchQueryEditorState::default(),
+            rename_editor: SessionRenameEditorState::default(),
+            next_rename_request_id: 0,
         }
     }
     pub fn browser_state(&self) -> &SessionBrowserState {
@@ -59,6 +74,111 @@ impl SessionOverlayUiState {
     }
     pub fn search_query_editor_buffer(&self) -> &str {
         &self.search_query_editor.buffer
+    }
+
+    pub fn is_rename_editing(&self) -> bool {
+        self.rename_editor.thread_id.is_some()
+    }
+
+    pub fn rename_editor_buffer(&self) -> &str {
+        &self.rename_editor.buffer
+    }
+
+    pub fn rename_editor_thread_id(&self) -> Option<&str> {
+        self.rename_editor.thread_id.as_deref()
+    }
+
+    pub fn rename_editor_feedback(&self) -> Option<&str> {
+        self.rename_editor.feedback.as_deref()
+    }
+
+    pub fn is_rename_pending(&self) -> bool {
+        self.rename_editor.pending_request.is_some()
+    }
+
+    pub fn start_rename_edit(&mut self, thread_id: impl Into<String>, name: impl Into<String>) {
+        self.rename_editor.thread_id = Some(thread_id.into());
+        self.rename_editor.buffer = name.into();
+        self.rename_editor.pending_request = None;
+        self.rename_editor.feedback = None;
+    }
+
+    pub fn push_rename_character(&mut self, character: char) {
+        if !self.is_rename_pending() {
+            self.rename_editor.buffer.push(character);
+            self.rename_editor.feedback = None;
+        }
+    }
+
+    pub fn push_rename_text(&mut self, text: &str) {
+        if self.is_rename_pending() {
+            return;
+        }
+        self.rename_editor.buffer.extend(
+            text.chars()
+                .filter(|character| *character != '\r')
+                .map(|character| if character == '\n' { ' ' } else { character }),
+        );
+        self.rename_editor.feedback = None;
+    }
+
+    pub fn pop_rename_character(&mut self) {
+        if !self.is_rename_pending() {
+            self.rename_editor.buffer.pop();
+            self.rename_editor.feedback = None;
+        }
+    }
+
+    pub fn cancel_rename_edit(&mut self, language: TuiLanguage) {
+        if self.is_rename_pending() {
+            self.rename_editor.feedback =
+                Some(language.session_rename_pending_feedback().to_string());
+            return;
+        }
+        self.rename_editor = SessionRenameEditorState::default();
+    }
+
+    pub fn prepare_rename_request(
+        &mut self,
+        language: TuiLanguage,
+    ) -> Option<(u64, SessionRenameRequest)> {
+        if self.is_rename_pending() {
+            self.rename_editor.feedback = Some(
+                language
+                    .session_rename_already_pending_feedback()
+                    .to_string(),
+            );
+            return None;
+        }
+        let name = self.rename_editor.buffer.trim();
+        if name.is_empty() {
+            self.rename_editor.feedback =
+                Some(language.session_rename_empty_feedback().to_string());
+            return None;
+        }
+        let thread_id = self.rename_editor.thread_id.clone()?;
+        let request = SessionRenameRequest::new(thread_id, name);
+        self.next_rename_request_id = self.next_rename_request_id.wrapping_add(1).max(1);
+        let request_id = self.next_rename_request_id;
+        self.rename_editor.pending_request = Some((request_id, request.clone()));
+        self.rename_editor.feedback = Some(language.session_rename_working_feedback().to_string());
+        Some((request_id, request))
+    }
+
+    pub fn pending_rename_matches(&self, request_id: u64, request: &SessionRenameRequest) -> bool {
+        self.rename_editor
+            .pending_request
+            .as_ref()
+            .is_some_and(|pending| pending.0 == request_id && pending.1 == *request)
+    }
+
+    pub fn finish_rename_success(&mut self) {
+        self.rename_editor = SessionRenameEditorState::default();
+    }
+
+    pub fn finish_rename_failure(&mut self, reason: &str, language: TuiLanguage) {
+        self.rename_editor.pending_request = None;
+        self.rename_editor.feedback = Some(language.session_rename_failed_feedback(reason));
     }
 
     pub fn start_search_query_edit(&mut self) {
@@ -318,5 +438,64 @@ mod tests {
         assert!(!state.is_search_query_editing());
         assert_eq!(state.browser_state().search_query, "release");
         assert_eq!(state.search_query_editor_buffer(), "release");
+    }
+
+    #[test]
+    fn rename_editor_captures_exact_thread_and_keeps_failed_draft() {
+        let mut state = SessionOverlayUiState::new(10);
+        state.start_rename_edit("thread-exact", "  Release draft  ");
+
+        let (_, request) = state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("valid rename should be prepared");
+        assert_eq!(
+            request,
+            SessionRenameRequest::new("thread-exact", "Release draft")
+        );
+        assert!(state.is_rename_pending());
+
+        state.finish_rename_failure("provider unavailable", TuiLanguage::English);
+
+        assert!(state.is_rename_editing());
+        assert!(!state.is_rename_pending());
+        assert_eq!(state.rename_editor_buffer(), "  Release draft  ");
+        assert!(
+            state
+                .rename_editor_feedback()
+                .is_some_and(|feedback| feedback.contains("Enter retries"))
+        );
+    }
+
+    #[test]
+    fn rename_editor_rejects_empty_name_and_clears_after_success() {
+        let mut state = SessionOverlayUiState::new(10);
+        state.start_rename_edit("thread-exact", "   ");
+
+        assert!(state.prepare_rename_request(TuiLanguage::English).is_none());
+        assert!(
+            state
+                .rename_editor_feedback()
+                .is_some_and(|feedback| feedback.contains("cannot be empty"))
+        );
+
+        state.push_rename_character('x');
+        assert!(state.prepare_rename_request(TuiLanguage::English).is_some());
+        state.finish_rename_success();
+        assert!(!state.is_rename_editing());
+    }
+
+    #[test]
+    fn rename_editor_paste_stays_single_line_and_is_blocked_while_pending() {
+        let mut state = SessionOverlayUiState::default();
+        state.start_rename_edit("thread-exact", "Release");
+
+        state.push_rename_text(" candidate\r\nready");
+
+        assert_eq!(state.rename_editor_buffer(), "Release candidate ready");
+        assert!(state.prepare_rename_request(TuiLanguage::English).is_some());
+
+        state.push_rename_text(" ignored");
+
+        assert_eq!(state.rename_editor_buffer(), "Release candidate ready");
     }
 }

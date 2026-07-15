@@ -79,6 +79,220 @@ impl TuiLanguage {
         }
     }
 
+    pub(super) const fn running_prompt_hint(self, buffered: bool) -> &'static str {
+        match (self, buffered) {
+            (Self::English, false) => "prompt: Enter queue | Tab steer | Ctrl+j nl",
+            (Self::English, true) => "buffered: Enter queue | Tab steer | Ctrl+j nl",
+            (Self::Korean, false) => "입력: Enter 큐 | Tab 전달 | Ctrl+j 줄바꿈",
+            (Self::Korean, true) => "작성됨: Enter 큐 | Tab 전달 | Ctrl+j 줄바꿈",
+        }
+    }
+
+    pub(super) const fn turn_starting_prompt_hint(self, buffered: bool) -> &'static str {
+        match (self, buffered) {
+            (Self::English, false) => "prompt: wait for turn start  |  type now",
+            (Self::English, true) => {
+                "buffered prompt  |  wait for turn start  |  Enter queues after start  |  Ctrl+j nl"
+            }
+            (Self::Korean, false) => "프롬프트: 턴 시작 대기 중  |  지금 입력 가능",
+            (Self::Korean, true) => {
+                "입력된 프롬프트  |  턴 시작 대기  |  시작 후 Enter 큐 등록  |  Ctrl+j 줄바꿈"
+            }
+        }
+    }
+
+    pub(super) fn manual_prompt_queued_status(
+        self,
+        task_id: &str,
+        revision: i64,
+        undo_available: bool,
+    ) -> String {
+        match (self, undo_available) {
+            (Self::English, true) => {
+                format!("queued task {task_id} / revision {revision} / undo available")
+            }
+            (Self::English, false) => format!("queued task {task_id} / revision {revision}"),
+            (Self::Korean, true) => {
+                format!("작업 {task_id} 큐 등록 완료 / 리비전 {revision} / 되돌리기 가능")
+            }
+            (Self::Korean, false) => {
+                format!("작업 {task_id} 큐 등록 완료 / 리비전 {revision}")
+            }
+        }
+    }
+
+    pub(super) const fn manual_prompt_queue_pending_status(self) -> &'static str {
+        match self {
+            Self::English => "queue registration is already being prepared; steer was not opened",
+            Self::Korean => "큐 등록을 준비 중이므로 현재 턴 전달을 열지 않았습니다.",
+        }
+    }
+
+    pub(super) const fn turn_steer_confirmation_title(self) -> &'static str {
+        match self {
+            Self::English => "Steer Active Turn",
+            Self::Korean => "현재 턴에 전달",
+        }
+    }
+
+    pub(super) const fn turn_steer_confirmation_question(self) -> &'static str {
+        match self {
+            Self::English => "Send this exact draft into the active turn?",
+            Self::Korean => "이 초안을 현재 실행 중인 턴에 정확히 전달할까요?",
+        }
+    }
+
+    pub(super) const fn turn_steer_confirmation_keys(self) -> &'static str {
+        match self {
+            Self::English => "Enter/Tab: steer    Esc: keep draft",
+            Self::Korean => "Enter/Tab: 전달    Esc: 초안 유지",
+        }
+    }
+
+    pub(super) const fn turn_steer_preview_truncated(self) -> &'static str {
+        match self {
+            Self::English => "[preview truncated; exact draft will be sent]",
+            Self::Korean => "[미리보기 생략됨 / 원본 초안이 전달됩니다]",
+        }
+    }
+
+    pub(super) const fn session_rename_pending_feedback(self) -> &'static str {
+        match self {
+            Self::English => "Rename is pending; wait for app-server confirmation.",
+            Self::Korean => "이름 변경 확인 중입니다. app-server 응답을 기다리세요.",
+        }
+    }
+
+    pub(super) const fn session_rename_already_pending_feedback(self) -> &'static str {
+        match self {
+            Self::English => "Rename is already pending; wait for app-server confirmation.",
+            Self::Korean => "이미 이름 변경을 확인 중입니다. app-server 응답을 기다리세요.",
+        }
+    }
+
+    pub(super) const fn session_rename_empty_feedback(self) -> &'static str {
+        match self {
+            Self::English => "Name cannot be empty. Enter a title or press Esc to cancel.",
+            Self::Korean => "이름은 비워둘 수 없습니다. 제목을 입력하거나 Esc로 취소하세요.",
+        }
+    }
+
+    pub(super) const fn session_rename_working_feedback(self) -> &'static str {
+        match self {
+            Self::English => "Renaming session...",
+            Self::Korean => "세션 이름 변경 중...",
+        }
+    }
+
+    pub(super) fn session_rename_failed_feedback(self, reason: &str) -> String {
+        match self {
+            Self::English => {
+                format!("Rename failed; draft kept. Enter retries, Esc cancels. {reason}")
+            }
+            Self::Korean => {
+                format!("이름 변경 실패 / 초안 유지. Enter 재시도, Esc 취소. {reason}")
+            }
+        }
+    }
+
+    pub(super) const fn session_rename_select_status(self) -> &'static str {
+        match self {
+            Self::English => "select a session before renaming it",
+            Self::Korean => "이름을 변경할 세션을 먼저 선택하세요.",
+        }
+    }
+
+    pub(super) fn session_rename_started_status(self, name: &str) -> String {
+        match self {
+            Self::English => format!("renaming session: {name}"),
+            Self::Korean => format!("세션 이름 변경 중: {name}"),
+        }
+    }
+
+    pub(super) fn session_renamed_status(self, name: &str) -> String {
+        match self {
+            Self::English => format!("session renamed: {name}"),
+            Self::Korean => format!("세션 이름 변경 완료: {name}"),
+        }
+    }
+
+    pub(super) fn session_rename_failed_status(self, reason: &str) -> String {
+        match self {
+            Self::English => format!("session rename failed; draft kept / {reason}"),
+            Self::Korean => format!("세션 이름 변경 실패 / 초안 유지 / {reason}"),
+        }
+    }
+
+    pub(super) const fn session_rename_label(self) -> &'static str {
+        match self {
+            Self::English => "rename",
+            Self::Korean => "새 이름",
+        }
+    }
+
+    pub(super) const fn session_rename_key_lines(self, pending: bool) -> [&'static str; 2] {
+        match (self, pending) {
+            (Self::English, true) => [
+                "Rename pending; the editor is locked until app-server responds.",
+                "Wait for confirmation; duplicate submit and cancel are disabled.",
+            ],
+            (Self::English, false) => [
+                "Type the session title directly. The selected thread id stays fixed.",
+                "Enter: rename    Esc/Ctrl+C: cancel    Backspace: delete",
+            ],
+            (Self::Korean, true) => [
+                "이름 변경 확인 중 / app-server 응답 전까지 편집이 잠깁니다.",
+                "중복 제출과 취소는 확인이 끝날 때까지 비활성화됩니다.",
+            ],
+            (Self::Korean, false) => [
+                "세션 제목을 입력하세요. 선택한 thread id는 바뀌지 않습니다.",
+                "Enter: 변경    Esc/Ctrl+C: 취소    Backspace: 삭제",
+            ],
+        }
+    }
+
+    pub(super) const fn turn_steer_needs_prompt_status(self) -> &'static str {
+        match self {
+            Self::English => "type a prompt before steering the active turn",
+            Self::Korean => "현재 턴에 전달할 프롬프트를 먼저 입력하세요.",
+        }
+    }
+
+    pub(super) const fn turn_steer_unavailable_status(self) -> &'static str {
+        match self {
+            Self::English => "the active turn changed; draft kept",
+            Self::Korean => "실행 중인 턴이 변경되어 초안을 유지했습니다.",
+        }
+    }
+
+    pub(super) const fn turn_steer_pending_status(self) -> &'static str {
+        match self {
+            Self::English => "steer request pending; draft kept until app-server confirms it",
+            Self::Korean => "현재 턴 전달 요청 확인 중 / app-server 확인 전까지 초안을 유지합니다.",
+        }
+    }
+
+    pub(super) const fn turn_steer_cancelled_status(self) -> &'static str {
+        match self {
+            Self::English => "steer cancelled; draft kept for queue submission",
+            Self::Korean => "현재 턴 전달을 취소했습니다. 초안은 큐 등록용으로 유지됩니다.",
+        }
+    }
+
+    pub(super) fn turn_steer_succeeded_status(self, turn_id: &str) -> String {
+        match self {
+            Self::English => format!("steered into active turn {turn_id}"),
+            Self::Korean => format!("현재 턴 {turn_id}에 전달했습니다."),
+        }
+    }
+
+    pub(super) fn turn_steer_failed_status(self, reason: &str) -> String {
+        match self {
+            Self::English => format!("steer rejected; draft kept / {reason}"),
+            Self::Korean => format!("현재 턴 전달이 거부되어 초안을 유지했습니다. / {reason}"),
+        }
+    }
+
     pub(super) const fn inline_shell_command_detail(
         self,
         command: InlineShellCommand,

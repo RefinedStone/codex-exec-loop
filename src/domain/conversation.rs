@@ -148,6 +148,18 @@ pub struct ConversationTurnOptions {
     pub reasoning_effort: Option<ConversationReasoningEffort>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationTurnSteerRequest {
+    pub thread_id: String,
+    pub expected_turn_id: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationTurnSteerReceipt {
+    pub turn_id: String,
+}
+
 impl ConversationTurnOptions {
     pub const DEFAULT_MODEL: &'static str = "gpt-5.5";
     pub const DEFAULT_REASONING_EFFORT: ConversationReasoningEffort =

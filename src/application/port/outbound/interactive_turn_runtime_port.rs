@@ -9,7 +9,7 @@ use crate::application::service::conversation_runtime_event::ConversationStreamS
 // 둘 다 TUI가 구체 adapter 타입을 몰라도 대화 화면과 제어 버튼을 구성하게 해 주는 domain 값이다.
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationRuntimeControlTruth, ConversationSnapshot,
-    ConversationTurnOptions,
+    ConversationTurnOptions, ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
 use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
@@ -38,6 +38,13 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
         _decision: ConversationApprovalDecision,
     ) -> Result<()> {
         anyhow::bail!("interactive approval decisions are not supported by this runtime")
+    }
+
+    fn steer_turn(
+        &self,
+        _request: ConversationTurnSteerRequest,
+    ) -> Result<ConversationTurnSteerReceipt> {
+        anyhow::bail!("active turn steering is not supported by this runtime")
     }
 
     // 아직 thread_id가 없는 새 대화를 시작하고 첫 prompt의 stream이 닫힐 때까지 실행한다.

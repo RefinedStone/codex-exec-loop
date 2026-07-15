@@ -641,10 +641,10 @@ fn build_inline_ready_prompt_lines(
                 "prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
             }
             (ConversationInputState::SubmittingTurn, _) => {
-                "prompt: wait for turn start".to_string()
+                language.turn_starting_prompt_hint(false).to_string()
             }
             (ConversationInputState::StreamingTurn, _) => {
-                "prompt: type now  |  Enter when idle".to_string()
+                language.running_prompt_hint(false).to_string()
             }
         };
         lines.push(Line::from(line));
@@ -733,9 +733,8 @@ fn build_inline_ready_prompt_lines(
         (ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue, _) => {
             "buffered prompt  |  Enter when ready  |  Ctrl+j nl"
         }
-        (ConversationInputState::SubmittingTurn | ConversationInputState::StreamingTurn, _) => {
-            "buffered prompt  |  Enter when idle  |  Ctrl+j nl"
-        }
+        (ConversationInputState::SubmittingTurn, _) => language.turn_starting_prompt_hint(true),
+        (ConversationInputState::StreamingTurn, _) => language.running_prompt_hint(true),
     };
     lines.push(Line::from(hint));
     lines
@@ -1024,7 +1023,7 @@ mod coverage_tests {
             (
                 ConversationInputState::StreamingTurn,
                 ShellActionAvailability::Ready,
-                "type now",
+                "Enter queue",
             ),
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
@@ -1127,9 +1126,14 @@ mod coverage_tests {
                 "Enter when ready",
             ),
             (
+                ConversationInputState::SubmittingTurn,
+                ShellActionAvailability::Ready,
+                "queues after start",
+            ),
+            (
                 ConversationInputState::StreamingTurn,
                 ShellActionAvailability::Ready,
-                "Enter when idle",
+                "Tab steer",
             ),
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());

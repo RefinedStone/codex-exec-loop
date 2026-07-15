@@ -33,6 +33,7 @@ use crate::core::runtime::{CoreRuntime, core_input_channel};
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
+use crate::domain::recent_sessions::SessionRenameRequest;
 
 use super::{
     AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
@@ -73,6 +74,15 @@ pub(super) enum BackgroundMessage {
         event: ConversationStreamEvent,
     },
     ConversationRuntimeNotice(String),
+    TurnSteerCompleted {
+        request_id: u64,
+        result: Result<crate::domain::conversation::ConversationTurnSteerReceipt, String>,
+    },
+    SessionRenameCompleted {
+        request_id: u64,
+        request: SessionRenameRequest,
+        result: Result<(), String>,
+    },
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
@@ -1056,6 +1066,8 @@ mod tests {
                 },
                 transcript_text: transcript_text.to_string(),
                 parallel_mode_enabled_at_submission: false,
+                delivery: crate::adapter::inbound::tui::app::ManualPromptDelivery::StartTurn,
+                parent_turn_id: None,
             },
         );
         generation
@@ -1065,13 +1077,19 @@ mod tests {
 #[derive(Clone)]
 pub(super) struct NativeTuiApplicationHandle {
     conversations: NativeTuiConversationHandle,
+    sessions: NativeTuiSessionHandle,
     planning_feature: NativeTuiPlanningHandle,
 }
 
 impl NativeTuiApplicationHandle {
-    fn new(conversations: ConversationService, planning_feature: PlanningServices) -> Self {
+    fn new(
+        conversations: ConversationService,
+        sessions: SessionService,
+        planning_feature: PlanningServices,
+    ) -> Self {
         Self {
             conversations: NativeTuiConversationHandle::new(conversations),
+            sessions: NativeTuiSessionHandle::new(sessions),
             planning_feature: NativeTuiPlanningHandle::new(planning_feature),
         }
     }
@@ -1086,6 +1104,17 @@ impl NativeTuiApplicationHandle {
 
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
         self.conversations.request_stop_all_sessions()
+    }
+
+    pub(super) fn steer_turn(
+        &self,
+        request: crate::domain::conversation::ConversationTurnSteerRequest,
+    ) -> Result<crate::domain::conversation::ConversationTurnSteerReceipt, String> {
+        self.conversations.steer_turn(request)
+    }
+
+    pub(super) fn rename_session(&self, request: SessionRenameRequest) -> Result<(), String> {
+        self.sessions.rename_session(request)
     }
 
     pub(super) fn resolve_approval_request(
@@ -1136,6 +1165,23 @@ impl NativeTuiApplicationHandle {
 }
 
 #[derive(Clone)]
+struct NativeTuiSessionHandle {
+    service: SessionService,
+}
+
+impl NativeTuiSessionHandle {
+    fn new(service: SessionService) -> Self {
+        Self { service }
+    }
+
+    fn rename_session(&self, request: SessionRenameRequest) -> Result<(), String> {
+        self.service
+            .rename_session(request)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct NativeTuiConversationHandle {
     service: ConversationService,
 }
@@ -1152,6 +1198,15 @@ impl NativeTuiConversationHandle {
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
         self.service
             .request_stop_all_sessions()
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn steer_turn(
+        &self,
+        request: crate::domain::conversation::ConversationTurnSteerRequest,
+    ) -> Result<crate::domain::conversation::ConversationTurnSteerReceipt, String> {
+        self.service
+            .steer_turn(request)
             .map_err(|error| error.to_string())
     }
 
@@ -1282,7 +1337,11 @@ impl NativeTuiApp {
             core_input_sender,
         );
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
-        let application = NativeTuiApplicationHandle::new(conversation_service, planning_feature);
+        let application = NativeTuiApplicationHandle::new(
+            conversation_service,
+            session_service,
+            planning_feature,
+        );
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
@@ -1316,6 +1375,10 @@ impl NativeTuiApp {
             pending_manual_prompt_preparation: None,
             next_manual_prompt_preparation_request_id: 0,
             manual_prompt_preparation_generation: 0,
+            next_turn_steer_request_id: 0,
+            prompt_input_revision: 0,
+            turn_steer_confirmation: None,
+            pending_turn_steer: None,
             parallel_mode_control_plane,
             conversation_state: ConversationState::ready(initial_conversation),
             pending_conversation_load: None,
@@ -1712,6 +1775,9 @@ impl NativeTuiApp {
             .iter()
             .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
         self.conversation_state = ConversationState::ready(reduction.state);
+        if !self.conversation_has_running_turn() {
+            self.turn_steer_confirmation = None;
+        }
         if let Some(runtime_projection) = next_planning_runtime_projection {
             self.sync_core_planning_runtime_projection(runtime_projection);
         }
@@ -1733,11 +1799,15 @@ impl NativeTuiApp {
             } else {
                 event
             };
+        let mutates_input_buffer = event.mutates_input_buffer();
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };
         let reduction = reduce_conversation_input(conversation, event);
         self.conversation_state = ConversationState::ready(reduction.state);
+        if mutates_input_buffer {
+            self.prompt_input_revision = self.prompt_input_revision.wrapping_add(1).max(1);
+        }
     }
 
     pub(super) fn clear_input_buffer(&mut self) {

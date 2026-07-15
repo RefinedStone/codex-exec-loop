@@ -2,7 +2,7 @@ use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
 };
-use super::{ConversationLoadCorrelation, StartupCheckCorrelation};
+use super::{ConversationLoadCorrelation, SessionCatalogLoadCorrelation, StartupCheckCorrelation};
 use super::{StartupReadySnapshot, StartupSnapshot};
 use super::{TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionCorrelation};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
@@ -37,7 +37,10 @@ pub enum CoreEffectCompletion {
         correlation: StartupCheckCorrelation,
         result: Result<Box<StartupReadySnapshot>, String>,
     },
-    SessionCatalogLoaded(Result<SessionCatalogReadySnapshot, String>),
+    SessionCatalogLoaded {
+        correlation: SessionCatalogLoadCorrelation,
+        result: Result<SessionCatalogReadySnapshot, String>,
+    },
     ConversationLoaded {
         correlation: ConversationLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,

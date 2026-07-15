@@ -63,7 +63,7 @@ impl SessionSummary {
     }
 
     // first_preview_line은 list row에서 session 내용을 한 줄로 요약하는 값이다. raw preview는
-    // 여러 줄일 수 있으므로 첫 non-empty line만 골라 title fallback과 row subtitle에 맞는 길이로 줄인다.
+    // 여러 줄일 수 있으므로 첫 non-empty line만 고르고, 실제 화면 폭에 따른 clipping은 renderer에 맡긴다.
     pub fn first_preview_line(&self) -> String {
         self.preview
             // preview block의 첫 줄은 대개 사용자의 첫 요청 또는 최근 대화 요약이다. detail panel은
@@ -74,8 +74,7 @@ impl SessionSummary {
             .map(str::trim)
             // 빈 첫 줄은 title/subtitle로 쓸 수 없으므로 placeholder fallback으로 내려 보낸다.
             .filter(|value| !value.is_empty())
-            // session browser row는 폭이 제한되어 있어 여기서 Unicode-safe truncation을 적용한다.
-            .map(Self::truncate)
+            .map(str::to_string)
             // preview가 완전히 비어도 UI가 빈 줄로 무너지는 대신 명시적인 placeholder를 보여 준다.
             .unwrap_or_else(|| "(empty preview)".to_string())
     }
@@ -124,23 +123,6 @@ impl SessionSummary {
             // timestamp 변환 실패 시에도 원본 epoch를 보여 준다. 숨기는 것보다 진단 가능한 raw 값이
             // detail panel과 테스트에서 더 유용하다.
             .unwrap_or_else(|| self.updated_at_epoch.to_string())
-    }
-
-    // truncate는 session row용 preview/title fallback을 Unicode scalar 기준으로 줄인다. byte 기준으로
-    // 자르면 한글/이모지 같은 multi-byte 문자를 깨뜨릴 수 있어 chars iterator를 사용한다.
-    fn truncate(value: &str) -> String {
-        // 72자는 session list에서 제목과 보조 metadata가 함께 보일 수 있게 하는 row-level copy limit다.
-        const LIMIT: usize = 72;
-        // chars count를 먼저 계산해 limit 이하 문자열은 원문을 그대로 반환한다. 불필요하게 ellipsis를
-        // 붙이면 검색 결과와 provider preview가 실제보다 손실된 것처럼 보인다.
-        let count = value.chars().count();
-        if count <= LIMIT {
-            return value.to_string();
-        }
-
-        // limit-1개 문자를 남긴 뒤 "..."를 붙인다. 기존 row width보다 약간 길어질 수 있지만,
-        // preview가 잘렸다는 신호를 명확히 주는 쪽을 선택한 표시 helper다.
-        value.chars().take(LIMIT - 1).collect::<String>() + "..."
     }
 }
 
@@ -192,13 +174,11 @@ mod tests {
     }
 
     #[test]
-    fn preview_title_fallback_truncates_unicode_without_splitting_scalars() {
+    fn preview_title_fallback_preserves_full_text_for_responsive_rendering() {
         let summary = summary_with(&"한".repeat(73));
         let title = summary.title();
 
-        assert_eq!(title.chars().count(), 74);
-        assert!(title.starts_with(&"한".repeat(71)));
-        assert!(title.ends_with("..."));
+        assert_eq!(title, "한".repeat(73));
     }
 
     #[test]

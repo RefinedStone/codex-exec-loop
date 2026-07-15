@@ -161,6 +161,17 @@ impl ShellRuntime {
                     self.app
                         .dispatch_core_input(CoreInput::ConversationRuntimeNotice(notice));
                 }
+                BackgroundMessage::TurnSteerCompleted { request_id, result } => {
+                    self.app.apply_turn_steer_completion(request_id, result);
+                }
+                BackgroundMessage::SessionRenameCompleted {
+                    request_id,
+                    request,
+                    result,
+                } => {
+                    self.app
+                        .apply_session_rename_completion(request_id, request, result);
+                }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
                 }
@@ -251,7 +262,11 @@ impl ShellRuntime {
     }
 
     fn handle_paste_text(&mut self, text: String, now: Instant) {
-        if self.app.approval_overlay_active() {
+        if self.app.approval_overlay_active() || self.app.is_turn_steer_confirmation_visible() {
+            self.request_redraw_at(now);
+            return;
+        }
+        if self.app.handle_session_rename_paste(&text) {
             self.request_redraw_at(now);
             return;
         }
@@ -278,6 +293,11 @@ impl ShellRuntime {
         // Shell overlays are modal at the runtime boundary; prompt editing only runs
         // after they decline the key.
         if self.app.handle_shell_overlay_key(key) {
+            self.request_redraw_at(now);
+            return;
+        }
+
+        if self.app.handle_turn_steer_confirmation_key(key) {
             self.request_redraw_at(now);
             return;
         }
@@ -416,6 +436,11 @@ impl ShellRuntime {
             }
             KeyCode::Backspace => self.app.pop_input_character(),
             KeyCode::Delete => self.app.delete_next_input_character(),
+            KeyCode::Tab if key.modifiers.is_empty() => {
+                if !self.app.show_turn_steer_confirmation() {
+                    return;
+                }
+            }
             KeyCode::Enter => self.app.start_turn_submission(),
             KeyCode::Char(character)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>

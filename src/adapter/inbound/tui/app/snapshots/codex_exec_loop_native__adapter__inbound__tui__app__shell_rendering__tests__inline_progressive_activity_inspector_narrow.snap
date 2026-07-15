@@ -11,4 +11,4 @@ expression: narrow
 "◦ Working (0s • waiting for response / inter...)"
 "notice: activity: active:command | diff:+1 -1 h1"
 ">                                               "
-"prompt: type now  |  Enter when idle            "
+"prompt: Enter queue | Tab steer | Ctrl+j nl     "

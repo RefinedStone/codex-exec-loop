@@ -11,7 +11,7 @@ use anyhow::Result;
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
 // SessionCatalogRequest/SessionCatalog는 domain이 정의한 catalog 조회 계약이다. service가 이
 // domain type을 그대로 받게 해 inbound adapter와 outbound adapter가 같은 요청/응답 언어를 사용한다.
-use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest, SessionRenameRequest};
 
 // SessionService는 ShellRuntime과 background task 사이에서 복제될 수 있어야 한다. Clone은 내부
 // Arc handle만 복제하므로 catalog port 구현체의 실제 connection/state는 공유된다.
@@ -59,6 +59,10 @@ impl SessionService {
         */
         self.session_catalog_port.load_session_catalog(request)
     }
+
+    pub fn rename_session(&self, request: SessionRenameRequest) -> Result<()> {
+        self.session_catalog_port.rename_session(request)
+    }
 }
 
 // 이 테스트 모듈은 service가 catalog request를 변형하지 않고 outbound port에 위임하는지 고정한다.
@@ -73,7 +77,9 @@ mod tests {
     use super::*;
     // 테스트 fake는 빈 RecentSessions를 SessionCatalog로 변환해 성공 응답을 만든다. 핵심 검증은
     // 반환 데이터가 아니라 request delegation이므로 catalog contents는 비워 둔다.
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
+    use crate::domain::recent_sessions::{
+        RecentSessions, SessionCatalog, SessionCatalogRequest, SessionRenameRequest,
+    };
 
     // FakeSessionCatalogPort는 service가 넘긴 request를 기록하는 spy port이다. outbound adapter를
     // 실제로 실행하지 않고도 application service가 port contract를 어떻게 호출하는지 검증한다.
@@ -82,6 +88,7 @@ mod tests {
         // requests는 load_session_catalog가 받은 domain request의 원본 기록이다. 테스트는 이
         // Vec을 비교해 workspace/limit이 service에서 손실되거나 덮이지 않았음을 확인한다.
         requests: Mutex<Vec<SessionCatalogRequest>>,
+        rename_requests: Mutex<Vec<SessionRenameRequest>>,
     }
 
     // fake port도 production adapter와 같은 SessionCatalogPort trait을 구현한다. 그래서 service
@@ -111,6 +118,14 @@ mod tests {
             // From<RecentSessions>는 domain catalog의 기본 ready wrapping을 제공한다.
             .into())
         }
+
+        fn rename_session(&self, request: SessionRenameRequest) -> Result<()> {
+            self.rename_requests
+                .lock()
+                .expect("session rename request mutex poisoned")
+                .push(request);
+            Ok(())
+        }
     }
 
     // 이 테스트는 SessionService가 capability request를 그대로 포트에 전달하는지 확인한다.
@@ -138,6 +153,25 @@ mod tests {
                 .lock()
                 .expect("session request mutex poisoned"),
             vec![SessionCatalogRequest::for_workspace(25, "/tmp/root")]
+        );
+    }
+
+    #[test]
+    fn rename_session_preserves_exact_thread_id_and_name() {
+        let port = Arc::new(FakeSessionCatalogPort::default());
+        let service = SessionService::new(port.clone());
+        let request = SessionRenameRequest::new("thread-exact", "Release follow-up");
+
+        service
+            .rename_session(request.clone())
+            .expect("rename session should succeed");
+
+        assert_eq!(
+            *port
+                .rename_requests
+                .lock()
+                .expect("session rename request mutex poisoned"),
+            vec![request]
         );
     }
 }

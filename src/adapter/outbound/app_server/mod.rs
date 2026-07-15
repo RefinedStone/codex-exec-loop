@@ -17,6 +17,7 @@ mod planning_worker;
 mod planning_worker_skill;
 pub(crate) mod protocol;
 pub(crate) mod runtime;
+mod steering;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -41,14 +42,15 @@ pub(crate) use self::planning_worker::PlanningThreadLauncher;
 use self::planning_worker_skill::PlanningWorkerSkillAdapter;
 use self::protocol::{
     ApprovalPolicyValue, ApprovalsReviewerValue, ReasoningEffortValue, SandboxModeValue,
-    ThreadListParams, ThreadResumeParams, ThreadStartParams, TurnInputItem, TurnStartParams,
-    initialize_detail, runtime_configuration_request, sort_and_dedup_warnings, thread_title,
-    to_conversation_snapshot, to_runtime_envelope, to_session_summary,
+    ThreadListParams, ThreadResumeParams, ThreadSetNameParams, ThreadStartParams, TurnInputItem,
+    TurnStartParams, initialize_detail, runtime_configuration_request, sort_and_dedup_warnings,
+    thread_title, to_conversation_snapshot, to_runtime_envelope, to_session_summary,
 };
 use self::runtime::{
     RequestFailureOutcome, RequestRuntimeMode, SharedAppServerRuntime, SharedRuntimeOutput,
     SharedRuntimeRequestKind, request_failure_outcome,
 };
+use self::steering::AppServerTurnSteerBroker;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     APP_SERVER_PROMPT_LOG_MAX_BODY_CHARS, APP_SERVER_PROMPT_LOG_MAX_ITEMS_PER_DIRECTION,
     APP_SERVER_PROMPT_LOG_MAX_METADATA_CHARS, AppServerPromptInputRecord,
@@ -73,13 +75,14 @@ use crate::diagnostics::event_log;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalReviewStatus,
     ConversationRuntimeControlTruth, ConversationSnapshot, ConversationTurnOptions,
+    ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelope, ConversationRuntimeEnvelopeObservation,
 };
 use crate::domain::planning::PostTurnContinuationPermit;
 use crate::domain::recent_sessions::{
-    RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
+    RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier, SessionRenameRequest,
 };
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 use crate::domain::turn_terminal::{
@@ -598,6 +601,7 @@ pub struct CodexAppServerAdapter {
     shared_runtime: Arc<Mutex<SharedAppServerRuntime>>,
     turn_interrupt_signal: AppServerTurnInterruptSignal,
     approval_broker: Arc<AppServerApprovalBroker>,
+    turn_steer_broker: Arc<AppServerTurnSteerBroker>,
     planning_worker_skill_adapter: PlanningWorkerSkillAdapter,
     prompt_log_port: Arc<dyn AppServerPromptLogPort>,
 }
@@ -668,6 +672,7 @@ impl CodexAppServerAdapter {
             shared_runtime: Arc::new(Mutex::new(SharedAppServerRuntime::default())),
             turn_interrupt_signal: AppServerTurnInterruptSignal::default(),
             approval_broker: Arc::new(AppServerApprovalBroker::default()),
+            turn_steer_broker: Arc::new(AppServerTurnSteerBroker::default()),
             planning_worker_skill_adapter: PlanningWorkerSkillAdapter::new(),
             prompt_log_port,
         }
@@ -1263,34 +1268,70 @@ impl CodexAppServerAdapter {
                 "turn/start response did not provide nonempty thread and turn identifiers"
             );
         }
-        send_required_app_server_event(
+        let turn_steer_binding = (prompt_trace_context.session_kind == "main")
+            .then(|| {
+                self.turn_steer_broker
+                    .bind(&trace_thread_id, &turn_response.turn.id)
+            })
+            .transpose()?;
+        if let Err(error) = send_required_app_server_event(
             event_sender,
             ConversationStreamEvent::TurnStarted {
                 turn_id: turn_response.turn.id.clone(),
                 runtime_request: Box::new(runtime_request),
             },
             "turn/started",
-        )?;
+        ) {
+            if let Some(binding) = turn_steer_binding.as_ref() {
+                self.turn_steer_broker.unbind(
+                    binding.binding_id(),
+                    "turn start could not be delivered to the application",
+                );
+            }
+            return Err(error);
+        }
 
         if !prompt_logging_enabled {
-            return connection.wait_for_turn_stream(
-                &trace_thread_id,
-                &turn_response.turn.id,
-                interrupt_signal,
-                observed_interrupt_generation,
-                event_sender,
-            );
+            return match turn_steer_binding {
+                Some(binding) => connection.wait_for_turn_stream_with_steering(
+                    &trace_thread_id,
+                    &turn_response.turn.id,
+                    interrupt_signal,
+                    observed_interrupt_generation,
+                    event_sender,
+                    &self.turn_steer_broker,
+                    binding,
+                ),
+                None => connection.wait_for_turn_stream(
+                    &trace_thread_id,
+                    &turn_response.turn.id,
+                    interrupt_signal,
+                    observed_interrupt_generation,
+                    event_sender,
+                ),
+            };
         }
 
         let (stream_event_sender, capture_worker) =
             prompt_log_stream_forwarder(event_sender.clone());
-        let stream_result = connection.wait_for_turn_stream(
-            &trace_thread_id,
-            &turn_response.turn.id,
-            interrupt_signal,
-            observed_interrupt_generation,
-            &stream_event_sender,
-        );
+        let stream_result = match turn_steer_binding {
+            Some(binding) => connection.wait_for_turn_stream_with_steering(
+                &trace_thread_id,
+                &turn_response.turn.id,
+                interrupt_signal,
+                observed_interrupt_generation,
+                &stream_event_sender,
+                &self.turn_steer_broker,
+                binding,
+            ),
+            None => connection.wait_for_turn_stream(
+                &trace_thread_id,
+                &turn_response.turn.id,
+                interrupt_signal,
+                observed_interrupt_generation,
+                &stream_event_sender,
+            ),
+        };
         drop(stream_event_sender);
         let output_items = match capture_worker.join() {
             Ok(capture) => capture.output_items,
@@ -1473,6 +1514,25 @@ impl SessionCatalogPort for CodexAppServerAdapter {
             },
         ))
     }
+
+    fn rename_session(&self, request: SessionRenameRequest) -> Result<()> {
+        let thread_id = request.thread_id.trim();
+        let name = request.name.trim();
+        if thread_id.is_empty() {
+            anyhow::bail!("session rename requires a thread id");
+        }
+        if name.is_empty() {
+            anyhow::bail!("session rename requires a non-empty name");
+        }
+
+        self.with_shared_runtime(SharedRuntimeRequestKind::SessionRename, |connection, _| {
+            connection.set_thread_name(ThreadSetNameParams {
+                thread_id: thread_id.to_string(),
+                name: name.to_string(),
+            })
+        })?;
+        Ok(())
+    }
 }
 
 impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
@@ -1512,6 +1572,13 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
         decision: ConversationApprovalDecision,
     ) -> Result<()> {
         self.approval_broker.resolve(approval_id, decision)
+    }
+
+    fn steer_turn(
+        &self,
+        request: ConversationTurnSteerRequest,
+    ) -> Result<ConversationTurnSteerReceipt> {
+        self.turn_steer_broker.submit(request)
     }
 
     fn run_new_thread_stream(
@@ -2019,7 +2086,7 @@ mod tests {
     };
     #[cfg(unix)]
     use crate::domain::recent_sessions::{
-        SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
+        SessionCatalog, SessionCatalogRequest, SessionCatalogTier, SessionRenameRequest,
     };
 
     #[cfg(unix)]
@@ -2075,6 +2142,28 @@ mod tests {
                 "thread/read"
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_catalog_port_renames_the_exact_app_server_thread() {
+        let fake_codex = FakeCodex::install("session-rename");
+        let adapter = test_adapter_with_fake(&fake_codex);
+
+        adapter
+            .rename_session(SessionRenameRequest::new(
+                "thread-exact",
+                "Release follow-up",
+            ))
+            .expect("session rename should succeed");
+
+        let request = fake_codex
+            .logged_requests()
+            .into_iter()
+            .find(|request| request["method"] == "thread/name/set")
+            .expect("thread/name/set should be sent");
+        assert_eq!(request["params"]["threadId"], "thread-exact");
+        assert_eq!(request["params"]["name"], "Release follow-up");
     }
 
     #[cfg(unix)]
@@ -4103,6 +4192,8 @@ for line in sys.stdin:
                 "nextCursor": "cursor-next",
             },
         })
+    elif method == "thread/name/set":
+        send({"id": request_id, "result": {}})
     elif method == "thread/read":
         send({
             "id": request_id,

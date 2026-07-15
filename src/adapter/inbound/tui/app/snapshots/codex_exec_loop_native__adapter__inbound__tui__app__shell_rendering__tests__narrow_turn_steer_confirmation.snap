@@ -1,0 +1,22 @@
+---
+source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+expression: rendered
+---
+"                                                "
+"                                                "
+"                                                "
+"┌Akra / Steer Active Turn / exact turn─────────┐"
+"│Send this exact draft into the active turn?   │"
+"│thread: thread-steer...  |  turn:             │"
+"│turn-steer-1...                               │"
+"│                                              │"
+"│prompt:                                       │"
+"│Prioritize the exact queue cancellation       │"
+"│regression before continuing.                 │"
+"│    cargo test --lib                          │"
+"│                                              │"
+"│Enter/Tab: steer    Esc: keep draft           │"
+"└──────────────────────────────────────────────┘"
+"regression before continuing.                   "
+"      cargo test --lib                          "
+"buffered: Enter queue | Tab steer | Ctrl+j nl   "

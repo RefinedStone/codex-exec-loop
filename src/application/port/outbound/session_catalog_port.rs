@@ -4,7 +4,7 @@ use anyhow::Result;
 
 // request와 catalog는 domain recent-sessions 모델이다. port가 adapter 전용 DTO를 노출하지 않기 때문에
 // TUI는 catalog 출처가 app-server인지, provider-backed store인지, fake test port인지 구분하지 않아도 된다.
-use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
+use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest, SessionRenameRequest};
 
 // `SessionCatalogPort`는 최근/재첨부 가능한 session 목록을 읽는 outbound 계약이다.
 // `SessionService`는 이 trait 하나만 보고 catalog를 요청하고, app-server adapter는 이 작은 use-case port를
@@ -18,4 +18,8 @@ pub trait SessionCatalogPort: Send + Sync {
     // 반환값에는 catalog tier, session rows, unavailable reason 같은 domain projection이 들어가며,
     // TUI rendering은 이 값을 그대로 session overlay와 status line으로 바꾼다.
     fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog>;
+
+    fn rename_session(&self, _request: SessionRenameRequest) -> Result<()> {
+        anyhow::bail!("session rename is not supported by this catalog provider")
+    }
 }

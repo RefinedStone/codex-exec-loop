@@ -183,10 +183,29 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn queue_receipt_undo_block_reason(&self) -> Option<&'static str> {
+        if self.parallel_mode_enabled() {
+            return Some("queue changes are disabled while parallel mode owns task leases");
+        }
+        match &self.conversation_state {
+            ConversationState::Ready(conversation)
+                if conversation.has_post_turn_settlement_in_flight()
+                    || conversation.auto_follow_state.has_live_activity() =>
+            {
+                Some("wait for post-turn planning to finish")
+            }
+            ConversationState::Ready(_) => None,
+            ConversationState::Loading | ConversationState::Failed(_) => {
+                Some("queue changes require a ready conversation")
+            }
+        }
+    }
+
     pub(super) fn queue_receipt_undo_task_count(&self) -> Option<usize> {
         if self.shell_overlay != ShellOverlay::Hidden
             || self.is_exit_confirmation_visible()
-            || self.queue_mutation_block_reason().is_some()
+            || self.is_turn_steer_confirmation_visible()
+            || self.queue_receipt_undo_block_reason().is_some()
         {
             return None;
         }

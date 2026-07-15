@@ -3,10 +3,12 @@ use super::{
     make_dispatch_ready_parallel_runtime, make_test_runtime, mark_core_turn_completed,
     post_turn_evaluation_completed_message, sample_startup_diagnostics,
 };
-use crate::adapter::inbound::tui::app::TuiLanguage;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
     PostTurnQueuedPrompt,
+};
+use crate::adapter::inbound::tui::app::{
+    ManualPromptDelivery, PendingManualPromptPreparation, TuiLanguage,
 };
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent;
 use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
@@ -67,6 +69,109 @@ fn plain_character_input_uses_empty_modifier_check() {
     };
     assert_eq!(conversation.input_buffer, "a");
     assert!(runtime.take_redraw_request());
+}
+
+#[test]
+fn session_rename_editor_owns_paste_without_mutating_the_prompt() {
+    let mut runtime = make_test_runtime();
+    runtime.app_mut().shell_overlay = ShellOverlay::Sessions;
+    runtime
+        .app_mut()
+        .session_overlay_ui_state
+        .start_rename_edit("thread-rename", "Release");
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.input_buffer = "keep this prompt".to_string();
+
+    runtime.handle_terminal_event(Event::Paste(" candidate\r\nready".to_string()));
+
+    assert_eq!(
+        runtime
+            .app()
+            .session_overlay_ui_state
+            .rename_editor_buffer(),
+        "Release candidate ready"
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "keep this prompt");
+}
+
+#[test]
+fn tab_opens_exact_turn_steer_confirmation_and_escape_keeps_the_draft() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-steer".to_string();
+    conversation.record_turn_started("turn-steer".to_string());
+    conversation.input_buffer = "add focused coverage".to_string();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+    let request = runtime
+        .app()
+        .turn_steer_confirmation
+        .as_ref()
+        .expect("Tab should open confirmation without submitting");
+    assert_eq!(request.request.thread_id, "thread-steer");
+    assert_eq!(request.request.expected_turn_id, "turn-steer");
+    assert_eq!(request.request.prompt, "add focused coverage");
+    assert!(runtime.app().pending_turn_steer.is_none());
+
+    runtime.handle_terminal_event(Event::Paste("must not alter exact draft".to_string()));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "add focused coverage");
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    assert!(runtime.app().turn_steer_confirmation.is_none());
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "add focused coverage");
+}
+
+#[test]
+fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().startup_state =
+        StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-queue-race".to_string();
+    conversation.record_turn_started("turn-queue-race".to_string());
+    conversation.input_buffer = "apply this once".to_string();
+
+    runtime.app_mut().pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
+        correlation: crate::domain::planning::ManualPromptCorrelation {
+            request_id: 1,
+            generation: 1,
+            workspace_directory,
+        },
+        transcript_text: "apply this once".to_string(),
+        parallel_mode_enabled_at_submission: false,
+        delivery: ManualPromptDelivery::QueueOnly,
+        parent_turn_id: Some("turn-queue-race".to_string()),
+    });
+    assert!(runtime.app().pending_manual_prompt_preparation.is_some());
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+
+    assert!(runtime.app().turn_steer_confirmation.is_none());
+    assert!(runtime.app().pending_turn_steer.is_none());
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, "apply this once");
+    assert!(conversation.status_text.contains("queue registration"));
 }
 
 #[test]

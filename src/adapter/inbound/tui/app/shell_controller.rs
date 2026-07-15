@@ -470,6 +470,185 @@ impl NativeTuiApp {
     pub(super) fn is_exit_confirmation_visible(&self) -> bool {
         self.exit_confirmation_state == ExitConfirmationState::Visible
     }
+
+    pub(super) fn is_turn_steer_confirmation_visible(&self) -> bool {
+        self.turn_steer_confirmation.is_some()
+            && self.shell_overlay == ShellOverlay::Hidden
+            && !self.is_exit_confirmation_visible()
+    }
+
+    pub(super) fn show_turn_steer_confirmation(&mut self) -> bool {
+        if self.pending_manual_prompt_preparation.is_some() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: self
+                    .tui_language
+                    .manual_prompt_queue_pending_status()
+                    .to_string(),
+            });
+            return true;
+        }
+        if self.pending_turn_steer.is_some() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: self.tui_language.turn_steer_pending_status().to_string(),
+            });
+            return true;
+        }
+        let (request, source_input_buffer) = match &self.conversation_state {
+            ConversationState::Ready(conversation)
+                if conversation.has_running_turn()
+                    && !conversation.input_buffer.trim().is_empty() =>
+            {
+                let Some(expected_turn_id) = conversation.active_turn_id.clone() else {
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: self
+                            .tui_language
+                            .turn_steer_unavailable_status()
+                            .to_string(),
+                    });
+                    return true;
+                };
+                if conversation.thread_id.trim().is_empty() {
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: self
+                            .tui_language
+                            .turn_steer_unavailable_status()
+                            .to_string(),
+                    });
+                    return true;
+                }
+                (
+                    ConversationTurnSteerRequest {
+                        thread_id: conversation.thread_id.clone(),
+                        expected_turn_id,
+                        prompt: conversation.input_buffer.trim().to_string(),
+                    },
+                    conversation.input_buffer.clone(),
+                )
+            }
+            ConversationState::Ready(conversation)
+                if conversation.has_running_turn()
+                    && conversation.input_buffer.trim().is_empty() =>
+            {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self
+                        .tui_language
+                        .turn_steer_needs_prompt_status()
+                        .to_string(),
+                });
+                return true;
+            }
+            _ => return false,
+        };
+        self.next_turn_steer_request_id = self.next_turn_steer_request_id.wrapping_add(1).max(1);
+        self.turn_steer_confirmation = Some(TurnSteerUiIntent {
+            request_id: self.next_turn_steer_request_id,
+            input_revision: self.prompt_input_revision,
+            source_input_buffer,
+            request,
+        });
+        true
+    }
+
+    pub(super) fn handle_turn_steer_confirmation_key(&mut self, key: event::KeyEvent) -> bool {
+        if !self.is_turn_steer_confirmation_visible() {
+            return false;
+        }
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
+            self.turn_steer_confirmation = None;
+            return false;
+        }
+        if !key.modifiers.is_empty() {
+            return true;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.turn_steer_confirmation = None;
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self.tui_language.turn_steer_cancelled_status().to_string(),
+                });
+            }
+            KeyCode::Enter | KeyCode::Tab => self.confirm_turn_steer(),
+            _ => {}
+        }
+        true
+    }
+
+    fn confirm_turn_steer(&mut self) {
+        let Some(intent) = self.turn_steer_confirmation.take() else {
+            return;
+        };
+        let still_exact = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.thread_id == intent.request.thread_id
+                    && conversation.active_turn_id.as_deref()
+                        == Some(intent.request.expected_turn_id.as_str())
+                    && conversation.input_buffer == intent.source_input_buffer
+        ) && self.prompt_input_revision == intent.input_revision;
+        if !still_exact {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: self
+                    .tui_language
+                    .turn_steer_unavailable_status()
+                    .to_string(),
+            });
+            return;
+        }
+
+        let request_id = intent.request_id;
+        let request = intent.request.clone();
+        self.pending_turn_steer = Some(intent);
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: self.tui_language.turn_steer_pending_status().to_string(),
+        });
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = application.steer_turn(request);
+            let _ = tx.send(BackgroundMessage::TurnSteerCompleted { request_id, result });
+        });
+    }
+
+    pub(super) fn apply_turn_steer_completion(
+        &mut self,
+        request_id: u64,
+        result: Result<crate::domain::conversation::ConversationTurnSteerReceipt, String>,
+    ) {
+        let Some(intent) = self
+            .pending_turn_steer
+            .as_ref()
+            .filter(|intent| intent.request_id == request_id)
+            .cloned()
+        else {
+            return;
+        };
+        self.pending_turn_steer = None;
+        match result {
+            Ok(receipt) => {
+                let input_revision = self.prompt_input_revision;
+                let draft_is_current = matches!(
+                    &self.conversation_state,
+                    ConversationState::Ready(conversation)
+                        if conversation.thread_id == intent.request.thread_id
+                            && conversation.input_buffer == intent.source_input_buffer
+                ) && input_revision == intent.input_revision;
+                if draft_is_current {
+                    self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+                }
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self
+                        .tui_language
+                        .turn_steer_succeeded_status(&receipt.turn_id),
+                });
+            }
+            Err(reason) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self.tui_language.turn_steer_failed_status(&reason),
+                });
+            }
+        }
+    }
+
     pub(super) fn handle_exit_confirmation_key(&mut self, key: event::KeyEvent) -> Option<bool> {
         if !self.is_exit_confirmation_visible() {
             return None;
@@ -502,6 +681,9 @@ impl NativeTuiApp {
         // Text-field handlers get first refusal because their shortcuts must not
         // leak into overlay navigation while the cursor is inside an editor.
         if self.handle_max_auto_turns_editor_key(key) {
+            return true;
+        }
+        if self.handle_session_rename_editor_key(key) {
             return true;
         }
         if self.handle_session_search_query_editor_key(key) {
@@ -663,7 +845,7 @@ impl NativeTuiApp {
     }
 
     pub(super) fn undo_latest_queue_registration(&mut self) -> bool {
-        if let Some(reason) = self.queue_mutation_block_reason() {
+        if let Some(reason) = self.queue_receipt_undo_block_reason() {
             self.queue_overlay_ui_state.set_feedback(reason);
             return false;
         }
@@ -768,7 +950,7 @@ impl NativeTuiApp {
         }
     }
 
-    fn refresh_queue_overlay_authority_binding(&mut self) -> Result<(), String> {
+    pub(super) fn refresh_queue_overlay_authority_binding(&mut self) -> Result<(), String> {
         self.queue_overlay_ui_state.clear_authority_binding();
         for _ in 0..2 {
             self.refresh_ready_conversation_planning_runtime_projection();
@@ -1118,6 +1300,20 @@ mod tests {
 
     fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> event::KeyEvent {
         event::KeyEvent::new(code, modifiers)
+    }
+
+    fn steer_intent(
+        request_id: u64,
+        input_revision: u64,
+        source_input_buffer: &str,
+        request: ConversationTurnSteerRequest,
+    ) -> TurnSteerUiIntent {
+        TurnSteerUiIntent {
+            request_id,
+            input_revision,
+            source_input_buffer: source_input_buffer.to_string(),
+            request,
+        }
     }
 
     fn startup_ready_snapshot(can_continue: bool) -> Box<StartupReadySnapshot> {
@@ -1923,6 +2119,7 @@ mod tests {
         assert!(ready_conversation_mut(&mut app).complete_post_turn_settlement("turn-queue"));
 
         app.close_shell_overlay();
+        ready_conversation_mut(&mut app).record_turn_started("turn-active-undo".to_string());
         app.queue_overlay_ui_state
             .bind_receipt_undo_hit_area(Some(Rect::new(2, 4, 14, 1)));
         assert!(
@@ -1956,6 +2153,7 @@ mod tests {
                 .latest_queue_mutation_receipt
                 .is_none()
         );
+        ready_conversation_mut(&mut app).mark_turn_finished();
 
         let individually_removed = app
             .application
@@ -2270,5 +2468,166 @@ mod tests {
         app.show_language_selection_overlay();
         assert!(app.handle_language_selection_overlay_key(key(KeyCode::Enter)));
         assert_eq!(app.tui_language, TuiLanguage::English);
+    }
+
+    #[test]
+    fn steer_completion_clears_only_the_exact_confirmed_draft() {
+        let mut app = test_native_tui_app();
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-steer".to_string(),
+            expected_turn_id: "turn-steer".to_string(),
+            prompt: "focus the current work".to_string(),
+        };
+        {
+            let conversation = ready_conversation_mut(&mut app);
+            conversation.thread_id = request.thread_id.clone();
+            conversation.record_turn_started(request.expected_turn_id.clone());
+            conversation.input_buffer = request.prompt.clone();
+        }
+        app.pending_turn_steer = Some(steer_intent(
+            1,
+            app.prompt_input_revision,
+            "focus the current work",
+            request.clone(),
+        ));
+
+        app.apply_turn_steer_completion(1, Err("not steerable".to_string()));
+        assert_eq!(
+            ready_conversation(&app).input_buffer,
+            "focus the current work"
+        );
+        assert!(app.pending_turn_steer.is_none());
+
+        app.pending_turn_steer = Some(steer_intent(
+            2,
+            app.prompt_input_revision,
+            "focus the current work",
+            request,
+        ));
+        app.apply_turn_steer_completion(
+            2,
+            Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                turn_id: "turn-steer".to_string(),
+            }),
+        );
+        assert!(ready_conversation(&app).input_buffer.is_empty());
+        assert!(app.pending_turn_steer.is_none());
+    }
+
+    #[test]
+    fn accepted_steer_does_not_clear_a_draft_edited_after_confirmation() {
+        let mut app = test_native_tui_app();
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-steer".to_string(),
+            expected_turn_id: "turn-steer".to_string(),
+            prompt: "original draft".to_string(),
+        };
+        {
+            let conversation = ready_conversation_mut(&mut app);
+            conversation.thread_id = request.thread_id.clone();
+            conversation.record_turn_started(request.expected_turn_id.clone());
+            conversation.input_buffer = "newer draft".to_string();
+        }
+        app.pending_turn_steer = Some(steer_intent(
+            1,
+            app.prompt_input_revision,
+            "original draft",
+            request,
+        ));
+
+        app.apply_turn_steer_completion(
+            1,
+            Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                turn_id: "turn-steer".to_string(),
+            }),
+        );
+
+        assert_eq!(ready_conversation(&app).input_buffer, "newer draft");
+    }
+
+    #[test]
+    fn accepted_steer_does_not_clear_the_same_draft_retyped_on_a_new_turn() {
+        let mut app = test_native_tui_app();
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-steer".to_string(),
+            expected_turn_id: "turn-old".to_string(),
+            prompt: "same draft".to_string(),
+        };
+        {
+            let conversation = ready_conversation_mut(&mut app);
+            conversation.thread_id = request.thread_id.clone();
+            conversation.record_turn_started("turn-new".to_string());
+            conversation.input_buffer = request.prompt.clone();
+        }
+        app.pending_turn_steer = Some(steer_intent(1, 0, "same draft", request));
+        app.prompt_input_revision = 1;
+
+        app.apply_turn_steer_completion(
+            1,
+            Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                turn_id: "turn-old".to_string(),
+            }),
+        );
+
+        assert_eq!(ready_conversation(&app).input_buffer, "same draft");
+    }
+
+    #[test]
+    fn accepted_steer_clears_an_unchanged_draft_after_the_turn_finishes() {
+        let mut app = test_native_tui_app();
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-steer".to_string(),
+            expected_turn_id: "turn-steer".to_string(),
+            prompt: "delivered draft".to_string(),
+        };
+        {
+            let conversation = ready_conversation_mut(&mut app);
+            conversation.thread_id = request.thread_id.clone();
+            conversation.record_turn_started(request.expected_turn_id.clone());
+            conversation.input_buffer = "delivered draft".to_string();
+            conversation.mark_turn_finished();
+        }
+        app.pending_turn_steer = Some(steer_intent(1, 0, "delivered draft", request));
+
+        app.apply_turn_steer_completion(
+            1,
+            Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                turn_id: "turn-steer".to_string(),
+            }),
+        );
+
+        assert!(ready_conversation(&app).input_buffer.is_empty());
+    }
+
+    #[test]
+    fn stale_steer_completion_cannot_complete_a_new_identical_request() {
+        let mut app = test_native_tui_app();
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-steer".to_string(),
+            expected_turn_id: "turn-steer".to_string(),
+            prompt: "same request".to_string(),
+        };
+        {
+            let conversation = ready_conversation_mut(&mut app);
+            conversation.thread_id = request.thread_id.clone();
+            conversation.record_turn_started(request.expected_turn_id.clone());
+            conversation.input_buffer = "same request".to_string();
+        }
+        app.pending_turn_steer = Some(steer_intent(2, 0, "same request", request));
+
+        app.apply_turn_steer_completion(
+            1,
+            Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                turn_id: "turn-steer".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            app.pending_turn_steer
+                .as_ref()
+                .map(|intent| intent.request_id),
+            Some(2)
+        );
+        assert_eq!(ready_conversation(&app).input_buffer, "same request");
     }
 }

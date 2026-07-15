@@ -318,6 +318,13 @@ pub(super) struct ThreadListParams {
     pub(super) source_kinds: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ThreadSetNameParams {
+    pub(super) thread_id: String,
+    pub(super) name: String,
+}
+
 /*
  * execution policy enums mirror app-server wire vocabulary. execution_policy.rs parses Akra env vars into
  * these values, and thread/turn params below decide whether they are sent at thread scope or turn scope.
@@ -531,6 +538,14 @@ pub(super) struct TurnStartParams {
     pub(super) effort: Option<ReasoningEffortValue>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TurnSteerParams {
+    pub(super) thread_id: String,
+    pub(super) input: Vec<TurnInputItem>,
+    pub(super) expected_turn_id: String,
+}
+
 // TurnInterruptParams is the narrow payload used when the TUI asks app-server to stop the active turn.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -590,6 +605,9 @@ pub(super) struct ThreadReadResponse {
     pub(super) thread: ThreadRecord,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct ThreadSetNameResponse {}
+
 // Raw flattened response extras remain adapter-local. The custom Debug below
 // exposes only structural counts so provider metadata or instruction paths cannot enter logs.
 #[derive(Clone, Deserialize)]
@@ -637,6 +655,12 @@ impl fmt::Debug for ThreadResumeResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct TurnStartResponse {
     pub(super) turn: TurnRecord,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TurnSteerResponse {
+    pub(super) turn_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -810,9 +834,52 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        SessionSourceValue, ThreadReadResponse, ThreadStartResponse, to_conversation_snapshot,
-        to_session_summary,
+        SessionSourceValue, ThreadReadResponse, ThreadSetNameParams, ThreadSetNameResponse,
+        ThreadStartResponse, TurnInputItem, TurnSteerParams, TurnSteerResponse,
+        to_conversation_snapshot, to_session_summary,
     };
+
+    #[test]
+    fn turn_steer_contract_serializes_exact_precondition_and_text_input() {
+        let params = TurnSteerParams {
+            thread_id: "thread-1".to_string(),
+            input: vec![TurnInputItem::text("correct course")],
+            expected_turn_id: "turn-7".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(params).expect("turn/steer params should serialize"),
+            json!({
+                "threadId": "thread-1",
+                "input": [{ "type": "text", "text": "correct course" }],
+                "expectedTurnId": "turn-7"
+            })
+        );
+
+        let response = serde_json::from_value::<TurnSteerResponse>(json!({
+            "turnId": "turn-7"
+        }))
+        .expect("turn/steer response should deserialize");
+        assert_eq!(response.turn_id, "turn-7");
+    }
+
+    #[test]
+    fn thread_set_name_contract_uses_exact_thread_identity() {
+        let params = ThreadSetNameParams {
+            thread_id: "thread-1".to_string(),
+            name: "Release follow-up".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(params).expect("thread/name/set params should serialize"),
+            json!({
+                "threadId": "thread-1",
+                "name": "Release follow-up"
+            })
+        );
+        serde_json::from_value::<ThreadSetNameResponse>(json!({}))
+            .expect("thread/name/set response should deserialize");
+    }
 
     #[test]
     fn thread_start_response_accepts_ephemeral_thread_with_null_path() {

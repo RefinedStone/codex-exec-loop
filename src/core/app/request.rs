@@ -9,6 +9,17 @@ impl StartupCheckCorrelation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionCatalogLoadCorrelation {
+    pub generation: u64,
+}
+
+impl SessionCatalogLoadCorrelation {
+    pub fn new(generation: u64) -> Self {
+        Self { generation }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationLoadCorrelation {
     pub generation: u64,

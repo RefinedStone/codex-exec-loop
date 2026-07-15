@@ -117,6 +117,58 @@ fn narrow_exit_confirmation_keeps_decision_keys_snapshot() {
 }
 
 #[test]
+fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.thread_id = "thread-steer-123456789".to_string();
+    conversation.record_turn_started("turn-steer-123456789".to_string());
+    conversation.input_buffer =
+        "Prioritize the exact queue cancellation regression before continuing.\n    cargo test --lib"
+            .to_string();
+    app.turn_steer_confirmation = Some(TurnSteerUiIntent {
+        request_id: 1,
+        input_revision: 0,
+        source_input_buffer: conversation.input_buffer.clone(),
+        request: ConversationTurnSteerRequest {
+            thread_id: conversation.thread_id.clone(),
+            expected_turn_id: conversation
+                .active_turn_id
+                .clone()
+                .expect("running turn should have identity"),
+            prompt: conversation.input_buffer.clone(),
+        },
+    });
+
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
+
+    assert!(rendered.contains("Akra / Steer Active Turn"), "{rendered}");
+    assert!(rendered.contains("thread: thread-steer..."), "{rendered}");
+    assert!(rendered.contains("turn:"), "{rendered}");
+    assert!(rendered.contains("turn-steer-1..."), "{rendered}");
+    assert!(
+        rendered.contains("Prioritize the exact queue"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("    cargo test --lib"), "{rendered}");
+    assert!(rendered.contains("Enter/Tab: steer"), "{rendered}");
+    assert_snapshot!("narrow_turn_steer_confirmation", rendered);
+}
+
+#[test]
+fn steer_prompt_preview_preserves_lines_and_marks_bounded_omissions() {
+    let (preview, truncated) = steer_prompt_preview("first\n    indented\nlast", 64, 6);
+    assert_eq!(preview, vec!["first", "    indented", "last"]);
+    assert!(!truncated);
+
+    let (preview, truncated) = steer_prompt_preview("first\nsecond\nthird", 64, 2);
+    assert_eq!(preview, vec!["first", "second"]);
+    assert!(truncated);
+}
+
+#[test]
 fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
@@ -125,6 +177,7 @@ fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
     };
     conversation.thread_id = "thread-mouse-undo".to_string();
     conversation.title = "Mouse undo".to_string();
+    conversation.record_turn_started("turn-active-mouse-undo".to_string());
     conversation.latest_queue_mutation_receipt = Some(PlanningQueueMutationReceipt {
         completed_turn_id: "turn-mouse-undo".to_string(),
         planning_revision: 7,
@@ -896,7 +949,9 @@ fn vt100_narrow_shell_matches_snapshot() {
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 48, 10);
 
     assert_snapshot!("vt100_narrow_shell", rendered);
-    assert!(rendered.contains("type now"));
+    assert!(rendered.contains("Enter queue"));
+    assert!(rendered.contains("Tab steer"));
+    assert!(rendered.contains("Ctrl+j nl"));
     assert!(!rendered.contains("prompt: turn running"));
     assert!(rendered.lines().all(|line| line.chars().count() <= 48));
 }

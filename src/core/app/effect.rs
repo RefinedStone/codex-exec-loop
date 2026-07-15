@@ -1,6 +1,6 @@
 use super::{
-    ConversationLoadCorrelation, StartupCheckCorrelation, TurnSubmissionCorrelation,
-    TurnSubmissionRequest,
+    ConversationLoadCorrelation, SessionCatalogLoadCorrelation, StartupCheckCorrelation,
+    TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
 
@@ -10,6 +10,7 @@ pub enum CoreEffect {
         correlation: StartupCheckCorrelation,
     },
     LoadSessionCatalog {
+        correlation: SessionCatalogLoadCorrelation,
         limit: usize,
         workspace_directory: String,
     },

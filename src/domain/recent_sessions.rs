@@ -19,6 +19,21 @@ pub struct SessionCatalogRequest {
     pub current_workspace_directory: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRenameRequest {
+    pub thread_id: String,
+    pub name: String,
+}
+
+impl SessionRenameRequest {
+    pub fn new(thread_id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            thread_id: thread_id.into(),
+            name: name.into(),
+        }
+    }
+}
+
 impl SessionCatalogRequest {
     /*
      * `for_workspace` preserves the shell's current workspace alongside the provider

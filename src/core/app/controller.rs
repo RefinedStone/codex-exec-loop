@@ -1,7 +1,7 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
-    CoreEffectCompletion, CoreInput, StartupCheckCorrelation, TurnStreamEvent, TurnStreamState,
-    TurnStreamUpdate, TurnSubmissionCorrelation,
+    CoreEffectCompletion, CoreInput, SessionCatalogLoadCorrelation, StartupCheckCorrelation,
+    TurnStreamEvent, TurnStreamState, TurnStreamUpdate, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::ManualPromptCorrelation;
@@ -19,6 +19,8 @@ pub struct CoreController {
     turn_stream_state: TurnStreamState,
     next_startup_check_generation: u64,
     in_flight_startup_check: Option<StartupCheckCorrelation>,
+    next_session_catalog_load_generation: u64,
+    in_flight_session_catalog_load: Option<SessionCatalogLoadCorrelation>,
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
@@ -33,6 +35,8 @@ impl CoreController {
             turn_stream_state: TurnStreamState::new(),
             next_startup_check_generation: 1,
             in_flight_startup_check: None,
+            next_session_catalog_load_generation: 1,
+            in_flight_session_catalog_load: None,
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
             in_flight_manual_prompt_preparation: None,
@@ -68,8 +72,14 @@ impl CoreController {
                 limit,
                 workspace_directory,
             }) => {
+                let correlation = SessionCatalogLoadCorrelation::new(take_generation(
+                    &mut self.next_session_catalog_load_generation,
+                    "session catalog load",
+                ));
+                self.in_flight_session_catalog_load = Some(correlation);
                 self.state.mark_session_catalog_loading();
                 self.session_catalog_changed_outcome(vec![CoreEffect::LoadSessionCatalog {
+                    correlation,
                     limit,
                     workspace_directory,
                 }])
@@ -163,7 +173,14 @@ impl CoreController {
                 self.state.apply_startup_result(result);
                 self.startup_changed_outcome(correlation, Vec::new())
             }
-            CoreInput::EffectCompleted(CoreEffectCompletion::SessionCatalogLoaded(result)) => {
+            CoreInput::EffectCompleted(CoreEffectCompletion::SessionCatalogLoaded {
+                correlation,
+                result,
+            }) => {
+                if self.in_flight_session_catalog_load != Some(correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.in_flight_session_catalog_load = None;
                 self.state.apply_session_catalog_result(result);
                 self.session_catalog_changed_outcome(Vec::new())
             }
@@ -678,6 +695,7 @@ mod tests {
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::LoadSessionCatalog {
+                correlation: SessionCatalogLoadCorrelation::new(1),
                 limit: 10,
                 workspace_directory: "/tmp/workspace".to_string(),
             }]
@@ -1034,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn session_catalog_completion_marks_ready() {
+    fn session_catalog_completion_marks_ready_and_drops_older_results() {
         let mut controller = CoreController::new();
         let ready = SessionCatalogReadySnapshot {
             catalog: Box::new(
@@ -1050,11 +1068,20 @@ mod tests {
             warnings: vec!["partial row".to_string()],
         };
 
+        for workspace_directory in ["/tmp/older", "/tmp/current"] {
+            controller.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
+                limit: 10,
+                workspace_directory: workspace_directory.to_string(),
+            }));
+        }
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::SessionCatalogLoaded(Ok(ready.clone())),
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: SessionCatalogLoadCorrelation::new(2),
+                result: Ok(ready.clone()),
+            },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.revision, 3);
         assert_eq!(
             outcome.snapshot.session_catalog,
             SessionCatalogSnapshot::Ready(ready.clone())
@@ -1062,21 +1089,40 @@ mod tests {
         assert_eq!(
             outcome.events,
             vec![AppEvent::SessionCatalogChanged(
-                SessionCatalogSnapshot::Ready(ready)
+                SessionCatalogSnapshot::Ready(ready.clone())
             )]
         );
         assert!(outcome.effects.is_empty());
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: SessionCatalogLoadCorrelation::new(1),
+                result: Err("stale catalog".to_string()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(
+            stale.snapshot.session_catalog,
+            SessionCatalogSnapshot::Ready(ready)
+        );
     }
 
     #[test]
     fn session_catalog_completion_marks_failed() {
         let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
+            limit: 10,
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::SessionCatalogLoaded(Err("catalog unavailable".to_string())),
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: SessionCatalogLoadCorrelation::new(1),
+                result: Err("catalog unavailable".to_string()),
+            },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(outcome.snapshot.revision, 2);
         assert_eq!(
             outcome.snapshot.session_catalog,
             SessionCatalogSnapshot::Failed {

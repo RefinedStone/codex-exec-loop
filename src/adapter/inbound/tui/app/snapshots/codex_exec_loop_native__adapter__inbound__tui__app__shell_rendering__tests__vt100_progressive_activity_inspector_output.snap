@@ -17,4 +17,4 @@ Akra  |  thread: Progressive activity
 ◦ Working (0s • waiting for response / interrupt runtime-...)
 notice: activity: active:command | diff:+1 -1 h1 | cmd:52 lines | ctx:75.00%
 >
-prompt: type now  |  Enter when idle
+prompt: Enter queue | Tab steer | Ctrl+j nl

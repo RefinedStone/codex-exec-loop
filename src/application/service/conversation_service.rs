@@ -21,7 +21,7 @@ use crate::application::service::review_center::{
 };
 use crate::domain::conversation::{
     ConversationApprovalReview, ConversationRuntimeControlTruth, ConversationSnapshot,
-    ConversationTurnOptions,
+    ConversationTurnOptions, ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
 use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
@@ -204,6 +204,13 @@ impl ConversationService {
             .resolve_approval_request(approval_id, decision)
     }
 
+    pub fn steer_turn(
+        &self,
+        request: ConversationTurnSteerRequest,
+    ) -> Result<ConversationTurnSteerReceipt> {
+        self.interactive_turn_runtime_port.steer_turn(request)
+    }
+
     // 새 thread를 만들며 첫 prompt를 실행하는 스트리밍 진입점이다.
     // TUI의 turn submission runtime은 현재 thread_id가 없을 때 이 메서드를 호출하고, 이후 ThreadPrepared/TurnStarted 같은
     // `ConversationStreamEvent`를 수신해 세션 상태를 채운다.
@@ -254,7 +261,8 @@ mod tests {
     };
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus,
-        ConversationRuntimeControlTruth, ConversationTurnOptions,
+        ConversationRuntimeControlTruth, ConversationTurnOptions, ConversationTurnSteerReceipt,
+        ConversationTurnSteerRequest,
     };
     use anyhow::Result;
     use std::sync::{Arc, Mutex};
@@ -346,6 +354,7 @@ mod tests {
 
     struct FakeInteractiveTurnRuntimePort {
         snapshot: ConversationSnapshot,
+        steer_requests: Mutex<Vec<ConversationTurnSteerRequest>>,
     }
 
     impl InteractiveTurnRuntimePort for FakeInteractiveTurnRuntimePort {
@@ -359,6 +368,18 @@ mod tests {
 
         fn request_stop_all_sessions(&self) -> Result<()> {
             Ok(())
+        }
+
+        fn steer_turn(
+            &self,
+            request: ConversationTurnSteerRequest,
+        ) -> Result<ConversationTurnSteerReceipt> {
+            let turn_id = request.expected_turn_id.clone();
+            self.steer_requests
+                .lock()
+                .expect("steer request mutex poisoned")
+                .push(request);
+            Ok(ConversationTurnSteerReceipt { turn_id })
         }
 
         fn run_new_thread_stream(
@@ -391,6 +412,42 @@ mod tests {
     }
 
     #[test]
+    fn steer_turn_delegates_exact_identity_and_prompt_to_runtime_port() {
+        let runtime_port = Arc::new(FakeInteractiveTurnRuntimePort {
+            snapshot: ConversationSnapshot {
+                thread_id: "thread-1".to_string(),
+                title: "Loaded thread".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                messages: Vec::new(),
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
+            },
+            steer_requests: Mutex::new(Vec::new()),
+        });
+        let service = ConversationService::new(runtime_port.clone());
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-1".to_string(),
+            expected_turn_id: "turn-7".to_string(),
+            prompt: "correct course".to_string(),
+        };
+
+        let receipt = service
+            .steer_turn(request.clone())
+            .expect("steering should delegate");
+
+        assert_eq!(receipt.turn_id, "turn-7");
+        assert_eq!(
+            runtime_port
+                .steer_requests
+                .lock()
+                .expect("steer request mutex poisoned")
+                .as_slice(),
+            [request]
+        );
+    }
+
+    #[test]
     fn resumed_thread_snapshot_uses_snapshot_workspace_for_review_lookup() {
         let runtime_port = Arc::new(FakeInteractiveTurnRuntimePort {
             snapshot: ConversationSnapshot {
@@ -402,6 +459,7 @@ mod tests {
                 runtime_notices: Vec::new(),
                 item_lifecycle: Default::default(),
             },
+            steer_requests: Mutex::new(Vec::new()),
         });
         let review_repository = Arc::new(FakeReviewCenterRepository {
             requested_workspaces: Mutex::new(Vec::new()),
@@ -449,6 +507,7 @@ mod tests {
                 runtime_notices: Vec::new(),
                 item_lifecycle: Default::default(),
             },
+            steer_requests: Mutex::new(Vec::new()),
         });
         let review_repository = Arc::new(FakeReviewCenterRepository {
             requested_workspaces: Mutex::new(Vec::new()),
@@ -537,6 +596,7 @@ mod tests {
                 runtime_notices: Vec::new(),
                 item_lifecycle: Default::default(),
             },
+            steer_requests: Mutex::new(Vec::new()),
         });
         let service = ConversationService::new(runtime_port).with_review_center_read_service(
             ReviewCenterReadService::new(
@@ -568,6 +628,7 @@ mod tests {
                 runtime_notices: Vec::new(),
                 item_lifecycle: Default::default(),
             },
+            steer_requests: Mutex::new(Vec::new()),
         });
         let review_repository = Arc::new(FakeReviewCenterRepository::default());
         let service = ConversationService::new(runtime_port).with_review_center_read_service(
@@ -648,6 +709,7 @@ mod tests {
                 runtime_notices: Vec::new(),
                 item_lifecycle: Default::default(),
             },
+            steer_requests: Mutex::new(Vec::new()),
         });
         let mut existing_review = ReviewCenterThreadProjection::new(
             "thread-1",

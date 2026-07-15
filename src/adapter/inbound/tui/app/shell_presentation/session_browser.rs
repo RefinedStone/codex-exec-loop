@@ -8,7 +8,6 @@ use super::capability_copy::{
     session_catalog_warning_blocked_line, session_catalog_warning_waiting_line,
 };
 use super::overlays::{OverlayListEntryView, OverlayListView};
-use super::terminal_text::truncate_end_to_cells;
 use super::{AkraTheme, NativeTuiApp};
 use crate::adapter::inbound::tui::shell_chrome::SessionState;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogTier};
@@ -164,6 +163,7 @@ pub(super) fn build_session_overlay_content(
             // workflow where a session may be opened by id, path, workspace, or
             // source/provider clues.
             let mut lines = vec![
+                Line::from(format!("title: {}", selected_session.title())),
                 Line::from(format!("id: {}", selected_session.id)),
                 Line::from(format!("updated: {}", selected_session.updated_at_label())),
                 Line::from(format!("workspace: {}", selected_session.cwd)),
@@ -174,6 +174,22 @@ pub(super) fn build_session_overlay_content(
                 )),
                 Line::from(format!("status: {}", selected_session.status_type)),
             ];
+            if app.session_overlay_ui_state.is_rename_editing()
+                && app.session_overlay_ui_state.rename_editor_thread_id()
+                    == Some(selected_session.id.as_str())
+            {
+                lines.insert(
+                    1,
+                    Line::from(format!(
+                        "{}: {}",
+                        app.tui_language.session_rename_label(),
+                        app.session_overlay_ui_state.rename_editor_buffer()
+                    )),
+                );
+                if let Some(feedback) = app.session_overlay_ui_state.rename_editor_feedback() {
+                    lines.insert(2, Line::from(feedback.to_string()));
+                }
+            }
             if let Some(branch) = &selected_session.git_branch {
                 lines.push(Line::from(format!("git branch: {branch}")));
             }
@@ -267,6 +283,14 @@ fn build_session_browser_summary_lines(
 // diagnostic surface for unsupported catalogs, or full browser. The shortcuts
 // listed here must match what the shell controller accepts in each mode.
 pub(super) fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+    if app.session_overlay_ui_state.is_rename_editing() {
+        let pending = app.session_overlay_ui_state.is_rename_pending();
+        let key_lines = app.tui_language.session_rename_key_lines(pending);
+        return vec![
+            AkraTheme::key_line(key_lines[0]),
+            AkraTheme::key_line(key_lines[1]),
+        ];
+    }
     if app.session_overlay_ui_state.is_search_query_editing() {
         return vec![
             AkraTheme::key_line("Type the session query directly. Spaces match multiple tokens."),
@@ -287,7 +311,7 @@ pub(super) fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
             "/: query    c: clear    Tab/Shift+Tab: filter    [ ] or PgUp/PgDn: page",
         ),
         AkraTheme::key_line("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
-        AkraTheme::key_line("n: draft    r: reload    Ctrl+d: diagnostics"),
+        AkraTheme::key_line("e: rename    n: draft    r: reload    Ctrl+d: diagnostics"),
     ]
 }
 
@@ -322,17 +346,12 @@ pub(super) fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'stati
 fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
     OverlayListEntryView {
         lines: vec![
+            Line::from(session.title()),
             Line::from(format!(
                 "{}  {}  {}",
-                session.short_id(),
                 session.updated_at_label(),
                 session.workspace_label(),
-            )),
-            Line::from(format!(
-                "{} [{} / {}]",
-                truncate_end_to_cells(&session.title(), 64),
-                session.source,
-                session.model_provider,
+                session.short_id(),
             )),
         ],
     }
@@ -481,6 +500,7 @@ fn plural_suffix(count: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::language::TuiLanguage;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
     use crate::domain::recent_sessions::RecentSessions;
@@ -646,8 +666,9 @@ mod tests {
         assert_eq!(list_view.items.len(), 2);
         assert_eq!(list_view.selected_index, Some(0));
         assert!(list_text(&list_view).contains("thread-a"));
-        assert!(list_text(&list_view).contains("Alpha task [native / openai]"));
+        assert_eq!(list_view.items[0].lines[0].to_string(), "Alpha task");
         let detail_text = lines_text(&detail_lines);
+        assert_eq!(detail_lines[0].to_string(), "title: Alpha task");
         assert!(detail_text.contains("id: thread-alpha"));
         assert!(detail_text.contains("updated:"));
         assert!(detail_text.contains("workspace: /tmp/root"));
@@ -664,6 +685,7 @@ mod tests {
         assert!(detail_text.contains("path: /tmp/root/thread-alpha.json"));
         assert!(lines_text(&build_session_warning_lines(&app)).contains("catalog warning"));
         assert!(lines_text(&build_session_key_lines(&app)).contains("/: query"));
+        assert!(lines_text(&build_session_key_lines(&app)).contains("e: rename"));
 
         app.session_overlay_ui_state
             .set_project_filter(SessionProjectFilter::RecentProject {
@@ -809,18 +831,47 @@ mod tests {
         );
 
         let entry = build_session_list_entry(&session("thread-gamma", "Gamma task", "/tmp/root"));
-        assert!(lines_text(&entry.lines).contains("thread-g"));
-        assert!(lines_text(&entry.lines).contains("Gamma task [native / openai]"));
+        assert_eq!(entry.lines[0].to_string(), "Gamma task");
+        assert!(entry.lines[1].to_string().contains("thread-g"));
+        assert!(!entry.lines[1].to_string().contains("native"));
 
         let long_title = "매우 긴 한국어 세션 제목 ".repeat(8);
         let entry = build_session_list_entry(&session("thread-korean", &long_title, "/tmp/root"));
-        let title_line = entry.lines[1].to_string();
-        let displayed_title = title_line
-            .strip_suffix(" [native / openai]")
-            .expect("source metadata remains visible after title truncation");
-        assert!(displayed_title.ends_with('…'));
-        assert!(super::super::terminal_text::display_width(displayed_title) <= 64);
+        assert_eq!(entry.lines[0].to_string(), long_title);
         assert_eq!(plural_suffix(1), "");
         assert_eq!(plural_suffix(2), "s");
+    }
+
+    #[test]
+    fn rename_editor_renders_exact_selected_thread_and_stateful_keys() {
+        let mut app = test_native_tui_app();
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.session_state = SessionState::Ready(ready_catalog(
+            vec![session("thread-alpha", "Alpha task", "/tmp/root")],
+            Vec::new(),
+            None,
+        ));
+        app.session_overlay_ui_state
+            .start_rename_edit("thread-alpha", "Alpha renamed");
+
+        let (_, detail_lines) = build_session_overlay_content(&app);
+        assert_eq!(detail_lines[0].to_string(), "title: Alpha task");
+        assert_eq!(detail_lines[1].to_string(), "rename: Alpha renamed");
+        assert!(lines_text(&detail_lines).contains("id: thread-alpha"));
+        assert!(lines_text(&build_session_key_lines(&app)).contains("Enter: rename"));
+
+        app.session_overlay_ui_state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("rename should enter pending state");
+        let keys = lines_text(&build_session_key_lines(&app));
+        assert!(keys.contains("Rename pending"));
+        assert!(keys.contains("duplicate submit"));
+
+        app.tui_language = TuiLanguage::Korean;
+        let (_, detail_lines) = build_session_overlay_content(&app);
+        assert_eq!(detail_lines[1].to_string(), "새 이름: Alpha renamed");
+        let keys = lines_text(&build_session_key_lines(&app));
+        assert!(keys.contains("이름 변경 확인 중"));
+        assert!(keys.contains("중복 제출"));
     }
 }
