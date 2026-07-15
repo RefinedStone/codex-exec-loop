@@ -600,36 +600,6 @@ impl NativeTuiApp {
         true
     }
 
-    fn queue_mutation_block_reason(&self) -> Option<&'static str> {
-        if self.parallel_mode_enabled() {
-            return Some("queue changes are disabled while parallel mode owns task leases");
-        }
-        match &self.conversation_state {
-            ConversationState::Ready(conversation)
-                if conversation.has_post_turn_settlement_in_flight() =>
-            {
-                Some("wait for post-turn planning to finish")
-            }
-            ConversationState::Ready(conversation)
-                if conversation.auto_follow_state.has_live_activity() =>
-            {
-                Some("wait for post-turn planning to finish")
-            }
-            ConversationState::Ready(conversation)
-                if matches!(
-                    conversation.input_state,
-                    ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue
-                ) =>
-            {
-                None
-            }
-            ConversationState::Ready(_) => Some("wait for the active turn to finish"),
-            ConversationState::Loading | ConversationState::Failed(_) => {
-                Some("queue changes require a ready conversation")
-            }
-        }
-    }
-
     fn cancel_selected_queue_task(&mut self) {
         if let Some(reason) = self.queue_mutation_block_reason() {
             self.queue_overlay_ui_state.set_feedback(reason);
@@ -665,10 +635,10 @@ impl NativeTuiApp {
         );
     }
 
-    fn undo_latest_queue_registration(&mut self) {
+    pub(super) fn undo_latest_queue_registration(&mut self) -> bool {
         if let Some(reason) = self.queue_mutation_block_reason() {
             self.queue_overlay_ui_state.set_feedback(reason);
-            return;
+            return false;
         }
         let receipt = match &self.conversation_state {
             ConversationState::Ready(conversation) => {
@@ -679,30 +649,31 @@ impl NativeTuiApp {
         let Some(receipt) = receipt else {
             self.queue_overlay_ui_state
                 .set_feedback("No recent queue registration is available to undo.");
-            return;
+            return false;
         };
         if self.queue_overlay_ui_state.authority_revision() != Some(receipt.planning_revision) {
-            let feedback = self
-                .refresh_queue_overlay_authority_binding()
-                .err()
-                .unwrap_or_else(|| {
-                    "The latest registration changed; review the refreshed queue before undoing it."
-                        .to_string()
-                });
-            self.queue_overlay_ui_state.set_feedback(feedback);
-            return;
+            if let Err(feedback) = self.refresh_queue_overlay_authority_binding() {
+                self.queue_overlay_ui_state.set_feedback(feedback);
+                return false;
+            }
+            if self.queue_overlay_ui_state.authority_revision() != Some(receipt.planning_revision) {
+                self.queue_overlay_ui_state.set_feedback(
+                    "The latest registration changed; review the refreshed queue before undoing it.",
+                );
+                return false;
+            }
         }
         let created_count = receipt.created_entries().count();
         if created_count == 0 {
             self.queue_overlay_ui_state
                 .set_feedback("The latest receipt did not add removable queue items.");
-            return;
+            return false;
         }
         if !receipt.created_batch_is_cancellable() {
             self.queue_overlay_ui_state.set_feedback(
                 "The latest registration changed after it was shown; review the queue before removing items.",
             );
-            return;
+            return false;
         }
         let targets = receipt
             .created_entries()
@@ -719,14 +690,14 @@ impl NativeTuiApp {
                 targets,
             },
             "Undid latest queue registration",
-        );
+        )
     }
 
     fn apply_queue_cancellation(
         &mut self,
         request: PlanningQueueCancellationRequest,
         success_label: &str,
-    ) {
+    ) -> bool {
         let queue = self.application.planning().queue().clone();
         match queue.cancel_tasks(request) {
             Ok(result) => {
@@ -742,11 +713,13 @@ impl NativeTuiApp {
                 }
                 let _ = self.refresh_queue_overlay_authority_binding();
                 self.queue_overlay_ui_state.set_feedback(success_message);
+                true
             }
             Err(error) => {
                 let _ = self.refresh_queue_overlay_authority_binding();
                 self.queue_overlay_ui_state
                     .set_feedback(format!("Queue change rejected: {error}"));
+                false
             }
         }
     }
@@ -1822,7 +1795,17 @@ mod tests {
         assert!(ready_conversation(&app).has_post_turn_settlement_in_flight());
         assert!(ready_conversation_mut(&mut app).complete_post_turn_settlement("turn-queue"));
 
-        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
+        app.close_shell_overlay();
+        app.queue_overlay_ui_state
+            .bind_receipt_undo_hit_area(Some(Rect::new(2, 4, 14, 1)));
+        assert!(
+            app.handle_queue_receipt_mouse_event(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left,),
+                column: 2,
+                row: 4,
+                modifiers: KeyModifiers::NONE,
+            })
+        );
 
         let after = app
             .application

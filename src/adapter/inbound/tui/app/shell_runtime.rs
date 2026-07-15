@@ -228,6 +228,11 @@ impl ShellRuntime {
 
                 self.handle_key_press(key, now);
             }
+            Event::Mouse(mouse) => {
+                if self.app.handle_queue_receipt_mouse_event(mouse) {
+                    self.request_redraw_at(now);
+                }
+            }
             Event::Paste(text) => self.handle_paste_text(text, now),
             Event::Resize(_, _) => {
                 /*
@@ -237,11 +242,11 @@ impl ShellRuntime {
                  * the physical cursor or host scrollback.
                  */
                 self.terminal_resize_epoch = self.terminal_resize_epoch.saturating_add(1);
+                self.app.clear_queue_receipt_undo_hit_area();
                 self.request_redraw_at(now);
             }
             Event::FocusGained => self.frame_scheduler.set_focused(true, now),
             Event::FocusLost => self.frame_scheduler.set_focused(false, now),
-            _ => {}
         }
     }
 

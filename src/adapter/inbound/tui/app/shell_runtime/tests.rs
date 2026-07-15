@@ -40,7 +40,7 @@ use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCata
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 use anyhow::Result;
-use crossterm::event::KeyEventState;
+use crossterm::event::{KeyEventState, MouseButton, MouseEvent, MouseEventKind};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -876,6 +876,46 @@ fn non_press_key_events_are_ignored() {
     }));
 
     assert!(!runtime.should_quit());
+}
+
+#[test]
+fn queue_receipt_mouse_down_routes_to_the_inline_undo_action() {
+    let mut runtime = make_test_runtime();
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("test runtime should start with a ready conversation");
+    };
+    conversation.latest_queue_mutation_receipt =
+        Some(crate::domain::planning::PlanningQueueMutationReceipt {
+            completed_turn_id: "turn-mouse".to_string(),
+            planning_revision: 1,
+            entries: vec![crate::domain::planning::PlanningQueueMutationReceiptEntry {
+                task_id: "task-mouse".to_string(),
+                task_title: "Mouse undo".to_string(),
+                mutation_kind: crate::domain::planning::PlanningQueueMutationKind::Created,
+                before_status: None,
+                after_status: crate::domain::planning::TaskStatus::Ready,
+                after_updated_at: "2026-07-15T00:00:00Z".to_string(),
+                unchanged_since_mutation: true,
+            }],
+        });
+    runtime
+        .app_mut()
+        .queue_overlay_ui_state
+        .bind_receipt_undo_hit_area(Some(ratatui::layout::Rect::new(3, 5, 14, 1)));
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 3,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    }));
+
+    assert!(runtime.take_redraw_request());
+    assert_eq!(
+        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        None
+    );
 }
 // Background loads must surface planning authority and queue context when a
 // resumed conversation points at a workspace that already has planning state.

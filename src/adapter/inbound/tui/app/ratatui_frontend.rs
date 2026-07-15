@@ -33,7 +33,7 @@ pub(super) fn run(
      * 먼저 guard로 감싼다. 이후 backend 생성, draw, event read 중 어디서 실패해도 Drop이
      * 사용자 shell을 복구하는 단일 경로가 된다.
      */
-    let _restore_guard = TerminalRestoreGuard::activate()?;
+    let mut restore_guard = TerminalRestoreGuard::activate()?;
     let backend = CrosstermBackend::new(io::stdout());
     /*
      * inline history mode는 ratatui TerminalOptions와 adapter의 history 정책이 같은 전제를
@@ -47,7 +47,7 @@ pub(super) fn run(
      * 결정하고, frame 준비와 host scrollback 보정은 adapter/runtime 조합에 맡긴다.
      */
     let mut adapter = InlineTerminalAdapter::new(terminal);
-    run_event_loop(&mut adapter, &mut runtime, shutdown)
+    run_event_loop(&mut adapter, &mut runtime, shutdown, &mut restore_guard)
 }
 
 /*
@@ -74,6 +74,7 @@ fn run_event_loop(
     adapter: &mut InlineTerminalAdapter<InlineTerminalBackend<CrosstermBackend<io::Stdout>>>,
     runtime: &mut ShellRuntime,
     shutdown: &crate::shutdown::GracefulShutdown,
+    restore_guard: &mut TerminalRestoreGuard,
 ) -> Result<()> {
     while !runtime.should_quit() && !shutdown.is_requested() {
         /*
@@ -90,6 +91,12 @@ fn run_event_loop(
             let transaction_completed = adapter.draw_inline_transaction(runtime)?;
             runtime.finish_pending_quit_after_transaction(transaction_completed);
         }
+        // Preserve normal terminal selection and wheel scrolling unless the current frame owns a clickable action.
+        restore_guard.sync_mouse_capture(
+            runtime
+                .app_mut()
+                .queue_receipt_undo_mouse_capture_requested(),
+        )?;
         /*
          * poll timeout은 기본 idle wait와 다음 scheduled draw deadline의 교집합이다. 입력이 없어도
          * delayed draw 시점에는 poll이 깨어나 frame coalescing이 실제 화면에 반영된다.
@@ -161,6 +168,7 @@ fn drain_ready_terminal_events_with(
  */
 struct TerminalRestoreGuard {
     bracketed_paste_enabled: bool,
+    mouse_capture_enabled: bool,
 }
 
 impl TerminalRestoreGuard {
@@ -178,7 +186,22 @@ impl TerminalRestoreGuard {
         let bracketed_paste_enabled = execute!(stdout, event::EnableBracketedPaste).is_ok();
         Ok(Self {
             bracketed_paste_enabled,
+            mouse_capture_enabled: false,
         })
+    }
+
+    fn sync_mouse_capture(&mut self, requested: bool) -> Result<()> {
+        if requested == self.mouse_capture_enabled {
+            return Ok(());
+        }
+        let mut stdout = io::stdout();
+        if requested {
+            execute!(stdout, event::EnableMouseCapture)?;
+        } else {
+            execute!(stdout, event::DisableMouseCapture)?;
+        }
+        self.mouse_capture_enabled = requested;
+        Ok(())
     }
 }
 
@@ -189,6 +212,9 @@ impl Drop for TerminalRestoreGuard {
          * 실패해도 raw mode 해제, focus 구독 해제, cursor 복구를 계속 시도하는 편이 낫다.
          */
         let mut stdout = io::stdout();
+        if self.mouse_capture_enabled {
+            let _ = execute!(stdout, event::DisableMouseCapture);
+        }
         if self.bracketed_paste_enabled {
             let _ = execute!(stdout, event::DisableBracketedPaste);
         }

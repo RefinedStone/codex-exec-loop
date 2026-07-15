@@ -1,11 +1,15 @@
 use std::collections::BTreeMap;
 
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::{Position, Rect};
+
+use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
 };
 use crate::domain::planning::TaskStatus;
 
-use super::NativeTuiApp;
+use super::{ConversationInputState, ConversationState, NativeTuiApp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueOverlayActionTask {
@@ -43,6 +47,7 @@ pub(super) struct QueueOverlayUiState {
     feedback: Option<String>,
     authority_revision: Option<i64>,
     authority_tokens: BTreeMap<String, QueueOverlayAuthorityToken>,
+    receipt_undo_hit_area: Option<Rect>,
 }
 
 impl QueueOverlayUiState {
@@ -74,6 +79,28 @@ impl QueueOverlayUiState {
 
     pub(super) fn authority_revision(&self) -> Option<i64> {
         self.authority_revision
+    }
+
+    pub(super) fn bind_receipt_undo_hit_area(&mut self, hit_area: Option<Rect>) {
+        self.receipt_undo_hit_area = hit_area;
+    }
+
+    pub(super) fn clear_receipt_undo_hit_area(&mut self) {
+        self.receipt_undo_hit_area = None;
+    }
+
+    pub(super) fn receipt_undo_hit_area(&self) -> Option<Rect> {
+        self.receipt_undo_hit_area
+    }
+
+    fn take_receipt_undo_hit(&mut self, column: u16, row: u16) -> bool {
+        let clicked = self
+            .receipt_undo_hit_area
+            .is_some_and(|area| area.contains(Position::new(column, row)));
+        if clicked {
+            self.receipt_undo_hit_area = None;
+        }
+        clicked
     }
 
     pub(super) fn selected_authority_token(
@@ -126,6 +153,86 @@ impl QueueOverlayUiState {
 }
 
 impl NativeTuiApp {
+    pub(super) fn queue_mutation_block_reason(&self) -> Option<&'static str> {
+        if self.parallel_mode_enabled() {
+            return Some("queue changes are disabled while parallel mode owns task leases");
+        }
+        match &self.conversation_state {
+            ConversationState::Ready(conversation)
+                if conversation.has_post_turn_settlement_in_flight() =>
+            {
+                Some("wait for post-turn planning to finish")
+            }
+            ConversationState::Ready(conversation)
+                if conversation.auto_follow_state.has_live_activity() =>
+            {
+                Some("wait for post-turn planning to finish")
+            }
+            ConversationState::Ready(conversation)
+                if matches!(
+                    conversation.input_state,
+                    ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue
+                ) =>
+            {
+                None
+            }
+            ConversationState::Ready(_) => Some("wait for the active turn to finish"),
+            ConversationState::Loading | ConversationState::Failed(_) => {
+                Some("queue changes require a ready conversation")
+            }
+        }
+    }
+
+    pub(super) fn queue_receipt_undo_task_count(&self) -> Option<usize> {
+        if self.shell_overlay != ShellOverlay::Hidden
+            || self.is_exit_confirmation_visible()
+            || self.queue_mutation_block_reason().is_some()
+        {
+            return None;
+        }
+        let ConversationState::Ready(conversation) = &self.conversation_state else {
+            return None;
+        };
+        let receipt = conversation.latest_queue_mutation_receipt.as_ref()?;
+        receipt
+            .created_batch_is_cancellable()
+            .then(|| receipt.created_entries().count())
+    }
+
+    pub(super) fn clear_queue_receipt_undo_hit_area(&mut self) {
+        self.queue_overlay_ui_state.clear_receipt_undo_hit_area();
+    }
+
+    pub(super) fn queue_receipt_undo_mouse_capture_requested(&self) -> bool {
+        self.queue_overlay_ui_state
+            .receipt_undo_hit_area()
+            .is_some()
+            && self.queue_receipt_undo_task_count().is_some()
+    }
+
+    pub(super) fn handle_queue_receipt_mouse_event(&mut self, mouse: MouseEvent) -> bool {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left)
+            || mouse.modifiers != KeyModifiers::NONE
+            || self.queue_receipt_undo_task_count().is_none()
+            || !self
+                .queue_overlay_ui_state
+                .take_receipt_undo_hit(mouse.column, mouse.row)
+        {
+            return false;
+        }
+
+        if !self.undo_latest_queue_registration() {
+            let feedback = self.queue_overlay_ui_state.feedback().map(str::to_string);
+            if let (Some(feedback), ConversationState::Ready(conversation)) =
+                (feedback, &mut self.conversation_state)
+            {
+                conversation.status_text = feedback.clone();
+                conversation.append_status_message(feedback);
+            }
+        }
+        true
+    }
+
     pub(super) fn queue_action_tasks(&self) -> Vec<QueueOverlayActionTask> {
         let projection = PlanningApplicationProjection::from_runtime_projection(
             &self.planning_runtime_projection_snapshot(),
@@ -208,5 +315,16 @@ mod tests {
         state.reset();
 
         assert!(state.selected_authority_token().is_none());
+    }
+
+    #[test]
+    fn receipt_undo_hit_area_is_single_use() {
+        let mut state = QueueOverlayUiState::default();
+        state.bind_receipt_undo_hit_area(Some(ratatui::layout::Rect::new(4, 7, 14, 1)));
+
+        assert!(!state.take_receipt_undo_hit(3, 7));
+        assert!(state.take_receipt_undo_hit(4, 7));
+        assert!(!state.take_receipt_undo_hit(4, 7));
+        assert_eq!(state.receipt_undo_hit_area(), None);
     }
 }

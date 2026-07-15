@@ -58,6 +58,15 @@ impl AkraTheme {
             .add_modifier(Modifier::BOLD)
     }
 
+    // Mouse-clickable inline actions use a filled treatment so they read as controls, not status prose.
+    // Yellow preserves the existing shortcut vocabulary while black foreground keeps terminal contrast explicit.
+    pub(super) fn inline_action() -> Style {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    }
+
     // tool/machine activity는 user prose나 assistant text와 다른 source임을 색으로 분리한다.
     pub(super) fn tool() -> Style {
         Style::default().fg(Color::Magenta)

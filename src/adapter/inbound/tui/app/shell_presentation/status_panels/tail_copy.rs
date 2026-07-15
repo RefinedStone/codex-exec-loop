@@ -27,6 +27,8 @@ use super::tail_shared::{
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 
+pub(super) const QUEUE_RECEIPT_UNDO_ACTION_LABEL: &str = "[ Undo queue ]";
+
 /* The inline tail is the compact operational dashboard below the transcript. It
  * keeps high-priority state visible in this order: startup readiness, conversation
  * turn state, parallel/planning health, recent transcript context, then prompt
@@ -134,6 +136,9 @@ pub(super) fn build_inline_tail_lines_with_context(
             if let Some(completion_line) = build_completion_alert_line(conversation) {
                 lines.push(completion_line);
             }
+            if let Some(queue_undo_action_line) = build_queue_receipt_undo_action_line(app) {
+                lines.push(queue_undo_action_line);
+            }
             if let Some(runtime_notice_summary) = runtime_notice_summary {
                 lines.push(Line::from(format!(
                     "runtime: {runtime_notice_summary}  |  {warning_summary}",
@@ -239,6 +244,21 @@ fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<
     }
 
     Line::from(parts.join("  |  "))
+}
+
+fn build_queue_receipt_undo_action_line(app: &NativeTuiApp) -> Option<Line<'static>> {
+    let queued_task_count = app.queue_receipt_undo_task_count()?;
+    let task_label = if queued_task_count == 1 {
+        "task"
+    } else {
+        "tasks"
+    };
+    Some(Line::from(vec![
+        Span::styled(QUEUE_RECEIPT_UNDO_ACTION_LABEL, AkraTheme::inline_action()),
+        Span::raw(format!(
+            "  click to cancel {queued_task_count} queued {task_label}  |  keyboard: :queue then u"
+        )),
+    ]))
 }
 
 fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool {

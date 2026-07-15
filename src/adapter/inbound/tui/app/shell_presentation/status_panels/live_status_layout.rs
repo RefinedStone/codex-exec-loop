@@ -1,9 +1,12 @@
+use ratatui::layout::Rect;
+
 use super::super::prompt_composer::{build_prompt_cursor_offset, wrapped_row_count};
 use super::super::{
     Line, NativeTuiApp, ShellConversationState, ShellCorePresentationContext, ShellOverlay,
 };
 use super::tail_copy::{
-    build_inline_tail_lines_with_context, build_inline_tail_prompt_lines_with_context,
+    QUEUE_RECEIPT_UNDO_ACTION_LABEL, build_inline_tail_lines_with_context,
+    build_inline_tail_prompt_lines_with_context,
 };
 
 const INLINE_TAIL_NOTICE_PREFIX_WIDTH: usize = "notice: ".len();
@@ -19,6 +22,8 @@ pub(crate) struct InlineTailView {
     pub(crate) prompt_cursor_offset: Option<(u16, u16)>,
     // Startup mode renders this block from the top instead of pinning it to the bottom.
     pub(crate) render_from_top: bool,
+    // Mouse target relative to the rendered tail body. The renderer translates it into terminal coordinates.
+    pub(crate) queue_receipt_undo_hit_area: Option<Rect>,
 }
 
 // Build the tail text and cursor plan from the same presentation context.
@@ -37,6 +42,9 @@ pub(crate) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> 
     );
     lines = compact_inspection_tail_lines(app, &context, content_width, lines);
 
+    let queue_receipt_undo_hit_area =
+        find_inline_action_hit_area(&lines, content_width, QUEUE_RECEIPT_UNDO_ACTION_LABEL);
+
     // Cursor placement depends on the actual line stack because status/notice rows before the prompt can wrap.
     let prompt_cursor_offset =
         build_inline_prompt_cursor_offset_for_lines(app, &context, content_width, &lines);
@@ -45,7 +53,44 @@ pub(crate) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> 
         lines,
         prompt_cursor_offset,
         render_from_top: context.startup_screen_is_active(),
+        queue_receipt_undo_hit_area,
     }
+}
+
+fn find_inline_action_hit_area(
+    lines: &[Line<'static>],
+    content_width: u16,
+    action_label: &str,
+) -> Option<Rect> {
+    let content_width = usize::from(content_width);
+    if content_width == 0 {
+        return None;
+    }
+
+    let mut rendered_row = 0usize;
+    for line in lines {
+        let mut logical_column = 0usize;
+        for span in &line.spans {
+            let span_width = span.width();
+            if span.content.as_ref() == action_label {
+                let action_x = logical_column % content_width;
+                if action_x.saturating_add(span_width) > content_width {
+                    return None;
+                }
+                let action_y = rendered_row.saturating_add(logical_column / content_width);
+                return Some(Rect::new(
+                    u16::try_from(action_x).ok()?,
+                    u16::try_from(action_y).ok()?,
+                    u16::try_from(span_width).ok()?,
+                    1,
+                ));
+            }
+            logical_column = logical_column.saturating_add(span_width);
+        }
+        rendered_row =
+            rendered_row.saturating_add(wrapped_row_count(line.width(), content_width as u16));
+    }
+    None
 }
 
 fn compact_inspection_tail_lines(

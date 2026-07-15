@@ -12,6 +12,7 @@ use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeLaunchEnvironment, ConversationRuntimeObservedValue,
 };
 use crate::domain::planning::{
+    PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
     PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
 };
 
@@ -30,6 +31,49 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
     assert!(rendered.contains("prompt: new thread ready"));
     assert!(!rendered.contains("┌"));
     assert_snapshot!("inline_main_buffer_ready_shell", rendered);
+}
+
+#[test]
+fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.thread_id = "thread-mouse-undo".to_string();
+    conversation.title = "Mouse undo".to_string();
+    conversation.latest_queue_mutation_receipt = Some(PlanningQueueMutationReceipt {
+        completed_turn_id: "turn-mouse-undo".to_string(),
+        planning_revision: 7,
+        entries: vec![PlanningQueueMutationReceiptEntry {
+            task_id: "queued-task".to_string(),
+            task_title: "Undo from the conversation tail".to_string(),
+            mutation_kind: PlanningQueueMutationKind::Created,
+            before_status: None,
+            after_status: TaskStatus::Ready,
+            after_updated_at: "2026-07-15T00:00:00Z".to_string(),
+            unchanged_since_mutation: true,
+        }],
+    });
+
+    let rendered = tui_testkit::render_inline_snapshot(&mut app, 96, 24);
+
+    assert!(rendered.contains("[ Undo queue ]"), "{rendered}");
+    assert!(rendered.contains("click to cancel 1 queued task"));
+    let hit_area = app
+        .queue_overlay_ui_state
+        .receipt_undo_hit_area()
+        .expect("visible queue undo action should own a mouse target");
+    assert_eq!(hit_area.width, "[ Undo queue ]".len() as u16);
+    assert_eq!(hit_area.height, 1);
+    assert!(app.queue_receipt_undo_mouse_capture_requested());
+
+    app.shell_overlay = ShellOverlay::Queue;
+    let overlay = tui_testkit::render_shell_snapshot(&mut app, 96, 24);
+
+    assert!(!overlay.contains("[ Undo queue ]"), "{overlay}");
+    assert!(app.queue_overlay_ui_state.receipt_undo_hit_area().is_none());
+    assert!(!app.queue_receipt_undo_mouse_capture_requested());
 }
 
 #[test]

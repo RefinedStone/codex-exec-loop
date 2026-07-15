@@ -68,6 +68,8 @@ pub(super) fn inline_parallel_event_stream_visible_rows(
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
     // 현재 native shell renderer는 하나뿐이지만, mode 인자를 유지해 app runtime과 shell frontend 추상화를 한 경계에서 묶는다.
     let _ = mode;
+    // Mouse coordinates belong to the last completed frame. Clear them before rebuilding this frame's geometry.
+    app.clear_queue_receipt_undo_hit_area();
     let frame_area = frame.area();
     // tail view는 status/prompt line과 cursor offset을 함께 담는다.
     // 같은 tail 높이가 inline inspection/body 분할 기준도 된다.
@@ -122,6 +124,7 @@ fn draw_inline_conversation_shell(
         if app.parallel_mode_enabled() {
             let tail_band = layout.get(1).copied().unwrap_or(frame_area);
             let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
+            bind_queue_receipt_undo_hit_area(app, tail_area, tail_view.queue_receipt_undo_hit_area);
             render_inline_body(frame, tail_area, tail_view.lines, false);
             if !app.parallel_mode_prompt_input_locked() && !app.is_exit_confirmation_visible() {
                 set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
@@ -130,6 +133,11 @@ fn draw_inline_conversation_shell(
         }
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
         if tail_view.render_from_top {
+            bind_queue_receipt_undo_hit_area(
+                app,
+                frame_area,
+                tail_view.queue_receipt_undo_hit_area,
+            );
             render_inline_body(frame, frame_area, tail_view.lines, false);
             if !app.is_exit_confirmation_visible() {
                 set_cursor_if_visible(frame, frame_area, tail_view.prompt_cursor_offset);
@@ -138,6 +146,7 @@ fn draw_inline_conversation_shell(
         }
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_area = inline_body_render_area(frame_area, &tail_view.lines);
+        bind_queue_receipt_undo_hit_area(app, tail_area, tail_view.queue_receipt_undo_hit_area);
         render_inline_live_transcript(frame, frame_area, tail_area, live_transcript_lines);
         render_inline_body(frame, tail_area, tail_view.lines, false);
         if !app.is_exit_confirmation_visible() {
@@ -148,10 +157,30 @@ fn draw_inline_conversation_shell(
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
     // exit modal은 두 영역을 모두 덮어야 하므로 이 함수 밖에서 계속 그린다.
     let tail_area = inline_body_render_area(layout[1], &tail_view.lines);
+    bind_queue_receipt_undo_hit_area(app, tail_area, tail_view.queue_receipt_undo_hit_area);
     render_inline_body(frame, tail_area, tail_view.lines, false);
     if app.shell_overlay == ShellOverlay::Supersession && !app.parallel_mode_prompt_input_locked() {
         set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
     }
+}
+
+fn bind_queue_receipt_undo_hit_area(
+    app: &mut NativeTuiApp,
+    tail_area: Rect,
+    relative_hit_area: Option<Rect>,
+) {
+    let hit_area = relative_hit_area.filter(|relative| {
+        relative.right() <= tail_area.width && relative.bottom() <= tail_area.height
+    });
+    app.queue_overlay_ui_state
+        .bind_receipt_undo_hit_area(hit_area.map(|relative| {
+            Rect::new(
+                tail_area.x.saturating_add(relative.x),
+                tail_area.y.saturating_add(relative.y),
+                relative.width,
+                relative.height,
+            )
+        }));
 }
 
 fn render_inline_live_transcript(
