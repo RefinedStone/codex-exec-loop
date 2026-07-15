@@ -216,21 +216,18 @@ fn typed_activity_rail_tmux_capture_is_bounded_sanitized_and_non_approval_grade(
 
     assert_eq!(artifact["schema"], "akra-typed-activity-rail-e2e/v1");
     assert_eq!(artifact["captureRole"], "supplemental-unmatched");
-    assert_eq!(
-        artifact["reviewer"],
-        "Codex /root/e1_e2_terminal_capability"
-    );
+    assert_eq!(artifact["reviewer"], "Codex /root/rail_capture_review");
     assert_eq!(artifact["approvalGrade"], false);
     assert_eq!(artifact["sourceBuild"], true);
     assert_eq!(artifact["syntheticAppServer"], true);
     assert_eq!(artifact["releasedRuntime"], false);
     assert_eq!(
         artifact["candidate"]["commit"],
-        "0a5f06ea345bd5c24998527679158eaf8643d058"
+        "fde12f2b15f033606189bb2a18536ef44d2bad90"
     );
     assert_eq!(
         artifact["candidate"]["tree"],
-        "7e4c0cd0de3b6609a88786eefe58074d1072d5fd"
+        "0efb676656f7bde31e8b5c46187c5462361f4ce3"
     );
     assert_eq!(artifact["candidate"]["cleanTree"], true);
     assert_eq!(artifact["candidate"]["runtimeExitStatus"], 0);
@@ -307,19 +304,19 @@ fn typed_activity_rail_tmux_capture_is_bounded_sanitized_and_non_approval_grade(
     );
 
     let startup = capture_checkpoint(checkpoints, "startup");
-    assert_capture_checkpoint(startup, [160, 24], [2, 9], 0, 2_296);
+    assert_capture_checkpoint(startup, [160, 24], [2, 9], 0, 2_378);
     assert_eq!(startup["counts"]["currentReadyPrompt"], 1);
     assert_eq!(startup["counts"]["currentActivityRail"], 0);
 
     let active_wide = capture_checkpoint(checkpoints, "active_wide");
-    assert_capture_checkpoint(active_wide, [160, 24], [2, 18], 0, 4_590);
+    assert_capture_checkpoint(active_wide, [160, 24], [2, 18], 0, 4_489);
     assert_active_capture(active_wide, 1);
 
     let active_narrow = capture_checkpoint(checkpoints, "active_narrow");
     let active_narrow_repeat = capture_checkpoint(checkpoints, "active_narrow_repeat");
     for (checkpoint, cursor, history_rows, raw_bytes) in [
-        (active_narrow, [2, 15], 6, 5_397),
-        (active_narrow_repeat, [2, 14], 11, 7_120),
+        (active_narrow, [2, 16], 4, 5_187),
+        (active_narrow_repeat, [2, 16], 7, 6_690),
     ] {
         assert_capture_checkpoint(checkpoint, [48, 18], cursor, history_rows, raw_bytes);
         assert_active_capture(checkpoint, 0);
@@ -329,7 +326,7 @@ fn typed_activity_rail_tmux_capture_is_bounded_sanitized_and_non_approval_grade(
         assert!(
             visible
                 .iter()
-                .any(|line| { line == "notice: activity: cmd:1 lines | active:command" })
+                .any(|line| { line == "notice: activity: active:command | cmd:1 lines" })
         );
         assert!(visible.iter().all(|line| {
             line.as_str()
@@ -341,10 +338,14 @@ fn typed_activity_rail_tmux_capture_is_bounded_sanitized_and_non_approval_grade(
         active_narrow_repeat["digests"]["semanticCurrentSha256"]
     );
     assert_eq!(
+        active_narrow["digests"]["currentSha256"],
+        active_narrow_repeat["digests"]["currentSha256"]
+    );
+    assert_eq!(
         active_narrow["digests"]["semanticHistorySha256"],
         active_narrow_repeat["digests"]["semanticHistorySha256"]
     );
-    for field in ["currentSha256", "historySha256", "fullSha256"] {
+    for field in ["historySha256", "fullSha256"] {
         assert_ne!(
             active_narrow["digests"][field], active_narrow_repeat["digests"][field],
             "tmux raw reflow must remain distinct for {field}"
@@ -352,7 +353,7 @@ fn typed_activity_rail_tmux_capture_is_bounded_sanitized_and_non_approval_grade(
     }
 
     let active_transition_wide = capture_checkpoint(checkpoints, "active_transition_wide");
-    assert_capture_checkpoint(active_transition_wide, [80, 18], [2, 16], 6, 6_267);
+    assert_capture_checkpoint(active_transition_wide, [80, 18], [2, 16], 4, 5_939);
     assert_active_capture(active_transition_wide, 1);
     assert!(
         active_transition_wide["visibleEvidence"]
@@ -365,16 +366,18 @@ fn typed_activity_rail_tmux_capture_is_bounded_sanitized_and_non_approval_grade(
     );
 
     let active_restored = capture_checkpoint(checkpoints, "active_restored");
-    assert_capture_checkpoint(active_restored, [160, 24], [2, 16], 10, 8_029);
+    assert_capture_checkpoint(active_restored, [160, 24], [2, 17], 6, 7_480);
     assert_active_capture(active_restored, 1);
 
     let completed = capture_checkpoint(checkpoints, "completed");
-    assert_capture_checkpoint(completed, [160, 24], [2, 19], 10, 10_320);
+    assert_capture_checkpoint(completed, [160, 24], [2, 20], 6, 9_214);
     for field in [
         "currentActivityRail",
         "currentActiveCommand",
         "currentWorkingState",
         "currentRunningPrompt",
+        "currentTurnWorking",
+        "currentInputStreaming",
         "historyActivityRail",
         "historyActiveCommand",
         "historyWorkingState",
@@ -393,7 +396,7 @@ fn typed_activity_rail_tmux_capture_is_bounded_sanitized_and_non_approval_grade(
     assert_eq!(raw["classification"], "ephemeral-local-observation");
     assert_eq!(raw["rawCaptureRetained"], false);
     assert_eq!(raw["digestRecomputableFromRepository"], false);
-    assert_eq!(raw["bytes"], 10_320);
+    assert_eq!(raw["bytes"], 9_214);
     assert_eq!(raw["committedCanaryOccurrences"], 1);
     assert_eq!(raw["rawSecretOccurrences"], 0);
     assert_eq!(raw["exactAnsiPayloadOccurrences"], 0);
@@ -573,6 +576,8 @@ fn assert_active_capture(checkpoint: &serde_json::Value, model_count: u64) {
     }
     assert_eq!(checkpoint["counts"]["currentModelFact"], model_count);
     for field in [
+        "currentTurnWorking",
+        "currentInputStreaming",
         "historyActivityRail",
         "historyActiveCommand",
         "historyWorkingState",

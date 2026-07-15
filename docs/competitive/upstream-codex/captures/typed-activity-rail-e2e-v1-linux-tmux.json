@@ -2,9 +2,9 @@
   "schema": "akra-typed-activity-rail-e2e/v1",
   "artifactId": "typed-activity-rail-e2e-v1-linux-tmux.json",
   "workItem": "P0-D4 typed activity rail physical-resize regression",
-  "capturedAt": "2026-07-13T18:36:55Z",
+  "capturedAt": "2026-07-15T14:14:18Z",
   "operator": "RefinedStone",
-  "reviewer": "Codex /root/e1_e2_terminal_capability",
+  "reviewer": "Codex /root/rail_capture_review",
   "captureRole": "supplemental-unmatched",
   "checkProfile": "typed-activity-rail-e2e-linux-tmux",
   "scenarioSet": "typed-activity-rail-e2e-v1",
@@ -13,15 +13,15 @@
   "syntheticAppServer": true,
   "releasedRuntime": false,
   "candidate": {
-    "commit": "0a5f06ea345bd5c24998527679158eaf8643d058",
-    "tree": "7e4c0cd0de3b6609a88786eefe58074d1072d5fd",
+    "commit": "fde12f2b15f033606189bb2a18536ef44d2bad90",
+    "tree": "0efb676656f7bde31e8b5c46187c5462361f4ce3",
     "cleanTree": true,
     "cleanChecks": [
       "before-build",
       "after-build",
       "after-capture"
     ],
-    "binarySha256": "a935a82df74f43028c1fab4bc6c7fe8950c83b36174c698b4bbf7a41712f7925",
+    "binarySha256": "afb0b4967114c2023fd78f252be73817e4d35d2ee87ae11b5b81d7691553de4b",
     "syntheticCodexSha256": "29c59009d16c67439d74f1175ccaa0827c0715e429a1137ac2600c4e7648734d",
     "runtimeExitStatus": 0
   },
@@ -87,7 +87,7 @@
         "y": 9
       },
       "historyRows": 0,
-      "rawPtyBytesObserved": 2296,
+      "rawPtyBytesObserved": 2378,
       "counts": {
         "currentActiveCommand": 0,
         "currentActivityRail": 0,
@@ -95,6 +95,8 @@
         "currentRunningPrompt": 0,
         "currentReadyPrompt": 1,
         "currentModelFact": 0,
+        "currentTurnWorking": 0,
+        "currentInputStreaming": 0,
         "historyActivityRail": 0,
         "historyActiveCommand": 0,
         "historyWorkingState": 0,
@@ -107,14 +109,14 @@
         "fullCommittedCanary": 0
       },
       "digests": {
-        "currentSha256": "ef5cfaaefe68768f1a584b466b8a6d5668b4b0abb9ab61ad60f2ff02a161d416",
+        "currentSha256": "e2e0a9c2a4bd9afe56168b4aaf87d77f0ff173e71d17891b1e795616f611f3c5",
         "historySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "fullSha256": "ef5cfaaefe68768f1a584b466b8a6d5668b4b0abb9ab61ad60f2ff02a161d416",
-        "semanticCurrentSha256": "5698db7795da9378fc651f892051d33bbfeacd6847549444fbaf1820d37efa58",
+        "fullSha256": "e2e0a9c2a4bd9afe56168b4aaf87d77f0ff173e71d17891b1e795616f611f3c5",
+        "semanticCurrentSha256": "9a1ffb183a66ff8d9786ab86ca03ecbb3fa76c38db611893da59876abd2b9a35",
         "semanticHistorySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "visibleEvidence": [
-        "Akra  |  Workflows: ready  |  Sessions: loading  |  Reviews: off",
+        "Akra  |  Workflows: ready  |  Sessions: 0 loaded  |  Reviews: off",
         ">",
         "prompt: new thread ready  |  Enter send  |  Ctrl+j nl  |  :help"
       ]
@@ -130,7 +132,7 @@
         "y": 18
       },
       "historyRows": 0,
-      "rawPtyBytesObserved": 4590,
+      "rawPtyBytesObserved": 4489,
       "counts": {
         "currentActiveCommand": 1,
         "currentActivityRail": 1,
@@ -138,6 +140,8 @@
         "currentRunningPrompt": 1,
         "currentReadyPrompt": 0,
         "currentModelFact": 1,
+        "currentTurnWorking": 0,
+        "currentInputStreaming": 0,
         "historyActivityRail": 0,
         "historyActiveCommand": 0,
         "historyWorkingState": 0,
@@ -150,18 +154,18 @@
         "fullCommittedCanary": 0
       },
       "digests": {
-        "currentSha256": "ef63f7867524f9180ef8caa3fec0969335a8923fde3c68d5d9222aaff995df1f",
+        "currentSha256": "e3330f3817ca3a44fcdc464f71f2dce28eff46425ce407dad31879579e1bebac",
         "historySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "fullSha256": "ef63f7867524f9180ef8caa3fec0969335a8923fde3c68d5d9222aaff995df1f",
-        "semanticCurrentSha256": "f61fbaabb034159d29235ef96d1cfb2f695b93e762af57294270e8cbe95bab7f",
+        "fullSha256": "e3330f3817ca3a44fcdc464f71f2dce28eff46425ce407dad31879579e1bebac",
+        "semanticCurrentSha256": "7af49f7eae25296270a85a9b3f674fc34b16a81b7d821d4cd6471a71f5683a28",
         "semanticHistorySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "visibleEvidence": [
-        "Akra  |  thread: Typed rail capture  |  turn: working  |  input: streaming",
+        "Akra  |  thread: Typed rail capture",
         "◦ Working (0s • waiting for response / interrupt runtime-...)",
-        "notice: activity: cmd:1 lines | active:command | model:gpt-5.6-synthetic | task:D4_CAPTURE_START",
+        "notice: activity: active:command | cmd:1 lines | model:gpt-5.6-synthetic | task:D4_CAPTURE_START",
         ">",
-        "prompt: turn running  |  type now, Enter when idle"
+        "prompt: type now  |  Enter when idle"
       ]
     },
     {
@@ -172,10 +176,10 @@
       },
       "cursor": {
         "x": 2,
-        "y": 15
+        "y": 16
       },
-      "historyRows": 6,
-      "rawPtyBytesObserved": 5397,
+      "historyRows": 4,
+      "rawPtyBytesObserved": 5187,
       "counts": {
         "currentActiveCommand": 1,
         "currentActivityRail": 1,
@@ -183,6 +187,8 @@
         "currentRunningPrompt": 1,
         "currentReadyPrompt": 0,
         "currentModelFact": 0,
+        "currentTurnWorking": 0,
+        "currentInputStreaming": 0,
         "historyActivityRail": 0,
         "historyActiveCommand": 0,
         "historyWorkingState": 0,
@@ -195,18 +201,18 @@
         "fullCommittedCanary": 0
       },
       "digests": {
-        "currentSha256": "1bcbb65ce22c7008a5d74d83e247dbe8fd704d30e63c626ffec50653aad80bb2",
-        "historySha256": "4943d3d1bea0bf2a87876c3b810ad09263b1eb10a8fe8704ae091934d85872d7",
-        "fullSha256": "95c6c2bcc78d6fa50524f06311c630699aad722932dffac181a751a34dc486f2",
-        "semanticCurrentSha256": "0b4409b66811ea7e85321e4c1f9b22bb8201966dc7e66826e120b9ba93b8008e",
+        "currentSha256": "a44d773a16713526c631a8c427a025c49908b3b1049bbe4efbb1c43611b98d19",
+        "historySha256": "936f0b74d2c8806740219e271de33a875ccd706ff4b6dcc0740c0a5267c8f8b0",
+        "fullSha256": "b0b01cd21a6fe5b3548865f53b0a38ccc08c8fee682bb0b648c6aa9268469ca1",
+        "semanticCurrentSha256": "7fbba5fd12105c71a0cfa347646a3c4d0af043e5115f20b6880e5e6c18ce6ea5",
         "semanticHistorySha256": "969c75b9fce9e02abff80e358bc3525c82b0f7cf74fb763be0a4689933dcbf4d"
       },
       "visibleEvidence": [
-        "Akra  |  thread: Typed rail capture  |  turn:",
-        "◦ Working (0s • waiting for response / interrupt",
-        "notice: activity: cmd:1 lines | active:command",
+        "Akra  |  thread: Typed rail capture",
+        "◦ Working (0s • waiting for response / inter...)",
+        "notice: activity: active:command | cmd:1 lines",
         ">",
-        "prompt: turn running  |  type now, Enter when"
+        "prompt: type now  |  Enter when idle"
       ]
     },
     {
@@ -219,8 +225,8 @@
         "x": 2,
         "y": 16
       },
-      "historyRows": 6,
-      "rawPtyBytesObserved": 6267,
+      "historyRows": 4,
+      "rawPtyBytesObserved": 5939,
       "counts": {
         "currentActiveCommand": 1,
         "currentActivityRail": 1,
@@ -228,6 +234,8 @@
         "currentRunningPrompt": 1,
         "currentReadyPrompt": 0,
         "currentModelFact": 1,
+        "currentTurnWorking": 0,
+        "currentInputStreaming": 0,
         "historyActivityRail": 0,
         "historyActiveCommand": 0,
         "historyWorkingState": 0,
@@ -240,18 +248,18 @@
         "fullCommittedCanary": 0
       },
       "digests": {
-        "currentSha256": "86b409a08e3ca2c91ac37fbb2f190c0f6e917fbd79c293430029899071251125",
-        "historySha256": "4943d3d1bea0bf2a87876c3b810ad09263b1eb10a8fe8704ae091934d85872d7",
-        "fullSha256": "4a33a140acf320b2b616da92b5072bc25e5148185d374973c9956710a397192d",
-        "semanticCurrentSha256": "4b7d99aab86c88ec5e214e8ee200722f6e23a9e4cfa0ae04543545797395cc27",
+        "currentSha256": "e072457120ba65ac4efe1e80352134f56bf68af3a05388be58650a41e750b872",
+        "historySha256": "936f0b74d2c8806740219e271de33a875ccd706ff4b6dcc0740c0a5267c8f8b0",
+        "fullSha256": "76a77826f3f8852d84a80972bef2fae74d83d215d5d9b32b787e2a9142573671",
+        "semanticCurrentSha256": "300592003fd4d6d6165e82317e2eca1367c9c6c909ae31b2bf8383c88ba5e655",
         "semanticHistorySha256": "969c75b9fce9e02abff80e358bc3525c82b0f7cf74fb763be0a4689933dcbf4d"
       },
       "visibleEvidence": [
-        "Akra  |  thread: Typed rail capture  |  turn: working  |  input: streaming",
+        "Akra  |  thread: Typed rail capture",
         "◦ Working (0s • waiting for response / interrupt runtime-...)",
-        "notice: activity: cmd:1 lines | active:command | model:gpt-5.6-synthetic",
+        "notice: activity: active:command | cmd:1 lines | model:gpt-5.6-synthetic",
         ">",
-        "prompt: turn running  |  type now, Enter when idle"
+        "prompt: type now  |  Enter when idle"
       ]
     },
     {
@@ -262,10 +270,10 @@
       },
       "cursor": {
         "x": 2,
-        "y": 14
+        "y": 16
       },
-      "historyRows": 11,
-      "rawPtyBytesObserved": 7120,
+      "historyRows": 7,
+      "rawPtyBytesObserved": 6690,
       "counts": {
         "currentActiveCommand": 1,
         "currentActivityRail": 1,
@@ -273,6 +281,8 @@
         "currentRunningPrompt": 1,
         "currentReadyPrompt": 0,
         "currentModelFact": 0,
+        "currentTurnWorking": 0,
+        "currentInputStreaming": 0,
         "historyActivityRail": 0,
         "historyActiveCommand": 0,
         "historyWorkingState": 0,
@@ -285,18 +295,18 @@
         "fullCommittedCanary": 0
       },
       "digests": {
-        "currentSha256": "24d9b31bb99de5b89dc9e49441afd2f2c0dd61ee6989c6c95603ef0ccd0502b0",
-        "historySha256": "fc636af0a735d54baa02932e7aae53453ee659f0b1111e27ed4e5af5abc5e844",
-        "fullSha256": "438e571cf79fe1f5281bf134e67513568316de9d7e92383303cfcde1dc546df9",
-        "semanticCurrentSha256": "0b4409b66811ea7e85321e4c1f9b22bb8201966dc7e66826e120b9ba93b8008e",
+        "currentSha256": "a44d773a16713526c631a8c427a025c49908b3b1049bbe4efbb1c43611b98d19",
+        "historySha256": "3e995d8600e8b0156aae3ab66c35bd5a42af321b004d484d45c2d5ad13ba41e3",
+        "fullSha256": "a2a05f40afdabfcef006fccd16f5c72b576e846abc589bb939822268f1aa3c93",
+        "semanticCurrentSha256": "7fbba5fd12105c71a0cfa347646a3c4d0af043e5115f20b6880e5e6c18ce6ea5",
         "semanticHistorySha256": "969c75b9fce9e02abff80e358bc3525c82b0f7cf74fb763be0a4689933dcbf4d"
       },
       "visibleEvidence": [
-        "Akra  |  thread: Typed rail capture  |  turn:",
-        "◦ Working (1s • waiting for response / interrupt",
-        "notice: activity: cmd:1 lines | active:command",
+        "Akra  |  thread: Typed rail capture",
+        "◦ Working (0s • waiting for response / inter...)",
+        "notice: activity: active:command | cmd:1 lines",
         ">",
-        "prompt: turn running  |  type now, Enter when"
+        "prompt: type now  |  Enter when idle"
       ]
     },
     {
@@ -307,10 +317,10 @@
       },
       "cursor": {
         "x": 2,
-        "y": 16
+        "y": 17
       },
-      "historyRows": 10,
-      "rawPtyBytesObserved": 8029,
+      "historyRows": 6,
+      "rawPtyBytesObserved": 7480,
       "counts": {
         "currentActiveCommand": 1,
         "currentActivityRail": 1,
@@ -318,6 +328,8 @@
         "currentRunningPrompt": 1,
         "currentReadyPrompt": 0,
         "currentModelFact": 1,
+        "currentTurnWorking": 0,
+        "currentInputStreaming": 0,
         "historyActivityRail": 0,
         "historyActiveCommand": 0,
         "historyWorkingState": 0,
@@ -330,18 +342,18 @@
         "fullCommittedCanary": 0
       },
       "digests": {
-        "currentSha256": "dbdbe2ade2b8118cee4a7d9103f371067d90032627ed6de3cda6e91fa0f67512",
-        "historySha256": "48bafb1dec8583c49556437446cecb17470065671387ddd7cd8d324e657fe837",
-        "fullSha256": "4b9ee622b5a96b6bbab36c81ed135d6e3e8c8de8728041b967773f15b56e4c31",
-        "semanticCurrentSha256": "ed7f6353dce12071411b3b8966e9ec9c2c3d6300ba3644b50aa11e82373c6c5e",
+        "currentSha256": "8b4e053e3f664862447ae69892e99119b974c4e5a201380e4df6c7e028b4c533",
+        "historySha256": "4943d3d1bea0bf2a87876c3b810ad09263b1eb10a8fe8704ae091934d85872d7",
+        "fullSha256": "f18556f99b0ea159023e1567b834cd3b24bf4facaacd0287b89a16cb99d85942",
+        "semanticCurrentSha256": "db13a044822b232ac204566ef2b3b47ef22522da6d2297a5c0e9fdf48cbce398",
         "semanticHistorySha256": "969c75b9fce9e02abff80e358bc3525c82b0f7cf74fb763be0a4689933dcbf4d"
       },
       "visibleEvidence": [
-        "Akra  |  thread: Typed rail capture  |  turn: working  |  input: streaming",
+        "Akra  |  thread: Typed rail capture",
         "◦ Working (1s • waiting for response / interrupt runtime-...)",
-        "notice: activity: cmd:1 lines | active:command | model:gpt-5.6-synthetic | task:D4_CAPTURE_START",
+        "notice: activity: active:command | cmd:1 lines | model:gpt-5.6-synthetic | task:D4_CAPTURE_START",
         ">",
-        "prompt: turn running  |  type now, Enter when idle"
+        "prompt: type now  |  Enter when idle"
       ]
     },
     {
@@ -352,10 +364,10 @@
       },
       "cursor": {
         "x": 2,
-        "y": 19
+        "y": 20
       },
-      "historyRows": 10,
-      "rawPtyBytesObserved": 10320,
+      "historyRows": 6,
+      "rawPtyBytesObserved": 9214,
       "counts": {
         "currentActiveCommand": 0,
         "currentActivityRail": 0,
@@ -363,6 +375,8 @@
         "currentRunningPrompt": 0,
         "currentReadyPrompt": 0,
         "currentModelFact": 0,
+        "currentTurnWorking": 0,
+        "currentInputStreaming": 0,
         "historyActivityRail": 0,
         "historyActiveCommand": 0,
         "historyWorkingState": 0,
@@ -375,15 +389,15 @@
         "fullCommittedCanary": 1
       },
       "digests": {
-        "currentSha256": "2c75417819ff3f653822187b077b70a62daa720e693786c02927513ea6129603",
-        "historySha256": "48bafb1dec8583c49556437446cecb17470065671387ddd7cd8d324e657fe837",
-        "fullSha256": "3dbdaae2b987d2eea01fd3114ba429d10413d80add3638a580ad548b57e5a0d2",
-        "semanticCurrentSha256": "2f4aff294278833a14a715fe663d3495363f6f964258363b73f7ca820003ba4c",
+        "currentSha256": "3c1fcb6b8b4c27686cda08be95a01771b557eb7ad2dc238f24c67807af760fab",
+        "historySha256": "4943d3d1bea0bf2a87876c3b810ad09263b1eb10a8fe8704ae091934d85872d7",
+        "fullSha256": "2a3290986fe48ce29dfbb7b945abd6816b7f56697238243a9b66d1936aeb0a3a",
+        "semanticCurrentSha256": "2dd3e5ca33c8e2e4a425985c31027fd92ed8b04fa867bc10d98f435b9e156ccf",
         "semanticHistorySha256": "969c75b9fce9e02abff80e358bc3525c82b0f7cf74fb763be0a4689933dcbf4d"
       },
       "visibleEvidence": [
         "  D4_COMMITTED_OUTPUT_CANARY",
-        "Akra  |  thread: Typed rail capture  |  turn: idle  |  input: ready",
+        "Akra  |  thread: Typed rail capture",
         ">",
         "prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help"
       ]
@@ -394,8 +408,8 @@
     "classification": "ephemeral-local-observation",
     "rawCaptureRetained": false,
     "digestRecomputableFromRepository": false,
-    "bytes": 10320,
-    "sha256": "f43ea2766849bf0148c7819c150d584beee9c0b937fd177ea591326df0e598aa",
+    "bytes": 9214,
+    "sha256": "a0282641c02d51dd46492b96b18eb9d31f4a3ea32b74f612c0e74f25751a04c5",
     "committedCanaryOccurrences": 1,
     "rawSecretOccurrences": 0,
     "exactAnsiPayloadOccurrences": 0
