@@ -29,6 +29,9 @@ pub(super) struct ConversationIntentState {
     // Running turn은 session switch와 new draft를 모두 막는 최상위 guard다.
     // 현재 stream, pending completion, auto-follow state가 navigation으로 끊기면 안 된다.
     pub has_running_turn: bool,
+    // Post-turn settlement and transcript handoff are not running turns, but
+    // replacing the ViewModel before their terminal flush would lose visible history.
+    pub blocks_navigation: bool,
     // Mode는 Ctrl-C 의미를 loading/recovery/blank/ready surface별로 나누는 최소 state다.
     pub mode: ConversationIntentMode,
     // Running turn 중 Ctrl-C는 runtime truth에 맞는 안내로만 낮춘다.
@@ -81,6 +84,11 @@ pub(super) fn reduce_conversation_intents(
                         "turn still running; wait for completion before starting a new draft"
                             .to_string(),
                 });
+            } else if state.blocks_navigation {
+                effects.push(ConversationIntentEffect::ShowStatus {
+                    status_text: "conversation is busy; wait before starting a new draft"
+                        .to_string(),
+                });
             } else {
                 effects.push(ConversationIntentEffect::OpenNewDraft);
             }
@@ -93,6 +101,10 @@ pub(super) fn reduce_conversation_intents(
                         "turn still running; wait for completion before switching sessions"
                             .to_string(),
                 });
+            } else if state.blocks_navigation {
+                effects.push(ConversationIntentEffect::ShowStatus {
+                    status_text: "conversation is busy; wait before switching sessions".to_string(),
+                });
             } else if let Some(session) = session {
                 effects.push(ConversationIntentEffect::OpenSession { session: *session });
             }
@@ -103,6 +115,11 @@ pub(super) fn reduce_conversation_intents(
             if state.has_running_turn {
                 effects.push(ConversationIntentEffect::ShowStatus {
                     status_text: interrupt_blocked_status_text(state.interrupt_support),
+                });
+            } else if state.blocks_navigation {
+                effects.push(ConversationIntentEffect::ShowStatus {
+                    status_text: "conversation is busy; wait before starting a new draft"
+                        .to_string(),
                 });
             } else {
                 match state.mode {
@@ -132,6 +149,7 @@ mod tests {
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
                 has_running_turn: true,
+                blocks_navigation: true,
                 mode: ConversationIntentMode::Ready,
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
@@ -153,6 +171,7 @@ mod tests {
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
                 has_running_turn: false,
+                blocks_navigation: false,
                 mode: ConversationIntentMode::BlankDraft,
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
@@ -171,6 +190,7 @@ mod tests {
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
                 has_running_turn: false,
+                blocks_navigation: false,
                 mode: ConversationIntentMode::Failed,
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
@@ -189,6 +209,7 @@ mod tests {
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
                 has_running_turn: false,
+                blocks_navigation: false,
                 mode: ConversationIntentMode::Ready,
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
@@ -204,6 +225,7 @@ mod tests {
         let reduced = reduce_conversation_intents(
             ConversationIntentState {
                 has_running_turn: true,
+                blocks_navigation: true,
                 mode: ConversationIntentMode::Ready,
                 interrupt_support: ConversationControlSupport::Unsupported,
             },
@@ -215,6 +237,39 @@ mod tests {
             [ConversationIntentEffect::ShowStatus { status_text }]
                 if status_text
                     == "turn still running; this runtime does not expose interrupt control in the shell"
+        ));
+    }
+
+    #[test]
+    fn finalizing_handoff_blocks_navigation_without_claiming_a_turn_is_running() {
+        let reduced = reduce_conversation_intents(
+            ConversationIntentState {
+                has_running_turn: false,
+                blocks_navigation: true,
+                mode: ConversationIntentMode::Ready,
+                interrupt_support: ConversationControlSupport::Unsupported,
+            },
+            ConversationIntentEvent::SessionOpenRequested {
+                session: Some(Box::new(SessionSummary {
+                    id: "thread-2".to_string(),
+                    name: None,
+                    preview: String::new(),
+                    cwd: "/tmp/root".to_string(),
+                    source: "test".to_string(),
+                    model_provider: "test".to_string(),
+                    updated_at_epoch: 1,
+                    status_type: "idle".to_string(),
+                    path: "/tmp/root/thread-2".to_string(),
+                    git_branch: None,
+                })),
+            },
+        );
+
+        assert!(matches!(
+            reduced.effects.as_slice(),
+            [ConversationIntentEffect::ShowStatus { status_text }]
+                if status_text
+                    == "conversation is busy; wait before switching sessions"
         ));
     }
 }

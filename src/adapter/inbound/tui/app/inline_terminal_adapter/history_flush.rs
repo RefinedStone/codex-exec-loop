@@ -23,6 +23,11 @@ pub(crate) struct HistoryFlushState {
      */
     pub(crate) rendered_lines: Vec<Line<'static>>,
     /*
+     * Parallel mode projects supervisor events instead of conversation rows. Keep its diff
+     * baseline separate so switching projections cannot make either history replay in full.
+     */
+    pub(crate) parallel_rendered_lines: Vec<Line<'static>>,
+    /*
      * Staging buffer for the suffix selected during sync. Tests inspect the field directly, but
      * production clears it after terminal mutation so stale rows cannot be replayed on the next
      * draw.
@@ -133,7 +138,47 @@ impl HistoryFlushState {
         expected: InlineResizeSnapshot,
         insert_mode: HistoryInsertionMode,
     ) -> Result<HistoryFlushResult, B::Error> {
-        let pending_history_lines = self.pending_lines(current_lines);
+        self.sync_projection(terminal, current_lines, expected, insert_mode, false)
+    }
+
+    pub(crate) fn sync_parallel<B: InlineResizeBackend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        current_lines: &[Line<'static>],
+        expected: InlineResizeSnapshot,
+        insert_mode: HistoryInsertionMode,
+    ) -> Result<HistoryFlushResult, B::Error> {
+        if self.parallel_rendered_lines.starts_with(current_lines) {
+            if !terminal.backend().matches_resize_snapshot(expected)? {
+                return Ok(HistoryFlushResult::default());
+            }
+            self.pending_history_lines.clear();
+            self.visible_history_rows_dirty = false;
+            return Ok(HistoryFlushResult {
+                inserted_rows: 0,
+                stable_geometry: true,
+                history_committed: true,
+            });
+        }
+        std::mem::swap(&mut self.rendered_lines, &mut self.parallel_rendered_lines);
+        let result = self.sync_projection(terminal, current_lines, expected, insert_mode, true);
+        std::mem::swap(&mut self.rendered_lines, &mut self.parallel_rendered_lines);
+        result
+    }
+
+    fn sync_projection<B: InlineResizeBackend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        current_lines: &[Line<'static>],
+        expected: InlineResizeSnapshot,
+        insert_mode: HistoryInsertionMode,
+        parallel_projection: bool,
+    ) -> Result<HistoryFlushResult, B::Error> {
+        let pending_history_lines = if parallel_projection {
+            Self::pending_lines_against(&self.rendered_lines, current_lines, false)
+        } else {
+            self.pending_lines(current_lines)
+        };
         if !terminal.backend().matches_resize_snapshot(expected)? {
             return Ok(HistoryFlushResult::default());
         }
@@ -166,6 +211,7 @@ impl HistoryFlushState {
                     current_lines.len(),
                     inserted_rows,
                     viewport_top_after_insert,
+                    parallel_projection,
                 );
                 self.pending_history_lines = pending_history_lines;
                 self.remember(current_lines);
@@ -180,7 +226,7 @@ impl HistoryFlushState {
         }
         self.pending_history_lines = pending_history_lines;
         let viewport_top_after_insert = terminal.get_frame().area().top();
-        if current_lines.is_empty() {
+        if current_lines.is_empty() && !parallel_projection {
             self.visible_history_rows = 0;
         } else if inserted_rows > 0 {
             self.visible_history_rows = self.visible_rows_after_insert(
@@ -188,6 +234,7 @@ impl HistoryFlushState {
                 current_lines.len(),
                 inserted_rows,
                 viewport_top_after_insert,
+                parallel_projection,
             );
         }
         /*
@@ -201,6 +248,48 @@ impl HistoryFlushState {
         Ok(HistoryFlushResult {
             inserted_rows,
             stable_geometry: true,
+            history_committed: true,
+        })
+    }
+
+    // Parallel mode keeps an event-only diff baseline. A completed conversation is
+    // inserted once without replacing that baseline, so later event ticks cannot replay it.
+    pub(crate) fn append_durable_lines_preserving_baseline<B: InlineResizeBackend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        lines: &[Line<'static>],
+        expected: InlineResizeSnapshot,
+        insert_mode: HistoryInsertionMode,
+    ) -> Result<HistoryFlushResult, B::Error> {
+        if !terminal.backend().matches_resize_snapshot(expected)? {
+            return Ok(HistoryFlushResult::default());
+        }
+        let inserted_rows = count_rendered_history_rows(lines, expected.size.width)
+            .min(usize::from(u16::MAX)) as u16;
+        if inserted_rows == 0 {
+            return Ok(HistoryFlushResult {
+                inserted_rows: 0,
+                stable_geometry: true,
+                history_committed: true,
+            });
+        }
+        let insertion = HistoryInsertionAdapter::new(insert_mode)
+            .insert_with_rendered_rows_at_snapshot(terminal, lines, inserted_rows, expected)?;
+        if !insertion.completed() {
+            return Ok(HistoryFlushResult::default());
+        }
+        let viewport_top_after_insert = terminal.get_frame().area().top();
+        self.visible_history_rows = self
+            .visible_history_rows
+            .saturating_add(inserted_rows)
+            .min(viewport_top_after_insert);
+        let stable_geometry = insertion.stable_geometry();
+        if !stable_geometry {
+            self.visible_history_rows_dirty = true;
+        }
+        Ok(HistoryFlushResult {
+            inserted_rows,
+            stable_geometry,
             history_committed: true,
         })
     }
@@ -219,8 +308,22 @@ impl HistoryFlushState {
         self.remember(current_lines);
     }
 
-    pub(crate) fn has_pending_lines(&self, current_lines: &[Line<'static>]) -> bool {
-        !self.pending_lines(current_lines).is_empty()
+    pub(crate) fn remember_parallel_without_flush(&mut self, current_lines: &[Line<'static>]) {
+        self.visible_history_rows_dirty = false;
+        self.pending_history_lines.clear();
+        if !self.parallel_rendered_lines.starts_with(current_lines) {
+            self.parallel_rendered_lines = current_lines.to_vec();
+        }
+    }
+
+    pub(crate) fn remember_conversation_projection(&mut self, current_lines: &[Line<'static>]) {
+        self.remember(current_lines);
+    }
+
+    pub(crate) fn has_pending_parallel_lines(&self, current_lines: &[Line<'static>]) -> bool {
+        !self.parallel_rendered_lines.starts_with(current_lines)
+            && !Self::pending_lines_against(&self.parallel_rendered_lines, current_lines, false)
+                .is_empty()
     }
 
     pub(crate) fn mark_visible_history_rows_dirty(&mut self) {
@@ -237,8 +340,9 @@ impl HistoryFlushState {
         current_line_count: usize,
         inserted_rows: u16,
         viewport_top: u16,
+        preserve_visible_rows_on_full_insert: bool,
     ) -> u16 {
-        if pending_line_count == current_line_count {
+        if pending_line_count == current_line_count && !preserve_visible_rows_on_full_insert {
             inserted_rows.min(viewport_top)
         } else {
             self.visible_history_rows
@@ -254,36 +358,52 @@ impl HistoryFlushState {
      * describes the active conversation.
      */
     pub(crate) fn pending_lines(&self, current_lines: &[Line<'static>]) -> Vec<Line<'static>> {
+        Self::pending_lines_against(&self.rendered_lines, current_lines, true)
+    }
+
+    fn pending_lines_against(
+        rendered_lines: &[Line<'static>],
+        current_lines: &[Line<'static>],
+        require_conversation_history_cap: bool,
+    ) -> Vec<Line<'static>> {
         if current_lines.is_empty() {
             return Vec::new();
         }
-        if current_lines.starts_with(self.rendered_lines.as_slice()) {
-            return current_lines[self.rendered_lines.len()..].to_vec();
+        if current_lines.starts_with(rendered_lines) {
+            return current_lines[rendered_lines.len()..].to_vec();
         }
-        if let Some(overlap_len) = self.shifted_window_overlap_len(current_lines) {
+        if let Some(overlap_len) = Self::shifted_window_overlap_len(
+            rendered_lines,
+            current_lines,
+            require_conversation_history_cap,
+        ) {
             return current_lines[overlap_len..].to_vec();
         }
         current_lines.to_vec()
     }
 
     /*
-     * The shifted-window detector only runs when the current transcript has reached the shared
-     * conversation history cap. It searches from the longest possible overlap downward, so the first
-     * match treats the maximum safe prefix as already written and minimizes duplicate scrollback
-     * when the oldest capped lines fall away.
+     * Conversation overlap detection only runs at the shared history cap, while the separate
+     * append-only parallel event stream can shift at its own larger cap. Search from the longest
+     * overlap downward so the maximum safe prefix stays in scrollback without duplication.
      */
-    fn shifted_window_overlap_len(&self, current_lines: &[Line<'static>]) -> Option<usize> {
-        if current_lines.len() != MAX_CONVERSATION_HISTORY_LINES {
+    fn shifted_window_overlap_len(
+        rendered_lines: &[Line<'static>],
+        current_lines: &[Line<'static>],
+        require_conversation_history_cap: bool,
+    ) -> Option<usize> {
+        if require_conversation_history_cap && current_lines.len() != MAX_CONVERSATION_HISTORY_LINES
+        {
             return None;
         }
-        let max_overlap = self.rendered_lines.len().min(current_lines.len());
+        let max_overlap = rendered_lines.len().min(current_lines.len());
         if max_overlap < MIN_SHIFTED_HISTORY_OVERLAP {
             return None;
         }
         (MIN_SHIFTED_HISTORY_OVERLAP..=max_overlap)
             .rev()
             .find(|overlap_len| {
-                self.rendered_lines[self.rendered_lines.len() - overlap_len..]
+                rendered_lines[rendered_lines.len() - overlap_len..]
                     == current_lines[..*overlap_len]
             })
     }

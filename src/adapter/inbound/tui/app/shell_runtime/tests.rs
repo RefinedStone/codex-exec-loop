@@ -956,13 +956,11 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
     assert!(
         conversation
             .status_text
-            .contains("queue summary: now: none  |  next: none")
+            .contains("queue summary: now: queue idle: no executable planning task")
     );
-    assert!(
-        conversation
-            .status_text
-            .contains("proposed: none  |  blocked: none")
-    );
+    assert!(!conversation.status_text.contains("next: none"));
+    assert!(!conversation.status_text.contains("proposed: none"));
+    assert!(!conversation.status_text.contains("blocked: none"));
     fs::remove_dir_all(workspace_dir).expect("temp workspace should be removed");
 }
 

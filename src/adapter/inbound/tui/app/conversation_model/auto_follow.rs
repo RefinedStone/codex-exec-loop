@@ -43,17 +43,14 @@ pub(crate) struct AutoFollowState {
 }
 
 /*
- * Phase tracks work after a normal turn completes. Evaluating is post-turn
- * planning inspection, Queued is a prompt accepted for submission, Submitting is
- * the conversation runtime handing it to the stream worker, and Running means the
- * app-server stream has actually started.
+ * Phase tracks an automatic continuation after planning settlement chooses it.
+ * Queued is a prompt accepted for submission, Submitting is the conversation
+ * runtime handing it to the stream worker, and Running means the app-server stream
+ * has actually started.
  */
 #[derive(Debug, Clone)]
 pub(crate) enum AutoFollowRuntimePhase {
     Idle,
-    Evaluating {
-        started_at: Instant,
-    },
     Queued {
         started_at: Instant,
         turn_index: usize,
@@ -150,7 +147,6 @@ impl AutoFollowState {
         let max_auto_turns = self.max_auto_turns_label();
         match &self.runtime_phase {
             AutoFollowRuntimePhase::Idle => "idle".to_string(),
-            AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next turn".to_string(),
             AutoFollowRuntimePhase::Queued { turn_index, .. } => {
                 format!("queued turn {turn_index}/{max_auto_turns}")
             }
@@ -176,13 +172,6 @@ impl AutoFollowState {
     pub(crate) fn reset_for_manual_turn(&mut self) {
         self.completed_auto_turns = 0;
         self.runtime_phase = AutoFollowRuntimePhase::Idle;
-    }
-
-    // Post-turn execution is now inspecting planning/runtime state for a follow-up prompt.
-    pub(crate) fn begin_post_turn_evaluation(&mut self) {
-        self.runtime_phase = AutoFollowRuntimePhase::Evaluating {
-            started_at: Instant::now(),
-        };
     }
 
     // Queue preserves the chosen turn index before async submission can start.
@@ -216,9 +205,7 @@ impl AutoFollowState {
         let turn_index = match &self.runtime_phase {
             AutoFollowRuntimePhase::Queued { turn_index, .. }
             | AutoFollowRuntimePhase::Submitting { turn_index, .. } => *turn_index,
-            AutoFollowRuntimePhase::Idle
-            | AutoFollowRuntimePhase::Evaluating { .. }
-            | AutoFollowRuntimePhase::Running { .. } => return None,
+            AutoFollowRuntimePhase::Idle | AutoFollowRuntimePhase::Running { .. } => return None,
         };
         self.runtime_phase = AutoFollowRuntimePhase::Running {
             started_at: Instant::now(),
@@ -238,9 +225,7 @@ impl AutoFollowState {
                 self.runtime_phase = AutoFollowRuntimePhase::Idle;
                 true
             }
-            AutoFollowRuntimePhase::Idle
-            | AutoFollowRuntimePhase::Evaluating { .. }
-            | AutoFollowRuntimePhase::Queued { .. } => {
+            AutoFollowRuntimePhase::Idle | AutoFollowRuntimePhase::Queued { .. } => {
                 self.runtime_phase = AutoFollowRuntimePhase::Idle;
                 false
             }
@@ -334,14 +319,13 @@ impl AutoFollowRuntimePhase {
             Self::Queued { turn_index, .. }
             | Self::Submitting { turn_index, .. }
             | Self::Running { turn_index, .. } => Some(*turn_index),
-            Self::Idle | Self::Evaluating { .. } => None,
+            Self::Idle => None,
         }
     }
 
     fn started_at(&self) -> Option<Instant> {
         match self {
-            Self::Evaluating { started_at }
-            | Self::Queued { started_at, .. }
+            Self::Queued { started_at, .. }
             | Self::Submitting { started_at, .. }
             | Self::Running { started_at, .. } => Some(*started_at),
             Self::Idle => None,

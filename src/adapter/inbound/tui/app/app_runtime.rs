@@ -1826,6 +1826,10 @@ impl NativeTuiApp {
 
         ConversationIntentState {
             has_running_turn: self.conversation_has_running_turn(),
+            blocks_navigation: matches!(
+                &self.conversation_state,
+                ConversationState::Ready(conversation) if !conversation.can_accept_manual_prompt()
+            ),
             mode,
             interrupt_support: match &self.conversation_state {
                 ConversationState::Ready(conversation) => {

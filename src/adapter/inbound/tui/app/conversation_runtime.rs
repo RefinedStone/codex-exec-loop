@@ -1859,9 +1859,10 @@ mod tests {
 
         assert_eq!(reduction.state.auto_follow_state.progress_label(), "1/20");
         assert!(
-            reduction.state.auto_follow_state.has_live_activity(),
-            "completed auto turn must hold manual intake until post-turn evaluation settles"
+            reduction.state.has_post_turn_settlement_in_flight(),
+            "completed auto turn must keep the settlement gate until evaluation settles"
         );
+        assert!(!reduction.state.auto_follow_state.has_live_activity());
         assert!(!reduction.state.can_accept_manual_prompt());
     }
 
@@ -1914,12 +1915,24 @@ mod tests {
         for (event, expected_terminal_state) in terminal_events {
             let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
             state.thread_id = "thread-1".to_string();
-            let reduction = reduce_conversation_runtime(state, stream_snapshot_event(event));
+            let mut reduction = reduce_conversation_runtime(state, stream_snapshot_event(event));
 
             assert!(reduction.effects.iter().all(|effect| !matches!(
                 effect,
                 ConversationRuntimeEffect::EvaluatePostTurn { .. }
             )));
+            assert!(!reduction.state.can_accept_manual_prompt());
+            assert!(
+                reduction
+                    .state
+                    .viewport_transcript_handoff_release_messages()
+                    .is_some()
+            );
+            assert!(
+                reduction
+                    .state
+                    .acknowledge_viewport_transcript_handoff_flush()
+            );
             assert!(reduction.state.can_accept_manual_prompt());
             assert_eq!(
                 reduction.state.activity_rail_terminal_state,
@@ -1996,11 +2009,11 @@ mod tests {
                 ..
             } if completed_turn_id == "turn-1"
         )));
-        assert!(reduction.state.auto_follow_state.has_live_activity());
+        assert!(!reduction.state.auto_follow_state.has_live_activity());
+        assert!(reduction.state.has_post_turn_settlement_in_flight());
         assert!(!reduction.state.can_accept_manual_prompt());
         reduction.state.auto_follow_state.set_max_auto_turns(0);
         assert!(!reduction.state.auto_follow_state.has_live_activity());
-        assert!(reduction.state.has_post_turn_settlement_in_flight());
         assert!(!reduction.state.can_accept_manual_prompt());
 
         let reduction = reduce_conversation_runtime(
@@ -2180,6 +2193,13 @@ mod tests {
                 }),
             },
         );
+
+        assert!(reduction.state.auto_follow_state.has_live_activity());
+        assert_eq!(
+            reduction.state.auto_follow_state.activity_label(),
+            "queued turn 1/3"
+        );
+        assert!(!reduction.state.can_accept_manual_prompt());
 
         let queued_effect = reduction
             .effects

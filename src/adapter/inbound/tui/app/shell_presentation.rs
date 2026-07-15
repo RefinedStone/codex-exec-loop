@@ -92,7 +92,12 @@ pub(super) fn build_inline_live_transcript_lines(app: &NativeTuiApp) -> Vec<Line
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         return Vec::new();
     };
-    status_panels::current_live_agent_lines(conversation).unwrap_or_default()
+    status_panels::current_live_agent_lines(
+        conversation,
+        app.inline_history_render_mode.writes_host_scrollback()
+            || conversation.has_pending_viewport_transcript_handoff(),
+    )
+    .unwrap_or_default()
 }
 
 fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

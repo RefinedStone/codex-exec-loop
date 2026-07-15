@@ -83,7 +83,6 @@ fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
         // Idle은 보통 호출되지 않지만, projection 조합 실수에도 빈 문자열 대신 진단 가능한
         // 라벨을 남긴다.
         AutoFollowRuntimePhase::Idle => "idle".to_string(),
-        AutoFollowRuntimePhase::Evaluating { .. } => "evaluating next auto-follow".to_string(),
         AutoFollowRuntimePhase::Queued { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} queued for submission")
         }
@@ -104,7 +103,7 @@ pub(super) fn auto_follow_prompt_status_line(
 ) -> Option<String> {
     if conversation.has_post_turn_settlement_in_flight() {
         return Some(if inline {
-            "prompt: planning queue settling  |  type now, Enter when ready".to_string()
+            "prompt: type now  |  Enter when settled".to_string()
         } else {
             "planning queue settling".to_string()
         });
@@ -114,7 +113,6 @@ pub(super) fn auto_follow_prompt_status_line(
     // line에 있으므로 여기서는 사용자가 지금 입력해도 되는지에 초점을 둔다.
     let detail = match &conversation.auto_follow_state.runtime_phase {
         AutoFollowRuntimePhase::Idle => return None,
-        AutoFollowRuntimePhase::Evaluating { .. } => "auto-follow evaluating".to_string(),
         AutoFollowRuntimePhase::Queued { turn_index, .. } => {
             format!("auto turn {turn_index}/{max_auto_turns} queued")
         }

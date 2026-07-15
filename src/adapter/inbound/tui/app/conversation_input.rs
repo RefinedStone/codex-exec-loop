@@ -162,7 +162,7 @@ pub(super) fn reduce_conversation_input(
             }
         }
         ConversationInputEvent::StatusMessageShown { status_text } => {
-            state.status_text = status_text;
+            state.record_status_message(status_text);
         }
         ConversationInputEvent::ManualPromptPreparationFailed {
             transcript_text,

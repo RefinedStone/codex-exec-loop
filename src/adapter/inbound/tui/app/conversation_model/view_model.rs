@@ -153,6 +153,12 @@ pub(crate) struct ConversationViewModel {
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
     post_turn_settlement: Option<PostTurnSettlementState>,
+    // A completed agent item remains in the viewport until post-turn settlement
+    // releases it to durable host scrollback. Release stays pending until the
+    // terminal adapter confirms that the history snapshot was committed.
+    viewport_transcript_handoff_start: Option<usize>,
+    viewport_transcript_handoff_release_pending: bool,
+    viewport_transcript_handoff_status_restore: Option<String>,
     // Transitional service snapshot used only by reducer/event synchronization.
     // Rendering and post-turn worker context must read the core snapshot instead.
     reducer_event_projection_cache: PlanningRuntimeProjection,
@@ -208,6 +214,9 @@ impl ConversationViewModel {
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(),
             post_turn_settlement: None,
+            viewport_transcript_handoff_start: None,
+            viewport_transcript_handoff_release_pending: false,
+            viewport_transcript_handoff_status_restore: None,
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
@@ -288,6 +297,9 @@ impl ConversationViewModel {
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(),
             post_turn_settlement: None,
+            viewport_transcript_handoff_start: None,
+            viewport_transcript_handoff_release_pending: false,
+            viewport_transcript_handoff_status_restore: None,
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
@@ -419,6 +431,8 @@ impl ConversationViewModel {
         self.input_cursor_byte_index = None;
         self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
         self.status_text = status_text;
+        self.hold_latest_transcript_message_in_viewport();
+        self.begin_viewport_transcript_handoff_release();
     }
     pub(crate) fn record_thread_prepared(&mut self, thread_id: String, title: String, cwd: String) {
         // Thread preparation upgrades a draft into an app-server backed conversation.
@@ -442,6 +456,7 @@ impl ConversationViewModel {
         }
         self.progressive_activity.reset();
         self.progressive_activity_detail.reset();
+        self.begin_viewport_transcript_handoff_release();
         self.mark_turn_started(turn_id);
         self.live_agent_message = None;
         // Auto-follow has its own phase text, but still shares the transcript status rail.
@@ -482,6 +497,7 @@ impl ConversationViewModel {
         self.can_accept_runtime_prompt()
             && !self.auto_follow_state.has_live_activity()
             && !self.has_post_turn_settlement_in_flight()
+            && !self.has_pending_viewport_transcript_handoff()
     }
     pub(crate) fn has_running_turn(&self) -> bool {
         !self.can_accept_runtime_prompt()
@@ -667,7 +683,10 @@ impl ConversationViewModel {
         self.progressive_activity_detail.reset();
         self.activity_rail_terminal_state = terminal_state;
         self.status_text = "turn failed".to_string();
-        self.append_status_message(message);
+        if self.append_status_message(message) {
+            self.hold_latest_transcript_message_in_viewport();
+        }
+        self.begin_viewport_transcript_handoff_release();
     }
     pub(crate) fn extend_runtime_notices<I>(&mut self, notices: I)
     where
@@ -799,7 +818,6 @@ impl ConversationViewModel {
             completed_turn_id: completed_turn_id.to_string(),
             started_at: Instant::now(),
         });
-        self.auto_follow_state.begin_post_turn_evaluation();
         self.status_text = "turn completed / evaluating post-turn continuation".to_string();
     }
     pub(crate) fn complete_post_turn_settlement(&mut self, completed_turn_id: &str) -> bool {
@@ -811,6 +829,7 @@ impl ConversationViewModel {
             })
         {
             self.post_turn_settlement = None;
+            self.begin_viewport_transcript_handoff_release();
             true
         } else {
             false

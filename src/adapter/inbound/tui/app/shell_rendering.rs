@@ -82,7 +82,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     // inline inspection은 base shell 뒤에 그려 overlay가 고정된 prompt/status tail은 두고 상단 body만 대체하게 한다.
     if app.shell_overlay != ShellOverlay::Hidden {
         draw_inline_shell_inspection(frame, app, layout[0]);
-    } else if app.parallel_mode_enabled() {
+    } else if app.parallel_mode_enabled() && !renders_parallel_viewport_handoff(app) {
         draw_inline_parallel_mode_inspection(frame, layout[0], app);
     }
     if app.is_turn_steer_confirmation_visible() {
@@ -232,7 +232,7 @@ fn draw_inline_conversation_shell(
     // hidden-overlay path는 일반 conversation shell이다.
     // inspection layout을 우회해 transcript가 tail 위의 전체 공간을 채우게 한다.
     if app.shell_overlay == ShellOverlay::Hidden {
-        if app.parallel_mode_enabled() {
+        if app.parallel_mode_enabled() && !renders_parallel_viewport_handoff(app) {
             let tail_band = layout.get(1).copied().unwrap_or(frame_area);
             let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
             render_bottom_anchored_tail(
@@ -278,6 +278,27 @@ fn draw_inline_conversation_shell(
     if app.shell_overlay == ShellOverlay::Supersession && !app.parallel_mode_prompt_input_locked() {
         set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
     }
+}
+
+pub(super) fn renders_parallel_viewport_handoff(app: &NativeTuiApp) -> bool {
+    app.parallel_mode_enabled() && renders_viewport_transcript_handoff(app)
+}
+
+pub(super) fn renders_viewport_transcript_handoff(app: &NativeTuiApp) -> bool {
+    app.shell_overlay == ShellOverlay::Hidden
+        && !app.is_exit_confirmation_visible()
+        && !app.is_turn_steer_confirmation_visible()
+        && matches!(
+            app.inline_history_render_mode,
+            InlineHistoryRenderMode::ViewportReplay
+        )
+        && matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation
+                    .viewport_transcript_handoff_release_messages()
+                    .is_some()
+        )
 }
 
 fn render_bottom_anchored_tail(
@@ -349,7 +370,7 @@ fn render_inline_live_transcript(
         tail_area.y.saturating_sub(frame_area.y),
     );
     let live_area = inline_body_render_area(live_container, &live_transcript_lines);
-    render_inline_body(frame, live_area, live_transcript_lines, false);
+    render_inline_body_suffix(frame, live_area, live_transcript_lines, None);
 }
 
 #[cfg(test)]

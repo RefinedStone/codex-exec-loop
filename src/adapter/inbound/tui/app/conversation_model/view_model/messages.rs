@@ -29,6 +29,7 @@ const TRANSCRIPT_RETENTION_NOTICE: &str =
 const TOOL_RETENTION_NOTICE: &str =
     "older buffered tool notices were trimmed before transcript delivery";
 const TEXT_RETENTION_MARKER: &str = "\n[truncated by Akra TUI retention policy]";
+const VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX: &str = "conversation is busy; wait before ";
 
 /*
  * 메시지 조작은 세 갈래를 한 impl에 묶어 둔다. app-server stream의 agent delta는
@@ -110,6 +111,9 @@ impl ConversationViewModel {
         }
 
         self.messages.drain(0..remove_count);
+        if let Some(start) = self.viewport_transcript_handoff_start.as_mut() {
+            *start = start.saturating_sub(remove_count);
+        }
         self.extend_runtime_notices([TRANSCRIPT_RETENTION_NOTICE.to_string()]);
         true
     }
@@ -252,7 +256,15 @@ impl ConversationViewModel {
         }
 
         let buffered_messages = std::mem::take(&mut self.buffered_tool_messages);
+        let buffered_message_count = buffered_messages.len();
         self.push_messages(buffered_messages);
+        if self.has_running_turn() && self.viewport_transcript_handoff_start.is_none() {
+            self.viewport_transcript_handoff_start = Some(
+                self.messages
+                    .len()
+                    .saturating_sub(buffered_message_count.min(self.messages.len())),
+            );
+        }
         true
     }
 
@@ -332,11 +344,12 @@ impl ConversationViewModel {
                 message.text = text;
                 message.phase = phase;
                 self.push_message(message);
+                self.hold_latest_committed_agent_in_viewport();
                 return true;
             }
 
-            // 다른 live item이 열려 있었다면 먼저 보존해 stream ordering 손실을 막는다.
-            self.push_message(message);
+            // 이전 item의 늦은 completion은 현재 streaming item의 lifecycle을 닫지 않는다.
+            self.live_agent_message = Some(message);
         }
 
         if let Some(message) = self
@@ -359,6 +372,7 @@ impl ConversationViewModel {
             phase,
             Some(item_id),
         ));
+        self.hold_latest_committed_agent_in_viewport();
         true
     }
 
@@ -373,6 +387,109 @@ impl ConversationViewModel {
         };
 
         self.push_message(message);
+        self.hold_latest_committed_agent_in_viewport();
+        true
+    }
+
+    pub(crate) fn host_scrollback_messages(&self) -> &[ConversationMessage] {
+        let end = if self.viewport_transcript_handoff_release_pending {
+            self.messages.len()
+        } else {
+            self.viewport_transcript_handoff_start
+                .unwrap_or(self.messages.len())
+                .min(self.messages.len())
+        };
+        &self.messages[..end]
+    }
+
+    pub(crate) fn viewport_transcript_handoff_messages(&self) -> Option<&[ConversationMessage]> {
+        if self.viewport_transcript_handoff_release_pending {
+            return None;
+        }
+        let start = self.viewport_transcript_handoff_start?;
+        let messages = self.messages.get(start..)?;
+        (!messages.is_empty()).then_some(messages)
+    }
+
+    pub(crate) fn viewport_transcript_handoff_release_messages(
+        &self,
+    ) -> Option<&[ConversationMessage]> {
+        if !self.viewport_transcript_handoff_release_pending {
+            return None;
+        }
+        let start = self.viewport_transcript_handoff_start?;
+        let messages = self.messages.get(start..)?;
+        (!messages.is_empty()).then_some(messages)
+    }
+
+    fn hold_latest_committed_agent_in_viewport(&mut self) {
+        if self.has_running_turn()
+            && self.viewport_transcript_handoff_start.is_none()
+            && !self.messages.is_empty()
+        {
+            self.viewport_transcript_handoff_start = Some(self.messages.len() - 1);
+        }
+    }
+
+    pub(super) fn hold_latest_transcript_message_in_viewport(&mut self) {
+        if self.viewport_transcript_handoff_start.is_none() && !self.messages.is_empty() {
+            self.viewport_transcript_handoff_start = Some(self.messages.len() - 1);
+        }
+    }
+
+    pub(crate) fn record_status_message(&mut self, status_text: String) {
+        let is_navigation_block =
+            status_text.starts_with(VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX);
+        if self.has_pending_viewport_transcript_handoff() && is_navigation_block {
+            if self.viewport_transcript_handoff_status_restore.is_none() {
+                self.viewport_transcript_handoff_status_restore = Some(self.status_text.clone());
+            }
+        } else if !is_navigation_block {
+            self.viewport_transcript_handoff_status_restore = None;
+        }
+        self.status_text = status_text;
+    }
+
+    pub(crate) fn status_text_for_viewport(&self) -> &str {
+        if self.viewport_transcript_handoff_release_pending
+            && self
+                .status_text
+                .starts_with(VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX)
+        {
+            return self
+                .viewport_transcript_handoff_status_restore
+                .as_deref()
+                .unwrap_or_default();
+        }
+        &self.status_text
+    }
+
+    pub(crate) fn has_pending_viewport_transcript_handoff(&self) -> bool {
+        self.viewport_transcript_handoff_start.is_some()
+    }
+
+    pub(super) fn begin_viewport_transcript_handoff_release(&mut self) {
+        self.viewport_transcript_handoff_release_pending =
+            self.viewport_transcript_handoff_start.is_some();
+    }
+
+    pub(crate) fn acknowledge_viewport_transcript_handoff_flush(&mut self) -> bool {
+        if !self.viewport_transcript_handoff_release_pending {
+            return false;
+        }
+        self.viewport_transcript_handoff_start = None;
+        self.viewport_transcript_handoff_release_pending = false;
+        if self
+            .status_text
+            .starts_with(VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX)
+        {
+            self.status_text = self
+                .viewport_transcript_handoff_status_restore
+                .take()
+                .unwrap_or_default();
+        } else {
+            self.viewport_transcript_handoff_status_restore = None;
+        }
         true
     }
 

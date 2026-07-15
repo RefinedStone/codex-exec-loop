@@ -49,19 +49,28 @@ pub(crate) fn build_planning_status_surface_projection(
     always_show: bool,
 ) -> PlanningStatusSurfaceProjection {
     let runtime_projection = app.planning_runtime_projection_snapshot();
+    let queue_framing_details =
+        build_queue_framing_details_from_projection(&runtime_projection, supplemental_detail_len);
+    let queue_framing_lines = queue_framing_details
+        .as_ref()
+        .map(queue_framing_lines_from_details)
+        .unwrap_or_default();
+    let mut summary_line = build_planning_summary_line(
+        app,
+        conversation,
+        &runtime_projection,
+        summary_detail_len,
+        always_show,
+    );
+    if queue_framing_details.is_some()
+        && let Some(summary) = summary_line.take()
+    {
+        summary_line = remove_duplicate_queue_framing_segments(summary);
+    }
     PlanningStatusSurfaceProjection {
-        summary_line: build_planning_summary_line(
-            app,
-            conversation,
-            &runtime_projection,
-            summary_detail_len,
-            always_show,
-        ),
+        summary_line,
         notice_line: build_planning_notice_line(conversation, supplemental_detail_len),
-        queue_framing_lines: build_queue_framing_lines(
-            &runtime_projection,
-            supplemental_detail_len,
-        ),
+        queue_framing_lines,
     }
 }
 
@@ -83,13 +92,27 @@ pub(crate) fn build_resumed_session_status_text(
         "manual handoff",
         resumed_thread_manual_handoff_context,
     );
-    if let Some(queue_summary) = build_queue_framing_summary_from_projection(
+    let queue_framing_details = build_queue_framing_details_from_projection(
         runtime_projection,
         RESUMED_SESSION_DETAIL_LIMIT,
-    ) {
+    );
+    let queue_summary = queue_framing_details
+        .as_ref()
+        .map(queue_framing_lines_from_details)
+        .map(|lines| {
+            lines
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join(STATUS_SEGMENT_SEPARATOR)
+        })
+        .filter(|summary| !summary.is_empty());
+    if let Some(queue_summary) = queue_summary {
         status_text.push_str(" / queue summary: ");
         status_text.push_str(&queue_summary);
-    } else if let Some(detail) = runtime_projection.preview_detail() {
+    } else if queue_framing_details.is_none()
+        && let Some(detail) = runtime_projection.preview_detail()
+    {
         status_text.push_str(" / planning detail: ");
         status_text.push_str(&compact_whitespace_detail(
             detail,
@@ -165,6 +188,16 @@ fn remove_legacy_valid_planning_summary_prefix(summary_line: String) -> Option<S
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn remove_duplicate_queue_framing_segments(summary_line: String) -> Option<String> {
+    let retained = summary_line
+        .split(STATUS_SEGMENT_SEPARATOR)
+        .map(str::trim)
+        .take_while(|segment| !segment.starts_with("queue:") && !segment.starts_with("proposals:"))
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    (!retained.is_empty()).then(|| retained.join(STATUS_SEGMENT_SEPARATOR))
+}
+
 pub(crate) fn build_planning_notice_line(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
@@ -174,13 +207,7 @@ pub(crate) fn build_planning_notice_line(
         .map(|summary| format!("planning notice: {summary}"))
 }
 
-pub(crate) fn build_queue_framing_lines(
-    runtime_projection: &PlanningRuntimeProjection,
-    max_detail_len: usize,
-) -> Vec<Line<'static>> {
-    build_queue_framing_lines_from_projection(runtime_projection, max_detail_len)
-}
-
+#[cfg(test)]
 pub(crate) fn build_queue_framing_lines_from_projection(
     runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
@@ -190,6 +217,7 @@ pub(crate) fn build_queue_framing_lines_from_projection(
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(crate) fn build_queue_framing_summary_from_projection(
     runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
@@ -312,6 +340,23 @@ fn build_queue_framing_details_from_application_projection(
             .or_else(|| projection.visible_tasks.first());
         let now_detail = current_task
             .map(|task| compact_queue_task_summary(task.task_title.as_str(), 1, 1, max_detail_len))
+            .or_else(|| {
+                let has_other_actionable_detail = !projection.proposed_tasks.is_empty()
+                    || projection
+                        .skipped_tasks
+                        .iter()
+                        .any(|task| !task.status.is_terminal());
+                if has_other_actionable_detail {
+                    return None;
+                }
+                projection.queue_summary.as_deref().and_then(|summary| {
+                    if let Some(parsed) = parse_queue_framing_details(summary, max_detail_len) {
+                        return parsed.now_detail.filter(|detail| detail_has_signal(detail));
+                    }
+                    detail_has_signal(summary)
+                        .then(|| compact_whitespace_detail(summary, max_detail_len))
+                })
+            })
             .unwrap_or_else(|| "none".to_string());
         let remaining_tasks = current_task
             .map(|current| {
@@ -351,14 +396,18 @@ fn build_queue_framing_details_from_application_projection(
                     .map(|summary| compact_proposal_summary_detail(summary, max_detail_len))
             })
             .unwrap_or_else(|| "none".to_string());
-        let blocked_detail = projection
+        let blocked_tasks = projection
             .skipped_tasks
+            .iter()
+            .filter(|task| !task.status.is_terminal())
+            .collect::<Vec<_>>();
+        let blocked_detail = blocked_tasks
             .first()
             .map(|task| {
                 let title = compact_whitespace_detail(task.task_title.as_str(), max_detail_len);
                 let reason = compact_whitespace_detail(task.reason.as_str(), max_detail_len);
                 let mut summary = format!("{title} ({reason})");
-                let hidden_count = projection.skipped_tasks.len().saturating_sub(1);
+                let hidden_count = blocked_tasks.len().saturating_sub(1);
                 if hidden_count > 0 {
                     summary.push_str(&format!(" (+{hidden_count} more)"));
                 }
@@ -376,10 +425,12 @@ fn build_queue_framing_details_from_application_projection(
         details.now_detail =
             compact_queue_task_summary(queue_head.task_title.as_str(), 1, 1, max_detail_len);
     }
-    if let Some(queue_summary) = projection.queue_summary.as_deref()
-        && let Some(parsed_details) = parse_queue_framing_details(queue_summary, max_detail_len)
-    {
-        merge_queue_framing_details(&mut details, parsed_details);
+    if let Some(queue_summary) = projection.queue_summary.as_deref() {
+        if let Some(parsed_details) = parse_queue_framing_details(queue_summary, max_detail_len) {
+            merge_queue_framing_details(&mut details, parsed_details);
+        } else if !detail_has_signal(&details.now_detail) {
+            details.now_detail = compact_whitespace_detail(queue_summary, max_detail_len);
+        }
     }
     if let Some(proposal_summary) = projection.proposal_summary.as_deref() {
         details.proposed_detail = compact_proposal_summary_detail(proposal_summary, max_detail_len);
@@ -408,17 +459,27 @@ fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> Stri
 
 fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if detail_has_signal(&details.now_detail) || detail_has_signal(&details.next_detail) {
-        lines.push(Line::from(format!(
-            "now: {}{STATUS_SEGMENT_SEPARATOR}next: {}",
-            details.now_detail, details.next_detail
-        )));
+    let current = [
+        ("now", details.now_detail.as_str()),
+        ("next", details.next_detail.as_str()),
+    ]
+    .into_iter()
+    .filter(|(_, detail)| detail_has_signal(detail))
+    .map(|(label, detail)| format!("{label}: {detail}"))
+    .collect::<Vec<_>>();
+    if !current.is_empty() {
+        lines.push(Line::from(current.join(STATUS_SEGMENT_SEPARATOR)));
     }
-    if detail_has_signal(&details.proposed_detail) || detail_has_signal(&details.blocked_detail) {
-        lines.push(Line::from(format!(
-            "proposed: {}{STATUS_SEGMENT_SEPARATOR}blocked: {}",
-            details.proposed_detail, details.blocked_detail
-        )));
+    let follow_up = [
+        ("proposed", details.proposed_detail.as_str()),
+        ("blocked", details.blocked_detail.as_str()),
+    ]
+    .into_iter()
+    .filter(|(_, detail)| detail_has_signal(detail))
+    .map(|(label, detail)| format!("{label}: {detail}"))
+    .collect::<Vec<_>>();
+    if !follow_up.is_empty() {
+        lines.push(Line::from(follow_up.join(STATUS_SEGMENT_SEPARATOR)));
     }
     lines
 }
@@ -450,10 +511,13 @@ fn queue_framing_summary_from_parts(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_queue_framing_lines_from_projection, build_queue_framing_summary_from_projection,
-        build_resumed_session_status_text, compact_queue_framing_summary,
+        build_planning_status_surface_projection, build_queue_framing_lines_from_projection,
+        build_queue_framing_summary_from_projection, build_resumed_session_status_text,
+        compact_queue_framing_summary, remove_duplicate_queue_framing_segments,
         remove_legacy_valid_planning_summary_prefix,
     };
+    use crate::adapter::inbound::tui::app::ConversationState;
+    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::domain::planning::{
         PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
@@ -608,6 +672,23 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_queue_segment_is_removed_without_hiding_planning_health() {
+        assert_eq!(
+            remove_duplicate_queue_framing_segments(
+                "planning: stale  |  queue: now: task-1  |  next: task-2  |  proposed: none  |  blocked: none  |  proposals: 2 promotable".to_string()
+            )
+            .as_deref(),
+            Some("planning: stale")
+        );
+        assert_eq!(
+            remove_duplicate_queue_framing_segments(
+                "queue: queue head: rank 1 / task-1  |  proposals: 2 promotable".to_string()
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn queue_framing_lines_hide_empty_none_only_rows() {
         let idle_projection = PlanningRuntimeProjection::ready_with_details(
             "Planning Context".to_string(),
@@ -631,10 +712,161 @@ mod tests {
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(
-            blocked_lines,
-            vec!["proposed: none  |  blocked: Follow blocked review"]
+        assert_eq!(blocked_lines, vec!["blocked: Follow blocked review"]);
+    }
+
+    #[test]
+    fn planning_surface_hides_none_only_queue_summary_segments() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_details(
+                "Planning Context".to_string(),
+                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+                None,
+                None,
+            )
+            .with_workspace_present(true),
         );
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+
+        let surface = build_planning_status_surface_projection(&app, conversation, 96, 96, true);
+
+        assert!(surface.queue_framing_lines.is_empty());
+        assert!(
+            surface.summary_line.as_deref().is_none_or(
+                |summary| !summary.contains("queue:") && !summary.contains("proposals:")
+            )
+        );
+    }
+
+    #[test]
+    fn planning_surface_preserves_unstructured_queue_status_in_framing() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_details(
+                "Planning Context".to_string(),
+                "queue idle: no executable planning task".to_string(),
+                Some("2 promotable follow-up proposals".to_string()),
+                None,
+            )
+            .with_workspace_present(true),
+        );
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+
+        let surface = build_planning_status_surface_projection(&app, conversation, 96, 96, true);
+        let framing = surface
+            .queue_framing_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(framing.contains("now: queue idle: no executable planning task"));
+        assert!(framing.contains("proposed: 2 promotable follow-up proposals"));
+        assert!(
+            surface.summary_line.as_deref().is_none_or(
+                |summary| !summary.contains("queue:") && !summary.contains("proposals:")
+            )
+        );
+    }
+
+    #[test]
+    fn planning_surface_preserves_structured_idle_status_after_terminal_skips() {
+        let mut completed = skipped_task("done-1", "Completed task", "status done");
+        completed.status = TaskStatus::Done;
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_queue_projection(
+                "Planning Context".to_string(),
+                "queue idle: no executable planning task".to_string(),
+                None,
+                None,
+                PriorityQueueProjection {
+                    next_task: None,
+                    active_tasks: Vec::new(),
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: vec![completed],
+                },
+            ),
+        );
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+
+        let surface = build_planning_status_surface_projection(&app, conversation, 96, 96, true);
+        let framing = surface
+            .queue_framing_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            framing,
+            vec!["now: queue idle: no executable planning task"]
+        );
+        assert!(
+            surface
+                .summary_line
+                .as_deref()
+                .is_none_or(|summary| !summary.contains("queue:"))
+        );
+    }
+
+    #[test]
+    fn compact_queue_framing_hides_terminal_skips_and_none_placeholders() {
+        let mut completed = skipped_task("done-1", "Completed sushi task", "status done");
+        completed.status = TaskStatus::Done;
+        let mut cancelled = skipped_task("cancelled-1", "Cancelled task", "status cancelled");
+        cancelled.status = TaskStatus::Cancelled;
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
+            "Planning Context".to_string(),
+            "queue head: rank 1 / task-1".to_string(),
+            None,
+            None,
+            PriorityQueueProjection {
+                next_task: Some(queue_task("task-1", "Current task", 1)),
+                active_tasks: vec![queue_task("task-1", "Current task", 1)],
+                proposed_tasks: Vec::new(),
+                skipped_tasks: vec![completed, cancelled],
+            },
+        );
+        let lines = build_queue_framing_lines_from_projection(&runtime_projection, 96)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(lines, vec!["now: Current task"]);
+    }
+
+    #[test]
+    fn compact_queue_framing_counts_only_actionable_blockers() {
+        let mut completed = skipped_task("done-1", "Completed task", "status done");
+        completed.status = TaskStatus::Done;
+        let runtime_projection = PlanningRuntimeProjection::ready_with_queue_projection(
+            "Planning Context".to_string(),
+            "queue ready".to_string(),
+            None,
+            None,
+            PriorityQueueProjection {
+                next_task: None,
+                active_tasks: Vec::new(),
+                proposed_tasks: Vec::new(),
+                skipped_tasks: vec![
+                    skipped_task("blocked-1", "Real blocker", "dependency open"),
+                    completed,
+                ],
+            },
+        );
+        let lines = build_queue_framing_lines_from_projection(&runtime_projection, 96)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(lines, vec!["blocked: Real blocker (dependency open)"]);
     }
     fn queue_task(task_id: &str, title: &str, rank: usize) -> PriorityQueueTask {
         PriorityQueueTask {

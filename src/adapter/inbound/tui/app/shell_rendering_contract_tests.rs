@@ -1726,13 +1726,13 @@ fn inline_tail_omits_legacy_planning_valid_status_in_single_and_parallel_home() 
 
     let single_rendered = rendered_tail(false);
     assert!(!single_rendered.contains("planning: valid"));
-    assert!(single_rendered.contains("queue: queue head: rank 1 / task-1"));
+    assert!(!single_rendered.contains("queue: queue head: rank 1 / task-1"));
     assert!(single_rendered.contains("now: Implement shell planning status"));
 
     let parallel_rendered = rendered_tail(true);
     assert!(!parallel_rendered.contains("planning: valid"));
     assert!(parallel_rendered.contains("parallel: ready  |  mode: parallel"));
-    assert!(parallel_rendered.contains("queue: queue head: rank 1 / task-1"));
+    assert!(!parallel_rendered.contains("queue: queue head: rank 1 / task-1"));
     assert!(parallel_rendered.contains("now: Implement shell planning status"));
 }
 
@@ -1787,7 +1787,7 @@ fn inline_tail_places_parallel_slot_working_line_between_queue_and_prompt() {
 
     let queue_index = lines
         .iter()
-        .position(|line| line.contains("queue: queue head: rank 1 / task-1"))
+        .position(|line| line.contains("now: Implement shell planning status"))
         .expect("planning queue line should remain visible");
     let working_index = lines
         .iter()

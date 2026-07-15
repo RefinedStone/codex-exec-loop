@@ -1,7 +1,9 @@
 ---
 source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+assertion_line: 518
 expression: rendered
 ---
+"                                                                                "
 "                                                                                "
 "                                                                                "
 "                                                                                "
@@ -11,10 +13,9 @@ expression: rendered
 "                                                                                "
 "Akra  |  thread: new draft                                                      "
 "◦ Working (0s • turn running / interrupt runtime-native)                        "
-"planning: stale  |  queue: queue head: rank 1 / terminal-bri...                 "
+"planning: stale                                                                 "
 "now: Implement shell planning status  |  next: Trim legacy shell code           "
-"proposed: none  |  blocked: Follow blocked review thread (blocked by tasks:     "
-"task-2(in_progress))                                                            "
+"blocked: Follow blocked review thread (blocked by tasks: task-2(in_progress))   "
 "recent codex: previous transcript should remain vis...                          "
 ">                                                                               "
 "prompt: Enter queue | Tab steer | Ctrl+j nl                                     "

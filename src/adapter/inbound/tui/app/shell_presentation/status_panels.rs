@@ -43,8 +43,9 @@ pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
 // Shared live-agent projection used by main tail and overlays so streaming/tool activity speaks with one vocabulary.
 pub(super) fn current_live_agent_lines(
     conversation: &ConversationViewModel,
+    include_committed_handoff: bool,
 ) -> Option<Vec<Line<'static>>> {
-    tail_shared::current_live_agent_lines(conversation)
+    tail_shared::current_live_agent_lines(conversation, include_committed_handoff)
 }
 
 // Re-export the planning substate label so workspace popups and footer indicators share the same wording.

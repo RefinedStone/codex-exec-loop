@@ -13,14 +13,24 @@ use super::activity_rail::build_activity_rail_notice_line;
  */
 pub(super) fn current_live_agent_lines(
     conversation: &ConversationViewModel,
+    include_committed_handoff: bool,
 ) -> Option<Vec<Line<'static>>> {
     /*
-     * live_agent_message는 현재 streaming 중인 agent 답변의 최신 조각이다.
-     * None이면 tail/footer가 별도 live block을 그릴 필요가 없고, Some이면 일반 transcript formatter를
-     * 재사용해 live preview와 저장된 대화가 같은 markdown/text 규칙을 따르게 한다.
+     * Host scrollback으로 아직 넘기지 않은 완료 메시지와 현재 streaming item을 순서대로 그린다.
+     * 동일 formatter를 재사용해 임시 viewport와 저장된 transcript의 markdown 규칙을 맞춘다.
      */
-    let message = conversation.live_agent_message.as_ref()?;
-    Some(format_conversation_lines(std::slice::from_ref(message)))
+    let mut lines = Vec::new();
+    if include_committed_handoff
+        && let Some(messages) = conversation
+            .viewport_transcript_handoff_messages()
+            .or_else(|| conversation.viewport_transcript_handoff_release_messages())
+    {
+        lines.extend(format_conversation_lines(messages));
+    }
+    if let Some(message) = conversation.live_agent_message.as_ref() {
+        lines.extend(format_conversation_lines(std::slice::from_ref(message)));
+    }
+    (!lines.is_empty()).then_some(lines)
 }
 
 pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> Option<String> {

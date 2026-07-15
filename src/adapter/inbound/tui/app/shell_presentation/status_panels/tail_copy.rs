@@ -155,9 +155,11 @@ pub(super) fn build_inline_tail_lines_with_context(
                 lines.push(queue_undo_action_line);
             }
             if let Some(runtime_notice_summary) = runtime_notice_summary {
-                lines.push(Line::from(format!(
-                    "runtime: {runtime_notice_summary}  |  {warning_summary}",
-                )));
+                let mut runtime_line = format!("runtime: {runtime_notice_summary}");
+                if warning_summary_has_signal(&warning_summary) {
+                    runtime_line.push_str(&format!("  |  {warning_summary}"));
+                }
+                lines.push(Line::from(runtime_line));
             } else if warning_summary_has_signal(&warning_summary) {
                 lines.push(Line::from(warning_summary));
             }
@@ -212,10 +214,17 @@ pub(super) fn build_inline_tail_lines_with_context(
             }
 
             lines.extend(planning_worker_panel_lines.into_iter().map(Line::from));
-            lines.extend(build_recent_transcript_summary_lines(
+            let renders_viewport_handoff = matches!(
                 app.inline_history_render_mode,
-                conversation,
-            ));
+                InlineHistoryRenderMode::ViewportReplay
+            ) && conversation
+                .has_pending_viewport_transcript_handoff();
+            if !renders_viewport_handoff {
+                lines.extend(build_recent_transcript_summary_lines(
+                    app.inline_history_render_mode,
+                    conversation,
+                ));
+            }
             if let Some(notice_line) = build_operator_notice_line(
                 github_review_recent_changes_summary.as_deref(),
                 conversation,
@@ -275,27 +284,30 @@ fn build_queue_receipt_undo_action_line(app: &NativeTuiApp) -> Option<Line<'stat
 }
 
 fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool {
-    conversation.auto_follow_state.has_live_activity()
-        || conversation
-            .auto_follow_state
-            .post_turn_continuation_paused()
-        || conversation.auto_follow_state.completed_auto_turns > 0
+    !conversation.has_post_turn_settlement_in_flight()
+        && (conversation.auto_follow_state.has_live_activity()
+            || conversation
+                .auto_follow_state
+                .post_turn_continuation_paused()
+            || conversation.auto_follow_state.completed_auto_turns > 0)
 }
 
 fn build_ready_status_detail_line(
     conversation: &ConversationViewModel,
     context: &ShellCorePresentationContext<'_>,
 ) -> Option<Line<'static>> {
-    let status = conversation.status_text.trim();
+    let status = conversation.status_text_for_viewport().trim();
     let terminal_status_is_owned_by_notice = conversation.activity_rail_terminal_state.is_some()
         && status.eq_ignore_ascii_case("turn failed");
-    let running_draft_status_is_stale =
-        conversation.has_running_turn() && status.eq_ignore_ascii_case("new thread draft");
+    let draft_status_is_redundant = status.eq_ignore_ascii_case("new thread draft");
+    let settlement_status_is_transient =
+        status.eq_ignore_ascii_case("turn completed / evaluating post-turn continuation");
     let mut parts = Vec::new();
     if !status.is_empty()
         && !status.eq_ignore_ascii_case("turn started")
         && !terminal_status_is_owned_by_notice
-        && !running_draft_status_is_stale
+        && !draft_status_is_redundant
+        && !settlement_status_is_transient
     {
         parts.push(format!(
             "status: {}",
@@ -573,6 +585,16 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
             "prompt: paused while an approval decision is pending",
         )];
     }
+    if matches!(
+        context.conversation_state,
+        ShellConversationState::Ready(conversation)
+            if conversation.has_pending_viewport_transcript_handoff()
+    ) && (app.shell_overlay != ShellOverlay::Hidden
+        || app.is_exit_confirmation_visible()
+        || app.is_turn_steer_confirmation_visible())
+    {
+        return vec![Line::from("prompt: response held while the dialog is open")];
+    }
     let mut lines = match context.conversation_state {
         ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
         ShellConversationState::Failed(message) => {
@@ -693,9 +715,7 @@ fn build_inline_ready_prompt_lines(
     if conversation.has_post_turn_settlement_in_flight()
         && conversation.input_state.can_submit_now()
     {
-        lines.push(Line::from(
-            "buffered prompt  |  planning queue settling  |  Enter when ready",
-        ));
+        lines.push(Line::from("buffered  |  Enter when settled  |  Ctrl+j nl"));
         return lines;
     }
 
@@ -1096,7 +1116,7 @@ mod coverage_tests {
 
         let mut busy = ConversationViewModel::new_draft("/tmp/root".to_string());
         busy.input_buffer = "next prompt".to_string();
-        busy.auto_follow_state.begin_post_turn_evaluation();
+        busy.auto_follow_state.mark_auto_turn_queued();
         let busy_prompt = rendered(build_inline_ready_prompt_lines(
             &busy,
             ShellActionAvailability::Ready,
@@ -1169,8 +1189,9 @@ mod coverage_tests {
             ShellActionAvailability::Ready,
             TuiLanguage::English,
         ));
-        assert!(empty_prompt.contains("planning queue settling"));
+        assert!(empty_prompt.contains("Enter when settled"));
         assert!(!empty_prompt.contains("Enter send"));
+        assert!(!empty_prompt.contains("Enter when ready"));
 
         conversation.input_buffer = "next request".to_string();
         let buffered_prompt = rendered(build_inline_ready_prompt_lines(
@@ -1178,8 +1199,37 @@ mod coverage_tests {
             ShellActionAvailability::Ready,
             TuiLanguage::English,
         ));
-        assert!(buffered_prompt.contains("planning queue settling"));
-        assert!(buffered_prompt.contains("Enter when ready"));
+        assert!(buffered_prompt.contains("Enter when settled"));
+        assert!(!buffered_prompt.contains("Enter when ready"));
+        assert!(
+            buffered_prompt
+                .lines()
+                .all(|line| line.chars().count() <= 48)
+        );
+    }
+
+    #[test]
+    fn settlement_tail_shows_one_phase_truth_without_auto_or_idle_noise() {
+        let mut app = test_native_tui_app();
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        let conversation = ready_conversation_mut(&mut app);
+        conversation.thread_id = "thread-settlement".to_string();
+        conversation.begin_post_turn_settlement("turn-1");
+        conversation.auto_follow_state.set_max_auto_turns(0);
+        conversation.auto_follow_state.completed_auto_turns = 1;
+        conversation
+            .runtime_notices
+            .push("bridge attached".to_string());
+
+        let tail = render_tail(&app, None);
+
+        assert_eq!(tail.matches("settling planning queue").count(), 1);
+        assert!(!tail.contains("auto:"));
+        assert!(!tail.contains("done:"));
+        assert!(!tail.contains("status: turn completed"));
+        assert!(!tail.contains("warn: none"));
+        assert!(!tail.contains("Enter send"));
+        assert!(!tail.contains("Enter when ready"));
     }
 
     #[test]

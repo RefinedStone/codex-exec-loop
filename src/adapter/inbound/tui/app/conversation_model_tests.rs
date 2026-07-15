@@ -503,3 +503,182 @@ fn planning_notice_summary_filters_non_planning_runtime_notices() {
         )
     );
 }
+
+#[test]
+fn next_live_agent_item_keeps_the_earliest_handoff_out_of_history() {
+    let mut conversation = ready_conversation();
+    conversation.record_turn_started("turn-1".to_string());
+    conversation.push_live_agent_delta(
+        "commentary-1".to_string(),
+        Some("commentary".to_string()),
+        "completed commentary".to_string(),
+    );
+    conversation.complete_live_agent_message(
+        "commentary-1".to_string(),
+        Some("commentary".to_string()),
+        "completed commentary".to_string(),
+    );
+
+    assert!(
+        !conversation
+            .host_scrollback_messages()
+            .iter()
+            .any(|message| message.text == "completed commentary")
+    );
+    assert_eq!(
+        conversation
+            .viewport_transcript_handoff_messages()
+            .map(|messages| messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()),
+        Some(vec!["completed commentary"])
+    );
+
+    conversation.push_live_agent_delta(
+        "answer-2".to_string(),
+        Some("final_answer".to_string()),
+        "new live answer".to_string(),
+    );
+
+    assert!(
+        !conversation
+            .host_scrollback_messages()
+            .iter()
+            .any(|message| message.text == "completed commentary")
+    );
+    assert_eq!(
+        conversation
+            .viewport_transcript_handoff_messages()
+            .map(|messages| messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()),
+        Some(vec!["completed commentary"])
+    );
+    assert_eq!(
+        conversation
+            .live_agent_message
+            .as_ref()
+            .map(|message| message.text.as_str()),
+        Some("new live answer")
+    );
+}
+
+#[test]
+fn completed_settlement_waits_for_history_flush_ack_before_unlocking_navigation() {
+    let mut conversation = ready_conversation();
+    conversation.record_turn_started("turn-1".to_string());
+    conversation.push_live_agent_delta(
+        "answer-1".to_string(),
+        Some("final_answer".to_string()),
+        "durable final answer".to_string(),
+    );
+    conversation.complete_live_agent_message(
+        "answer-1".to_string(),
+        Some("final_answer".to_string()),
+        "durable final answer".to_string(),
+    );
+    conversation.finish_turn("turn-1", &[]);
+    conversation.begin_post_turn_settlement("turn-1");
+
+    assert!(conversation.complete_post_turn_settlement("turn-1"));
+    assert!(conversation.has_pending_viewport_transcript_handoff());
+    assert!(
+        conversation
+            .viewport_transcript_handoff_messages()
+            .is_none()
+    );
+    assert!(
+        conversation
+            .host_scrollback_messages()
+            .iter()
+            .any(|message| message.text == "durable final answer")
+    );
+    assert!(!conversation.can_accept_manual_prompt());
+
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert!(conversation.can_accept_manual_prompt());
+}
+
+#[test]
+fn agentless_failure_waits_for_transcript_delivery_before_unlocking_navigation() {
+    let mut conversation = ready_conversation();
+    conversation.record_turn_started("turn-1".to_string());
+    conversation.fail_turn("agentless runtime failure".to_string());
+
+    assert_eq!(
+        conversation
+            .viewport_transcript_handoff_release_messages()
+            .map(|messages| messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()),
+        Some(vec!["agentless runtime failure"])
+    );
+    assert!(!conversation.can_accept_manual_prompt());
+
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    assert!(conversation.can_accept_manual_prompt());
+}
+
+#[test]
+fn manual_preparation_failure_waits_for_delivery_and_restores_its_status() {
+    let mut conversation = ready_conversation();
+    conversation.record_manual_preparation_failure(
+        "submitted prompt".to_string(),
+        "turn preparation failed / workspace unavailable".to_string(),
+    );
+
+    assert_eq!(
+        conversation
+            .viewport_transcript_handoff_release_messages()
+            .map(|messages| messages
+                .iter()
+                .map(|message| (message.kind, message.text.as_str()))
+                .collect::<Vec<_>>()),
+        Some(vec![(ConversationMessageKind::User, "submitted prompt")])
+    );
+    assert!(!conversation.can_accept_manual_prompt());
+
+    conversation
+        .record_status_message("conversation is busy; wait before opening a new draft".to_string());
+    assert_eq!(
+        conversation.status_text_for_viewport(),
+        "turn preparation failed / workspace unavailable"
+    );
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    assert_eq!(
+        conversation.status_text,
+        "turn preparation failed / workspace unavailable"
+    );
+    assert!(conversation.can_accept_manual_prompt());
+}
+
+#[test]
+fn tool_only_turn_waits_for_transcript_delivery_before_unlocking_navigation() {
+    let mut conversation = ready_conversation();
+    conversation.record_turn_started("turn-1".to_string());
+    conversation.buffer_tool_message("tool-only completion");
+    conversation.finish_turn("turn-1", &[]);
+    conversation.begin_post_turn_settlement("turn-1");
+
+    assert!(conversation.complete_post_turn_settlement("turn-1"));
+    assert_eq!(
+        conversation
+            .viewport_transcript_handoff_release_messages()
+            .map(|messages| messages
+                .iter()
+                .map(|message| (message.kind, message.text.as_str()))
+                .collect::<Vec<_>>()),
+        Some(vec![(
+            ConversationMessageKind::Tool,
+            "tool-only completion"
+        )])
+    );
+    assert!(!conversation.can_accept_manual_prompt());
+
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    assert!(conversation.can_accept_manual_prompt());
+}
