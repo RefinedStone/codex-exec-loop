@@ -626,6 +626,15 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
+    if conversation.has_post_turn_settlement_in_flight()
+        && conversation.input_state.can_submit_now()
+    {
+        lines.push(Line::from(
+            "buffered prompt  |  planning queue settling  |  Enter when ready",
+        ));
+        return lines;
+    }
+
     if conversation.auto_follow_state.has_live_activity()
         && conversation.input_state.can_submit_now()
     {
@@ -1012,6 +1021,34 @@ mod coverage_tests {
         }
 
         assert!(!parallel_loading_prompt_indicator_frame().is_empty());
+    }
+
+    #[test]
+    fn planning_settlement_truth_overrides_idle_and_enter_send_copy() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.begin_post_turn_settlement("turn-1");
+        conversation.auto_follow_state.set_max_auto_turns(0);
+
+        assert!(!conversation.can_accept_manual_prompt());
+        assert_eq!(turn_status_label(&conversation), "working");
+        assert!(
+            build_working_line(&conversation, 40)
+                .is_some_and(|line| line.to_string().contains("settling planning queue"))
+        );
+        let empty_prompt = rendered(build_inline_ready_prompt_lines(
+            &conversation,
+            ShellActionAvailability::Ready,
+        ));
+        assert!(empty_prompt.contains("planning queue settling"));
+        assert!(!empty_prompt.contains("Enter send"));
+
+        conversation.input_buffer = "next request".to_string();
+        let buffered_prompt = rendered(build_inline_ready_prompt_lines(
+            &conversation,
+            ShellActionAvailability::Ready,
+        ));
+        assert!(buffered_prompt.contains("planning queue settling"));
+        assert!(buffered_prompt.contains("Enter when ready"));
     }
 
     #[test]

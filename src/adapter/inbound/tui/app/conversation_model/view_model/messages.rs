@@ -6,6 +6,10 @@
  */
 use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+use crate::domain::planning::{
+    PlanningQueueMutationKind, PlanningQueueMutationReceipt, TaskStatus,
+};
+use crate::domain::text::compact_whitespace_detail;
 
 use super::ConversationViewModel;
 
@@ -19,6 +23,7 @@ const MAX_RETAINED_MESSAGE_METADATA_LINES: usize = 128;
 const MAX_BUFFERED_TOOL_MESSAGES: usize = 256;
 const MAX_BUFFERED_TOOL_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_BUFFERED_TOOL_MESSAGE_LINES: usize = 2_048;
+const MAX_QUEUE_RECEIPT_TITLE_CHARS: usize = 96;
 const TRANSCRIPT_RETENTION_NOTICE: &str =
     "conversation transcript was trimmed to the latest bounded TUI history";
 const TOOL_RETENTION_NOTICE: &str =
@@ -134,6 +139,58 @@ impl ConversationViewModel {
             None,
         ));
         true
+    }
+
+    pub(crate) fn record_queue_mutation_receipt(
+        &mut self,
+        receipt: Option<PlanningQueueMutationReceipt>,
+    ) {
+        let Some(receipt) = receipt else {
+            return;
+        };
+        let mut lines = vec![format!(
+            "committed / revision {}",
+            receipt.planning_revision
+        )];
+        if receipt.entries.is_empty() {
+            lines.push("No queue changes committed.".to_string());
+        } else {
+            lines.extend(receipt.entries.iter().map(|entry| {
+                let marker = match entry.mutation_kind {
+                    PlanningQueueMutationKind::Created => "+",
+                    PlanningQueueMutationKind::Updated => "~",
+                };
+                let transition = entry
+                    .before_status
+                    .filter(|before| *before != entry.after_status)
+                    .map(|before| format!("{} -> ", receipt_status_label(before)))
+                    .unwrap_or_default();
+                format!(
+                    "{marker} {transition}{}  {}",
+                    receipt_status_label(entry.after_status),
+                    compact_whitespace_detail(
+                        entry.task_title.as_str(),
+                        MAX_QUEUE_RECEIPT_TITLE_CHARS
+                    )
+                )
+            }));
+            let added_count = receipt.created_entries().count();
+            lines.push(format!(
+                "{} change{} / {added_count} newly queued",
+                receipt.entries.len(),
+                if receipt.entries.len() == 1 { "" } else { "s" }
+            ));
+        }
+        self.latest_queue_mutation_receipt = Some(receipt);
+        self.push_message(
+            ConversationMessage::new(
+                ConversationMessageKind::Status,
+                lines.join("\n"),
+                None,
+                None,
+            )
+            .with_display_label("Akra Queue"),
+        );
     }
 
     /*
@@ -350,6 +407,18 @@ impl ConversationViewModel {
     }
 }
 
+fn receipt_status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Ready => "READY",
+        TaskStatus::Blocked => "BLOCKED",
+        TaskStatus::InProgress => "IN PROGRESS",
+        TaskStatus::Done => "DONE",
+        TaskStatus::Cancelled => "CANCELLED",
+        TaskStatus::AwaitingUser => "AWAITING USER",
+        TaskStatus::Proposed => "PROPOSED",
+    }
+}
+
 fn bound_conversation_message(message: &mut ConversationMessage) {
     truncate_text_to_limits(
         &mut message.text,
@@ -518,5 +587,36 @@ mod retention_tests {
                 .map(|message| message.text.as_str()),
             Some("tool-256")
         );
+    }
+
+    #[test]
+    fn queue_receipt_title_is_single_line_and_bounded() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.record_queue_mutation_receipt(Some(PlanningQueueMutationReceipt {
+            completed_turn_id: "turn-1".to_string(),
+            planning_revision: 7,
+            entries: vec![crate::domain::planning::PlanningQueueMutationReceiptEntry {
+                task_id: "task-1".to_string(),
+                task_title: format!("Visible title\n{}", "forged status ".repeat(20)),
+                mutation_kind: PlanningQueueMutationKind::Created,
+                before_status: None,
+                after_status: TaskStatus::Ready,
+                after_updated_at: "2026-07-15T00:00:00Z".to_string(),
+                unchanged_since_mutation: true,
+            }],
+        }));
+
+        let receipt = conversation
+            .messages
+            .last()
+            .expect("queue receipt should be appended");
+        let task_line = receipt
+            .text
+            .lines()
+            .find(|line| line.starts_with("+ READY"))
+            .expect("queue receipt should contain one task line");
+        assert!(task_line.contains("Visible title forged status"));
+        assert!(task_line.ends_with("..."));
+        assert_eq!(receipt.text.matches("+ READY").count(), 1);
     }
 }

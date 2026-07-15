@@ -20,7 +20,8 @@ use crate::application::port::outbound::planning_authority_port::{
 };
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommit,
-    PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommitResult, PlanningTaskAuthorityMutationAudit,
+    PlanningTaskAuthorityMutationKind, PlanningTaskRepositoryPort,
 };
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
@@ -32,7 +33,10 @@ use crate::application::port::outbound::review_center_repository_port::{
 use crate::application::port::outbound::telegram_update_ledger_port::{
     TelegramRunnerLeaseClaimDecision, TelegramUpdateLedgerPort,
 };
-use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
+use crate::application::service::planning::{
+    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget, PlanningQueueUseCases,
+    PlanningTaskMutationService, RESULT_OUTPUT_FILE_PATH,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
     ParallelModeDispatchBlockReason, ParallelModeDispatchCommandSnapshot,
@@ -43,9 +47,9 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::{
     DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
-    PlanningAuthorityLocation, PriorityQueueProjection, PriorityQueueSkippedTask,
-    PriorityQueueTask, QueueIdleConfig, QueueIdlePolicy, TaskActor, TaskAuthorityDocument,
-    TaskDefinition, TaskMutationProvenance, TaskStatus,
+    PlanningAuthorityLocation, PriorityQueueProjection, PriorityQueueService,
+    PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig, QueueIdlePolicy, TaskActor,
+    TaskAuthorityDocument, TaskDefinition, TaskMutationProvenance, TaskStatus,
 };
 use chrono::Utc;
 use rusqlite::OptionalExtension;
@@ -408,8 +412,8 @@ fn authority_connection(workspace_dir: &str) -> rusqlite::Connection {
 }
 
 #[test]
-fn authority_schema_migrates_v7_and_v8_additively_and_rejects_unsupported_versions() {
-    for legacy_version in [7, 8] {
+fn authority_schema_migrates_v7_through_v9_additively_and_rejects_unsupported_versions() {
+    for legacy_version in [7, 8, 9] {
         let workspace_dir = temp_workspace(&format!("schema-migrate-v{legacy_version}"));
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -428,6 +432,8 @@ fn authority_schema_migrates_v7_and_v8_additively_and_rejects_unsupported_versio
         connection
             .execute_batch(&format!(
                 "{v8_objects}
+                 DROP INDEX idx_planning_task_mutation_events_revision;
+                 DROP TABLE planning_task_mutation_events;
                  DROP TABLE planning_file_sync_baselines;
                  INSERT OR REPLACE INTO active_documents (relative_path, content)
                  VALUES ('legacy.md', 'legacy body');
@@ -445,7 +451,7 @@ fn authority_schema_migrates_v7_and_v8_additively_and_rejects_unsupported_versio
                 |row| row.get(0),
             )
             .expect("migrated version should load");
-        assert_eq!(version, "9");
+        assert_eq!(version, "10");
         assert_eq!(
             migrated
                 .query_row(
@@ -464,9 +470,15 @@ fn authority_schema_migrates_v7_and_v8_additively_and_rejects_unsupported_versio
                 ("table", "telegram_update_inbox"),
                 ("index", "idx_telegram_update_inbox_stream_state_id"),
                 ("table", "planning_file_sync_baselines"),
+                ("table", "planning_task_mutation_events"),
+                ("index", "idx_planning_task_mutation_events_revision"),
             ]
         } else {
-            vec![("table", "planning_file_sync_baselines")]
+            vec![
+                ("table", "planning_file_sync_baselines"),
+                ("table", "planning_task_mutation_events"),
+                ("index", "idx_planning_task_mutation_events_revision"),
+            ]
         };
         for (object_type, object_name) in expected_objects {
             assert!(
@@ -484,7 +496,7 @@ fn authority_schema_migrates_v7_and_v8_additively_and_rejects_unsupported_versio
         }
     }
 
-    for unsupported_version in ["6", "10", "not-a-version"] {
+    for unsupported_version in ["6", "11", "not-a-version"] {
         let workspace_dir = temp_workspace("schema-reject-unsupported");
         let location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
             &workspace_dir,
@@ -1365,6 +1377,242 @@ fn task_authority_snapshot_is_committed_to_db_tables() {
     // 성공을 막는다. 두 값이 같은 snapshot으로 돌아와야 planning runtime과 repair flow가 같은 authority를 본다.
     assert_eq!(snapshot.task_authority, task_authority);
     assert_eq!(snapshot.queue_projection, queue_projection);
+}
+
+#[test]
+fn task_mutation_journal_commits_atomically_and_reloads_after_restart() {
+    let workspace_dir = temp_workspace("task-mutation-journal-restart");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let empty_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let empty_queue = empty_test_queue_projection();
+    let baseline = adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &empty_authority,
+                queue_projection: &empty_queue,
+            },
+        )
+        .expect("empty authority should seed");
+    let PlanningTaskAuthorityCommitResult::Committed {
+        planning_revision: baseline_revision,
+        ..
+    } = baseline
+    else {
+        panic!("baseline should commit")
+    };
+    let created = authority_task("journal-created", "direction-1");
+    let created_id = created.id.clone();
+    let next_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![created.clone()],
+    };
+    let provenance = TaskMutationProvenance::new(OriginSessionKind::Planner).with_parent(
+        Some("parent-thread".to_string()),
+        Some("parent-turn".to_string()),
+    );
+    let committed = adapter
+        .commit_task_authority_mutation_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: Some(baseline_revision),
+                task_authority: &next_authority,
+                queue_projection: &empty_queue,
+            },
+            PlanningTaskAuthorityMutationAudit {
+                task_ids: std::slice::from_ref(&created_id),
+                legacy_source_turn_id: None,
+                provenance: &provenance,
+            },
+        )
+        .expect("audited mutation should commit");
+    let PlanningTaskAuthorityCommitResult::Committed {
+        planning_revision: mutation_revision,
+        changed: true,
+    } = committed
+    else {
+        panic!("audited mutation should change authority")
+    };
+    let restarted = SqlitePlanningAuthorityAdapter::new();
+    let records = restarted
+        .load_task_authority_mutations(&workspace_dir, baseline_revision, mutation_revision)
+        .expect("mutation journal should reload");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].task_id, created.id);
+    assert_eq!(
+        records[0].mutation_kind,
+        PlanningTaskAuthorityMutationKind::Created
+    );
+    assert_eq!(records[0].provenance, provenance);
+
+    let mut generic_task = created;
+    generic_task.title = "Generic external rewrite".to_string();
+    let generic_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: vec![generic_task],
+    };
+    let generic = restarted
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: Some(mutation_revision),
+                task_authority: &generic_authority,
+                queue_projection: &empty_queue,
+            },
+        )
+        .expect("generic rewrite should commit");
+    let PlanningTaskAuthorityCommitResult::Committed {
+        planning_revision: generic_revision,
+        ..
+    } = generic
+    else {
+        panic!("generic rewrite should commit")
+    };
+    let generic_records = restarted
+        .load_task_authority_mutations(&workspace_dir, mutation_revision, generic_revision)
+        .expect("generic revision journal range should load");
+    assert_eq!(generic_records.len(), 1);
+    assert_eq!(
+        generic_records[0].mutation_kind,
+        PlanningTaskAuthorityMutationKind::Updated
+    );
+    assert_eq!(
+        generic_records[0].provenance.origin_session_kind,
+        Some(OriginSessionKind::System)
+    );
+    assert_eq!(
+        generic_records[0]
+            .after_task
+            .as_ref()
+            .map(|task| task.title.as_str()),
+        Some("Generic external rewrite")
+    );
+}
+
+#[test]
+fn queue_cancellation_persists_cancelled_state_across_adapter_restart() {
+    let workspace_dir = temp_workspace("queue-cancellation-restart");
+    let adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
+    let directions = DirectionCatalogDocument {
+        version: 1,
+        queue_idle: QueueIdleConfig::default(),
+        directions: vec![DirectionDefinition {
+            id: "direction-1".to_string(),
+            title: "Direction 1".to_string(),
+            summary: "Queue cancellation persistence".to_string(),
+            success_criteria: vec!["done".to_string()],
+            scope_hints: Vec::new(),
+            detail_doc_path: String::new(),
+            state: DirectionState::Active,
+        }],
+    };
+    let ready_tasks = (0..17)
+        .map(|index| authority_task(&format!("task-cancel-{index}"), "direction-1"))
+        .collect::<Vec<_>>();
+    let task_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: ready_tasks.clone(),
+    };
+    let queue_projection = PriorityQueueService::new()
+        .build_projection(&directions, &task_authority)
+        .expect("queue projection should build");
+    adapter
+        .commit_direction_authority_snapshot(
+            &workspace_dir,
+            PlanningDirectionAuthorityCommit {
+                observed_planning_revision: None,
+                directions: &directions,
+                authority_mutation_owner_token: None,
+            },
+        )
+        .expect("direction authority should seed");
+    adapter
+        .commit_task_authority_snapshot(
+            &workspace_dir,
+            PlanningTaskAuthorityCommit {
+                observed_planning_revision: None,
+                task_authority: &task_authority,
+                queue_projection: &queue_projection,
+            },
+        )
+        .expect("task authority should seed");
+    let queue = PlanningQueueUseCases::new(
+        PlanningTaskMutationService::new(adapter.clone(), PriorityQueueService::new()),
+        adapter.clone(),
+    );
+    let before = queue
+        .load_authority_snapshot(&workspace_dir)
+        .expect("queue authority should load");
+    let cancellation = PlanningQueueCancellationRequest {
+        workspace_directory: workspace_dir.clone(),
+        expected_planning_revision: before.planning_revision,
+        targets: ready_tasks
+            .into_iter()
+            .map(|task| PlanningQueueCancellationTarget {
+                task_id: task.id,
+                expected_status: task.status,
+                expected_updated_at: task.updated_at,
+            })
+            .collect(),
+    };
+
+    adapter
+        .upsert_runtime_slot_lease(
+            &workspace_dir,
+            &slot_lease_for_task(
+                "slot-queue-cancel",
+                "task-cancel-0",
+                ParallelModeSlotLeaseState::Running,
+            ),
+        )
+        .expect("running task lease should persist");
+    let blocked = queue
+        .cancel_tasks(cancellation.clone())
+        .expect_err("running task must reject queue cancellation");
+    assert!(blocked.to_string().contains("cannot be edited while slot"));
+    let unchanged = queue
+        .load_authority_snapshot(&workspace_dir)
+        .expect("blocked cancellation should preserve authority");
+    assert_eq!(unchanged.planning_revision, before.planning_revision);
+    assert!(
+        unchanged
+            .tasks
+            .iter()
+            .all(|task| task.status == TaskStatus::Ready)
+    );
+    adapter
+        .remove_runtime_slot_lease(&workspace_dir, "slot-queue-cancel")
+        .expect("test lease should release");
+
+    let cancelled = queue
+        .cancel_tasks(cancellation)
+        .expect("ready task should be cancelled");
+    assert_eq!(cancelled.applied_command_count, 17);
+    assert_eq!(
+        cancelled.committed_planning_revision,
+        before.planning_revision + 1
+    );
+    drop(queue);
+    drop(adapter);
+
+    let restarted = SqlitePlanningAuthorityAdapter::new();
+    let snapshot = restarted
+        .load_task_authority_snapshot(&workspace_dir)
+        .expect("restarted adapter should load")
+        .expect("task authority should persist");
+    assert!(
+        snapshot
+            .task_authority
+            .tasks
+            .iter()
+            .all(|task| task.status == TaskStatus::Cancelled)
+    );
+    assert!(snapshot.queue_projection.next_task.is_none());
+    assert!(snapshot.queue_projection.active_tasks.is_empty());
 }
 
 #[test]

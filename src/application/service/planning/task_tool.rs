@@ -11,6 +11,9 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub(crate) const PLANNING_TOOL_PARENT_THREAD_ID_ENV: &str = "AKRA_PLANNING_TOOL_PARENT_THREAD_ID";
+pub(crate) const PLANNING_TOOL_PARENT_TURN_ID_ENV: &str = "AKRA_PLANNING_TOOL_PARENT_TURN_ID";
+
 /*
  * planning task tool은 worker-facing task authority write API다. full planning admin surface보다
  * 의도적으로 좁게 설계되어 worker는 task를 읽고, `PlanningTaskMutationService`를 통해 한 번에
@@ -42,6 +45,43 @@ pub enum PlanningTaskToolRequest {
     ListTasks(PlanningTaskToolListRequest),
     CreateTask(PlanningTaskToolCreateRequest),
     UpdateTask(PlanningTaskToolUpdateRequest),
+}
+
+impl PlanningTaskToolRequest {
+    pub(crate) fn apply_cli_host_context(
+        &mut self,
+        parent_thread_id: Option<String>,
+        parent_turn_id: Option<String>,
+    ) {
+        let parent_thread_id = normalized_host_identifier(parent_thread_id);
+        let parent_turn_id = normalized_host_identifier(parent_turn_id);
+        match self {
+            Self::ListTasks(_) => {}
+            Self::CreateTask(request) => {
+                request.legacy_source_turn_id = None;
+                request.origin_session_kind = Some(OriginSessionKind::Planner);
+                request.thread_id = None;
+                request.turn_id = None;
+                request.parent_thread_id = parent_thread_id;
+                request.parent_turn_id = parent_turn_id;
+            }
+            Self::UpdateTask(request) => {
+                request.legacy_source_turn_id = None;
+                request.origin_session_kind = Some(OriginSessionKind::Planner);
+                request.thread_id = None;
+                request.turn_id = None;
+                request.parent_thread_id = parent_thread_id;
+                request.parent_turn_id = parent_turn_id;
+            }
+        }
+    }
+}
+
+fn normalized_host_identifier(identifier: Option<String>) -> Option<String> {
+    identifier.and_then(|identifier| {
+        let identifier = identifier.trim();
+        (!identifier.is_empty()).then(|| identifier.to_string())
+    })
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -559,6 +599,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn cli_host_context_replaces_untrusted_json_provenance_and_clears_it_when_absent() {
+        let parsed = serde_json::from_str::<PlanningTaskToolRequest>(
+            r#"{
+                "version":1,
+                "op":"create_task",
+                "apply":true,
+                "title":"Follow up",
+                "source_turn_id":"spoof-source",
+                "origin_session_kind":"main",
+                "thread_id":"spoof-thread",
+                "turn_id":"spoof-turn",
+                "parent_thread_id":"spoof-parent-thread",
+                "parent_turn_id":"spoof-parent-turn"
+            }"#,
+        )
+        .expect("request should parse");
+        let mut with_host = parsed.clone();
+        with_host.apply_cli_host_context(
+            Some(" host-parent-thread ".to_string()),
+            Some("host-parent-turn".to_string()),
+        );
+        let PlanningTaskToolRequest::CreateTask(with_host) = with_host else {
+            panic!("create request should remain create");
+        };
+        assert_eq!(with_host.legacy_source_turn_id, None);
+        assert_eq!(
+            with_host.origin_session_kind,
+            Some(OriginSessionKind::Planner)
+        );
+        assert_eq!(with_host.thread_id, None);
+        assert_eq!(with_host.turn_id, None);
+        assert_eq!(
+            with_host.parent_thread_id.as_deref(),
+            Some("host-parent-thread")
+        );
+        assert_eq!(
+            with_host.parent_turn_id.as_deref(),
+            Some("host-parent-turn")
+        );
+
+        let mut without_host = parsed;
+        without_host.apply_cli_host_context(None, None);
+        let PlanningTaskToolRequest::CreateTask(without_host) = without_host else {
+            panic!("create request should remain create");
+        };
+        assert_eq!(without_host.legacy_source_turn_id, None);
+        assert_eq!(without_host.thread_id, None);
+        assert_eq!(without_host.turn_id, None);
+        assert_eq!(without_host.parent_thread_id, None);
+        assert_eq!(without_host.parent_turn_id, None);
     }
 
     #[test]

@@ -386,6 +386,7 @@ fn reconcile_post_turn_reports_reconciliation_write_failures() {
         workspace.path_str(),
         PlanningExecutionSnapshot {
             result_output_markdown: Some("pre-turn result".to_string()),
+            ..PlanningExecutionSnapshot::default()
         },
     );
 
@@ -634,6 +635,8 @@ fn queue_refresh_finalization_reports_proposal_promotion_failure() {
     let outcome = planning.worker.finalize_post_turn_queue_refresh(
         PlanningPostTurnQueueRefreshFinalizationRequest {
             workspace_directory: workspace.path_str(),
+            parent_thread_id: None,
+            completed_turn_id: "turn-coverage",
             previous_handoff_task: None,
             previous_runtime_projection: &proposal_projection,
             refreshed_runtime_projection: &proposal_projection,

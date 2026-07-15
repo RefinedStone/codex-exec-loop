@@ -823,7 +823,7 @@ fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
     if line_width == 0 {
         1
     } else {
-        line_width.div_ceil(width as usize)
+        line_width.div_ceil(width.max(1) as usize)
     }
 }
 
@@ -858,6 +858,7 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
         queue_lines,
         proposal_lines,
         note_lines,
+        selected_content_line_index,
         key_lines,
     } = overlay_view;
     let body_lines = take_panel_body_lines(header_lines);
@@ -882,6 +883,14 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
             Constraint::Length(inline_section_height(&key_lines, 2)),
         ])
         .split(area);
+    let visible_content_rows = layout[2].height.saturating_sub(1) as usize;
+    let content_scroll_offset = selected_content_scroll_offset(
+        &content_lines,
+        selected_content_line_index,
+        layout[2].width,
+        visible_content_rows,
+    )
+    .min(u16::MAX as usize) as u16;
 
     render_inline_titled_panel(
         frame,
@@ -891,9 +900,38 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
         true,
     );
     render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
-    render_inline_titled_panel(frame, layout[2], Line::from("Queue"), content_lines, false);
+    render_inline_scrolled_panel(
+        frame,
+        layout[2],
+        Line::from("Queue"),
+        content_lines,
+        content_scroll_offset,
+    );
     render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
+
+fn selected_content_scroll_offset(
+    content_lines: &[Line<'_>],
+    selected_line_index: Option<usize>,
+    width: u16,
+    visible_rows: usize,
+) -> usize {
+    selected_line_index
+        .and_then(|selected_index| {
+            let selected_line = content_lines.get(selected_index)?;
+            let selected_start =
+                count_rendered_inline_rows(&content_lines[..selected_index], width);
+            let selected_rows = rendered_line_rows(selected_line, width);
+            let visible_rows = visible_rows.max(1);
+            Some(if selected_rows >= visible_rows {
+                selected_start
+            } else {
+                (selected_start + selected_rows).saturating_sub(visible_rows)
+            })
+        })
+        .unwrap_or(0)
+}
+
 fn draw_inline_reviews_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_reviews_overlay_view(app);
     let current_thread_lines = overlay_view.current_thread_section_lines();
@@ -1104,7 +1142,7 @@ fn draw_inline_session_list_panel(
 mod tests {
     use ratatui::text::Line;
 
-    use super::event_boundary_scroll_offset;
+    use super::{event_boundary_scroll_offset, selected_content_scroll_offset};
 
     #[test]
     fn event_boundary_scroll_offset_keeps_wrapped_event_intact() {
@@ -1119,6 +1157,20 @@ mod tests {
             event_boundary_scroll_offset(&lines, 10, 1),
             2,
             "boundary exactly after the first wrapped event may start at the next event"
+        );
+    }
+
+    #[test]
+    fn selected_content_scroll_keeps_marker_when_row_is_taller_than_viewport() {
+        let lines = vec![
+            Line::from("heading"),
+            Line::from(format!("> selected {}", "detail ".repeat(20))),
+        ];
+
+        assert_eq!(
+            selected_content_scroll_offset(&lines, Some(1), 48, 2),
+            1,
+            "a tall selected row should start at its marker instead of its wrapped tail"
         );
     }
 }

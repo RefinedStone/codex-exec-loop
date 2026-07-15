@@ -32,6 +32,8 @@ pub(crate) trait PlanningThreadLauncher: Send + Sync {
         &self,
         workspace_directory: &str,
         prompt: &str,
+        parent_thread_id: Option<&str>,
+        parent_turn_id: Option<&str>,
         event_sender: ConversationStreamSender,
         continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
     ) -> Result<ConversationTurnTerminalReceipt>;
@@ -83,11 +85,15 @@ impl PlanningWorkerPort for AppServerPlanningWorkerAdapter {
         let planning_thread_launcher = self.planning_thread_launcher.clone();
         let workspace_directory = request.workspace_directory.clone();
         let prompt = request.prompt.clone();
+        let parent_thread_id = request.parent_thread_id.clone();
+        let parent_turn_id = request.parent_turn_id.clone();
         let continuation_permit = request.continuation_permit.clone();
         let service_thread = thread::spawn(move || {
             planning_thread_launcher.run_hidden_planning_thread(
                 &workspace_directory,
                 &prompt,
+                parent_thread_id.as_deref(),
+                parent_turn_id.as_deref(),
                 tx,
                 continuation_permit,
             )
@@ -315,6 +321,8 @@ mod tests {
     struct HiddenPlanningThreadCall {
         workspace_directory: String,
         prompt: String,
+        parent_thread_id: Option<String>,
+        parent_turn_id: Option<String>,
     }
 
     struct FakePlanningThreadLauncher {
@@ -329,6 +337,8 @@ mod tests {
             &self,
             workspace_directory: &str,
             prompt: &str,
+            parent_thread_id: Option<&str>,
+            parent_turn_id: Option<&str>,
             event_sender: crate::application::service::conversation_runtime_event::ConversationStreamSender,
             _continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
         ) -> Result<ConversationTurnTerminalReceipt> {
@@ -344,6 +354,8 @@ mod tests {
                 .push(HiddenPlanningThreadCall {
                     workspace_directory: workspace_directory.to_string(),
                     prompt: prompt.to_string(),
+                    parent_thread_id: parent_thread_id.map(str::to_string),
+                    parent_turn_id: parent_turn_id.map(str::to_string),
                 });
             for event in self.events.clone() {
                 let _ = event_sender.send(event);
@@ -435,6 +447,8 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
+                parent_thread_id: Some("parent-thread".to_string()),
+                parent_turn_id: Some("parent-turn".to_string()),
                 continuation_permit: None,
             })
             .expect("planning worker should succeed");
@@ -482,6 +496,8 @@ mod tests {
             &[HiddenPlanningThreadCall {
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
+                parent_thread_id: Some("parent-thread".to_string()),
+                parent_turn_id: Some("parent-turn".to_string()),
             }]
         );
     }
@@ -504,6 +520,8 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "must not launch".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
                 continuation_permit: Some(permit),
             })
             .expect_err("superseded continuation must fail closed before launch");
@@ -547,6 +565,8 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
                 continuation_permit: None,
             })
             .expect_err("out-of-order runtime envelope events must fail closed");
@@ -575,6 +595,8 @@ mod tests {
                 operation: PlanningWorkerOperation::RepairTaskAuthority,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "repair".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
                 continuation_permit: None,
             })
             .expect_err("failed stream should surface as error");
@@ -608,6 +630,8 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
                 continuation_permit: None,
             })
             .expect_err("producer receipt without a terminal event must fail closed");
@@ -634,6 +658,8 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
                 continuation_permit: None,
             })
             .expect_err("event and producer receipts must agree");
@@ -656,6 +682,8 @@ mod tests {
                 operation: PlanningWorkerOperation::RefreshQueue,
                 workspace_directory: "/tmp/workspace".to_string(),
                 prompt: "refresh".to_string(),
+                parent_thread_id: None,
+                parent_turn_id: None,
                 continuation_permit: None,
             })
             .expect_err("transport errors remain errors after an observed terminal event");
@@ -717,6 +745,8 @@ mod tests {
                     operation: PlanningWorkerOperation::RefreshQueue,
                     workspace_directory: "/tmp/workspace".to_string(),
                     prompt: "refresh".to_string(),
+                    parent_thread_id: None,
+                    parent_turn_id: None,
                     continuation_permit: None,
                 })
                 .expect_err("only confirmed completed terminals may succeed");

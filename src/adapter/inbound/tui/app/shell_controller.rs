@@ -1,5 +1,7 @@
 use super::*;
-
+use crate::application::service::planning::{
+    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
+};
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
 // auto-follow, and overlays report the same readiness reason.
@@ -90,7 +92,9 @@ impl NativeTuiApp {
         });
     }
     pub(super) fn show_queue_overlay(&mut self) {
-        self.refresh_ready_conversation_planning_runtime_projection();
+        if let Err(error) = self.refresh_queue_overlay_authority_binding() {
+            self.queue_overlay_ui_state.set_feedback(error);
+        }
         self.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
     }
     pub(super) fn show_reviews_overlay(&mut self) {
@@ -138,6 +142,9 @@ impl NativeTuiApp {
             }
             ShellOverlay::Activity => {
                 self.progressive_activity_overlay_ui_state.reset();
+            }
+            ShellOverlay::Queue => {
+                self.queue_overlay_ui_state.reset();
             }
             _ => {}
         }
@@ -561,9 +568,258 @@ impl NativeTuiApp {
         if self.shell_overlay == ShellOverlay::Activity {
             return self.handle_progressive_activity_overlay_key(key);
         }
+        if self.shell_overlay == ShellOverlay::Queue {
+            return self.handle_queue_overlay_key(key);
+        }
 
         self.handle_session_overlay_key(key);
         true
+    }
+
+    fn handle_queue_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        let task_ids = self
+            .queue_action_tasks()
+            .into_iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>();
+        match (key.code, key.modifiers) {
+            (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                self.queue_overlay_ui_state.move_selection(&task_ids, -1);
+            }
+            (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                self.queue_overlay_ui_state.move_selection(&task_ids, 1);
+            }
+            (KeyCode::Char('x') | KeyCode::Delete, KeyModifiers::NONE) => {
+                self.cancel_selected_queue_task();
+            }
+            (KeyCode::Char('u'), KeyModifiers::NONE) => {
+                self.undo_latest_queue_registration();
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn queue_mutation_block_reason(&self) -> Option<&'static str> {
+        if self.parallel_mode_enabled() {
+            return Some("queue changes are disabled while parallel mode owns task leases");
+        }
+        match &self.conversation_state {
+            ConversationState::Ready(conversation)
+                if conversation.has_post_turn_settlement_in_flight() =>
+            {
+                Some("wait for post-turn planning to finish")
+            }
+            ConversationState::Ready(conversation)
+                if conversation.auto_follow_state.has_live_activity() =>
+            {
+                Some("wait for post-turn planning to finish")
+            }
+            ConversationState::Ready(conversation)
+                if matches!(
+                    conversation.input_state,
+                    ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue
+                ) =>
+            {
+                None
+            }
+            ConversationState::Ready(_) => Some("wait for the active turn to finish"),
+            ConversationState::Loading | ConversationState::Failed(_) => {
+                Some("queue changes require a ready conversation")
+            }
+        }
+    }
+
+    fn cancel_selected_queue_task(&mut self) {
+        if let Some(reason) = self.queue_mutation_block_reason() {
+            self.queue_overlay_ui_state.set_feedback(reason);
+            return;
+        }
+        let selected = self.queue_overlay_ui_state.selected_authority_token().map(
+            |(revision, task_id, token)| {
+                (
+                    revision,
+                    task_id.to_string(),
+                    token.status,
+                    token.updated_at.clone(),
+                )
+            },
+        );
+        let Some((planning_revision, task_id, status, updated_at)) = selected else {
+            let _ = self.refresh_queue_overlay_authority_binding();
+            self.queue_overlay_ui_state
+                .set_feedback("The selected queue item changed; review the refreshed queue.");
+            return;
+        };
+        self.apply_queue_cancellation(
+            PlanningQueueCancellationRequest {
+                workspace_directory: self.planning_workspace_directory(),
+                expected_planning_revision: planning_revision,
+                targets: vec![PlanningQueueCancellationTarget {
+                    task_id,
+                    expected_status: status,
+                    expected_updated_at: updated_at,
+                }],
+            },
+            "Removed selected queue item",
+        );
+    }
+
+    fn undo_latest_queue_registration(&mut self) {
+        if let Some(reason) = self.queue_mutation_block_reason() {
+            self.queue_overlay_ui_state.set_feedback(reason);
+            return;
+        }
+        let receipt = match &self.conversation_state {
+            ConversationState::Ready(conversation) => {
+                conversation.latest_queue_mutation_receipt.clone()
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => None,
+        };
+        let Some(receipt) = receipt else {
+            self.queue_overlay_ui_state
+                .set_feedback("No recent queue registration is available to undo.");
+            return;
+        };
+        if self.queue_overlay_ui_state.authority_revision() != Some(receipt.planning_revision) {
+            let feedback = self
+                .refresh_queue_overlay_authority_binding()
+                .err()
+                .unwrap_or_else(|| {
+                    "The latest registration changed; review the refreshed queue before undoing it."
+                        .to_string()
+                });
+            self.queue_overlay_ui_state.set_feedback(feedback);
+            return;
+        }
+        let created_count = receipt.created_entries().count();
+        if created_count == 0 {
+            self.queue_overlay_ui_state
+                .set_feedback("The latest receipt did not add removable queue items.");
+            return;
+        }
+        if !receipt.created_batch_is_cancellable() {
+            self.queue_overlay_ui_state.set_feedback(
+                "The latest registration changed after it was shown; review the queue before removing items.",
+            );
+            return;
+        }
+        let targets = receipt
+            .created_entries()
+            .map(|entry| PlanningQueueCancellationTarget {
+                task_id: entry.task_id.clone(),
+                expected_status: entry.after_status,
+                expected_updated_at: entry.after_updated_at.clone(),
+            })
+            .collect::<Vec<_>>();
+        self.apply_queue_cancellation(
+            PlanningQueueCancellationRequest {
+                workspace_directory: self.planning_workspace_directory(),
+                expected_planning_revision: receipt.planning_revision,
+                targets,
+            },
+            "Undid latest queue registration",
+        );
+    }
+
+    fn apply_queue_cancellation(
+        &mut self,
+        request: PlanningQueueCancellationRequest,
+        success_label: &str,
+    ) {
+        let queue = self.application.planning().queue().clone();
+        match queue.cancel_tasks(request) {
+            Ok(result) => {
+                let success_message = format!(
+                    "{success_label}: {} task(s) marked Cancelled / revision {}",
+                    result.committed_task_ids.len(),
+                    result.committed_planning_revision
+                );
+                if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+                    conversation.latest_queue_mutation_receipt = None;
+                    conversation.status_text = success_message.clone();
+                    conversation.append_status_message(success_message.clone());
+                }
+                let _ = self.refresh_queue_overlay_authority_binding();
+                self.queue_overlay_ui_state.set_feedback(success_message);
+            }
+            Err(error) => {
+                let _ = self.refresh_queue_overlay_authority_binding();
+                self.queue_overlay_ui_state
+                    .set_feedback(format!("Queue change rejected: {error}"));
+            }
+        }
+    }
+
+    fn invalidate_stale_queue_receipt(&mut self) {
+        let current_revision = self
+            .planning_runtime_projection_snapshot()
+            .planning_revision();
+        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
+            return;
+        };
+        if current_revision.is_some_and(|current_revision| {
+            conversation
+                .latest_queue_mutation_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.planning_revision != current_revision)
+        }) {
+            conversation.latest_queue_mutation_receipt = None;
+        }
+    }
+
+    fn refresh_queue_overlay_authority_binding(&mut self) -> Result<(), String> {
+        self.queue_overlay_ui_state.clear_authority_binding();
+        for _ in 0..2 {
+            self.refresh_ready_conversation_planning_runtime_projection();
+            self.invalidate_stale_queue_receipt();
+            let projection_revision = self
+                .planning_runtime_projection_snapshot()
+                .planning_revision()
+                .ok_or_else(|| {
+                    "Queue authority is unavailable; retry after planning reloads.".to_string()
+                })?;
+            let action_tasks = self.queue_action_tasks();
+            let authority = self
+                .application
+                .planning()
+                .queue()
+                .load_authority_snapshot(&self.planning_workspace_directory())
+                .map_err(|error| format!("Queue authority is unavailable: {error}"))?;
+            if authority.planning_revision != projection_revision {
+                continue;
+            }
+            let tokens = action_tasks
+                .iter()
+                .map(|action_task| {
+                    authority
+                        .tasks
+                        .iter()
+                        .find(|task| {
+                            task.id == action_task.task_id && task.status == action_task.status
+                        })
+                        .map(|authority_task| {
+                            (
+                                action_task.task_id.clone(),
+                                queue_overlay_ui::QueueOverlayAuthorityToken {
+                                    status: authority_task.status,
+                                    updated_at: authority_task.updated_at.clone(),
+                                },
+                            )
+                        })
+                })
+                .collect::<Option<std::collections::BTreeMap<_, _>>>();
+            let Some(tokens) = tokens else {
+                continue;
+            };
+            self.queue_overlay_ui_state
+                .bind_authority(authority.planning_revision, tokens);
+            self.sync_queue_overlay_selection();
+            return Ok(());
+        }
+        self.queue_overlay_ui_state.clear_authority_binding();
+        self.sync_queue_overlay_selection();
+        Err("Queue is still changing; reopen it to refresh before removing items.".to_string())
     }
     fn handle_progressive_activity_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         match (key.code, key.modifiers) {
@@ -842,9 +1098,16 @@ impl NativeTuiApp {
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::application::service::planning::{
+        PlanningRuntimeProjection, PlanningTaskToolRequest,
+    };
     use crate::core::app::StartupReadySnapshot;
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
+    };
+    use crate::domain::planning::{
+        PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
+        PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
     };
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -1315,6 +1578,394 @@ mod tests {
         assert!(app.move_inline_command_palette_selection(0));
         assert!(app.accept_inline_command_palette_selection());
         assert_eq!(app.shell_overlay, ShellOverlay::Help);
+    }
+
+    #[test]
+    fn queue_overlay_consumes_direct_manipulation_keys_without_editing_prompt() {
+        let mut app = test_native_tui_app();
+        ready_conversation_mut(&mut app).input_buffer = "keep draft".to_string();
+        app.shell_overlay = ShellOverlay::Queue;
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
+
+        assert_eq!(ready_conversation(&app).input_buffer, "keep draft");
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("No recent queue registration is available to undo.")
+        );
+    }
+
+    #[test]
+    fn queue_overlay_keeps_undo_available_for_large_atomic_batch() {
+        let mut app = test_native_tui_app();
+        let entries = (0..17)
+            .map(|index| PlanningQueueMutationReceiptEntry {
+                task_id: format!("task-{index}"),
+                task_title: format!("Task {index}"),
+                mutation_kind: PlanningQueueMutationKind::Created,
+                before_status: None,
+                after_status: TaskStatus::Ready,
+                after_updated_at: format!("2026-07-15T00:00:{index:02}Z"),
+                unchanged_since_mutation: true,
+            })
+            .collect();
+        ready_conversation_mut(&mut app).latest_queue_mutation_receipt =
+            Some(PlanningQueueMutationReceipt {
+                completed_turn_id: "turn-large".to_string(),
+                planning_revision: 17,
+                entries,
+            });
+        app.queue_overlay_ui_state
+            .bind_authority(17, std::collections::BTreeMap::new());
+        app.shell_overlay = ShellOverlay::Queue;
+
+        let view =
+            crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
+        assert!(
+            view.key_lines
+                .iter()
+                .any(|line| line.to_string().contains("u:"))
+        );
+    }
+
+    #[test]
+    fn unavailable_projection_does_not_discard_a_valid_queue_receipt() {
+        let mut app = test_native_tui_app();
+        ready_conversation_mut(&mut app).latest_queue_mutation_receipt =
+            Some(PlanningQueueMutationReceipt {
+                completed_turn_id: "turn-receipt".to_string(),
+                planning_revision: 7,
+                entries: Vec::new(),
+            });
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::invalid("temporary authority read failure"),
+        );
+
+        app.invalidate_stale_queue_receipt();
+
+        assert!(
+            ready_conversation(&app)
+                .latest_queue_mutation_receipt
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn queue_overlay_selection_reaches_hidden_and_skipped_ready_tasks() {
+        let mut app = test_native_tui_app();
+        let queue_task = |rank: usize| PriorityQueueTask {
+            rank,
+            task_id: format!("task-{rank}"),
+            direction_id: "general-workstream".to_string(),
+            direction_title: "General".to_string(),
+            task_title: format!("Queue task {rank}"),
+            status: TaskStatus::Ready,
+            combined_priority: 100 - rank as i32,
+            updated_at: format!("2026-07-15T00:00:0{rank}Z"),
+            rank_reasons: vec!["status=ready".to_string()],
+        };
+        let active_tasks = (1..=4).map(queue_task).collect::<Vec<_>>();
+        let proposal = PriorityQueueTask {
+            rank: 1,
+            task_id: "proposal-1".to_string(),
+            direction_id: "general-workstream".to_string(),
+            direction_title: "General".to_string(),
+            task_title: "Proposal task".to_string(),
+            status: TaskStatus::Proposed,
+            combined_priority: 50,
+            updated_at: "2026-07-15T00:00:05Z".to_string(),
+            rank_reasons: vec!["status=proposed".to_string()],
+        };
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_queue_projection(
+                "context".to_string(),
+                "queue ready".to_string(),
+                Some("one proposal".to_string()),
+                active_tasks.first().cloned(),
+                PriorityQueueProjection {
+                    next_task: active_tasks.first().cloned(),
+                    active_tasks,
+                    proposed_tasks: vec![proposal],
+                    skipped_tasks: vec![PriorityQueueSkippedTask {
+                        task_id: "ready-but-skipped".to_string(),
+                        task_title: "Waiting on dependency".to_string(),
+                        direction_id: "general-workstream".to_string(),
+                        status: TaskStatus::Ready,
+                        reason: "dependency task-open is ready".to_string(),
+                    }],
+                },
+            )
+            .with_planning_revision(Some(9)),
+        );
+        app.shell_overlay = ShellOverlay::Queue;
+        app.sync_queue_overlay_selection();
+
+        for _ in 0..3 {
+            assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
+        }
+        assert_eq!(
+            app.queue_overlay_ui_state.selected_task_id(),
+            Some("task-4")
+        );
+        let hidden_active_view =
+            crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
+        assert!(
+            hidden_active_view
+                .queue_lines
+                .iter()
+                .any(|line| line.to_string().contains("> #4"))
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
+        assert_eq!(
+            app.queue_overlay_ui_state.selected_task_id(),
+            Some("ready-but-skipped")
+        );
+        let skipped_view =
+            crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
+        assert!(
+            skipped_view
+                .note_lines
+                .iter()
+                .any(|line| line.to_string().contains("> [ready / skipped]"))
+        );
+    }
+
+    #[test]
+    fn queue_overlay_mutations_gate_settlement_invalidate_stale_receipts_and_persist() {
+        let mut app = test_native_tui_app();
+        let workspace = std::env::temp_dir()
+            .join(format!(
+                "akra-queue-overlay-undo-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system time should follow epoch")
+                    .as_nanos()
+            ))
+            .to_string_lossy()
+            .to_string();
+        std::fs::create_dir_all(&workspace).expect("queue workspace should exist");
+        app.application
+            .planning()
+            .workspace()
+            .initialize_simple_workspace(&workspace)
+            .expect("planning workspace should initialize");
+        ready_conversation_mut(&mut app).sync_draft_workspace(workspace.clone());
+        let created = app
+            .application
+            .planning()
+            .task_tool()
+            .run(
+                &workspace,
+                serde_json::from_str::<PlanningTaskToolRequest>(
+                    r#"{"version":1,"op":"create_task","apply":true,"title":"Undo this registration","status":"ready"}"#,
+                )
+                .expect("create task request should parse"),
+            )
+            .expect("task should be created");
+        let task_id = created.committed_task_ids[0].clone();
+        let snapshot = app
+            .application
+            .planning()
+            .queue()
+            .load_authority_snapshot(&workspace)
+            .expect("queue snapshot should load");
+        let task = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .expect("created task should exist")
+            .clone();
+        ready_conversation_mut(&mut app).latest_queue_mutation_receipt =
+            Some(PlanningQueueMutationReceipt {
+                completed_turn_id: "turn-queue".to_string(),
+                planning_revision: snapshot.planning_revision,
+                entries: vec![PlanningQueueMutationReceiptEntry {
+                    task_id: task.id.clone(),
+                    task_title: task.title.clone(),
+                    mutation_kind: PlanningQueueMutationKind::Created,
+                    before_status: None,
+                    after_status: task.status,
+                    after_updated_at: task.updated_at.clone(),
+                    unchanged_since_mutation: true,
+                }],
+            });
+        app.show_queue_overlay();
+
+        ready_conversation_mut(&mut app).begin_post_turn_settlement("turn-queue");
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
+        let blocked = app
+            .application
+            .planning()
+            .queue()
+            .load_authority_snapshot(&workspace)
+            .expect("settlement gate should preserve queue authority");
+        assert_eq!(blocked.planning_revision, snapshot.planning_revision);
+        assert_eq!(blocked.tasks[0].status, TaskStatus::Ready);
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("wait for post-turn planning to finish")
+        );
+        assert!(
+            ready_conversation(&app)
+                .latest_queue_mutation_receipt
+                .is_some()
+        );
+        ready_conversation_mut(&mut app)
+            .auto_follow_state
+            .clear_runtime_phase();
+        assert!(ready_conversation(&app).has_post_turn_settlement_in_flight());
+        assert!(ready_conversation_mut(&mut app).complete_post_turn_settlement("turn-queue"));
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
+
+        let after = app
+            .application
+            .planning()
+            .queue()
+            .load_authority_snapshot(&workspace)
+            .expect("cancelled queue snapshot should load");
+        assert_eq!(after.tasks[0].status, TaskStatus::Cancelled);
+        assert!(
+            app.queue_overlay_ui_state
+                .feedback()
+                .is_some_and(|feedback| feedback.contains("Undid latest queue registration"))
+        );
+        assert!(ready_conversation(&app).messages.iter().any(|message| {
+            message
+                .text
+                .contains("Undid latest queue registration: 1 task(s) marked Cancelled / revision")
+        }));
+        assert!(
+            ready_conversation(&app)
+                .latest_queue_mutation_receipt
+                .is_none()
+        );
+
+        let individually_removed = app
+            .application
+            .planning()
+            .task_tool()
+            .run(
+                &workspace,
+                serde_json::from_str::<PlanningTaskToolRequest>(
+                    r#"{"version":1,"op":"create_task","apply":true,"title":"Individual removal","status":"ready"}"#,
+                )
+                .expect("individual task request should parse"),
+            )
+            .expect("individual task should create");
+        let individual_task_id = individually_removed.committed_task_ids[0].clone();
+        let individual_snapshot = app
+            .application
+            .planning()
+            .queue()
+            .load_authority_snapshot(&workspace)
+            .expect("individual task snapshot should load");
+        let individual_task = individual_snapshot
+            .tasks
+            .iter()
+            .find(|task| task.id == individual_task_id)
+            .expect("individual task should exist")
+            .clone();
+        ready_conversation_mut(&mut app).latest_queue_mutation_receipt =
+            Some(PlanningQueueMutationReceipt {
+                completed_turn_id: "turn-stale".to_string(),
+                planning_revision: individual_snapshot.planning_revision,
+                entries: vec![PlanningQueueMutationReceiptEntry {
+                    task_id: individual_task.id.clone(),
+                    task_title: individual_task.title.clone(),
+                    mutation_kind: PlanningQueueMutationKind::Created,
+                    before_status: None,
+                    after_status: individual_task.status,
+                    after_updated_at: individual_task.updated_at.clone(),
+                    unchanged_since_mutation: true,
+                }],
+            });
+        app.show_queue_overlay();
+        app.application
+            .planning()
+            .task_tool()
+            .run(
+                &workspace,
+                serde_json::from_str::<PlanningTaskToolRequest>(
+                    r#"{"version":1,"op":"create_task","apply":true,"title":"Concurrent queue change","status":"ready"}"#,
+                )
+                .expect("concurrent task request should parse"),
+            )
+            .expect("concurrent task should create");
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert!(
+            app.queue_overlay_ui_state
+                .feedback()
+                .is_some_and(|feedback| feedback.contains("Queue change rejected"))
+        );
+        assert!(
+            ready_conversation(&app)
+                .latest_queue_mutation_receipt
+                .is_none()
+        );
+        let after_stale_remove = app
+            .application
+            .planning()
+            .queue()
+            .load_authority_snapshot(&workspace)
+            .expect("stale remove should refresh authority");
+        assert_eq!(
+            after_stale_remove
+                .tasks
+                .iter()
+                .find(|task| task.id == individual_task_id)
+                .map(|task| task.status),
+            Some(TaskStatus::Ready)
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        let after_individual_remove = app
+            .application
+            .planning()
+            .queue()
+            .load_authority_snapshot(&workspace)
+            .expect("individual cancellation should persist");
+        assert_eq!(
+            after_individual_remove
+                .tasks
+                .iter()
+                .find(|task| task.id == individual_task_id)
+                .map(|task| task.status),
+            Some(TaskStatus::Cancelled)
+        );
+        ready_conversation_mut(&mut app).latest_queue_mutation_receipt =
+            Some(PlanningQueueMutationReceipt {
+                completed_turn_id: "turn-stale".to_string(),
+                planning_revision: individual_snapshot.planning_revision,
+                entries: vec![PlanningQueueMutationReceiptEntry {
+                    task_id: individual_task.id,
+                    task_title: individual_task.title,
+                    mutation_kind: PlanningQueueMutationKind::Created,
+                    before_status: None,
+                    after_status: individual_task.status,
+                    after_updated_at: individual_task.updated_at,
+                    unchanged_since_mutation: true,
+                }],
+            });
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
+        assert!(
+            app.queue_overlay_ui_state
+                .feedback()
+                .is_some_and(|feedback| feedback.contains("latest registration changed"))
+        );
+        assert!(
+            ready_conversation(&app)
+                .latest_queue_mutation_receipt
+                .is_none()
+        );
+        std::fs::remove_dir_all(&workspace).expect("queue workspace should clean up");
     }
 
     #[test]

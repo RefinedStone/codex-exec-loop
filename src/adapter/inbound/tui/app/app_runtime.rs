@@ -723,7 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_follow_operator_controls_supersede_prior_continuation_permits() {
+    fn stop_supersedes_settlement_but_turn_budget_edits_do_not() {
         let mut app = test_helpers::test_native_tui_app();
 
         let paused_permit = app.post_turn_continuation_gate.capture();
@@ -734,7 +734,7 @@ mod tests {
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: "3".to_string(),
         });
-        assert!(!rearmed_permit.is_current());
+        assert!(rearmed_permit.is_current());
 
         let invalid_edit_permit = app.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
@@ -746,7 +746,7 @@ mod tests {
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
             value: "off".to_string(),
         });
-        assert!(!disabled_permit.is_current());
+        assert!(disabled_permit.is_current());
     }
 
     #[test]
@@ -1224,6 +1224,10 @@ impl NativeTuiPlanningHandle {
         &self.services.runtime
     }
 
+    pub(super) fn queue(&self) -> &crate::application::service::planning::PlanningQueueUseCases {
+        &self.services.queue
+    }
+
     #[cfg(test)]
     pub(super) fn task_tool(&self) -> &PlanningTaskToolUseCases {
         &self.services.task_tool
@@ -1306,6 +1310,7 @@ impl NativeTuiApp {
             parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
             progressive_activity_overlay_ui_state:
                 super::ProgressiveActivityOverlayUiState::default(),
+            queue_overlay_ui_state: super::queue_overlay_ui::QueueOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,
             next_manual_prompt_preparation_request_id: 0,
@@ -1809,9 +1814,9 @@ impl NativeTuiApp {
     pub(super) fn dispatch_auto_follow_controls(&mut self, event: AutoFollowControlEvent) {
         let invalidates_prior_requests = match &event {
             AutoFollowControlEvent::AutoFollowPaused => true,
-            AutoFollowControlEvent::MaxAutoTurnsUpdated { value } => {
-                super::AutoFollowState::normalize_max_auto_turns_candidate(value).is_some()
-            }
+            // Budget edits affect the eventual auto-prompt decision, but the
+            // in-flight planning settlement still owns queue/receipt completion.
+            AutoFollowControlEvent::MaxAutoTurnsUpdated { .. } => false,
             AutoFollowControlEvent::DraftWorkspaceSynced {
                 workspace_directory,
             } => matches!(

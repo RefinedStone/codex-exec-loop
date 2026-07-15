@@ -30,7 +30,9 @@ use crate::application::port::outbound::planning_authority_port::{
 use crate::application::port::outbound::planning_task_repository_port::{
     PlanningAuthoritySnapshotCommit, PlanningDirectionAuthorityCommit,
     PlanningDirectionAuthoritySnapshot, PlanningTaskAuthorityCommit,
-    PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommitResult, PlanningTaskAuthorityMutationAudit,
+    PlanningTaskAuthorityMutationRecord, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+    task_authority_mutation_records,
 };
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspaceLoadRecord;
 use crate::application::port::outbound::review_center_repository_port::{
@@ -71,11 +73,11 @@ use self::store::*;
 use self::task_authority_rows::{clear_task_authority_tables, replace_task_authority_tables};
 use crate::domain::planning::{
     PlanningAuthorityLocation, PlanningAuthorityShadowStoreInspection,
-    PlanningAuthorityShadowStoreSyncState,
+    PlanningAuthorityShadowStoreSyncState, TaskAuthorityDocument,
 };
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
-const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 9;
+const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 10;
 const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
@@ -327,6 +329,40 @@ impl SqlitePlanningAuthorityAdapter {
         load_task_authority_snapshot_from_connection(&connection)
     }
 
+    pub(crate) fn load_task_authority_mutations(
+        workspace_dir: &str,
+        after_planning_revision: i64,
+        through_planning_revision: i64,
+    ) -> Result<Vec<PlanningTaskAuthorityMutationRecord>> {
+        if through_planning_revision <= after_planning_revision {
+            return Ok(Vec::new());
+        }
+        let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
+        let connection = open_authority_connection(&location)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT content_json FROM planning_task_mutation_events
+                 WHERE planning_revision > ?1 AND planning_revision <= ?2
+                 ORDER BY planning_revision ASC, event_order ASC",
+            )
+            .context("failed to prepare planning task mutation event load")?;
+        let rows = statement
+            .query_map(
+                params![after_planning_revision, through_planning_revision],
+                |row| row.get::<_, String>(0),
+            )
+            .context("failed to query planning task mutation events")?;
+        let mut records = Vec::new();
+        for row in rows {
+            let content_json = row.context("failed to decode planning task mutation event")?;
+            records.push(
+                serde_json::from_str(&content_json)
+                    .context("failed to parse planning task mutation event")?,
+            );
+        }
+        Ok(records)
+    }
+
     /*
     direction authority snapshot을 repo-scoped authority DB에서 읽는다.
 
@@ -446,12 +482,11 @@ impl SqlitePlanningAuthorityAdapter {
             .as_ref()
             .map(|snapshot| &snapshot.directions)
             == Some(commit.directions);
-        let task_unchanged = load_task_authority_snapshot_from_connection(&transaction)?
-            .as_ref()
-            .is_some_and(|snapshot| {
-                snapshot.task_authority == *commit.task_authority
-                    && snapshot.queue_projection == *commit.queue_projection
-            });
+        let existing_task_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
+        let task_unchanged = existing_task_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.task_authority == *commit.task_authority
+                && snapshot.queue_projection == *commit.queue_projection
+        });
         let mut active_changed = apply_active_workspace_record(
             &transaction,
             &PlanningWorkspaceLoadRecord {
@@ -501,6 +536,19 @@ impl SqlitePlanningAuthorityAdapter {
             )?;
         }
         let planning_revision = bump_planning_revision(&transaction)?;
+        if !task_unchanged {
+            insert_task_authority_mutation_records(
+                &transaction,
+                &task_authority_mutation_records(
+                    existing_task_snapshot
+                        .as_ref()
+                        .map(|snapshot| &snapshot.task_authority),
+                    commit.task_authority,
+                    planning_revision,
+                    None,
+                ),
+            )?;
+        }
         transaction
             .commit()
             .context("failed to commit planning authority document transaction")?;
@@ -546,12 +594,11 @@ impl SqlitePlanningAuthorityAdapter {
             .as_ref()
             .map(|snapshot| &snapshot.directions)
             == Some(commit.directions);
-        let task_unchanged = load_task_authority_snapshot_from_connection(&transaction)?
-            .as_ref()
-            .is_some_and(|snapshot| {
-                snapshot.task_authority == *commit.task_authority
-                    && snapshot.queue_projection == *commit.queue_projection
-            });
+        let existing_task_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
+        let task_unchanged = existing_task_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.task_authority == *commit.task_authority
+                && snapshot.queue_projection == *commit.queue_projection
+        });
         if direction_unchanged && task_unchanged {
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision: current_revision,
@@ -576,6 +623,19 @@ impl SqlitePlanningAuthorityAdapter {
             )?;
         }
         let planning_revision = bump_planning_revision(&transaction)?;
+        if !task_unchanged {
+            insert_task_authority_mutation_records(
+                &transaction,
+                &task_authority_mutation_records(
+                    existing_task_snapshot
+                        .as_ref()
+                        .map(|snapshot| &snapshot.task_authority),
+                    commit.task_authority,
+                    planning_revision,
+                    None,
+                ),
+            )?;
+        }
         transaction
             .commit()
             .context("failed to commit planning authority combined transaction")?;
@@ -635,9 +695,29 @@ impl SqlitePlanningAuthorityAdapter {
             &location,
             "last_direction_authority_commit_at",
         )?;
+        let existing_task_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
         replace_direction_authority_tables(&transaction, commit.directions)?;
         reconcile_task_authority_with_directions(&transaction, Some(commit.directions))?;
         let planning_revision = bump_planning_revision(&transaction)?;
+        let reconciled_task_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
+        let reconciled_task_authority = reconciled_task_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.task_authority.clone())
+            .unwrap_or(TaskAuthorityDocument {
+                version: 1,
+                tasks: Vec::new(),
+            });
+        insert_task_authority_mutation_records(
+            &transaction,
+            &task_authority_mutation_records(
+                existing_task_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.task_authority),
+                &reconciled_task_authority,
+                planning_revision,
+                None,
+            ),
+        )?;
         transaction
             .commit()
             .context("failed to commit direction authority transaction")?;
@@ -672,9 +752,29 @@ impl SqlitePlanningAuthorityAdapter {
             &location,
             "last_direction_authority_commit_at",
         )?;
+        let existing_task_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
         clear_direction_authority_tables(&transaction)?;
         reconcile_task_authority_with_directions(&transaction, None)?;
-        bump_planning_revision(&transaction)?;
+        let planning_revision = bump_planning_revision(&transaction)?;
+        let reconciled_task_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
+        let reconciled_task_authority = reconciled_task_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.task_authority.clone())
+            .unwrap_or(TaskAuthorityDocument {
+                version: 1,
+                tasks: Vec::new(),
+            });
+        insert_task_authority_mutation_records(
+            &transaction,
+            &task_authority_mutation_records(
+                existing_task_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.task_authority),
+                &reconciled_task_authority,
+                planning_revision,
+                None,
+            ),
+        )?;
         transaction
             .commit()
             .context("failed to clear direction authority transaction")?;
@@ -693,6 +793,22 @@ impl SqlitePlanningAuthorityAdapter {
     pub(crate) fn commit_task_authority_snapshot(
         workspace_dir: &str,
         commit: PlanningTaskAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        Self::commit_task_authority_snapshot_with_audit(workspace_dir, commit, None)
+    }
+
+    pub(crate) fn commit_task_authority_mutation_snapshot(
+        workspace_dir: &str,
+        commit: PlanningTaskAuthorityCommit<'_>,
+        audit: PlanningTaskAuthorityMutationAudit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        Self::commit_task_authority_snapshot_with_audit(workspace_dir, commit, Some(audit))
+    }
+
+    fn commit_task_authority_snapshot_with_audit(
+        workspace_dir: &str,
+        commit: PlanningTaskAuthorityCommit<'_>,
+        audit: Option<PlanningTaskAuthorityMutationAudit<'_>>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
@@ -714,10 +830,11 @@ impl SqlitePlanningAuthorityAdapter {
                 current_planning_revision: current_revision,
             });
         }
-        if let Some(existing_snapshot) = load_task_authority_snapshot_from_connection(&transaction)?
-            && existing_snapshot.task_authority == *commit.task_authority
-            && existing_snapshot.queue_projection == *commit.queue_projection
-        {
+        let existing_snapshot = load_task_authority_snapshot_from_connection(&transaction)?;
+        if existing_snapshot.as_ref().is_some_and(|existing_snapshot| {
+            existing_snapshot.task_authority == *commit.task_authority
+                && existing_snapshot.queue_projection == *commit.queue_projection
+        }) {
             return Ok(PlanningTaskAuthorityCommitResult::Committed {
                 planning_revision: current_revision,
                 changed: false,
@@ -731,6 +848,15 @@ impl SqlitePlanningAuthorityAdapter {
             commit.queue_projection,
         )?;
         let planning_revision = bump_planning_revision(&transaction)?;
+        let records = task_authority_mutation_records(
+            existing_snapshot
+                .as_ref()
+                .map(|snapshot| &snapshot.task_authority),
+            commit.task_authority,
+            planning_revision,
+            audit,
+        );
+        insert_task_authority_mutation_records(&transaction, &records)?;
         transaction
             .commit()
             .context("failed to commit task authority transaction")?;
@@ -761,6 +887,9 @@ impl SqlitePlanningAuthorityAdapter {
         )?;
         upsert_authority_metadata(&transaction, &location, "last_task_authority_commit_at")?;
         clear_task_authority_tables(&transaction)?;
+        transaction
+            .execute("DELETE FROM planning_task_mutation_events", [])
+            .context("failed to clear planning task mutation events")?;
         bump_planning_revision(&transaction)?;
         transaction
             .commit()
@@ -1366,6 +1495,28 @@ impl PlanningTaskRepositoryPort for SqlitePlanningAuthorityAdapter {
         commit: PlanningTaskAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         Self::commit_task_authority_snapshot(workspace_dir, commit)
+    }
+
+    fn commit_task_authority_mutation_snapshot(
+        &self,
+        workspace_dir: &str,
+        commit: PlanningTaskAuthorityCommit<'_>,
+        audit: PlanningTaskAuthorityMutationAudit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        Self::commit_task_authority_mutation_snapshot(workspace_dir, commit, audit)
+    }
+
+    fn load_task_authority_mutations(
+        &self,
+        workspace_dir: &str,
+        after_planning_revision: i64,
+        through_planning_revision: i64,
+    ) -> Result<Vec<PlanningTaskAuthorityMutationRecord>> {
+        Self::load_task_authority_mutations(
+            workspace_dir,
+            after_planning_revision,
+            through_planning_revision,
+        )
     }
 
     // task authority 제거 port를 task rows/edges/projection clear helper에 연결한다.
@@ -2766,6 +2917,35 @@ parse 실패를 error로 만들지 않고 `None`으로 접는 것은 이 metadat
 fn read_metadata_i64_connection(connection: &Connection, key: &str) -> Result<Option<i64>> {
     read_metadata_string_connection(connection, key)
         .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
+}
+
+fn insert_task_authority_mutation_records(
+    transaction: &rusqlite::Transaction<'_>,
+    records: &[PlanningTaskAuthorityMutationRecord],
+) -> Result<()> {
+    for (event_order, record) in records.iter().enumerate() {
+        let content_json = serde_json::to_string(record)
+            .context("failed to serialize planning task mutation event")?;
+        transaction
+            .execute(
+                "INSERT INTO planning_task_mutation_events
+                 (planning_revision, event_order, task_id, content_json)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    record.planning_revision,
+                    event_order as i64,
+                    record.task_id.trim(),
+                    content_json
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to store planning task mutation event for `{}`",
+                    record.task_id
+                )
+            })?;
+    }
+    Ok(())
 }
 
 /*

@@ -1,4 +1,7 @@
 use crate::application::service::parallel_mode::ParallelModeOrchestratorTickResult;
+use crate::application::service::planning::task_tool::{
+    PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
+};
 use crate::application::service::planning::{
     PlanningControlCommand, PlanningControlRequest, PlanningResetTarget, PlanningServices,
     PlanningTaskToolRequest, PlanningTaskToolResponse,
@@ -293,11 +296,25 @@ fn run_planning_tool_request(
     std::io::stdin()
         .read_to_string(&mut request_json)
         .context("failed to read planning-tool JSON request from stdin")?;
-    let request = serde_json::from_str::<PlanningTaskToolRequest>(&request_json)
+    let mut request = serde_json::from_str::<PlanningTaskToolRequest>(&request_json)
         .context("failed to parse planning-tool JSON request")?;
+    request.apply_cli_host_context(
+        optional_utf8_environment(PLANNING_TOOL_PARENT_THREAD_ID_ENV)?,
+        optional_utf8_environment(PLANNING_TOOL_PARENT_TURN_ID_ENV)?,
+    );
     planning
         .task_tool
         .run(workspace_path.to_string_lossy().as_ref(), request)
+}
+
+fn optional_utf8_environment(name: &str) -> Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(anyhow::anyhow!("{name} must contain valid UTF-8"))
+        }
+    }
 }
 
 fn resolve_workspace_path(workspace_arg: Option<&OsStr>) -> Result<PathBuf> {

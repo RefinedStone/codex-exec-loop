@@ -33,6 +33,7 @@ pub use super::protected_restore::PlanningProtectedFileRestoration;
  */
 pub struct PlanningReconciliationService {
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
 }
 
 pub type PlanningExecutionSnapshot = DomainExecutionSnapshot;
@@ -111,10 +112,11 @@ impl PlanningReconciliationService {
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
         _planning_validation_service: PlanningValidationService,
         _priority_queue_service: PriorityQueueService,
-        _planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+        planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
     ) -> Self {
         Self {
             planning_workspace_port,
+            planning_task_repository_port,
         }
     }
 
@@ -130,8 +132,17 @@ impl PlanningReconciliationService {
         let workspace_record = self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
+        let task_snapshot = self
+            .planning_task_repository_port
+            .load_task_authority_snapshot(workspace_dir)
+            .ok()
+            .flatten();
         Ok(PlanningExecutionSnapshot {
             result_output_markdown: workspace_record.result_output_markdown,
+            planning_revision: task_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.planning_revision),
+            task_authority: task_snapshot.map(|snapshot| snapshot.task_authority),
         })
     }
 

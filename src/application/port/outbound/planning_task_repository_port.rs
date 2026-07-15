@@ -4,9 +4,11 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::planning::{
-    DirectionCatalogDocument, PriorityQueueProjection, TaskAuthorityDocument,
+    DirectionCatalogDocument, PriorityQueueProjection, TaskAuthorityDocument, TaskDefinition,
+    TaskMutationProvenance, TaskStatus,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +52,129 @@ pub struct PlanningTaskAuthorityCommit<'a> {
     pub task_authority: &'a TaskAuthorityDocument,
     // 같은 revision으로 저장할 우선순위 큐 투영이다.
     pub queue_projection: &'a PriorityQueueProjection,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlanningTaskAuthorityMutationAudit<'a> {
+    pub task_ids: &'a [String],
+    pub legacy_source_turn_id: Option<&'a str>,
+    pub provenance: &'a TaskMutationProvenance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningTaskAuthorityMutationKind {
+    Created,
+    Updated,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningTaskAuthorityMutationRecord {
+    pub planning_revision: i64,
+    pub task_id: String,
+    pub task_title: String,
+    pub mutation_kind: PlanningTaskAuthorityMutationKind,
+    pub before_status: Option<TaskStatus>,
+    pub before_updated_at: Option<String>,
+    pub after_status: Option<TaskStatus>,
+    pub after_updated_at: Option<String>,
+    pub after_task: Option<TaskDefinition>,
+    pub legacy_source_turn_id: Option<String>,
+    pub provenance: TaskMutationProvenance,
+}
+
+pub(crate) fn task_authority_mutation_records(
+    previous: Option<&TaskAuthorityDocument>,
+    next: &TaskAuthorityDocument,
+    planning_revision: i64,
+    audit: Option<PlanningTaskAuthorityMutationAudit<'_>>,
+) -> Vec<PlanningTaskAuthorityMutationRecord> {
+    let previous_tasks = previous
+        .map(|document| &document.tasks[..])
+        .unwrap_or_default();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut records = next
+        .tasks
+        .iter()
+        .filter_map(|after| {
+            let task_id = after.id.trim();
+            if task_id.is_empty() || !seen.insert(task_id.to_string()) {
+                return None;
+            }
+            let before = previous_tasks.iter().find(|task| task.id.trim() == task_id);
+            if before == Some(after) {
+                return None;
+            }
+            let (legacy_source_turn_id, provenance) = mutation_record_attribution(audit, task_id);
+            Some(PlanningTaskAuthorityMutationRecord {
+                planning_revision,
+                task_id: after.id.clone(),
+                task_title: after.title.clone(),
+                mutation_kind: if before.is_some() {
+                    PlanningTaskAuthorityMutationKind::Updated
+                } else {
+                    PlanningTaskAuthorityMutationKind::Created
+                },
+                before_status: before.map(|task| task.status),
+                before_updated_at: before.map(|task| task.updated_at.clone()),
+                after_status: Some(after.status),
+                after_updated_at: Some(after.updated_at.clone()),
+                after_task: Some(after.clone()),
+                legacy_source_turn_id,
+                provenance,
+            })
+        })
+        .collect::<Vec<_>>();
+    records.extend(previous_tasks.iter().filter_map(|before| {
+        let task_id = before.id.trim();
+        if task_id.is_empty()
+            || next.tasks.iter().any(|task| task.id.trim() == task_id)
+            || !seen.insert(task_id.to_string())
+        {
+            return None;
+        }
+        let (legacy_source_turn_id, provenance) = mutation_record_attribution(audit, task_id);
+        Some(PlanningTaskAuthorityMutationRecord {
+            planning_revision,
+            task_id: before.id.clone(),
+            task_title: before.title.clone(),
+            mutation_kind: PlanningTaskAuthorityMutationKind::Removed,
+            before_status: Some(before.status),
+            before_updated_at: Some(before.updated_at.clone()),
+            after_status: None,
+            after_updated_at: None,
+            after_task: None,
+            legacy_source_turn_id,
+            provenance,
+        })
+    }));
+    records
+}
+
+fn mutation_record_attribution(
+    audit: Option<PlanningTaskAuthorityMutationAudit<'_>>,
+    task_id: &str,
+) -> (Option<String>, TaskMutationProvenance) {
+    let Some(audit) = audit.filter(|audit| {
+        audit
+            .task_ids
+            .iter()
+            .any(|audited_task_id| audited_task_id.trim() == task_id)
+    }) else {
+        return (
+            None,
+            TaskMutationProvenance::new(crate::domain::planning::OriginSessionKind::System),
+        );
+    };
+    (
+        audit
+            .legacy_source_turn_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        audit.provenance.clone(),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -147,6 +272,24 @@ pub trait PlanningTaskRepositoryPort: Send + Sync {
         // 저장할 task authority, queue projection, observed revision을 담은 명령이다.
         commit: PlanningTaskAuthorityCommit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult>;
+
+    fn commit_task_authority_mutation_snapshot(
+        &self,
+        workspace_dir: &str,
+        commit: PlanningTaskAuthorityCommit<'_>,
+        _audit: PlanningTaskAuthorityMutationAudit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        self.commit_task_authority_snapshot(workspace_dir, commit)
+    }
+
+    fn load_task_authority_mutations(
+        &self,
+        _workspace_dir: &str,
+        _after_planning_revision: i64,
+        _through_planning_revision: i64,
+    ) -> Result<Vec<PlanningTaskAuthorityMutationRecord>> {
+        Ok(Vec::new())
+    }
 
     /*
      * direction/task authority를 한 편집 세션 단위로 함께 저장한다.
@@ -468,6 +611,7 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 changed: false,
             });
         }
+        let previous = task_store.get(workspace_dir).cloned();
         // 성공하면 두 문서가 같은 새 revision을 공유한다.
         let planning_revision = current_revision + 1;
         revision_store.insert(workspace_dir.to_string(), planning_revision);
@@ -484,10 +628,71 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
         if let Some(direction_snapshot) = direction_store.get_mut(workspace_dir) {
             direction_snapshot.planning_revision = planning_revision;
         }
+        let records = task_authority_mutation_records(
+            previous.as_ref().map(|snapshot| &snapshot.task_authority),
+            commit.task_authority,
+            planning_revision,
+            None,
+        );
+        noop_task_authority_mutation_store()
+            .lock()
+            .expect("noop task mutation store should not be poisoned")
+            .entry(workspace_dir.to_string())
+            .or_default()
+            .extend(records);
         Ok(PlanningTaskAuthorityCommitResult::Committed {
             planning_revision,
             changed: true,
         })
+    }
+
+    fn commit_task_authority_mutation_snapshot(
+        &self,
+        workspace_dir: &str,
+        commit: PlanningTaskAuthorityCommit<'_>,
+        audit: PlanningTaskAuthorityMutationAudit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        let previous = self.load_task_authority_snapshot(workspace_dir)?;
+        let result = self.commit_task_authority_snapshot(workspace_dir, commit)?;
+        if let PlanningTaskAuthorityCommitResult::Committed {
+            planning_revision,
+            changed: true,
+        } = result
+        {
+            let records = task_authority_mutation_records(
+                previous.as_ref().map(|snapshot| &snapshot.task_authority),
+                commit.task_authority,
+                planning_revision,
+                Some(audit),
+            );
+            let mut mutation_store = noop_task_authority_mutation_store()
+                .lock()
+                .expect("noop task mutation store should not be poisoned");
+            let workspace_records = mutation_store.entry(workspace_dir.to_string()).or_default();
+            workspace_records.retain(|record| record.planning_revision != planning_revision);
+            workspace_records.extend(records);
+        }
+        Ok(result)
+    }
+
+    fn load_task_authority_mutations(
+        &self,
+        workspace_dir: &str,
+        after_planning_revision: i64,
+        through_planning_revision: i64,
+    ) -> Result<Vec<PlanningTaskAuthorityMutationRecord>> {
+        Ok(noop_task_authority_mutation_store()
+            .lock()
+            .expect("noop task mutation store should not be poisoned")
+            .get(workspace_dir)
+            .into_iter()
+            .flatten()
+            .filter(|record| {
+                record.planning_revision > after_planning_revision
+                    && record.planning_revision <= through_planning_revision
+            })
+            .cloned()
+            .collect())
     }
 
     // task authority snapshot을 workspace 단위로 제거한다.
@@ -509,6 +714,10 @@ impl PlanningTaskRepositoryPort for NoopPlanningTaskRepositoryPort {
                 direction_snapshot.planning_revision = planning_revision;
             }
         }
+        noop_task_authority_mutation_store()
+            .lock()
+            .expect("noop task mutation store should not be poisoned")
+            .remove(workspace_dir);
         Ok(())
     }
 }
@@ -541,5 +750,13 @@ fn noop_direction_authority_store()
 #[cfg(test)]
 fn noop_planning_revision_store() -> &'static Mutex<BTreeMap<String, i64>> {
     static STORE: OnceLock<Mutex<BTreeMap<String, i64>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[cfg(test)]
+fn noop_task_authority_mutation_store()
+-> &'static Mutex<BTreeMap<String, Vec<PlanningTaskAuthorityMutationRecord>>> {
+    static STORE: OnceLock<Mutex<BTreeMap<String, Vec<PlanningTaskAuthorityMutationRecord>>>> =
+        OnceLock::new();
     STORE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }

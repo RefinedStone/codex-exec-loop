@@ -26,10 +26,11 @@ use super::authoring::init::PlanningInitService;
 use super::feature::PlanningFeature;
 use super::repair::doctor::PlanningDoctorService;
 use super::repair::reset::PlanningResetService;
+use super::task_mutation::PlanningTaskMutationService;
 use super::task_tool::PlanningTaskToolService;
 use super::use_cases::{
-    PlanningRuntimeUseCases, PlanningTaskToolUseCases, PlanningWorkerUseCases,
-    PlanningWorkspaceUseCases,
+    PlanningQueueUseCases, PlanningRuntimeUseCases, PlanningTaskToolUseCases,
+    PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
 
 #[derive(Clone)]
@@ -95,12 +96,20 @@ impl PlanningFeatureComposition {
         let runtime_dependencies = PlanningRuntimeUseCaseDependencies::new(&self.ports, &services);
         let task_tool_use_cases =
             PlanningTaskToolUseCaseBuilder::new(&self.ports, &services).build();
+        let queue_use_cases = PlanningQueueUseCases::new(
+            PlanningTaskMutationService::new(
+                self.ports.task_repository.clone(),
+                services.priority_queue.clone(),
+            ),
+            self.ports.authority.clone(),
+        );
         let worker_dependencies = PlanningWorkerUseCaseDependencies::new(self.ports, services);
         PlanningFeature {
             // workspace facade는 init/reset/doctor/directions 같은 operator maintenance flow를 묶는다.
             workspace: PlanningWorkspaceUseCaseBuilder::new(workspace_dependencies).build(),
             // runtime facade는 TUI/app-server snapshot과 queue-driven follow-up 판단을 제공한다.
             runtime: PlanningRuntimeUseCaseBuilder::new(runtime_dependencies).build(),
+            queue: queue_use_cases,
             // task-tool facade는 worker/tool payload를 task repository mutation 경계 안에 가둔다.
             task_tool: task_tool_use_cases,
             // worker facade는 planning-worker prompt, orchestration, proposal promotion을 담당한다.

@@ -34,6 +34,12 @@ use super::runtime::manual_intake::{
 };
 use super::runtime::policy::PlanningAutoFollowBlockReason;
 use super::runtime::prompt::{PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus};
+use super::shared::authority_mutation_guard::with_task_mutation_guard;
+use super::task_mutation::{
+    PlanningQueueAuthoritySnapshot, PlanningQueueCancellationRequest,
+    PlanningTaskMutationCommitResult, PlanningTaskMutationService,
+    validate_queue_cancellation_request,
+};
 use super::task_tool::{
     PlanningTaskToolRequest, PlanningTaskToolResponse, PlanningTaskToolService,
     planning_task_tool_contract_json,
@@ -43,17 +49,79 @@ use super::worker::orchestration::{
     PlanningQueueRefreshMode, PlanningQueueRefreshRequest, PlanningWorkerOrchestrationService,
     PlanningWorkerRunOutcome,
 };
+use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
+use crate::application::port::outbound::planning_task_repository_port::PlanningTaskAuthorityMutationRecord;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfile;
 use crate::domain::planning::{
-    PlanningOfficialCompletionRefreshContract, PostTurnContinuationPermit, PriorityQueueTask,
-    QueueIdlePolicy, TurnSnapshotCapture as DomainTurnSnapshotCapture,
+    OriginSessionKind, PlanningOfficialCompletionRefreshContract, PostTurnContinuationPermit,
+    PriorityQueueTask, QueueIdlePolicy, TaskMutationProvenance,
+    TurnSnapshotCapture as DomainTurnSnapshotCapture,
     TurnSnapshotCaptureState as DomainTurnSnapshotCaptureState,
 };
+use std::sync::Arc;
 
 pub const PLANNING_WORKER_REFRESH_FAILURE_BLOCK_REASON: &str = "planning worker refresh failed; auto-follow stays paused until the next accepted planning worker refresh";
 pub const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
     "official completion refresh failed; the leased slot stays reserved until planning is repaired";
 pub const DEFAULT_POST_TURN_REPAIR_ATTEMPT_LIMIT: usize = 2;
+
+#[derive(Clone)]
+pub struct PlanningQueueUseCases {
+    task_mutation: PlanningTaskMutationService,
+    authority: Arc<dyn PlanningAuthorityPort>,
+}
+
+impl PlanningQueueUseCases {
+    pub(crate) fn new(
+        task_mutation: PlanningTaskMutationService,
+        authority: Arc<dyn PlanningAuthorityPort>,
+    ) -> Self {
+        Self {
+            task_mutation,
+            authority,
+        }
+    }
+
+    pub fn load_authority_snapshot(
+        &self,
+        workspace_directory: &str,
+    ) -> anyhow::Result<PlanningQueueAuthoritySnapshot> {
+        self.task_mutation
+            .load_queue_authority_snapshot(workspace_directory)
+    }
+
+    pub fn load_authority_mutations(
+        &self,
+        workspace_directory: &str,
+        after_planning_revision: i64,
+        through_planning_revision: i64,
+    ) -> anyhow::Result<Vec<PlanningTaskAuthorityMutationRecord>> {
+        self.task_mutation.load_queue_authority_mutations(
+            workspace_directory,
+            after_planning_revision,
+            through_planning_revision,
+        )
+    }
+
+    pub fn cancel_tasks(
+        &self,
+        request: PlanningQueueCancellationRequest,
+    ) -> anyhow::Result<PlanningTaskMutationCommitResult> {
+        validate_queue_cancellation_request(&request)?;
+        let workspace_directory = request.workspace_directory.clone();
+        let task_ids = request
+            .targets
+            .iter()
+            .map(|target| target.task_id.clone())
+            .collect::<Vec<_>>();
+        with_task_mutation_guard(
+            self.authority.as_ref(),
+            &workspace_directory,
+            &task_ids,
+            || self.task_mutation.cancel_queue_tasks(request),
+        )
+    }
+}
 
 /*
  * 이 파일은 planning의 public application facade다.
@@ -222,7 +290,7 @@ pub struct PlanningPostTurnReconciliationOutcome {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnWorkerPanelStartRequest<'a> {
-    pub continuation_paused: bool,
+    pub planning_settlement_paused: bool,
     pub changed_planning_file_paths: &'a [String],
     pub current_runtime_projection: &'a PlanningRuntimeProjection,
 }
@@ -445,6 +513,8 @@ pub enum PlanningPostTurnRepairAttemptResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnQueueRefreshFinalizationRequest<'a> {
     pub workspace_directory: &'a str,
+    pub parent_thread_id: Option<&'a str>,
+    pub completed_turn_id: &'a str,
     pub previous_handoff_task: Option<&'a PlanningTaskHandoff>,
     pub previous_runtime_projection: &'a PlanningRuntimeProjection,
     pub refreshed_runtime_projection: &'a PlanningRuntimeProjection,
@@ -785,7 +855,7 @@ impl PlanningRuntimeUseCases {
         &self,
         request: PlanningPostTurnWorkerPanelStartRequest<'_>,
     ) -> PlanningPostTurnWorkerPanelStartState {
-        if request.continuation_paused {
+        if request.planning_settlement_paused {
             return PlanningPostTurnWorkerPanelStartState::PreserveCurrent;
         }
         if request
@@ -1059,6 +1129,10 @@ impl PlanningWorkerUseCases {
         {
             match self.promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                 workspace_directory: request.workspace_directory,
+                provenance: TaskMutationProvenance::new(OriginSessionKind::Planner).with_parent(
+                    request.parent_thread_id.map(str::to_string),
+                    Some(request.completed_turn_id.to_string()),
+                ),
             }) {
                 Ok(outcome) => {
                     runtime_projection = outcome.runtime_projection.clone();
@@ -1945,11 +2019,12 @@ mod tests {
         assert_eq!(capture.workspace_directory, "/tmp/workspace");
         assert_eq!(
             capture.state,
-            PlanningTurnExecutionSnapshotCaptureState::Ready(PlanningExecutionSnapshot {
+            PlanningTurnExecutionSnapshotCaptureState::Ready(Box::new(PlanningExecutionSnapshot {
                 result_output_markdown: Some(
                     "# Result Output\n- Keep completion copy.".to_string()
-                )
-            })
+                ),
+                ..PlanningExecutionSnapshot::default()
+            }))
         );
 
         let planning = planning_services(Arc::new(ScriptedPlanningWorkspacePort::failing_load(
@@ -2004,6 +2079,7 @@ mod tests {
             "/tmp/other",
             PlanningExecutionSnapshot {
                 result_output_markdown: Some("old".to_string()),
+                ..PlanningExecutionSnapshot::default()
             },
         );
         let stale = planning
@@ -2090,6 +2166,7 @@ mod tests {
             "/tmp/workspace",
             PlanningExecutionSnapshot {
                 result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+                ..PlanningExecutionSnapshot::default()
             },
         );
         let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
@@ -2142,6 +2219,7 @@ mod tests {
             "/tmp/workspace",
             PlanningExecutionSnapshot {
                 result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+                ..PlanningExecutionSnapshot::default()
             },
         );
         let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
@@ -2194,6 +2272,7 @@ mod tests {
             "/tmp/workspace",
             PlanningExecutionSnapshot {
                 result_output_markdown: Some("# Result Output\n- Pre-turn copy.".to_string()),
+                ..PlanningExecutionSnapshot::default()
             },
         );
         let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
@@ -2239,7 +2318,7 @@ mod tests {
         assert_eq!(
             planning.runtime.post_turn_worker_panel_start_state(
                 PlanningPostTurnWorkerPanelStartRequest {
-                    continuation_paused: true,
+                    planning_settlement_paused: true,
                     changed_planning_file_paths: &changed_paths,
                     current_runtime_projection: &ready_with_task,
                 },
@@ -2249,7 +2328,7 @@ mod tests {
         assert_eq!(
             planning.runtime.post_turn_worker_panel_start_state(
                 PlanningPostTurnWorkerPanelStartRequest {
-                    continuation_paused: false,
+                    planning_settlement_paused: false,
                     changed_planning_file_paths: &changed_paths,
                     current_runtime_projection: &ready_with_task,
                 },
@@ -2259,7 +2338,7 @@ mod tests {
         assert_eq!(
             planning.runtime.post_turn_worker_panel_start_state(
                 PlanningPostTurnWorkerPanelStartRequest {
-                    continuation_paused: false,
+                    planning_settlement_paused: false,
                     changed_planning_file_paths: &[],
                     current_runtime_projection: &PlanningRuntimeProjection::ready(
                         "prompt".to_string(),
@@ -2273,7 +2352,7 @@ mod tests {
         assert_eq!(
             planning.runtime.post_turn_worker_panel_start_state(
                 PlanningPostTurnWorkerPanelStartRequest {
-                    continuation_paused: false,
+                    planning_settlement_paused: false,
                     changed_planning_file_paths: &[],
                     current_runtime_projection: &ready_with_task,
                 },
@@ -2512,6 +2591,8 @@ mod tests {
         let empty = planning.worker.finalize_post_turn_queue_refresh(
             PlanningPostTurnQueueRefreshFinalizationRequest {
                 workspace_directory: "/tmp/use-cases-finalize-empty",
+                parent_thread_id: None,
+                completed_turn_id: "turn-finalize-empty",
                 previous_handoff_task: None,
                 previous_runtime_projection: &previous_projection,
                 refreshed_runtime_projection: &refreshed_empty,
@@ -2529,6 +2610,8 @@ mod tests {
         let repeated = planning.worker.finalize_post_turn_queue_refresh(
             PlanningPostTurnQueueRefreshFinalizationRequest {
                 workspace_directory: "/tmp/use-cases-finalize-repeated",
+                parent_thread_id: None,
+                completed_turn_id: "turn-finalize-repeated",
                 previous_handoff_task: Some(&sample_handoff()),
                 previous_runtime_projection: &previous_projection,
                 refreshed_runtime_projection: &previous_projection,

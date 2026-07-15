@@ -4,6 +4,7 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::{
     PlanningValidationReport, PriorityQueueProjection, PriorityQueueTask, QueueIdlePolicy,
+    TaskAuthorityDocument, TaskStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,6 +287,8 @@ impl RuntimeProjection {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecutionSnapshot {
     pub result_output_markdown: Option<String>,
+    pub planning_revision: Option<i64>,
+    pub task_authority: Option<TaskAuthorityDocument>,
 }
 
 impl ExecutionSnapshot {
@@ -322,7 +325,7 @@ impl TurnSnapshotCapture {
     pub fn ready(workspace_directory: impl Into<String>, snapshot: ExecutionSnapshot) -> Self {
         Self {
             workspace_directory: workspace_directory.into(),
-            state: TurnSnapshotCaptureState::Ready(snapshot),
+            state: TurnSnapshotCaptureState::Ready(Box::new(snapshot)),
             parallel_slot_lease: None,
         }
     }
@@ -346,7 +349,7 @@ impl TurnSnapshotCapture {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnSnapshotCaptureState {
-    Ready(ExecutionSnapshot),
+    Ready(Box<ExecutionSnapshot>),
     CaptureFailed(String),
 }
 
@@ -646,6 +649,7 @@ pub struct PostTurnContext {
     pub current_runtime_projection: RuntimeProjection,
     pub parallel_mode_enabled: bool,
     pub parallel_automation_epoch_id: Option<u64>,
+    pub planning_settlement_paused: bool,
     pub continuation_paused: bool,
     pub can_queue_next: bool,
     pub stop_keyword: String,
@@ -677,6 +681,59 @@ pub struct PlanningWorkerPanelState {
     pub last_prompt: Option<String>,
     pub last_response: Option<String>,
     pub last_host_detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningQueueMutationKind {
+    Created,
+    Updated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningQueueMutationReceiptEntry {
+    pub task_id: String,
+    pub task_title: String,
+    pub mutation_kind: PlanningQueueMutationKind,
+    pub before_status: Option<TaskStatus>,
+    pub after_status: TaskStatus,
+    pub after_updated_at: String,
+    pub unchanged_since_mutation: bool,
+}
+
+impl PlanningQueueMutationReceiptEntry {
+    pub fn is_created_and_cancellable(&self) -> bool {
+        self.mutation_kind == PlanningQueueMutationKind::Created
+            && self.unchanged_since_mutation
+            && matches!(self.after_status, TaskStatus::Ready | TaskStatus::Proposed)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningQueueMutationReceipt {
+    pub completed_turn_id: String,
+    pub planning_revision: i64,
+    pub entries: Vec<PlanningQueueMutationReceiptEntry>,
+}
+
+impl PlanningQueueMutationReceipt {
+    pub fn created_entries(&self) -> impl Iterator<Item = &PlanningQueueMutationReceiptEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.mutation_kind == PlanningQueueMutationKind::Created)
+    }
+
+    pub fn cancellable_created_entries(
+        &self,
+    ) -> impl Iterator<Item = &PlanningQueueMutationReceiptEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.is_created_and_cancellable())
+    }
+
+    pub fn created_batch_is_cancellable(&self) -> bool {
+        let created_count = self.created_entries().count();
+        created_count > 0 && self.cancellable_created_entries().count() == created_count
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -711,6 +768,7 @@ pub struct PostTurnProvenance {
     pub completed_turn_id: String,
     pub handoff_task: Option<TaskHandoff>,
     pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+    pub queue_mutation_receipt: Option<PlanningQueueMutationReceipt>,
 }
 
 impl PostTurnProvenance {
@@ -719,6 +777,7 @@ impl PostTurnProvenance {
             completed_turn_id,
             handoff_task: None,
             parallel_queue_signal: None,
+            queue_mutation_receipt: None,
         }
     }
 
@@ -732,6 +791,14 @@ impl PostTurnProvenance {
         parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
     ) -> Self {
         self.parallel_queue_signal = parallel_queue_signal;
+        self
+    }
+
+    pub fn with_queue_mutation_receipt(
+        mut self,
+        queue_mutation_receipt: Option<PlanningQueueMutationReceipt>,
+    ) -> Self {
+        self.queue_mutation_receipt = queue_mutation_receipt;
         self
     }
 }

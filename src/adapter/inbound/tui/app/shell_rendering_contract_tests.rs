@@ -365,6 +365,7 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
         "stable history stays visible above the queue",
     );
     app.shell_overlay = ShellOverlay::Queue;
+    app.sync_queue_overlay_selection();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -373,6 +374,7 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
 
     assert!(rendered.contains("Ready Queue"));
     assert!(rendered.contains("Proposals"));
+    assert!(rendered.contains("x/Delete: remove"));
 }
 
 // Inline inspection overlays replace the transcript region rather than drawing

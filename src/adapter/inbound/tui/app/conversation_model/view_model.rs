@@ -28,7 +28,7 @@ use crate::domain::conversation::{
     ConversationSnapshot,
 };
 use crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope;
-use crate::domain::planning::PlanningRepairRequestSnapshot;
+use crate::domain::planning::{PlanningQueueMutationReceipt, PlanningRepairRequestSnapshot};
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
 use super::activity_rail::ActivityRailTerminalState;
@@ -104,6 +104,12 @@ struct PendingApprovalResolution {
 }
 
 #[derive(Debug, Clone)]
+struct PostTurnSettlementState {
+    completed_turn_id: String,
+    started_at: Instant,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ConversationViewModel {
     pub(crate) thread_id: String,
     pub(crate) title: String,
@@ -145,6 +151,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
+    post_turn_settlement: Option<PostTurnSettlementState>,
     // Transitional service snapshot used only by reducer/event synchronization.
     // Rendering and post-turn worker context must read the core snapshot instead.
     reducer_event_projection_cache: PlanningRuntimeProjection,
@@ -162,6 +169,7 @@ pub(crate) struct ConversationViewModel {
     pub(crate) last_auto_follow_activity: Option<RecordedAutoFollowActivity>,
     hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection,
     pub(crate) last_planning_task_handoff: Option<PlanningTaskHandoff>,
+    pub(crate) latest_queue_mutation_receipt: Option<PlanningQueueMutationReceipt>,
     pub(crate) status_text: String,
 }
 impl ConversationViewModel {
@@ -198,6 +206,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(),
+            post_turn_settlement: None,
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
@@ -212,6 +221,7 @@ impl ConversationViewModel {
             hydrated_thread_review_status_projection: HydratedThreadReviewStatusProjection::default(
             ),
             last_planning_task_handoff: None,
+            latest_queue_mutation_receipt: None,
             status_text: String::new(),
         };
         view_model.enforce_transcript_retention();
@@ -276,6 +286,7 @@ impl ConversationViewModel {
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(),
+            post_turn_settlement: None,
             reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
@@ -289,6 +300,7 @@ impl ConversationViewModel {
             hydrated_thread_review_status_projection,
             last_auto_follow_activity: None,
             last_planning_task_handoff: None,
+            latest_queue_mutation_receipt: None,
             status_text: String::new(),
         };
         view_model.enforce_transcript_retention();
@@ -466,17 +478,23 @@ impl ConversationViewModel {
     }
     pub(crate) fn can_accept_manual_prompt(&self) -> bool {
         // Manual prompts wait for auto-follow bookkeeping to settle even if input_state is ready.
-        self.can_accept_runtime_prompt() && !self.auto_follow_state.has_live_activity()
+        self.can_accept_runtime_prompt()
+            && !self.auto_follow_state.has_live_activity()
+            && !self.has_post_turn_settlement_in_flight()
     }
     pub(crate) fn has_running_turn(&self) -> bool {
         !self.can_accept_runtime_prompt()
     }
     pub(crate) fn live_activity_started_at(&self) -> Option<Instant> {
         // Status timers prefer auto-follow evaluation/queue phases over a plain active turn.
-        self.auto_follow_state.active_started_at().or_else(|| {
-            self.active_turn_started_at
-                .filter(|_| self.has_running_turn())
-        })
+        self.post_turn_settlement
+            .as_ref()
+            .map(|settlement| settlement.started_at)
+            .or_else(|| self.auto_follow_state.active_started_at())
+            .or_else(|| {
+                self.active_turn_started_at
+                    .filter(|_| self.has_running_turn())
+            })
     }
     pub(crate) fn arm_startup_submit(&mut self) {
         self.startup_submit_armed = true;
@@ -769,15 +787,36 @@ impl ConversationViewModel {
                 .to_string();
         self.append_status_message(self.status_text.clone());
     }
-    pub(crate) fn begin_auto_follow_evaluation(&mut self) {
+    pub(crate) fn begin_post_turn_settlement(&mut self, completed_turn_id: &str) {
         /*
          * Every completed turn queues post-turn evaluation, including parallel
          * continuation when the single-session turn budget is off. Keep manual
          * intake closed until that exact evaluation settles; otherwise an
          * operator Enter can race the planning worker and parallel dispatcher.
          */
+        self.post_turn_settlement = Some(PostTurnSettlementState {
+            completed_turn_id: completed_turn_id.to_string(),
+            started_at: Instant::now(),
+        });
         self.auto_follow_state.begin_post_turn_evaluation();
         self.status_text = "turn completed / evaluating post-turn continuation".to_string();
+    }
+    pub(crate) fn complete_post_turn_settlement(&mut self, completed_turn_id: &str) -> bool {
+        if self
+            .post_turn_settlement
+            .as_ref()
+            .is_some_and(|settlement| {
+                settlement.completed_turn_id.trim() == completed_turn_id.trim()
+            })
+        {
+            self.post_turn_settlement = None;
+            true
+        } else {
+            false
+        }
+    }
+    pub(crate) fn has_post_turn_settlement_in_flight(&self) -> bool {
+        self.post_turn_settlement.is_some()
     }
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
         self.last_planning_task_handoff.as_ref()
