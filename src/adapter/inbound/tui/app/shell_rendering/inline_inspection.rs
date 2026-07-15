@@ -20,6 +20,7 @@ use super::inline_layout::{
     count_rendered_inline_rows, inline_section_height, set_cursor_if_visible, split_inline_section,
     take_panel_body_lines,
 };
+use crate::adapter::inbound::tui::supersession_mud::SupersessionMudFocusZone;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
@@ -81,7 +82,7 @@ pub(super) fn draw_inline_shell_inspection(
             draw_inline_parallel_peek_inspection(frame, inspection_area, app)
         }
         ShellOverlay::Activity => draw_inline_activity_inspection(frame, inspection_area, app),
-        ShellOverlay::Help => draw_inline_help_inspection(frame, inspection_area),
+        ShellOverlay::Help => draw_inline_help_inspection(frame, inspection_area, app),
         ShellOverlay::Reviews => draw_inline_reviews_inspection(frame, inspection_area, app),
         ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
         ShellOverlay::DirectionsMaintenance => {
@@ -383,22 +384,22 @@ fn inline_preview_scroll_offset(area: Rect, line_count: usize, scroll_from_botto
         .min(u16::MAX as usize) as u16
 }
 
-fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
+fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
     let HelpOverlayView {
         header_lines,
         command_lines,
         key_lines,
     } = build_help_overlay_view();
     let body_lines = take_panel_body_lines(header_lines);
+    let key_height = count_rendered_inline_rows(&key_lines, area.width)
+        .saturating_add(1)
+        .clamp(2, 4) as u16;
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(
-                &command_lines,
-                command_lines.len().saturating_add(1).min(u16::MAX as usize) as u16,
-            )),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Min(2),
+            Constraint::Length(key_height),
         ])
         .split(area);
 
@@ -409,12 +410,16 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect) {
         body_lines,
         true,
     );
-    render_inline_titled_panel(
+    let visible_command_rows = usize::from(layout[1].height.saturating_sub(1));
+    let rendered_command_rows = count_rendered_inline_rows(&command_lines, layout[1].width);
+    let max_scroll = rendered_command_rows.saturating_sub(visible_command_rows.max(1));
+    app.help_scroll_offset = app.help_scroll_offset.min(max_scroll);
+    render_inline_scrolled_panel(
         frame,
         layout[1],
         Line::from("Commands"),
         command_lines,
-        false,
+        app.help_scroll_offset.min(usize::from(u16::MAX)) as u16,
     );
     render_inline_titled_panel(frame, layout[2], Line::from("Keys"), key_lines, true);
 }
@@ -682,9 +687,20 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         pool_lines,
         roster_lines,
         detail_lines,
-        distributor_lines: _distributor_lines,
+        distributor_lines,
         key_lines,
     } = overlay_view;
+    let selection_visible = matches!(
+        app.supersession_mud_ui_state.focused_zone(),
+        SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog
+    );
+    let orchestrator_lines = if selection_visible {
+        let mut lines = distributor_lines;
+        lines.extend(roster_lines);
+        lines
+    } else {
+        roster_lines
+    };
     let body_lines = take_panel_body_lines(header_lines);
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -720,26 +736,22 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         ])
         .split(layout[2]);
 
-    render_inline_titled_panel(
+    render_inline_supersession_panel(
         frame,
         status_layout[0],
         Line::from("Distributor"),
         capability_lines,
-        false,
     );
-    render_inline_titled_panel(
-        frame,
-        status_layout[1],
-        Line::from("Pool"),
-        pool_lines,
-        false,
-    );
-    render_inline_titled_panel(
+    render_inline_supersession_panel(frame, status_layout[1], Line::from("Pool"), pool_lines);
+    render_inline_supersession_panel(
         frame,
         status_layout[2],
-        Line::from("Orchestrator"),
-        roster_lines,
-        false,
+        Line::from(if selection_visible {
+            "Selection / Orchestrator"
+        } else {
+            "Orchestrator"
+        }),
+        orchestrator_lines,
     );
     render_inline_parallel_event_stream(frame, layout[3], detail_lines);
     render_inline_titled_panel(
@@ -749,6 +761,22 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         key_lines,
         true,
     );
+}
+
+fn render_inline_supersession_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: Line<'static>,
+    lines: Vec<Line<'static>>,
+) {
+    let selected_line_index = lines
+        .iter()
+        .rposition(|line| line.to_string().starts_with("> "));
+    let visible_rows = area.height.saturating_sub(1) as usize;
+    let scroll_offset =
+        selected_content_scroll_offset(&lines, selected_line_index, area.width, visible_rows)
+            .min(u16::MAX as usize) as u16;
+    render_inline_scrolled_panel(frame, area, title, lines, scroll_offset);
 }
 
 fn render_inline_parallel_event_stream(

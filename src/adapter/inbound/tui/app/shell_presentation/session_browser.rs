@@ -8,6 +8,7 @@ use super::capability_copy::{
     session_catalog_warning_blocked_line, session_catalog_warning_waiting_line,
 };
 use super::overlays::{OverlayListEntryView, OverlayListView};
+use super::terminal_text::truncate_end_to_cells;
 use super::{AkraTheme, NativeTuiApp};
 use crate::adapter::inbound::tui::shell_chrome::SessionState;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogTier};
@@ -329,7 +330,7 @@ fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
             )),
             Line::from(format!(
                 "{} [{} / {}]",
-                session.title(),
+                truncate_end_to_cells(&session.title(), 64),
                 session.source,
                 session.model_provider,
             )),
@@ -810,6 +811,15 @@ mod tests {
         let entry = build_session_list_entry(&session("thread-gamma", "Gamma task", "/tmp/root"));
         assert!(lines_text(&entry.lines).contains("thread-g"));
         assert!(lines_text(&entry.lines).contains("Gamma task [native / openai]"));
+
+        let long_title = "매우 긴 한국어 세션 제목 ".repeat(8);
+        let entry = build_session_list_entry(&session("thread-korean", &long_title, "/tmp/root"));
+        let title_line = entry.lines[1].to_string();
+        let displayed_title = title_line
+            .strip_suffix(" [native / openai]")
+            .expect("source metadata remains visible after title truncation");
+        assert!(displayed_title.ends_with('…'));
+        assert!(super::super::terminal_text::display_width(displayed_title) <= 64);
         assert_eq!(plural_suffix(1), "");
         assert_eq!(plural_suffix(2), "s");
     }

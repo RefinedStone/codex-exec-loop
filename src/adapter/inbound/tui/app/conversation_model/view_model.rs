@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use ratatui::text::Line;
+use unicode_segmentation::UnicodeSegmentation;
 
 /*
  * This file owns the mutable TUI projection of a conversation. The domain
@@ -341,11 +342,11 @@ impl ConversationViewModel {
     }
     pub(crate) fn input_cursor_byte_index(&self) -> usize {
         self.input_cursor_byte_index
-            .map(|index| clamp_to_char_boundary(&self.input_buffer, index))
+            .map(|index| clamp_to_grapheme_boundary(&self.input_buffer, index))
             .unwrap_or(self.input_buffer.len())
     }
     pub(crate) fn set_input_cursor_byte_index(&mut self, index: usize) {
-        self.input_cursor_byte_index = Some(clamp_to_char_boundary(&self.input_buffer, index));
+        self.input_cursor_byte_index = Some(clamp_to_grapheme_boundary(&self.input_buffer, index));
     }
     pub(crate) fn move_input_cursor_to_end(&mut self) {
         self.input_cursor_byte_index = None;
@@ -910,12 +911,17 @@ fn retain_bounded_string_history(values: &mut Vec<String>, max_items: usize) {
     }
 }
 
-fn clamp_to_char_boundary(buffer: &str, index: usize) -> usize {
-    let mut clamped_index = index.min(buffer.len());
-    while clamped_index > 0 && !buffer.is_char_boundary(clamped_index) {
-        clamped_index -= 1;
+fn clamp_to_grapheme_boundary(buffer: &str, index: usize) -> usize {
+    let clamped_index = index.min(buffer.len());
+    if clamped_index == buffer.len() {
+        return buffer.len();
     }
-    clamped_index
+    buffer
+        .grapheme_indices(true)
+        .map(|(byte_index, _)| byte_index)
+        .take_while(|byte_index| *byte_index <= clamped_index)
+        .last()
+        .unwrap_or(0)
 }
 
 fn hydrate_thread_review_status_projection(

@@ -17,10 +17,11 @@ mod inline_layout;
 #[cfg(test)]
 use super::shell_presentation::build_planning_draft_editor_overlay_view;
 use inline_inspection::{draw_inline_parallel_mode_inspection, draw_inline_shell_inspection};
+#[cfg(test)]
 use inline_layout::centered_rect;
 use inline_layout::{
-    build_inline_terminal_flow_layout, inline_body_render_area, render_inline_body,
-    set_cursor_if_visible,
+    build_inline_terminal_flow_layout, centered_fixed_rect, inline_body_render_area,
+    render_inline_body, render_inline_body_suffix, set_cursor_if_visible,
 };
 
 pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
@@ -91,19 +92,33 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
 }
 
 fn draw_exit_confirmation(frame: &mut Frame<'_>) {
-    let popup_area = centered_rect(42, 22, frame.area());
-    frame.render_widget(Clear, popup_area);
-    let popup = Paragraph::new(vec![
+    let title = AkraTheme::title_line("Confirm Exit", "");
+    let lines = vec![
         Line::from("You are already at the shell home."),
         Line::from("Exit codex-exec-loop?"),
         Line::from(""),
         AkraTheme::key_line("y: exit    n: stay"),
-    ])
-    .block(AkraTheme::panel_block(AkraTheme::title_line(
-        "Confirm Exit",
-        "",
-    )))
-    .wrap(Wrap { trim: true });
+    ];
+    let desired_width = lines
+        .iter()
+        .map(Line::width)
+        .chain(std::iter::once(title.width()))
+        .max()
+        .unwrap_or(1)
+        .saturating_add(2)
+        .min(usize::from(u16::MAX)) as u16;
+    let popup_width = desired_width.min(frame.area().width);
+    let rendered_body_rows = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: true })
+        .line_count(popup_width.saturating_sub(2));
+    let content_height = rendered_body_rows
+        .saturating_add(2)
+        .min(usize::from(u16::MAX)) as u16;
+    let popup_area = centered_fixed_rect(popup_width, content_height, frame.area());
+    frame.render_widget(Clear, popup_area);
+    let popup = Paragraph::new(lines)
+        .block(AkraTheme::panel_block(title))
+        .wrap(Wrap { trim: true });
 
     frame.render_widget(popup, popup_area);
 }
@@ -124,11 +139,13 @@ fn draw_inline_conversation_shell(
         if app.parallel_mode_enabled() {
             let tail_band = layout.get(1).copied().unwrap_or(frame_area);
             let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
-            bind_queue_receipt_undo_hit_area(app, tail_area, tail_view.queue_receipt_undo_hit_area);
-            render_inline_body(frame, tail_area, tail_view.lines, false);
-            if !app.parallel_mode_prompt_input_locked() && !app.is_exit_confirmation_visible() {
-                set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
-            }
+            render_bottom_anchored_tail(
+                frame,
+                app,
+                tail_area,
+                tail_view,
+                !app.parallel_mode_prompt_input_locked() && !app.is_exit_confirmation_visible(),
+            );
             return;
         }
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
@@ -145,13 +162,16 @@ fn draw_inline_conversation_shell(
             return;
         }
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
-        let tail_area = inline_body_render_area(frame_area, &tail_view.lines);
-        bind_queue_receipt_undo_hit_area(app, tail_area, tail_view.queue_receipt_undo_hit_area);
+        let tail_band = layout.get(1).copied().unwrap_or(frame_area);
+        let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
         render_inline_live_transcript(frame, frame_area, tail_area, live_transcript_lines);
-        render_inline_body(frame, tail_area, tail_view.lines, false);
-        if !app.is_exit_confirmation_visible() {
-            set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
-        }
+        render_bottom_anchored_tail(
+            frame,
+            app,
+            tail_area,
+            tail_view,
+            !app.is_exit_confirmation_visible(),
+        );
         return;
     }
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
@@ -162,6 +182,37 @@ fn draw_inline_conversation_shell(
     if app.shell_overlay == ShellOverlay::Supersession && !app.parallel_mode_prompt_input_locked() {
         set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
     }
+}
+
+fn render_bottom_anchored_tail(
+    frame: &mut Frame<'_>,
+    app: &mut NativeTuiApp,
+    tail_area: Rect,
+    tail_view: super::shell_presentation::InlineTailView,
+    show_cursor: bool,
+) {
+    let focus_row = tail_view.prompt_cursor_offset.map(|(_, y)| y);
+    let dropped_rows = render_inline_body_suffix(frame, tail_area, tail_view.lines, focus_row);
+    let hit_area = tail_view
+        .queue_receipt_undo_hit_area
+        .and_then(|area| scroll_relative_rect(area, dropped_rows));
+    let prompt_cursor_offset = tail_view
+        .prompt_cursor_offset
+        .and_then(|(x, y)| y.checked_sub(dropped_rows).map(|y| (x, y)));
+
+    bind_queue_receipt_undo_hit_area(app, tail_area, hit_area);
+    if show_cursor {
+        set_cursor_if_visible(frame, tail_area, prompt_cursor_offset);
+    }
+}
+
+fn scroll_relative_rect(area: Rect, dropped_rows: u16) -> Option<Rect> {
+    Some(Rect::new(
+        area.x,
+        area.y.checked_sub(dropped_rows)?,
+        area.width,
+        area.height,
+    ))
 }
 
 fn bind_queue_receipt_undo_hit_area(

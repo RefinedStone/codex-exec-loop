@@ -109,7 +109,7 @@ pub(crate) struct SupersessionOverlayView {
     pub(crate) roster_lines: Vec<Line<'static>>,
     // Longer status, path, or reason text for the selected/focused worker.
     pub(crate) detail_lines: Vec<Line<'static>>,
-    // Distributor backlog, assignment, and queue-head state.
+    // Focused roster or session detail shown before orchestrator state.
     pub(crate) distributor_lines: Vec<Line<'static>>,
     // Available supersession controls for the current capability state.
     pub(crate) key_lines: Vec<Line<'static>>,

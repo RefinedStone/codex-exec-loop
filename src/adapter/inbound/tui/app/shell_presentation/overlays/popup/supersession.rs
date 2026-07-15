@@ -1,12 +1,17 @@
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
-use crate::domain::parallel_mode::{
-    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
-    ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
+use crate::adapter::inbound::tui::supersession_mud::{
+    SupersessionMudFocusZone, build_supersession_mud_view,
 };
+use crate::domain::parallel_mode::{
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeSupervisorSnapshot,
+};
+#[cfg(test)]
+use crate::domain::parallel_mode::{ParallelModePoolSlotSnapshot, ParallelModePoolSlotState};
 
 use super::super::super::super::parallel_supervisor_events::parallel_supervisor_snapshot_stream_lines;
 use super::super::super::super::{AkraTheme, NativeTuiApp, TuiLanguage};
@@ -27,6 +32,8 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
     let readiness_snapshot_ref = readiness_snapshot.as_ref();
     let activity_frame = supersession_activity_frame();
+    let mud_view =
+        build_supersession_mud_view(&supervisor_snapshot, &app.supersession_mud_ui_state);
     /*
     The core app projection remains the first source for live readiness and
     supervisor snapshots. This adapter only chooses popup grouping and copy, so service-layer
@@ -40,17 +47,37 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
         &supervisor_snapshot,
         activity_frame,
     );
-    let capability_lines = build_distributor_lines_with_mud(&supervisor_snapshot.distributor, &[]);
-    let pool_lines = build_pool_lines_with_mud(&supervisor_snapshot.pool, activity_frame, &[]);
+    let capability_lines = build_distributor_lines_with_mud(
+        &supervisor_snapshot.distributor,
+        if app.supersession_mud_ui_state.focused_zone() == SupersessionMudFocusZone::ExitCorridor {
+            &mud_view.distributor_lines
+        } else {
+            &[]
+        },
+    );
+    let pool_lines = build_pool_lines_with_mud(
+        &supervisor_snapshot.pool,
+        activity_frame,
+        if app.supersession_mud_ui_state.focused_zone() == SupersessionMudFocusZone::RealmMap {
+            &mud_view.pool_lines
+        } else {
+            &[]
+        },
+    );
     let roster_lines = build_orchestrator_lines(&supervisor_snapshot.distributor);
     let detail_lines = build_parallel_event_stream_lines(
         &supervisor_snapshot,
         app.parallel_supervisor_event_lines(),
         app.tui_language,
     );
-    let mut distributor_lines =
-        build_roster_lines_with_mud(&supervisor_snapshot, activity_frame, &[]);
-    distributor_lines.extend(build_detail_lines_with_mud(&supervisor_snapshot, &[]));
+    let distributor_lines = match app.supersession_mud_ui_state.focused_zone() {
+        SupersessionMudFocusZone::Actors => mud_view.roster_lines,
+        SupersessionMudFocusZone::QuestLog => mud_view.detail_lines,
+        SupersessionMudFocusZone::RealmMap | SupersessionMudFocusZone::ExitCorridor => Vec::new(),
+    }
+    .into_iter()
+    .map(Line::from)
+    .collect::<Vec<_>>();
     let key_lines = build_command_hint_lines(
         app.parallel_mode_enabled(),
         app.parallel_mode_prompt_input_locked(),
@@ -272,6 +299,7 @@ fn build_roster_lines(
     build_roster_lines_with_mud(supervisor_snapshot, activity_frame, &[])
 }
 
+#[cfg(test)]
 fn build_roster_lines_with_mud(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     activity_frame: &'static str,
@@ -345,6 +373,7 @@ fn build_detail_lines(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> V
     build_detail_lines_with_mud(supervisor_snapshot, &[])
 }
 
+#[cfg(test)]
 fn build_detail_lines_with_mud(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     mud_detail_lines: &[String],
@@ -474,6 +503,7 @@ fn build_parallel_event_stream_lines(
     events
 }
 
+#[cfg(test)]
 fn build_timeline_lines(
     detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
 ) -> Vec<Line<'static>> {
@@ -522,12 +552,14 @@ fn build_timeline_lines(
     lines
 }
 
+#[cfg(test)]
 struct SupersessionTimelineEvent {
     state_label: String,
     timestamp: String,
     summary: String,
 }
 
+#[cfg(test)]
 fn compact_timeline_events(
     detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
 ) -> Vec<SupersessionTimelineEvent> {
@@ -568,16 +600,19 @@ fn compact_timeline_events(
     events
 }
 
+#[cfg(test)]
 struct DeliveryBoundaryStage {
     label: &'static str,
     state_labels: &'static [&'static str],
 }
 
+#[cfg(test)]
 struct DeliveryBoundaryEvent {
     stage_label: &'static str,
     timestamp: String,
 }
 
+#[cfg(test)]
 fn delivery_boundary_label(
     detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
 ) -> Option<String> {
@@ -596,6 +631,7 @@ fn delivery_boundary_label(
     ))
 }
 
+#[cfg(test)]
 fn delivery_boundary_events(
     detail: &crate::domain::parallel_mode::ParallelModeAgentSessionDetailSnapshot,
 ) -> Vec<DeliveryBoundaryEvent> {
@@ -635,6 +671,7 @@ fn delivery_boundary_events(
         .collect()
 }
 
+#[cfg(test)]
 fn delivery_boundary_stages() -> [DeliveryBoundaryStage; 3] {
     [
         DeliveryBoundaryStage {
@@ -841,6 +878,7 @@ fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Ve
     lines
 }
 
+#[cfg(test)]
 fn display_supersession_state_label(state_label: &str) -> String {
     /*
     Domain labels are precise but too lifecycle-specific for the popup. The control
@@ -892,6 +930,7 @@ fn truncate_timeline_text(text: &str, max_chars: usize) -> String {
     truncated
 }
 
+#[cfg(test)]
 fn display_roster_duration_label(state_label: &str, duration_label: &str) -> String {
     /*
     Duration only gets a verb for actively running rows. Completed or blocked rows
@@ -906,6 +945,7 @@ fn display_roster_duration_label(state_label: &str, duration_label: &str) -> Str
     trimmed_duration.to_string()
 }
 
+#[cfg(test)]
 fn slot_health_summary(
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     slot_id: &str,
@@ -924,6 +964,7 @@ fn slot_health_summary(
         .unwrap_or_else(|| "slot not projected".to_string())
 }
 
+#[cfg(test)]
 fn slot_health_summary_from_slot(slot: &ParallelModePoolSlotSnapshot) -> String {
     match slot.state {
         ParallelModePoolSlotState::Leased
@@ -945,6 +986,7 @@ fn slot_health_summary_from_slot(slot: &ParallelModePoolSlotSnapshot) -> String 
     }
 }
 
+#[cfg(test)]
 fn worktree_health_detail(worktree_label: &str) -> String {
     /*
     Pool worktree labels often use "path / diagnosis". The popup keeps the

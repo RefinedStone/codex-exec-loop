@@ -13,14 +13,15 @@ use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
-    ParallelModeCompletionFeedEntry, ParallelModeDistributorSnapshot,
-    ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
-    ParallelModeReadinessState, ParallelModeSupervisorDetailSnapshot,
-    ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
+    ParallelModeCompletionFeedEntry, ParallelModeDistributorQueueItem,
+    ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
+    ParallelModePoolSlotState, ParallelModeQueueItemState, ParallelModeReadinessState,
+    ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
+    ParallelModeSupervisorState,
 };
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 use ratatui::Terminal;
-use ratatui::backend::TestBackend;
+use ratatui::backend::{Backend, TestBackend};
 use ratatui::layout::Position;
 use ratatui::style::Color;
 use std::fs;
@@ -357,6 +358,78 @@ fn inline_render_positions_cursor_on_empty_prompt_line() {
         .assert_cursor_position(Position::new(2, 8));
 }
 #[test]
+fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
+    let mut terminal = Terminal::new(TestBackend::new(48, 18)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    tui_testkit::append_agent_history_message(&mut app, "prompt overflow baseline");
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    let before_middle = "word ".repeat(120);
+    conversation.input_buffer = format!(
+        "{before_middle}MIDDLE_CURSOR {}CURSOR_END",
+        "word ".repeat(120)
+    );
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("long prompt render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+    let cursor = terminal
+        .backend_mut()
+        .get_cursor_position()
+        .expect("cursor position should be available");
+
+    assert!(rendered.contains("CURSOR_END"), "{rendered}");
+    assert!(
+        rendered.contains("buffered prompt  |  Enter send"),
+        "{rendered}"
+    );
+    let (cursor_text_row, cursor_text_line) = rendered
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("CURSOR_END"))
+        .expect("prompt suffix row should be visible");
+    let cursor_text_line = cursor_text_line.trim_matches('"');
+    let expected_cursor_x = cursor_text_line
+        .find("CURSOR_END")
+        .expect("cursor marker should have a column")
+        .saturating_add("CURSOR_END".len());
+    assert_eq!(
+        cursor,
+        Position::new(expected_cursor_x as u16, cursor_text_row as u16),
+        "cursor should follow the word-wrapped prompt suffix"
+    );
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.set_input_cursor_byte_index(before_middle.len());
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("middle cursor render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+    let cursor = terminal
+        .backend_mut()
+        .get_cursor_position()
+        .expect("middle cursor position should be available");
+    let (middle_row, middle_line) = rendered
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("MIDDLE_CURSOR"))
+        .expect("focused middle prompt row should be visible");
+    let middle_x = middle_line
+        .trim_matches('"')
+        .find("MIDDLE_CURSOR")
+        .expect("middle cursor marker should have a column");
+    assert_eq!(
+        cursor,
+        Position::new(middle_x as u16, middle_row as u16),
+        "cursor should follow a word-wrapped middle edit"
+    );
+}
+#[test]
 fn inline_queue_overlay_rendering_shows_compact_sections() {
     let mut terminal = tui_testkit::inline_terminal(80, 24);
     let mut app = make_test_app();
@@ -476,10 +549,38 @@ fn inline_help_inspection_renders_command_help() {
     assert!(rendered.contains(":turns"));
     assert!(rendered.contains("auto-follow opt-in; off or 0 disables"));
     assert!(!rendered.contains(":auto"));
-    assert!(rendered.contains("Esc/Ctrl+C: close"));
+    assert!(rendered.contains("PgUp/PgDn: page"));
     assert!(!rendered.contains("Shell commands: :diag  :parallel"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn narrow_help_inspection_scrolls_to_the_last_command() {
+    let mut terminal = Terminal::new(TestBackend::new(48, 18)).expect("test terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell_overlay = ShellOverlay::Help;
+    app.help_scroll_offset = usize::MAX;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("narrow help render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert_ne!(app.help_scroll_offset, usize::MAX);
+    assert!(
+        rendered.contains("command help"),
+        "last command detail must be reachable:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Esc/Ctrl+C: close"),
+        "help close action must remain visible:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("prompt:"),
+        "composer tail must remain visible:\n{rendered}"
+    );
 }
 #[test]
 fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_workspace() {
@@ -736,6 +837,125 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
     assert!(rendered.contains("Ctrl+O/Esc/Ctrl+C close"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
+    let mut terminal = Terminal::new(TestBackend::new(120, 32)).expect("test terminal");
+    let mut app = make_test_app();
+    app.set_parallel_mode_enabled_for_test(true);
+    let slots = (1..=12)
+        .map(|index| {
+            ParallelModePoolSlotSnapshot::new(
+                format!("slot-{index}"),
+                ParallelModePoolSlotState::Running,
+                format!("agent/{index}"),
+                format!("pool/{index}"),
+                format!("agent-{index}"),
+            )
+        })
+        .collect();
+    let roster = (1..=12)
+        .map(|index| {
+            ParallelModeAgentRosterEntry::new(
+                format!("agent-{index}"),
+                format!("Task {index}"),
+                format!("slot-{index}"),
+                format!("agent/{index}"),
+                "running",
+                format!("{index}m"),
+                format!("testing {index}"),
+            )
+        })
+        .collect();
+    let queue_items = (1..=12)
+        .map(|index| {
+            ParallelModeDistributorQueueItem::new(
+                format!("agent-{index}"),
+                format!("Task {index}"),
+                ParallelModeQueueItemState::Queued,
+                format!("agent/{index}"),
+                format!("sha{index}"),
+                format!("queued {index}"),
+            )
+        })
+        .collect();
+    let detail = ParallelModeAgentSessionDetailSnapshot::new(
+        "slot-1:task-1",
+        "agent-1",
+        "task-1",
+        "Task 1",
+        "slot-1",
+        Some("thread-1".to_string()),
+        "/tmp/pool/1",
+        "agent/1",
+        "2026-07-15T00:00:00Z",
+        "running",
+        "running",
+        "testing 1",
+        "tests pending",
+        "ledger pending",
+        None,
+        Vec::new(),
+        "2026-07-15T00:01:00Z",
+    );
+    let snapshot = ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(12, "/tmp/pool", "running", slots),
+        ParallelModeAgentRosterSnapshot::new(roster, "empty"),
+        ParallelModeSupervisorDetailSnapshot::new(Some(detail), "no detail"),
+        ParallelModeDistributorSnapshot::new(queue_items, Vec::new(), "queued", "queue active"),
+        None,
+    );
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot.clone()));
+    app.shell_overlay = ShellOverlay::Supersession;
+    app.supersession_mud_ui_state.move_selection(&snapshot, 10);
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession deep slot render succeeds");
+    let pool_rendered = tui_testkit::screen_text(&terminal);
+    assert!(
+        pool_rendered.contains("> slot slot-11"),
+        "deep selected pool slot must be visible:\n{pool_rendered}"
+    );
+
+    app.supersession_mud_ui_state.focus_next_zone();
+    app.supersession_mud_ui_state.move_selection(&snapshot, 10);
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession selected roster render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("Selection / Orchestrator"));
+    assert!(
+        rendered.contains("> agent agent-11 in slot-11"),
+        "deep selected roster row must be visible:\n{rendered}"
+    );
+    assert!(!rendered.contains("> agent agent-1 in slot-1"));
+
+    app.supersession_mud_ui_state.focus_next_zone();
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession selected detail fallback render succeeds");
+    let detail_rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(detail_rendered.contains("> selected agent: agent-11"));
+    assert!(detail_rendered.contains("latest summary: testing 11"));
+    assert!(!detail_rendered.contains("session detail: slot-1 / agent-1"));
+
+    app.supersession_mud_ui_state.focus_next_zone();
+    app.supersession_mud_ui_state.move_selection(&snapshot, 10);
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline supersession deep distributor render succeeds");
+    let distributor_rendered = tui_testkit::screen_text(&terminal);
+    assert!(
+        distributor_rendered.contains("> held queued | agent agent-11"),
+        "deep selected distributor item must be visible:\n{distributor_rendered}"
+    );
 }
 
 #[test]
@@ -1232,6 +1452,8 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
         None,
     )));
     app.shell_overlay = ShellOverlay::Supersession;
+    app.supersession_mud_ui_state.focus_next_zone();
+    app.supersession_mud_ui_state.focus_next_zone();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -1243,6 +1465,11 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     assert!(rendered.contains("Agent agent-1: Timeline UI"));
     assert!(rendered.contains("Ledger: accepted Timeline UI"));
     assert!(rendered.contains("head: idle"));
+    assert!(rendered.contains("Selection"));
+    assert!(
+        rendered.contains("> session detail:"),
+        "selected session detail must survive the narrow layout:\n{rendered}"
+    );
     assert!(!rendered.contains("commit_ready"));
 }
 
@@ -1573,20 +1800,25 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
 }
 #[test]
 fn exit_confirmation_uses_shared_akra_chrome() {
-    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
-    let mut app = make_test_app();
-    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+    for (width, height) in [(24, 12), (48, 18), (80, 24)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
+        let mut app = make_test_app();
+        app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+        app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
 
-    terminal
-        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
-        .expect("exit confirmation render succeeds");
-    let rendered = tui_testkit::screen_text(&terminal);
+        terminal
+            .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+            .expect("exit confirmation render succeeds");
+        let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Akra / Confirm Exit"));
-    assert!(rendered.contains("Exit codex-exec-loop?"));
-    assert!(rendered.contains("ready: send a task or reopen a session"));
-    assert!(!rendered.contains("████"));
+        assert!(rendered.contains("Akra / Confirm Exit"), "{rendered}");
+        assert!(rendered.contains("Exit codex-exec-loop?"), "{rendered}");
+        assert!(rendered.contains("y: exit    n: stay"), "{rendered}");
+        if width == 80 {
+            assert!(rendered.contains("ready: send a task or reopen a session"));
+        }
+        assert!(!rendered.contains("████"));
+    }
 }
 #[test]
 fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {

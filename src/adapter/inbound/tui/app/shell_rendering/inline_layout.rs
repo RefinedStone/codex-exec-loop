@@ -41,7 +41,10 @@ pub(super) fn build_inline_terminal_flow_layout(
         MAX_INLINE_INSPECTION_TAIL_HEIGHT
     };
     let tail_height = inline_body_height(tail_lines, area.width, tail_max_height);
-    let inspection_constraint = if app.shell_overlay == ShellOverlay::Activity && area.width <= 48 {
+    let inspection_constraint = if app.shell_overlay == ShellOverlay::Hidden {
+        // The prompt tail owns short viewports; transcript receives every remaining row.
+        Constraint::Min(0)
+    } else if app.shell_overlay == ShellOverlay::Activity && area.width <= 48 {
         Constraint::Length(area.height.saturating_sub(tail_height))
     } else {
         Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6))
@@ -83,17 +86,35 @@ pub(super) fn count_rendered_inline_rows(lines: &[Line<'_>], width: u16) -> usiz
         return 0;
     }
 
-    lines
-        .iter()
-        .map(|line| {
-            let line_width = line.width();
-            if line_width == 0 {
-                1
-            } else {
-                line_width.div_ceil(width as usize)
-            }
-        })
-        .sum()
+    Paragraph::new(lines.to_vec())
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+}
+
+pub(super) fn render_inline_body_suffix(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    focus_row: Option<u16>,
+) -> u16 {
+    if area.width == 0 || area.height == 0 {
+        return 0;
+    }
+
+    let rendered_rows = count_rendered_inline_rows(&lines, area.width);
+    let bottom_scroll = rendered_rows.saturating_sub(usize::from(area.height));
+    let dropped_rows = focus_row
+        .map(usize::from)
+        .filter(|focus_row| *focus_row < bottom_scroll)
+        .unwrap_or(bottom_scroll);
+    let scroll_offset = dropped_rows.min(usize::from(u16::MAX)) as u16;
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll_offset, 0))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+    scroll_offset
 }
 
 pub(super) fn split_inline_section(area: Rect) -> Rc<[Rect]> {
@@ -271,6 +292,7 @@ pub(super) fn take_panel_body_lines(mut header_lines: Vec<Line<'static>>) -> Vec
     header_lines
 }
 
+#[cfg(test)]
 pub(super) fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
     /*
      * popup overlay는 percent 기반 영역을 요청하지만 design 조정 중 caller가 100을 넘는 값을 줄 수 있다.
@@ -294,6 +316,18 @@ pub(super) fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area
             Constraint::Percentage((100u16.saturating_sub(horizontal_percent)) / 2),
         ])
         .split(vertical_layout[1])[1]
+}
+
+pub(super) fn centered_fixed_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width) / 2),
+        area.y
+            .saturating_add(area.height.saturating_sub(height) / 2),
+        width,
+        height,
+    )
 }
 
 #[cfg(test)]

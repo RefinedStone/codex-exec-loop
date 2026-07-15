@@ -320,6 +320,7 @@ struct NativeTuiApp {
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,
+    help_scroll_offset: usize,
     queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState,
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,

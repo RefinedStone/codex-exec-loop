@@ -34,6 +34,89 @@ fn inline_main_buffer_ready_shell_matches_snapshot() {
 }
 
 #[test]
+fn dense_hidden_tail_preserves_prompt_suffix_snapshot() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    tui_testkit::append_agent_history_message(&mut app, "previous operator-visible response");
+    app.sync_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
+        "Planning Context",
+        "queue head: rank 1 / task-1 / Implement shell planning status",
+    ));
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.thread_id = "thread-dense-tail".to_string();
+    conversation.title = "Dense tail".to_string();
+    conversation.warnings = vec!["runtime recovery needs operator attention".to_string()];
+    conversation.runtime_notices =
+        vec!["attachment recovered with a long operational notice".to_string()];
+    conversation.input_buffer = "queued follow-up must remain visible".to_string();
+    conversation.latest_queue_mutation_receipt = Some(PlanningQueueMutationReceipt {
+        completed_turn_id: "turn-dense-tail".to_string(),
+        planning_revision: 9,
+        entries: vec![PlanningQueueMutationReceiptEntry {
+            task_id: "queued-task".to_string(),
+            task_title: "Keep the prompt visible".to_string(),
+            mutation_kind: PlanningQueueMutationKind::Created,
+            before_status: None,
+            after_status: TaskStatus::Ready,
+            after_updated_at: "2026-07-15T00:00:00Z".to_string(),
+            unchanged_since_mutation: true,
+        }],
+    });
+
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
+
+    assert!(
+        rendered.contains("> queued follow-up must remain visible"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("buffered prompt  |  Enter send"),
+        "{rendered}"
+    );
+    let prompt_row = rendered
+        .lines()
+        .position(|line| line.contains("> queued follow-up must remain visible"))
+        .expect("prompt row should be visible");
+    assert!(
+        prompt_row >= 8,
+        "dense tail should reserve upper viewport rows:\n{rendered}"
+    );
+    let (action_row, action_line) = rendered
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("[ Undo queue ]"))
+        .expect("visible undo action should have a rendered row");
+    let action_column = action_line
+        .trim_matches('"')
+        .find("[ Undo queue ]")
+        .expect("visible undo action should have a rendered column");
+    let hit_area = app
+        .queue_overlay_ui_state
+        .receipt_undo_hit_area()
+        .expect("visible undo action should retain its mouse target");
+    assert_eq!(hit_area.x, action_column as u16);
+    assert_eq!(hit_area.y, action_row as u16);
+    assert_snapshot!("dense_hidden_tail_prompt_suffix", rendered);
+}
+
+#[test]
+fn narrow_exit_confirmation_keeps_decision_keys_snapshot() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+
+    let rendered = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
+
+    assert!(rendered.contains("Akra / Confirm Exit"), "{rendered}");
+    assert!(rendered.contains("Exit codex-exec-loop?"), "{rendered}");
+    assert!(rendered.contains("y: exit    n: stay"), "{rendered}");
+    assert_snapshot!("narrow_exit_confirmation", rendered);
+}
+
+#[test]
 fn queue_receipt_renders_clickable_undo_action_in_conversation_tail() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());

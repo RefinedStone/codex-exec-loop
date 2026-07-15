@@ -2,10 +2,12 @@ use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot,
     ParallelModePoolSlotState, ParallelModeSupervisorSnapshot,
 };
+use std::ops::Range;
 
 const LINE_LIMIT: usize = 112;
 const FIELD_LIMIT: usize = 34;
 const SUMMARY_LIMIT: usize = 56;
+const PANEL_LINE_LIMIT: usize = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupersessionMudFocusZone {
@@ -203,16 +205,24 @@ fn build_mud_pool_lines(
     pool: &ParallelModePoolBoardSnapshot,
     ui_state: &SupersessionMudUiState,
 ) -> Vec<String> {
+    let slot_window = selected_centered_window(
+        pool.slots.len(),
+        ui_state.selected_room_index,
+        PANEL_LINE_LIMIT.saturating_sub(1),
+    );
     let mut lines = vec![fit_line(format!(
-        "pool board: {}",
+        "pool board: {}{}",
         pool.slots
             .iter()
             .enumerate()
+            .skip(slot_window.start)
+            .take(slot_window.len())
             .map(|(index, slot)| {
                 selected_token(slot_room_token(slot), is_selected_room(ui_state, index))
             })
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" "),
+        bounded_window_suffix(&slot_window, pool.slots.len(), "slots")
     ))];
     if pool.slots.is_empty() {
         lines.push(fit_line(format!(
@@ -223,17 +233,24 @@ fn build_mud_pool_lines(
         return lines;
     }
 
-    lines.extend(pool.slots.iter().enumerate().map(|(index, slot)| {
-        fit_line(format!(
-            "{}slot {} {} | branch {} | lease {} | owner {}",
-            selection_prefix(is_selected_room(ui_state, index)),
-            slot.slot_id,
-            room_state_label(slot.state),
-            truncate_text(&slot.branch_name, FIELD_LIMIT),
-            slot_exit_label(slot),
-            truncate_text(&slot.owner_label, FIELD_LIMIT)
-        ))
-    }));
+    lines.extend(
+        pool.slots
+            .iter()
+            .enumerate()
+            .skip(slot_window.start)
+            .take(slot_window.len())
+            .map(|(index, slot)| {
+                fit_line(format!(
+                    "{}slot {} {} | branch {} | lease {} | owner {}",
+                    selection_prefix(is_selected_room(ui_state, index)),
+                    slot.slot_id,
+                    room_state_label(slot.state),
+                    truncate_text(&slot.branch_name, FIELD_LIMIT),
+                    slot_exit_label(slot),
+                    truncate_text(&slot.owner_label, FIELD_LIMIT)
+                ))
+            }),
+    );
     lines
 }
 
@@ -248,11 +265,18 @@ fn build_mud_roster_lines(
         ))];
     }
 
+    let actor_window = selected_centered_window(
+        snapshot.roster.entries.len(),
+        ui_state.selected_actor_index,
+        PANEL_LINE_LIMIT,
+    );
     snapshot
         .roster
         .entries
         .iter()
         .enumerate()
+        .skip(actor_window.start)
+        .take(actor_window.len())
         .map(|(index, entry)| {
             fit_line(format!(
                 "{}agent {} in {} | task {} | progress {} | summary {}",
@@ -271,7 +295,29 @@ fn build_mud_detail_lines(
     snapshot: &ParallelModeSupervisorSnapshot,
     ui_state: &SupersessionMudUiState,
 ) -> Vec<String> {
-    let Some(detail) = snapshot.detail.session.as_ref() else {
+    let selected_actor = snapshot.roster.entries.get(ui_state.selected_actor_index);
+    let detail = snapshot.detail.session.as_ref().filter(|detail| {
+        selected_actor.is_some_and(|actor| {
+            actor.agent_id == detail.agent_id && actor.slot_id == detail.slot_id
+        })
+    });
+    let Some(detail) = detail else {
+        if let Some(actor) = selected_actor {
+            return vec![
+                fit_line(format!(
+                    "{}selected agent: {} in {} | task {}",
+                    selection_prefix(ui_state.focused_zone == SupersessionMudFocusZone::QuestLog),
+                    actor.agent_id,
+                    actor.slot_id,
+                    truncate_text(&actor.task_title, FIELD_LIMIT)
+                )),
+                "detail: waiting for the selected agent session projection".to_string(),
+                fit_line(format!(
+                    "latest summary: {}",
+                    truncate_text(&actor.latest_summary, SUMMARY_LIMIT)
+                )),
+            ];
+        }
         return vec![
             "session detail: no selected agent".to_string(),
             "flow: slot -> thread -> report -> ledger -> distributor".to_string(),
@@ -321,13 +367,20 @@ fn build_mud_distributor_lines(
     distributor: &ParallelModeDistributorSnapshot,
     ui_state: &SupersessionMudUiState,
 ) -> Vec<String> {
+    let held_line_count = usize::from(distributor.orchestrator_status.held_queue_count > 0);
+    let queue_window = selected_centered_window(
+        distributor.queue_items.len(),
+        ui_state.selected_quest_index,
+        PANEL_LINE_LIMIT.saturating_sub(2 + held_line_count),
+    );
     let mut lines = vec![
         fit_line(format!(
-            "{}distributor queue: head {} | depth {} | barrier {}",
+            "{}distributor queue: head {} | depth {} | barrier {}{}",
             selection_prefix(ui_state.focused_zone == SupersessionMudFocusZone::ExitCorridor),
             distributor.head_summary,
             distributor.queue_depth(),
-            distributor.orchestrator_status.barrier_state
+            distributor.orchestrator_status.barrier_state,
+            bounded_window_suffix(&queue_window, distributor.queue_items.len(), "items")
         )),
         fit_line(format!(
             "integration check: {}",
@@ -347,6 +400,8 @@ fn build_mud_distributor_lines(
                 .queue_items
                 .iter()
                 .enumerate()
+                .skip(queue_window.start)
+                .take(queue_window.len())
                 .map(|(index, item)| {
                     fit_line(format!(
                         "{}{} {} | agent {} | task {} | branch {}",
@@ -367,6 +422,26 @@ fn build_mud_distributor_lines(
         )));
     }
     lines
+}
+
+fn selected_centered_window(len: usize, selected_index: usize, max_visible: usize) -> Range<usize> {
+    if len == 0 || max_visible == 0 {
+        return 0..0;
+    }
+    let visible = len.min(max_visible);
+    let selected_index = selected_index.min(len - 1);
+    let start = selected_index
+        .saturating_sub(visible / 2)
+        .min(len - visible);
+    start..start + visible
+}
+
+fn bounded_window_suffix(window: &Range<usize>, total: usize, label: &str) -> String {
+    if window.start == 0 && window.end == total {
+        String::new()
+    } else {
+        format!(" | {label} {}-{}/{}", window.start + 1, window.end, total)
+    }
 }
 
 fn pool_pressure_label(pool: &ParallelModePoolBoardSnapshot) -> String {
@@ -730,10 +805,126 @@ mod tests {
         assert!(rendered.contains("focus: distributor queue"));
         assert!(rendered.contains("pool board: [slot-1:IDLE] [slot-2:RUN]"));
         assert!(rendered.contains("> distributor queue: head queued | depth 1"));
-        assert!(rendered.contains("session detail: no selected agent"));
+        assert!(rendered.contains("selected agent: agent-2 in slot-2"));
         assert!(
             rendered.lines().all(|line| line.chars().count() <= 112),
             "focused MUD projection should remain bounded:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn supersession_mud_windows_keep_deep_selection_inside_panel_capacity() {
+        let snapshot = large_supervisor_snapshot(12);
+        let mut ui_state = SupersessionMudUiState::default();
+
+        ui_state.move_selection(&snapshot, 10);
+        let pool = build_supersession_mud_view(&snapshot, &ui_state).pool_lines;
+        assert!(pool.len() <= super::PANEL_LINE_LIMIT);
+        assert!(pool.iter().any(|line| line.starts_with("> slot slot-11 ")));
+
+        ui_state.focus_next_zone();
+        ui_state.move_selection(&snapshot, 10);
+        let roster = build_supersession_mud_view(&snapshot, &ui_state).roster_lines;
+        assert!(roster.len() <= super::PANEL_LINE_LIMIT);
+        assert!(
+            roster
+                .iter()
+                .any(|line| line.starts_with("> agent agent-11 in slot-11 "))
+        );
+
+        ui_state.focus_next_zone();
+        ui_state.focus_next_zone();
+        ui_state.move_selection(&snapshot, 10);
+        let distributor = build_supersession_mud_view(&snapshot, &ui_state).distributor_lines;
+        assert!(distributor.len() <= super::PANEL_LINE_LIMIT);
+        assert!(
+            distributor
+                .iter()
+                .any(|line| line.starts_with("> held queued | agent agent-11 "))
+        );
+    }
+
+    #[test]
+    fn quest_log_uses_selected_actor_when_snapshot_detail_belongs_to_another_actor() {
+        let snapshot = large_supervisor_snapshot(2);
+        let mut ui_state = SupersessionMudUiState::default();
+        ui_state.focus_next_zone();
+        ui_state.move_selection(&snapshot, 1);
+        ui_state.focus_next_zone();
+
+        let detail = build_supersession_mud_view(&snapshot, &ui_state).detail_lines;
+        let rendered = detail.join("\n");
+
+        assert!(rendered.contains("> selected agent: agent-2 in slot-2"));
+        assert!(rendered.contains("latest summary: progress 2"));
+        assert!(!rendered.contains("agent-1"));
+        assert!(!rendered.contains("session detail:"));
+    }
+
+    fn large_supervisor_snapshot(count: usize) -> ParallelModeSupervisorSnapshot {
+        let slots = (1..=count)
+            .map(|index| {
+                ParallelModePoolSlotSnapshot::new(
+                    format!("slot-{index}"),
+                    ParallelModePoolSlotState::Running,
+                    format!("agent/{index}"),
+                    format!("pool/{index}"),
+                    format!("agent-{index}"),
+                )
+            })
+            .collect();
+        let roster = (1..=count)
+            .map(|index| {
+                ParallelModeAgentRosterEntry::new(
+                    format!("agent-{index}"),
+                    format!("Task {index}"),
+                    format!("slot-{index}"),
+                    format!("agent/{index}"),
+                    "running",
+                    format!("{index}m"),
+                    format!("progress {index}"),
+                )
+            })
+            .collect();
+        let queue_items = (1..=count)
+            .map(|index| {
+                ParallelModeDistributorQueueItem::new(
+                    format!("agent-{index}"),
+                    format!("Task {index}"),
+                    ParallelModeQueueItemState::Queued,
+                    format!("agent/{index}"),
+                    format!("sha{index}"),
+                    format!("queued {index}"),
+                )
+            })
+            .collect();
+        let detail = ParallelModeAgentSessionDetailSnapshot::new(
+            "slot-1:task-1",
+            "agent-1",
+            "task-1",
+            "Task 1",
+            "slot-1",
+            Some("thread-1".to_string()),
+            "/tmp/pool/1",
+            "agent/1",
+            "2026-07-15T00:00:00Z",
+            "running",
+            "running",
+            "progress 1",
+            "tests pending",
+            "ledger pending",
+            None,
+            Vec::new(),
+            "2026-07-15T00:01:00Z",
+        );
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            "/tmp/root",
+            ParallelModePoolBoardSnapshot::new(count, "/tmp/pool", "running", slots),
+            ParallelModeAgentRosterSnapshot::new(roster, "empty"),
+            ParallelModeSupervisorDetailSnapshot::new(Some(detail), "empty"),
+            ParallelModeDistributorSnapshot::new(queue_items, Vec::new(), "queued", "queue active"),
+            None,
+        )
     }
 }

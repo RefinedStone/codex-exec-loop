@@ -1,0 +1,22 @@
+---
+source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+expression: rendered
+---
+"Akra  |  Workflows: ready  |  Sessions: idle  | "
+"Reviews: off                                    "
+"workspace: /tmp/root                            "
+"diagnostics: codex ok  |  app-server ok  |      "
+"account ok                                      "
+"attachment: provider-launched  |  recovery:     "
+"provid┌Akra / Confirm Exit───────────────┐      "
+"ready:│You are already at the shell home.│      "
+"exampl│Exit codex-exec-loop?             │|     "
+"explai│                                  │      "
+"shortc│y: exit    n: stay                │      "
+"diagno└──────────────────────────────────┘      "
+"                                                "
+">                                               "
+"prompt: new thread ready  |  Enter send  |      "
+"Ctrl+j nl  |  :help                             "
+"                                                "
+"                                                "

@@ -1,0 +1,22 @@
+---
+source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
+expression: rendered
+---
+"                                                "
+"                                                "
+"                                                "
+"                                                "
+"                                                "
+"                                                "
+"[ Undo queue ]  click to cancel 1 queued task  |"
+" keyboard: :queue then u                        "
+"runtime: notice: attachment re...  |  warn: none"
+"queue: queue head: rank 1 / task-1 / Imp...     "
+"now: Implement shell planning status  |  next:  "
+"Trim legacy shell code                          "
+"proposed: none  |  blocked: Follow blocked      "
+"review thread (blocked by tasks:                "
+"task-2(in_progress))                            "
+"recent codex: previous operator-visible response"
+"> queued follow-up must remain visible          "
+"buffered prompt  |  Enter send  |  Ctrl+j nl    "

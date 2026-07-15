@@ -153,6 +153,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_init_copy.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_runtime.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_session.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/queue.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/overlays/popup/supersession/tests.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/prompt_composer.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/runtime_status_copy.rs`
@@ -164,6 +165,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/plan_indicator.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs`
+- `src/adapter/inbound/tui/app/shell_presentation/terminal_text.rs`
 - `src/adapter/inbound/tui/app/shell_presentation/transcript_copy.rs`
 - `src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs`
 - `src/adapter/inbound/tui/app/shell_rendering/inline_layout.rs`

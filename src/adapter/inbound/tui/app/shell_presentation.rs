@@ -45,6 +45,8 @@ mod shell_core;
 mod startup_banner;
 #[path = "shell_presentation/status_panels.rs"]
 mod status_panels;
+#[path = "shell_presentation/terminal_text.rs"]
+mod terminal_text;
 #[path = "shell_presentation/transcript_copy.rs"]
 mod transcript_copy;
 

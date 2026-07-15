@@ -207,6 +207,7 @@ impl NativeTuiApp {
         self.clear_input_buffer();
     }
     fn show_help_overlay(&mut self) {
+        self.help_scroll_offset = 0;
         self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
     }
     fn handle_activity_shell_command(&mut self, argument: Option<&str>) {
@@ -568,11 +569,35 @@ impl NativeTuiApp {
         if self.shell_overlay == ShellOverlay::Activity {
             return self.handle_progressive_activity_overlay_key(key);
         }
+        if self.shell_overlay == ShellOverlay::Help {
+            return self.handle_help_overlay_key(key);
+        }
         if self.shell_overlay == ShellOverlay::Queue {
             return self.handle_queue_overlay_key(key);
         }
 
         self.handle_session_overlay_key(key);
+        true
+    }
+
+    fn handle_help_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        match (key.code, key.modifiers) {
+            (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                self.help_scroll_offset = self.help_scroll_offset.saturating_sub(1);
+            }
+            (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                self.help_scroll_offset = self.help_scroll_offset.saturating_add(1);
+            }
+            (KeyCode::PageUp, KeyModifiers::NONE) => {
+                self.help_scroll_offset = self.help_scroll_offset.saturating_sub(5);
+            }
+            (KeyCode::PageDown, KeyModifiers::NONE) => {
+                self.help_scroll_offset = self.help_scroll_offset.saturating_add(5);
+            }
+            (KeyCode::Home, KeyModifiers::NONE) => self.help_scroll_offset = 0,
+            (KeyCode::End, KeyModifiers::NONE) => self.help_scroll_offset = usize::MAX,
+            _ => {}
+        }
         true
     }
 
@@ -1070,7 +1095,7 @@ impl NativeTuiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::adapter::inbound::tui::app::test_helpers::{sample_queue_head, test_native_tui_app};
     use crate::application::service::planning::{
         PlanningRuntimeProjection, PlanningTaskToolRequest,
     };
@@ -1345,6 +1370,30 @@ mod tests {
             app.progressive_activity_overlay_ui_state,
             ProgressiveActivityOverlayUiState::default()
         );
+    }
+
+    #[test]
+    fn help_overlay_keymap_scrolls_resets_and_defers_final_clamp_to_rendering() {
+        let mut app = test_native_tui_app();
+        app.help_scroll_offset = 9;
+
+        app.show_help_overlay();
+        assert_eq!(app.shell_overlay, ShellOverlay::Help);
+        assert_eq!(app.help_scroll_offset, 0);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
+        assert_eq!(app.help_scroll_offset, 1);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
+        assert_eq!(app.help_scroll_offset, 6);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('k'))));
+        assert_eq!(app.help_scroll_offset, 5);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageUp)));
+        assert_eq!(app.help_scroll_offset, 0);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::End)));
+        assert_eq!(app.help_scroll_offset, usize::MAX);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Home)));
+        assert_eq!(app.help_scroll_offset, 0);
     }
 
     #[test]
@@ -1705,6 +1754,82 @@ mod tests {
                 .iter()
                 .any(|line| line.to_string().contains("> [ready / skipped]"))
         );
+    }
+
+    #[test]
+    fn queue_overlay_keeps_pause_ahead_of_selected_skip_and_feedback() {
+        let mut app = test_native_tui_app();
+        let queue_head = sample_queue_head();
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_queue_projection(
+                "context".to_string(),
+                "queue ready".to_string(),
+                None,
+                Some(queue_head.clone()),
+                PriorityQueueProjection {
+                    next_task: Some(queue_head.clone()),
+                    active_tasks: vec![queue_head],
+                    proposed_tasks: Vec::new(),
+                    skipped_tasks: vec![PriorityQueueSkippedTask {
+                        task_id: "ready-but-skipped".to_string(),
+                        task_title: "Dependency wait".to_string(),
+                        direction_id: "general-workstream".to_string(),
+                        status: TaskStatus::Ready,
+                        reason: "dependency task is still open".to_string(),
+                    }],
+                },
+            )
+            .with_auto_follow_pause_reason("dependency authority needs operator attention"),
+        );
+        app.shell_overlay = ShellOverlay::Queue;
+        app.sync_queue_overlay_selection();
+        let task_ids = app
+            .queue_action_tasks()
+            .into_iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>();
+        app.queue_overlay_ui_state
+            .move_selection(&task_ids, task_ids.len() as isize);
+        app.queue_overlay_ui_state
+            .set_feedback("task cancellation feedback");
+
+        let view =
+            crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
+        let notes = view
+            .note_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        assert_eq!(notes.len(), 2);
+        assert!(notes[0].starts_with("pause: dependency authority"));
+        assert!(notes[1].contains("> [ready / skipped]"));
+        assert!(
+            !notes
+                .iter()
+                .any(|line| line.contains("cancellation feedback"))
+        );
+    }
+
+    #[test]
+    fn queue_overlay_keeps_failure_ahead_of_feedback() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::invalid("planning authority could not be loaded"),
+        );
+        app.queue_overlay_ui_state
+            .set_feedback("previous queue action completed");
+
+        let view =
+            crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
+        let notes = view
+            .note_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        assert!(notes[0].starts_with("blocking issue: planning authority"));
+        assert!(notes[1].contains("previous queue action completed"));
     }
 
     #[test]

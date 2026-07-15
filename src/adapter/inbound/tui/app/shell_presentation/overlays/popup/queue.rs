@@ -1,3 +1,4 @@
+use super::super::super::terminal_text::truncate_end_to_cells;
 use super::super::super::{
     AkraTheme, ConversationState, Line, NativeTuiApp, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
     QUEUE_INSPECTION_PROPOSAL_LIMIT, QUEUE_INSPECTION_TASK_LIMIT,
@@ -135,10 +136,7 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             if let Some(queue_head) = projection.queue_head.as_ref() {
                 summary_segments.push(format!(
                     "next: {}",
-                    compact_whitespace_detail(
-                        queue_head.task_title.trim(),
-                        QUEUE_INSPECTION_TITLE_DETAIL_LIMIT
-                    )
+                    compact_queue_title(queue_head.task_title.as_str())
                 ));
             }
             if let Some(queue_summary) = projection.queue_summary.as_deref() {
@@ -168,16 +166,6 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
              * 먼저 operator가 봐야 하는 blocker이고, planning notice와 planning worker host detail은 그 다음 진단이다.
              */
             let mut note_lines = Vec::new();
-            let selected_skipped_visible =
-                build_selected_skipped_queue_line(&projection.skipped_tasks, selected_task_id)
-                    .map(|line| {
-                        note_lines.push(line);
-                        true
-                    })
-                    .unwrap_or(false);
-            if let Some(feedback) = app.queue_overlay_ui_state.feedback() {
-                note_lines.push(Line::from(feedback.to_string()));
-            }
             if let Some(detail) = runtime_projection.auto_follow_pause_reason() {
                 note_lines.push(Line::from(format!(
                     "pause: {}",
@@ -188,6 +176,17 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     "blocking issue: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
+            }
+            let selected_skipped_line =
+                build_selected_skipped_queue_line(&projection.skipped_tasks, selected_task_id);
+            let selected_skipped_visible = selected_skipped_line.is_some();
+            let selected_skipped_note_index = selected_skipped_line.map(|line| {
+                let index = note_lines.len();
+                note_lines.push(line);
+                index
+            });
+            if let Some(feedback) = app.queue_overlay_ui_state.feedback() {
+                note_lines.push(Line::from(feedback.to_string()));
             }
             if let Some(summary) =
                 conversation.planning_notice_summary(QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
@@ -233,7 +232,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 .or_else(|| {
                     proposal_selected_line_index.map(|index| proposal_heading_index + 1 + index)
                 })
-                .or_else(|| selected_skipped_visible.then_some(notes_heading_index + 1));
+                .or_else(|| {
+                    selected_skipped_note_index
+                        .map(|index| notes_heading_index.saturating_add(1).saturating_add(index))
+                });
 
             QueueOverlayView {
                 header_lines,
@@ -305,7 +307,7 @@ fn build_queue_task_lines(
             task.rank,
             task.status_label,
             task.combined_priority,
-            compact_whitespace_detail(task.task_title.trim(), QUEUE_INSPECTION_TITLE_DETAIL_LIMIT)
+            compact_queue_title(task.task_title.as_str())
         ));
         if selected {
             selected_line_index = Some(lines.len());
@@ -358,14 +360,16 @@ fn build_selected_skipped_queue_line(
         Line::from(format!(
             "> [{} / skipped] {} - {}",
             selected.status_label,
-            compact_whitespace_detail(
-                selected.task_title.as_str(),
-                QUEUE_INSPECTION_TITLE_DETAIL_LIMIT
-            ),
+            compact_queue_title(selected.task_title.as_str()),
             compact_whitespace_detail(selected.reason.as_str(), QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
         ))
         .style(AkraTheme::selected()),
     )
+}
+
+fn compact_queue_title(title: &str) -> String {
+    let compact = compact_whitespace_detail(title, usize::MAX);
+    truncate_end_to_cells(&compact, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT)
 }
 
 fn build_skipped_queue_note_line(
@@ -384,4 +388,20 @@ fn build_skipped_queue_note_line(
             QUEUE_INSPECTION_NOTE_DETAIL_LIMIT
         )
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::super::terminal_text::display_width;
+    use super::compact_queue_title;
+
+    #[test]
+    fn queue_titles_compact_whitespace_and_respect_terminal_cell_budget() {
+        let compact = compact_queue_title(&format!("  {}\n  tail  ", "긴 한국어 작업 ".repeat(12)));
+
+        assert!(!compact.contains('\n'));
+        assert!(!compact.contains("  "));
+        assert!(compact.ends_with('…'));
+        assert!(display_width(&compact) <= 56);
+    }
 }

@@ -1310,6 +1310,7 @@ impl NativeTuiApp {
             parallel_peek_overlay_ui_state: super::ParallelPeekOverlayUiState::default(),
             progressive_activity_overlay_ui_state:
                 super::ProgressiveActivityOverlayUiState::default(),
+            help_scroll_offset: 0,
             queue_overlay_ui_state: super::queue_overlay_ui::QueueOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,

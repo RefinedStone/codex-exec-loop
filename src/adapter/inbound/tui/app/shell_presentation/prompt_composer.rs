@@ -1,4 +1,8 @@
 use super::*;
+use ratatui::buffer::Buffer;
+use ratatui::style::Modifier;
+use ratatui::widgets::{Paragraph, Widget, Wrap};
+use unicode_segmentation::UnicodeSegmentation;
 
 /*
 prompt_composer는 shell footer의 입력 영역을 만드는 presentation adapter다.
@@ -12,9 +16,6 @@ const PROMPT_CONTINUATION_PREFIX: &str = "  ";
 pub(super) struct PromptBufferView {
     // Prompt text is already split into ratatui Lines so popup and inline tail renderers share one projection.
     pub(super) lines: Vec<Line<'static>>,
-    // Cursor location is relative to this projected prompt buffer, before surrounding footer rows are added.
-    pub(super) cursor_line_index: usize,
-    pub(super) cursor_column: usize,
 }
 
 pub(super) fn build_shell_command_palette_lines(
@@ -104,37 +105,89 @@ pub(super) fn build_prompt_cursor_offset(
     if content_width == 0 {
         return None;
     }
-    let prompt_buffer = build_prompt_buffer_view(conversation);
-    /*
-    Cursor rows must account for terminal wrapping across every prompt line before the active
-    line. This keeps multi-line prompts and long single-line prompts aligned with ratatui's
-    rendered width rather than byte offsets in the input buffer.
-    */
-    let wrapped_rows_before_cursor = prompt_buffer.lines[..prompt_buffer.cursor_line_index]
-        .iter()
-        .map(|line| wrapped_row_count(line.width(), content_width))
-        .sum::<usize>();
-    let cursor_row_in_line = prompt_buffer.cursor_column / content_width as usize;
-    let cursor_column = (prompt_buffer.cursor_column % content_width as usize) as u16;
-    let cursor_row = wrapped_rows_before_cursor
-        .saturating_add(cursor_row_in_line)
-        .min(u16::MAX as usize) as u16;
+    locate_prompt_cursor_with_word_wrap(conversation, content_width)
+}
 
-    Some((cursor_column, cursor_row))
+fn locate_prompt_cursor_with_word_wrap(
+    conversation: &ConversationViewModel,
+    content_width: u16,
+) -> Option<(u16, u16)> {
+    let cursor_byte_index = conversation.input_cursor_byte_index();
+    let cursor_prefix = &conversation.input_buffer[..cursor_byte_index];
+    let mut prefix_lines = cursor_prefix
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            Line::from(vec![
+                Span::raw(prompt_line_prefix(index)),
+                Span::raw(line.to_string()),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let marker_modifier = Modifier::SLOW_BLINK | Modifier::RAPID_BLINK;
+    let marker_style = Style::default().add_modifier(marker_modifier);
+    prefix_lines
+        .last_mut()?
+        .spans
+        .push(Span::styled(" ", marker_style));
+    let estimated_cursor_row = Paragraph::new(prefix_lines)
+        .wrap(Wrap { trim: false })
+        .line_count(content_width)
+        .saturating_sub(1)
+        .min(usize::from(u16::MAX)) as u16;
+
+    let cursor_line_index = cursor_prefix.matches('\n').count();
+    let cursor_line_start = cursor_prefix
+        .rfind('\n')
+        .map(|index| index.saturating_add(1))
+        .unwrap_or(0);
+    let cursor_byte_in_rendered_line = prompt_line_prefix(cursor_line_index)
+        .len()
+        .saturating_add(cursor_byte_index.saturating_sub(cursor_line_start));
+    let mut marked_lines = build_prompt_buffer_view(conversation).lines;
+    let rendered_line = marked_lines[cursor_line_index].to_string();
+    let (before_cursor, from_cursor) = rendered_line.split_at(cursor_byte_in_rendered_line);
+    marked_lines[cursor_line_index] =
+        if let Some(next_grapheme) = from_cursor.graphemes(true).next() {
+            let next_grapheme_end = next_grapheme.len();
+            Line::from(vec![
+                Span::raw(before_cursor.to_string()),
+                Span::styled(from_cursor[..next_grapheme_end].to_string(), marker_style),
+                Span::raw(from_cursor[next_grapheme_end..].to_string()),
+            ])
+        } else {
+            Line::from(vec![
+                Span::raw(before_cursor.to_string()),
+                Span::styled(" ", marker_style),
+            ])
+        };
+
+    let search_start = estimated_cursor_row.saturating_sub(1);
+    let search_height = 3;
+    let area = Rect::new(0, 0, content_width, search_height);
+    let mut buffer = Buffer::empty(area);
+    Paragraph::new(marked_lines)
+        .scroll((search_start, 0))
+        .wrap(Wrap { trim: false })
+        .render(area, &mut buffer);
+
+    for y in 0..search_height {
+        for x in 0..content_width {
+            let cell = &buffer[(x, y)];
+            if cell.modifier.contains(marker_modifier) {
+                return Some((x, search_start.saturating_add(y)));
+            }
+        }
+    }
+    None
 }
 
 pub(super) fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> PromptBufferView {
     /*
-    Prefixes are part of the prompt projection, so cursor_column is measured after the prefix.
-    That makes renderer cursor placement match exactly what the user sees in the footer.
+    Prefixes are part of the prompt projection so rendered input and cursor probes share the same copy.
     */
-    let cursor_byte_index = conversation.input_cursor_byte_index();
     let buffer_lines = conversation.input_buffer.split('\n').collect::<Vec<_>>();
     let mut lines = Vec::with_capacity(buffer_lines.len().max(1));
-    let mut cursor_line_index = 0;
-    let mut cursor_column = 0;
-    let mut line_start_byte_index = 0;
-    let mut cursor_position_resolved = false;
 
     for (index, buffer_line) in buffer_lines.iter().enumerate() {
         let prefix = prompt_line_prefix(index);
@@ -142,23 +195,10 @@ pub(super) fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> 
             Span::raw(prefix),
             Span::raw((*buffer_line).to_string()),
         ]);
-        let line_end_byte_index = line_start_byte_index + buffer_line.len();
-        if !cursor_position_resolved && cursor_byte_index <= line_end_byte_index {
-            cursor_line_index = index;
-            let cursor_line_text =
-                &conversation.input_buffer[line_start_byte_index..cursor_byte_index];
-            cursor_column = prompt_line_width_before_cursor(prefix, cursor_line_text);
-            cursor_position_resolved = true;
-        }
         lines.push(line);
-        line_start_byte_index = line_end_byte_index.saturating_add(1);
     }
 
-    PromptBufferView {
-        lines,
-        cursor_line_index,
-        cursor_column,
-    }
+    PromptBufferView { lines }
 }
 
 fn prompt_line_prefix(line_index: usize) -> &'static str {
@@ -167,14 +207,6 @@ fn prompt_line_prefix(line_index: usize) -> &'static str {
     } else {
         PROMPT_CONTINUATION_PREFIX
     }
-}
-
-fn prompt_line_width_before_cursor(prefix: &'static str, text_before_cursor: &str) -> usize {
-    Line::from(vec![
-        Span::raw(prefix),
-        Span::raw(text_before_cursor.to_string()),
-    ])
-    .width()
 }
 
 pub(super) fn wrapped_row_count(line_width: usize, content_width: u16) -> usize {
@@ -209,5 +241,18 @@ mod tests {
         conversation.set_input_cursor_byte_index("one\n".len() + 1);
 
         assert_eq!(build_prompt_cursor_offset(&conversation, 80), Some((3, 1)));
+    }
+
+    #[test]
+    fn prompt_cursor_probe_handles_combining_and_zwj_graphemes() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.input_buffer = "before e\u{301} 👩‍💻 after".to_string();
+        let emoji_start = conversation
+            .input_buffer
+            .find("👩‍💻")
+            .expect("emoji fixture should exist");
+        conversation.set_input_cursor_byte_index(emoji_start);
+
+        assert!(build_prompt_cursor_offset(&conversation, 12).is_some());
     }
 }

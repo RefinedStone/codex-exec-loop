@@ -1,4 +1,5 @@
 use super::{ConversationViewModel, InlineShellCommand};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub(super) const MAX_PROMPT_INPUT_BYTES: usize = 1024 * 1024;
 const PROMPT_INPUT_LIMIT_STATUS: &str =
@@ -269,8 +270,8 @@ fn previous_character_start(buffer: &str, cursor_byte_index: usize) -> usize {
     }
 
     buffer[..cursor_byte_index]
-        .char_indices()
-        .last()
+        .grapheme_indices(true)
+        .next_back()
         .map(|(byte_index, _)| byte_index)
         .unwrap_or(0)
 }
@@ -281,9 +282,9 @@ fn next_character_end(buffer: &str, cursor_byte_index: usize) -> usize {
     }
 
     buffer[cursor_byte_index..]
-        .char_indices()
-        .nth(1)
-        .map(|(offset, _)| cursor_byte_index + offset)
+        .graphemes(true)
+        .next()
+        .map(|grapheme| cursor_byte_index + grapheme.len())
         .unwrap_or(buffer.len())
 }
 
@@ -369,7 +370,9 @@ fn move_to_adjacent_line(
     direction: LineDirection,
 ) -> usize {
     let current_start = current_line_start(buffer, cursor_byte_index);
-    let current_column = buffer[current_start..cursor_byte_index].chars().count();
+    let current_column = buffer[current_start..cursor_byte_index]
+        .graphemes(true)
+        .count();
 
     match direction {
         LineDirection::Previous => {
@@ -401,7 +404,7 @@ fn byte_index_at_line_column(
     column: usize,
 ) -> usize {
     buffer[line_start..line_end]
-        .char_indices()
+        .grapheme_indices(true)
         .nth(column)
         .map(|(offset, _)| line_start + offset)
         .unwrap_or(line_end)
@@ -525,6 +528,35 @@ mod tests {
 
         assert_eq!(reduced.state.input_buffer, "helo");
         assert_eq!(reduced.state.input_cursor_byte_index(), "he".len());
+    }
+
+    #[test]
+    fn cursor_movement_and_deletion_keep_extended_graphemes_intact() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "e\u{301}👩‍💻".to_string();
+
+        let moved = reduce_conversation_input(
+            state,
+            ConversationInputEvent::CursorMoved {
+                movement: InputCursorMovement::PreviousCharacter,
+            },
+        );
+        assert_eq!(moved.state.input_cursor_byte_index(), "e\u{301}".len());
+
+        let reduced =
+            reduce_conversation_input(moved.state, ConversationInputEvent::BackspacePressed);
+        assert_eq!(reduced.state.input_buffer, "👩‍💻");
+        assert_eq!(reduced.state.input_cursor_byte_index(), 0);
+    }
+
+    #[test]
+    fn cursor_index_clamps_to_the_start_of_a_combining_grapheme() {
+        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        state.input_buffer = "e\u{301}x".to_string();
+
+        state.set_input_cursor_byte_index(1);
+
+        assert_eq!(state.input_cursor_byte_index(), 0);
     }
 
     #[test]

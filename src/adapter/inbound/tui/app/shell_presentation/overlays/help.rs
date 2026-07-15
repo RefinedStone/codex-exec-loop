@@ -1,3 +1,4 @@
+use super::super::terminal_text::{display_width, pad_right_to_cells};
 use super::super::{AkraTheme, InlineShellCommand, Line};
 
 // help overlay는 domain/runtime projection이 아니라 shell command catalog의 read-only view다.
@@ -21,7 +22,7 @@ pub(crate) fn build_help_overlay_view() -> HelpOverlayView {
     // 이렇게 해야 argument가 있는 command에서도 detail 문장이 같은 열에서 시작한다.
     let usage_width = entries
         .iter()
-        .map(|entry| entry.usage.len())
+        .map(|entry| display_width(entry.usage))
         .max()
         .unwrap_or(0)
         .saturating_add(2);
@@ -37,13 +38,14 @@ pub(crate) fn build_help_overlay_view() -> HelpOverlayView {
             .into_iter()
             .map(|entry| {
                 Line::from(format!(
-                    "{:<width$}{}",
-                    entry.usage,
+                    "{}{}",
+                    pad_right_to_cells(entry.usage, usage_width),
                     entry.detail,
-                    width = usage_width
                 ))
             })
             .collect(),
-        key_lines: vec![AkraTheme::key_line("Esc/Ctrl+C: close")],
+        key_lines: vec![AkraTheme::key_line(
+            "Up/Down or j/k: scroll  |  PgUp/PgDn: page  |  Home/End  |  Esc/Ctrl+C: close",
+        )],
     }
 }

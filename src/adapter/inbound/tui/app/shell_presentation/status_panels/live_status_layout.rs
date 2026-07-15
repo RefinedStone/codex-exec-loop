@@ -1,4 +1,5 @@
 use ratatui::layout::Rect;
+use ratatui::widgets::{Paragraph, Wrap};
 
 use super::super::prompt_composer::{build_prompt_cursor_offset, wrapped_row_count};
 use super::super::{
@@ -87,8 +88,10 @@ fn find_inline_action_hit_area(
             }
             logical_column = logical_column.saturating_add(span_width);
         }
-        rendered_row =
-            rendered_row.saturating_add(wrapped_row_count(line.width(), content_width as u16));
+        rendered_row = rendered_row.saturating_add(rendered_rows(
+            std::slice::from_ref(line),
+            content_width as u16,
+        ));
     }
     None
 }
@@ -161,10 +164,9 @@ fn compact_inspection_tail_lines(
 }
 
 fn rendered_rows(lines: &[Line<'static>], content_width: u16) -> usize {
-    lines
-        .iter()
-        .map(|line| wrapped_row_count(line.width(), content_width))
-        .sum()
+    Paragraph::new(lines.to_vec())
+        .wrap(Wrap { trim: false })
+        .line_count(content_width)
 }
 
 // Convert the prompt-local cursor into a tail-local cursor.
@@ -190,10 +192,7 @@ fn build_inline_prompt_cursor_offset_for_lines(
     let prompt_start_index = tail_lines.len().saturating_sub(prompt_lines.len());
 
     // Count physical terminal rows before the prompt, not logical Line entries.
-    let prompt_start_row = tail_lines[..prompt_start_index]
-        .iter()
-        .map(|line| wrapped_row_count(line.width(), content_width))
-        .sum::<usize>()
+    let prompt_start_row = rendered_rows(&tail_lines[..prompt_start_index], content_width)
         .try_into()
         .unwrap_or(u16::MAX);
 
