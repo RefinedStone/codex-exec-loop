@@ -1,6 +1,7 @@
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
-    load_consistent_planning_authority_snapshots,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
+    PlanningTaskAuthorityMutationAudit, PlanningTaskAuthorityMutationRecord,
+    PlanningTaskRepositoryPort, load_consistent_planning_authority_snapshots,
 };
 
 use crate::domain::planning::{
@@ -91,6 +92,26 @@ pub struct PlanningTaskMutationCommitResult {
     pub task_authority_changed: bool,
     pub applied_command_count: usize,
     pub committed_task_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningQueueAuthoritySnapshot {
+    pub planning_revision: i64,
+    pub tasks: Vec<TaskDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningQueueCancellationTarget {
+    pub task_id: String,
+    pub expected_status: TaskStatus,
+    pub expected_updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningQueueCancellationRequest {
+    pub workspace_directory: String,
+    pub expected_planning_revision: i64,
+    pub targets: Vec<PlanningQueueCancellationTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,6 +247,11 @@ impl PlanningTaskMutationService {
                 Some(observed_revision),
                 &candidate_task_authority,
                 &queue_projection,
+                PlanningTaskAuthorityMutationAudit {
+                    task_ids: std::slice::from_ref(&committed_task_id),
+                    legacy_source_turn_id: preview.request.legacy_source_turn_id.as_deref(),
+                    provenance: &preview.request.provenance,
+                },
             )? {
                 PlanningTaskAuthorityCommitResult::Committed {
                     planning_revision, ..
@@ -311,6 +337,11 @@ impl PlanningTaskMutationService {
                 observed_revision,
                 &candidate_task_authority,
                 &queue_projection,
+                PlanningTaskAuthorityMutationAudit {
+                    task_ids: &application.committed_task_ids,
+                    legacy_source_turn_id: request.legacy_source_turn_id.as_deref(),
+                    provenance: &request.provenance,
+                },
             )? {
                 PlanningTaskAuthorityCommitResult::Committed {
                     planning_revision, ..
@@ -331,6 +362,121 @@ impl PlanningTaskMutationService {
             "planning task mutation could not commit because planning state kept changing after observed revision {observed_revision}"
         )
     }
+
+    pub fn load_queue_authority_snapshot(
+        &self,
+        workspace_directory: &str,
+    ) -> Result<PlanningQueueAuthoritySnapshot> {
+        let context = self.load_context(workspace_directory)?;
+        Ok(PlanningQueueAuthoritySnapshot {
+            planning_revision: context.task_planning_revision,
+            tasks: context.task_authority.tasks,
+        })
+    }
+
+    pub fn load_queue_authority_mutations(
+        &self,
+        workspace_directory: &str,
+        after_planning_revision: i64,
+        through_planning_revision: i64,
+    ) -> Result<Vec<PlanningTaskAuthorityMutationRecord>> {
+        self.planning_task_repository_port
+            .load_task_authority_mutations(
+                workspace_directory,
+                after_planning_revision,
+                through_planning_revision,
+            )
+    }
+
+    pub(crate) fn cancel_queue_tasks(
+        &self,
+        request: PlanningQueueCancellationRequest,
+    ) -> Result<PlanningTaskMutationCommitResult> {
+        validate_queue_cancellation_request(&request)?;
+
+        let context = self.load_context(&request.workspace_directory)?;
+        if context.task_planning_revision != request.expected_planning_revision {
+            bail!(
+                "planning queue changed from revision {} to {}; reopen the queue and retry",
+                request.expected_planning_revision,
+                context.task_planning_revision
+            );
+        }
+
+        let mut candidate_task_authority = context.task_authority.clone();
+        let task_indexes = candidate_task_authority
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(index, task)| (task.id.trim().to_string(), index))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut seen_task_ids = std::collections::BTreeSet::new();
+        let updated_at = format_timestamp(Utc::now());
+        for target in &request.targets {
+            let task_id = required_id(&target.task_id, "task id")?;
+            if !seen_task_ids.insert(task_id.to_string()) {
+                bail!("queue cancellation contains duplicate task `{task_id}`");
+            }
+            let task_index = task_indexes
+                .get(task_id)
+                .copied()
+                .ok_or_else(|| anyhow!("task `{task_id}` does not exist"))?;
+            let task = &mut candidate_task_authority.tasks[task_index];
+            if task.status != target.expected_status
+                || task.updated_at.trim() != target.expected_updated_at.trim()
+            {
+                bail!("task `{task_id}` changed after it was shown; reopen the queue and retry");
+            }
+            if !matches!(task.status, TaskStatus::Ready | TaskStatus::Proposed) {
+                bail!(
+                    "task `{task_id}` cannot be removed from the queue while status is {}",
+                    task.status.label()
+                );
+            }
+            task.status = TaskStatus::Cancelled;
+            task.last_updated_by = TaskActor::User;
+            task.updated_at = updated_at.clone();
+        }
+
+        let queue_projection =
+            self.validate_and_project(&context.directions, &candidate_task_authority)?;
+        let committed_task_ids = request
+            .targets
+            .iter()
+            .map(|target| target.task_id.clone())
+            .collect::<Vec<_>>();
+        let cancellation_provenance = TaskMutationProvenance::default();
+        match self.commit_authority(
+            &request.workspace_directory,
+            Some(context.task_planning_revision),
+            &candidate_task_authority,
+            &queue_projection,
+            PlanningTaskAuthorityMutationAudit {
+                task_ids: &committed_task_ids,
+                legacy_source_turn_id: None,
+                provenance: &cancellation_provenance,
+            },
+        )? {
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision, ..
+            } => Ok(PlanningTaskMutationCommitResult {
+                committed_planning_revision: planning_revision,
+                queue_head: queue_projection.next_task,
+                task_authority_changed: true,
+                applied_command_count: request.targets.len(),
+                committed_task_ids,
+            }),
+            PlanningTaskAuthorityCommitResult::Conflict {
+                current_planning_revision,
+                ..
+            } => bail!(
+                "planning queue changed from revision {} to {}; reopen the queue and retry",
+                request.expected_planning_revision,
+                current_planning_revision
+            ),
+        }
+    }
+
     fn load_context(&self, workspace_directory: &str) -> Result<PlanningTaskMutationContext> {
         // task validation은 direction id와 현재 planning format에 의존하므로 direction/task
         // authority를 같은 revision으로 읽는다. 둘 중 하나라도 더 새 revision이면 reload/retry가 필요하다.
@@ -610,19 +756,40 @@ impl PlanningTaskMutationService {
         observed_planning_revision: Option<i64>,
         task_authority: &TaskAuthorityDocument,
         queue_projection: &PriorityQueueProjection,
+        audit: PlanningTaskAuthorityMutationAudit<'_>,
     ) -> Result<PlanningTaskAuthorityCommitResult> {
         // compare-and-swap semantics는 repository port가 소유한다. 이 layer는 이미 검증된
         // task authority와 그에 대응하는 queue projection을 함께 넘긴다.
         self.planning_task_repository_port
-            .commit_task_authority_snapshot(
+            .commit_task_authority_mutation_snapshot(
                 workspace_directory,
                 PlanningTaskAuthorityCommit {
                     observed_planning_revision,
                     task_authority,
                     queue_projection,
                 },
+                audit,
             )
     }
+}
+
+pub(crate) fn validate_queue_cancellation_request(
+    request: &PlanningQueueCancellationRequest,
+) -> Result<()> {
+    if request.targets.is_empty() {
+        bail!("queue cancellation requires at least one task");
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for target in &request.targets {
+        let task_id = target.task_id.trim();
+        if task_id.is_empty() {
+            bail!("task id must not be blank");
+        }
+        if !seen.insert(task_id) {
+            bail!("queue cancellation contains duplicate task `{task_id}`");
+        }
+    }
+    Ok(())
 }
 #[derive(Debug, Clone)]
 struct PlanningTaskMutationContext {

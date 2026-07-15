@@ -23,8 +23,8 @@ use super::composition::{PlanningFeatureComposition, PlanningFeaturePorts};
 // use case 묶음들은 adapter가 직접 호출하는 application 표면이다. PlanningFeature는 workspace/runtime/worker/task_tool
 // 네 영역을 한 값으로 들고 다니게 해 TUI, CLI, 테스트가 같은 진입 구조를 공유하게 한다.
 use super::use_cases::{
-    PlanningRuntimeUseCases, PlanningTaskToolUseCases, PlanningWorkerUseCases,
-    PlanningWorkspaceUseCases,
+    PlanningQueueUseCases, PlanningRuntimeUseCases, PlanningTaskToolUseCases,
+    PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
 
 // Clone이 필요한 이유는 TUI 상태, conversation runtime, 테스트 헬퍼가 같은 planning feature handle을 복제해 보관하기
@@ -37,6 +37,7 @@ pub struct PlanningFeature {
     pub workspace: PlanningWorkspaceUseCases,
     // runtime은 task intake, follow-up 판단, execution snapshot, reconciliation처럼 턴 실행 경로에서 쓰는 표면이다.
     pub runtime: PlanningRuntimeUseCases,
+    pub queue: PlanningQueueUseCases,
     // worker는 planning worker dispatch와 queue repair처럼 외부 worker 실행 경계까지 이어지는 표면이다.
     pub worker: PlanningWorkerUseCases,
     // task_tool은 task authority를 도구 호출 형태로 읽고 갱신하는 좁은 표면이다.

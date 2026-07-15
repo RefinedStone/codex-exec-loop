@@ -1,4 +1,5 @@
 use super::{
+    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
     PlanningTaskCommandExtraction, PlanningTaskCreateInput, PlanningTaskCreatePreviewRequest,
     PlanningTaskMutationCommand, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, PlanningTaskUpdateInput, extract_planning_task_commands,
@@ -761,5 +762,163 @@ fn terminal_status_change_is_rejected() {
         error
             .to_string()
             .contains("cannot change from terminal status")
+    );
+}
+
+#[test]
+fn queue_cancellation_marks_large_ready_and_proposed_batch_cancelled_in_one_revision() {
+    let repo = repo();
+    let workspace = workspace("queue-cancel-batch");
+    let tasks = (0..17)
+        .map(|index| {
+            task(
+                &format!("task-{index}"),
+                if index % 2 == 0 {
+                    TaskStatus::Ready
+                } else {
+                    TaskStatus::Proposed
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: tasks.clone(),
+        },
+    );
+    let service = PlanningTaskMutationService::new(
+        repo.clone(),
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+    let before = service.load_queue_authority_snapshot(&workspace).unwrap();
+
+    let result = service
+        .cancel_queue_tasks(PlanningQueueCancellationRequest {
+            workspace_directory: workspace.clone(),
+            expected_planning_revision: before.planning_revision,
+            targets: tasks
+                .into_iter()
+                .map(|task| PlanningQueueCancellationTarget {
+                    task_id: task.id,
+                    expected_status: task.status,
+                    expected_updated_at: task.updated_at,
+                })
+                .collect(),
+        })
+        .unwrap();
+
+    assert_eq!(
+        result.committed_planning_revision,
+        before.planning_revision + 1
+    );
+    assert_eq!(result.applied_command_count, 17);
+    assert!(result.queue_head.is_none());
+    let after = repo
+        .load_task_authority_snapshot(&workspace)
+        .unwrap()
+        .unwrap();
+    assert!(
+        after
+            .task_authority
+            .tasks
+            .iter()
+            .all(|task| task.status == TaskStatus::Cancelled)
+    );
+}
+
+#[test]
+fn queue_cancellation_rejects_mixed_running_batch_without_partial_commit() {
+    let repo = repo();
+    let workspace = workspace("queue-cancel-atomic");
+    let ready = task("ready-task", TaskStatus::Ready);
+    let running = task("running-task", TaskStatus::InProgress);
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![ready.clone(), running.clone()],
+        },
+    );
+    let service = PlanningTaskMutationService::new(
+        repo.clone(),
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+    let before = service.load_queue_authority_snapshot(&workspace).unwrap();
+
+    let error = service
+        .cancel_queue_tasks(PlanningQueueCancellationRequest {
+            workspace_directory: workspace.clone(),
+            expected_planning_revision: before.planning_revision,
+            targets: vec![
+                PlanningQueueCancellationTarget {
+                    task_id: ready.id,
+                    expected_status: ready.status,
+                    expected_updated_at: ready.updated_at,
+                },
+                PlanningQueueCancellationTarget {
+                    task_id: running.id,
+                    expected_status: running.status,
+                    expected_updated_at: running.updated_at,
+                },
+            ],
+        })
+        .unwrap_err();
+
+    assert!(error.to_string().contains("status is in_progress"));
+    let after = service.load_queue_authority_snapshot(&workspace).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn queue_cancellation_rejects_stale_revision_and_stale_row() {
+    let repo = repo();
+    let workspace = workspace("queue-cancel-stale");
+    let ready = task("ready-task", TaskStatus::Ready);
+    seed(
+        repo.as_ref(),
+        &workspace,
+        TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![ready.clone()],
+        },
+    );
+    let service = PlanningTaskMutationService::new(
+        repo,
+        crate::domain::planning::PriorityQueueService::new(),
+    );
+    let before = service.load_queue_authority_snapshot(&workspace).unwrap();
+
+    let stale_revision = service
+        .cancel_queue_tasks(PlanningQueueCancellationRequest {
+            workspace_directory: workspace.clone(),
+            expected_planning_revision: before.planning_revision - 1,
+            targets: vec![PlanningQueueCancellationTarget {
+                task_id: ready.id.clone(),
+                expected_status: ready.status,
+                expected_updated_at: ready.updated_at.clone(),
+            }],
+        })
+        .unwrap_err();
+    assert!(stale_revision.to_string().contains("reopen the queue"));
+
+    let stale_row = service
+        .cancel_queue_tasks(PlanningQueueCancellationRequest {
+            workspace_directory: workspace.clone(),
+            expected_planning_revision: before.planning_revision,
+            targets: vec![PlanningQueueCancellationTarget {
+                task_id: ready.id,
+                expected_status: ready.status,
+                expected_updated_at: "older-row".to_string(),
+            }],
+        })
+        .unwrap_err();
+    assert!(stale_row.to_string().contains("changed after it was shown"));
+    assert_eq!(
+        service.load_queue_authority_snapshot(&workspace).unwrap(),
+        before
     );
 }

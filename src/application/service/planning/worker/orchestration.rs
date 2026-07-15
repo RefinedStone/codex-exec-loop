@@ -661,6 +661,8 @@ impl PlanningWorkerOrchestrationService {
                     operation,
                     workspace_directory: workspace_directory.to_string(),
                     prompt,
+                    parent_thread_id: run_context.parent_provenance.thread_id.map(str::to_string),
+                    parent_turn_id: run_context.parent_provenance.turn_id.map(str::to_string),
                     continuation_permit: run_context.continuation_permit.cloned(),
                 }) {
                 Ok(response) => response,

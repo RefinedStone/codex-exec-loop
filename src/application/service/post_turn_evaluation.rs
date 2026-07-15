@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningTaskAuthorityMutationKind, PlanningTaskAuthorityMutationRecord,
+};
 use crate::application::service::parallel_mode::{
     ParallelModeOfficialCompletionReport, turn::ParallelModeTurnService,
 };
@@ -9,8 +12,8 @@ use crate::application::service::planning::{
     PlanningPostTurnQueueRefreshFinalizationEvent, PlanningPostTurnQueueRefreshFinalizationRequest,
     PlanningPostTurnQueueRefreshPreparation, PlanningPostTurnQueueRefreshPreparationRequest,
     PlanningPostTurnReconciliationRequest, PlanningPostTurnWorkerPanelStartRequest,
-    PlanningPostTurnWorkerPanelStartState, PlanningRuntimeProjection, PlanningServices,
-    PlanningTaskHandoff,
+    PlanningPostTurnWorkerPanelStartState, PlanningQueueAuthoritySnapshot,
+    PlanningRuntimeProjection, PlanningServices, PlanningTaskHandoff,
 };
 use crate::application::service::post_turn_decision::{
     PostTurnAutoFollowStopReason, PostTurnDecision as ApplicationPostTurnDecision,
@@ -20,7 +23,8 @@ use crate::diagnostics::event_log;
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
 use crate::domain::planning::{
-    PlanningWorkerPanelState as DomainPlanningWorkerPanelState,
+    OriginSessionKind, PlanningQueueMutationKind, PlanningQueueMutationReceipt,
+    PlanningQueueMutationReceiptEntry, PlanningWorkerPanelState as DomainPlanningWorkerPanelState,
     PlanningWorkerStatus as DomainPlanningWorkerStatus,
     PostTurnAutoFollowSkipReason as DomainPostTurnAutoFollowSkipReason,
     PostTurnContext as DomainPostTurnContext,
@@ -29,6 +33,7 @@ use crate::domain::planning::{
     PostTurnPlanningRepairState as DomainPostTurnPlanningRepairState,
     PostTurnProvenance as DomainPostTurnProvenance,
     PostTurnQueuedPrompt as DomainPostTurnQueuedPrompt, PostTurnRequest as DomainPostTurnRequest,
+    TaskDefinition, TurnSnapshotCaptureState,
 };
 use serde_json::json;
 
@@ -76,7 +81,7 @@ impl PostTurnEvaluationService {
         self.planning_feature
             .runtime
             .post_turn_worker_panel_start_state(PlanningPostTurnWorkerPanelStartRequest {
-                continuation_paused: request.context.continuation_paused,
+                planning_settlement_paused: request.context.planning_settlement_paused,
                 changed_planning_file_paths: &request.changed_planning_file_paths,
                 current_runtime_projection: &request.context.current_runtime_projection,
             })
@@ -183,6 +188,148 @@ struct HiddenPlanningRepairOutcome {
 struct PlanningQueueRefreshOutcome {
     runtime_projection: PlanningRuntimeProjection,
 }
+
+fn queue_receipt_baseline(
+    planning_feature: &PlanningServices,
+    request: &PostTurnEvaluationRequest,
+) -> Option<PlanningQueueAuthoritySnapshot> {
+    let captured = request
+        .execution_snapshot_capture
+        .as_ref()
+        .filter(|capture| capture.workspace_directory == request.workspace_directory)
+        .and_then(|capture| match &capture.state {
+            TurnSnapshotCaptureState::Ready(snapshot) => snapshot
+                .planning_revision
+                .zip(snapshot.task_authority.clone())
+                .map(
+                    |(planning_revision, task_authority)| PlanningQueueAuthoritySnapshot {
+                        planning_revision,
+                        tasks: task_authority.tasks,
+                    },
+                ),
+            TurnSnapshotCaptureState::CaptureFailed(_) => None,
+        });
+    captured.or_else(|| {
+        planning_feature
+            .queue
+            .load_authority_snapshot(&request.workspace_directory)
+            .ok()
+    })
+}
+
+fn build_queue_mutation_receipt(
+    completed_thread_id: &str,
+    completed_turn_id: &str,
+    before_planning_revision: i64,
+    mut mutations: Vec<PlanningTaskAuthorityMutationRecord>,
+    after: PlanningQueueAuthoritySnapshot,
+) -> PlanningQueueMutationReceipt {
+    let mut entries = Vec::new();
+    let mut entry_indexes = std::collections::BTreeMap::new();
+    let mut expected_tasks = std::collections::BTreeMap::<String, TaskDefinition>::new();
+    let mut attributed_task_ids = std::collections::BTreeSet::new();
+    let mut contaminated_task_ids = std::collections::BTreeSet::new();
+    mutations.sort_by_key(|mutation| mutation.planning_revision);
+    for mutation in mutations {
+        if mutation.planning_revision <= before_planning_revision {
+            continue;
+        }
+        if !task_mutation_belongs_to_turn(&mutation, completed_thread_id, completed_turn_id) {
+            if attributed_task_ids.contains(&mutation.task_id) {
+                contaminated_task_ids.insert(mutation.task_id);
+            }
+            continue;
+        }
+        attributed_task_ids.insert(mutation.task_id.clone());
+        let (Some(after_status), Some(after_updated_at), Some(after_task)) = (
+            mutation.after_status,
+            mutation.after_updated_at,
+            mutation.after_task,
+        ) else {
+            contaminated_task_ids.insert(mutation.task_id);
+            continue;
+        };
+        expected_tasks.insert(mutation.task_id.clone(), after_task);
+        if let Some(index) = entry_indexes.get(&mutation.task_id).copied() {
+            let entry: &mut PlanningQueueMutationReceiptEntry = &mut entries[index];
+            entry.task_title = mutation.task_title;
+            entry.after_status = after_status;
+            entry.after_updated_at = after_updated_at;
+        } else {
+            entry_indexes.insert(mutation.task_id.clone(), entries.len());
+            entries.push(PlanningQueueMutationReceiptEntry {
+                task_id: mutation.task_id,
+                task_title: mutation.task_title,
+                mutation_kind: match mutation.mutation_kind {
+                    PlanningTaskAuthorityMutationKind::Created => {
+                        PlanningQueueMutationKind::Created
+                    }
+                    PlanningTaskAuthorityMutationKind::Updated => {
+                        PlanningQueueMutationKind::Updated
+                    }
+                    PlanningTaskAuthorityMutationKind::Removed => unreachable!(),
+                },
+                before_status: mutation.before_status,
+                after_status,
+                after_updated_at,
+                unchanged_since_mutation: false,
+            });
+        }
+    }
+    for entry in &mut entries {
+        entry.unchanged_since_mutation = !contaminated_task_ids.contains(&entry.task_id)
+            && expected_tasks.get(&entry.task_id).is_some_and(|expected| {
+                after
+                    .tasks
+                    .iter()
+                    .any(|task| task.id == entry.task_id && task == expected)
+            });
+    }
+    PlanningQueueMutationReceipt {
+        completed_turn_id: completed_turn_id.to_string(),
+        planning_revision: after.planning_revision,
+        entries,
+    }
+}
+
+fn task_mutation_belongs_to_turn(
+    mutation: &PlanningTaskAuthorityMutationRecord,
+    completed_thread_id: &str,
+    completed_turn_id: &str,
+) -> bool {
+    let completed_thread_id = completed_thread_id.trim();
+    let completed_turn_id = completed_turn_id.trim();
+    if completed_thread_id.is_empty() || completed_turn_id.is_empty() {
+        return false;
+    }
+    match mutation.provenance.origin_session_kind {
+        Some(OriginSessionKind::Main) => {
+            provenance_id_matches(
+                mutation.provenance.thread_id.as_deref(),
+                completed_thread_id,
+            ) && provenance_id_matches(mutation.provenance.turn_id.as_deref(), completed_turn_id)
+        }
+        Some(OriginSessionKind::Planner) => {
+            provenance_id_matches(
+                mutation.provenance.parent_thread_id.as_deref(),
+                completed_thread_id,
+            ) && provenance_id_matches(
+                mutation.provenance.parent_turn_id.as_deref(),
+                completed_turn_id,
+            )
+        }
+        Some(
+            OriginSessionKind::ManualIntake
+            | OriginSessionKind::Parallel
+            | OriginSessionKind::System,
+        ) => false,
+        None => false,
+    }
+}
+
+fn provenance_id_matches(actual: Option<&str>, expected: &str) -> bool {
+    actual.is_some_and(|actual| actual.trim() == expected)
+}
 #[derive(Debug, Clone)]
 struct OfficialCompletionRefreshOutcome {
     runtime_projection: PlanningRuntimeProjection,
@@ -267,6 +414,10 @@ impl PostTurnEvaluationExecutor {
         request: &PostTurnEvaluationRequest,
     ) -> PostTurnEvaluationExecution {
         let planning_workspace_directory = context.planning_workspace_directory.as_str();
+        let mut receipt_baseline = (!context.planning_settlement_paused
+            && request.continuation_permit.is_current())
+        .then(|| queue_receipt_baseline(&self.planning_feature, request))
+        .flatten();
         event_log::emit_lazy("post_turn_evaluation_started", || {
             post_turn_event_detail(
                 post_turn_log_context(context, request),
@@ -302,8 +453,15 @@ impl PostTurnEvaluationExecutor {
         let reconciliation_result = reconciliation_outcome.reconciliation_result;
         let mut runtime_notices = reconciliation_result.notices.clone();
         let mut runtime_projection = reconciliation_outcome.runtime_projection;
-        let continuation_enabled =
-            !context.continuation_paused && request.continuation_permit.is_current();
+        let planning_settlement_enabled =
+            !context.planning_settlement_paused && request.continuation_permit.is_current();
+        if receipt_baseline.is_none() && planning_settlement_enabled {
+            receipt_baseline = self
+                .planning_feature
+                .queue
+                .load_authority_snapshot(&request.workspace_directory)
+                .ok();
+        }
         let official_completion_capture = request
             .continuation_permit
             .with_current(|| self.begin_official_completion_if_needed(context, request))
@@ -324,7 +482,7 @@ impl PostTurnEvaluationExecutor {
         }
         if request.continuation_permit.is_current()
             && !official_completion_capture_failed
-            && (continuation_enabled || official_completion_report.is_some())
+            && (planning_settlement_enabled || official_completion_report.is_some())
             && let Some(repair_request) = reconciliation_result.repair_request.as_ref()
         {
             let repair_outcome = self.run_hidden_planning_repairs(
@@ -354,14 +512,14 @@ impl PostTurnEvaluationExecutor {
             };
         if !handled_parallel_completion
             && !official_completion_capture_failed
-            && continuation_enabled
+            && planning_settlement_enabled
             && request.continuation_permit.is_current()
         {
             let refresh_outcome =
                 self.run_planning_queue_refresh(context, request, runtime_projection.clone());
             runtime_projection = refresh_outcome.runtime_projection;
         }
-        let post_turn_decision = if !request.continuation_permit.is_current() {
+        let mut post_turn_decision = if !request.continuation_permit.is_current() {
             PostTurnDecision::from_action(
                 request.completed_turn_id.clone(),
                 PostTurnContinuationAction::SkipAutoFollow {
@@ -383,6 +541,29 @@ impl PostTurnEvaluationExecutor {
         } else {
             self.auto_follow_decision_from_projection(context, request, &runtime_projection)
         };
+        if request.continuation_permit.is_current()
+            && let Some(receipt_baseline) = receipt_baseline
+            && let Ok(receipt_final) = self
+                .planning_feature
+                .queue
+                .load_authority_snapshot(&request.workspace_directory)
+            && let Ok(receipt_mutations) = self.planning_feature.queue.load_authority_mutations(
+                &request.workspace_directory,
+                receipt_baseline.planning_revision,
+                receipt_final.planning_revision,
+            )
+        {
+            let receipt = build_queue_mutation_receipt(
+                &context.thread_id,
+                &request.completed_turn_id,
+                receipt_baseline.planning_revision,
+                receipt_mutations,
+                receipt_final,
+            );
+            if !receipt.entries.is_empty() {
+                post_turn_decision.provenance.queue_mutation_receipt = Some(receipt);
+            }
+        }
         event_log::emit_lazy("post_turn_evaluation_completed", || {
             post_turn_event_detail(
                 post_turn_log_context(context, request),
@@ -625,6 +806,9 @@ impl PostTurnEvaluationExecutor {
             .finalize_post_turn_queue_refresh_with_permit(
                 PlanningPostTurnQueueRefreshFinalizationRequest {
                     workspace_directory: &request.workspace_directory,
+                    parent_thread_id: Some(context.thread_id.as_str())
+                        .filter(|thread_id| !thread_id.trim().is_empty()),
+                    completed_turn_id: &request.completed_turn_id,
                     previous_handoff_task: previous_handoff_task(context),
                     previous_runtime_projection: &context.current_runtime_projection,
                     refreshed_runtime_projection: &runtime_projection,
@@ -963,13 +1147,18 @@ mod tests {
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::{
         NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
-        PlanningTaskAuthorityCommit, PlanningTaskRepositoryPort,
+        PlanningTaskAuthorityCommit, PlanningTaskAuthorityMutationAudit,
+        PlanningTaskRepositoryPort, task_authority_mutation_records,
     };
     use crate::application::port::outbound::planning_worker_port::{
         NoopPlanningWorkerPort, PlanningWorkerPort, PlanningWorkerRequest, PlanningWorkerResponse,
         test_planning_worker_runtime_envelope,
     };
     use crate::application::service::parallel_mode::ParallelModeService;
+    use crate::application::service::planning::task_tool::{
+        PlanningTaskCreatePayload, PlanningTaskToolCreateRequest, PlanningTaskToolRequest,
+        PlanningTaskToolService,
+    };
     use crate::application::service::planning::{
         OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON,
         PlanningOfficialCompletionRefreshContract, PlanningOfficialCompletionRefreshPayload,
@@ -982,9 +1171,10 @@ mod tests {
         ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState,
     };
     use crate::domain::planning::{
-        DirectionCatalogDocument, DirectionDefinition, DirectionState, PriorityQueueProjection,
-        PriorityQueueService, PriorityQueueSkippedTask, PriorityQueueTask, QueueIdleConfig,
-        QueueIdlePolicy, TaskActor, TaskAuthorityDocument, TaskDefinition, TaskStatus,
+        DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
+        PriorityQueueProjection, PriorityQueueService, PriorityQueueSkippedTask, PriorityQueueTask,
+        QueueIdleConfig, QueueIdlePolicy, TaskActor, TaskAuthorityDocument, TaskDefinition,
+        TaskMutationProvenance, TaskStatus,
     };
     use std::collections::VecDeque;
     use std::fs;
@@ -1010,6 +1200,331 @@ mod tests {
         assert!(!source.contains(&legacy_refresh_signature));
         assert!(!source.contains(&legacy_fallback_name));
         assert!(!official_completion_source.contains("conversation: &ConversationViewModel"));
+    }
+
+    #[test]
+    fn queue_receipt_diff_reports_completed_and_new_tasks_from_authority() {
+        let current = task_definition("current", "Current work", TaskStatus::Ready);
+        let mut completed = current.clone();
+        completed.status = TaskStatus::Done;
+        completed.updated_at = "2026-07-15T01:00:00Z".to_string();
+        completed.provenance = TaskMutationProvenance::new(OriginSessionKind::Main)
+            .with_thread_turn(Some("thread-1".to_string()), Some("turn-1".to_string()));
+        let mut created = task_definition("follow-up", "Follow-up work", TaskStatus::Proposed);
+        created.provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+            .with_parent(Some("thread-1".to_string()), Some("turn-1".to_string()));
+        let mut foreign = task_definition("foreign", "Unrelated work", TaskStatus::Ready);
+        foreign.provenance = TaskMutationProvenance::new(OriginSessionKind::System)
+            .with_thread_turn(None, Some("turn-1".to_string()));
+        let mutation = |task: &TaskDefinition,
+                        mutation_kind: PlanningTaskAuthorityMutationKind,
+                        before_status| PlanningTaskAuthorityMutationRecord {
+            planning_revision: 5,
+            task_id: task.id.clone(),
+            task_title: task.title.clone(),
+            mutation_kind,
+            before_status,
+            before_updated_at: before_status.map(|_| "2026-07-15T00:00:00Z".to_string()),
+            after_status: Some(task.status),
+            after_updated_at: Some(task.updated_at.clone()),
+            after_task: Some(task.clone()),
+            legacy_source_turn_id: None,
+            provenance: task.provenance.clone(),
+        };
+        let mutations = vec![
+            mutation(
+                &completed,
+                PlanningTaskAuthorityMutationKind::Updated,
+                Some(TaskStatus::Ready),
+            ),
+            mutation(&created, PlanningTaskAuthorityMutationKind::Created, None),
+            mutation(&foreign, PlanningTaskAuthorityMutationKind::Created, None),
+        ];
+
+        let receipt = build_queue_mutation_receipt(
+            "thread-1",
+            "turn-1",
+            4,
+            mutations,
+            PlanningQueueAuthoritySnapshot {
+                planning_revision: 5,
+                tasks: vec![completed, created, foreign],
+            },
+        );
+
+        assert_eq!(receipt.planning_revision, 5);
+        assert_eq!(receipt.entries.len(), 2);
+        assert_eq!(
+            receipt.entries[0].mutation_kind,
+            PlanningQueueMutationKind::Updated
+        );
+        assert_eq!(receipt.entries[0].before_status, Some(TaskStatus::Ready));
+        assert_eq!(receipt.entries[0].after_status, TaskStatus::Done);
+        assert_eq!(
+            receipt.entries[1].mutation_kind,
+            PlanningQueueMutationKind::Created
+        );
+        assert_eq!(receipt.entries[1].after_status, TaskStatus::Proposed);
+        assert_eq!(receipt.cancellable_created_entries().count(), 1);
+    }
+
+    #[test]
+    fn queue_receipt_journal_preserves_creation_ownership_across_concurrent_writes() {
+        let current_provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+            .with_parent(Some("thread-1".to_string()), Some("turn-1".to_string()));
+        let foreign_provenance = TaskMutationProvenance::new(OriginSessionKind::System)
+            .with_thread_turn(None, Some("turn-1".to_string()));
+        let record = |revision,
+                      task_id: &str,
+                      kind,
+                      before_status,
+                      after_updated_at: &str,
+                      provenance: TaskMutationProvenance| {
+            let mut after_task = task_definition(task_id, task_id, TaskStatus::Ready);
+            after_task.updated_at = after_updated_at.to_string();
+            after_task.provenance = provenance.clone();
+            PlanningTaskAuthorityMutationRecord {
+                planning_revision: revision,
+                task_id: task_id.to_string(),
+                task_title: task_id.to_string(),
+                mutation_kind: kind,
+                before_status,
+                before_updated_at: before_status.map(|_| "before".to_string()),
+                after_status: Some(TaskStatus::Ready),
+                after_updated_at: Some(after_updated_at.to_string()),
+                after_task: Some(after_task),
+                legacy_source_turn_id: None,
+                provenance,
+            }
+        };
+        let mutations = vec![
+            record(
+                11,
+                "external-created",
+                PlanningTaskAuthorityMutationKind::Updated,
+                Some(TaskStatus::Proposed),
+                "current-update",
+                current_provenance.clone(),
+            ),
+            record(
+                12,
+                "current-then-foreign",
+                PlanningTaskAuthorityMutationKind::Created,
+                None,
+                "current-create",
+                current_provenance.clone(),
+            ),
+            record(
+                12,
+                "current-foreign-current",
+                PlanningTaskAuthorityMutationKind::Created,
+                None,
+                "same-second",
+                current_provenance.clone(),
+            ),
+            record(
+                13,
+                "current-foreign-current",
+                PlanningTaskAuthorityMutationKind::Updated,
+                Some(TaskStatus::Ready),
+                "same-second",
+                foreign_provenance.clone(),
+            ),
+            record(
+                14,
+                "current-foreign-current",
+                PlanningTaskAuthorityMutationKind::Updated,
+                Some(TaskStatus::Ready),
+                "same-second",
+                current_provenance.clone(),
+            ),
+            record(
+                12,
+                "current-unchanged",
+                PlanningTaskAuthorityMutationKind::Created,
+                None,
+                "current-stable",
+                current_provenance.clone(),
+            ),
+            record(
+                15,
+                "foreign-unrelated",
+                PlanningTaskAuthorityMutationKind::Created,
+                None,
+                "foreign-unrelated",
+                foreign_provenance,
+            ),
+        ];
+        let final_task = |id: &str, updated_at: &str| {
+            let mut task = task_definition(id, id, TaskStatus::Ready);
+            task.updated_at = updated_at.to_string();
+            task
+        };
+        let mut externally_rewritten = final_task("current-then-foreign", "current-create");
+        externally_rewritten.title = "Foreign title rewrite".to_string();
+        externally_rewritten.provenance = current_provenance.clone();
+        let mut external_created = final_task("external-created", "current-update");
+        external_created.provenance = current_provenance.clone();
+        let mut current_unchanged = final_task("current-unchanged", "current-stable");
+        current_unchanged.provenance = current_provenance;
+        let mut contaminated = final_task("current-foreign-current", "same-second");
+        contaminated.provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+            .with_parent(Some("thread-1".to_string()), Some("turn-1".to_string()));
+
+        let receipt = build_queue_mutation_receipt(
+            "thread-1",
+            "turn-1",
+            10,
+            mutations,
+            PlanningQueueAuthoritySnapshot {
+                planning_revision: 15,
+                tasks: vec![
+                    external_created,
+                    externally_rewritten,
+                    current_unchanged,
+                    contaminated,
+                    final_task("foreign-unrelated", "foreign-unrelated"),
+                ],
+            },
+        );
+
+        assert_eq!(receipt.entries.len(), 4);
+        let external = receipt
+            .entries
+            .iter()
+            .find(|entry| entry.task_id == "external-created")
+            .unwrap();
+        assert_eq!(external.mutation_kind, PlanningQueueMutationKind::Updated);
+        let changed = receipt
+            .entries
+            .iter()
+            .find(|entry| entry.task_id == "current-then-foreign")
+            .unwrap();
+        assert_eq!(changed.mutation_kind, PlanningQueueMutationKind::Created);
+        assert!(!changed.unchanged_since_mutation);
+        assert!(!changed.is_created_and_cancellable());
+        let stable = receipt
+            .entries
+            .iter()
+            .find(|entry| entry.task_id == "current-unchanged")
+            .unwrap();
+        assert!(stable.unchanged_since_mutation);
+        assert!(stable.is_created_and_cancellable());
+        let contaminated = receipt
+            .entries
+            .iter()
+            .find(|entry| entry.task_id == "current-foreign-current")
+            .unwrap();
+        assert!(!contaminated.unchanged_since_mutation);
+        assert!(!contaminated.is_created_and_cancellable());
+    }
+
+    #[test]
+    fn queue_receipt_requires_origin_specific_thread_and_turn_pairs() {
+        let mut task = task_definition("task-1", "Task 1", TaskStatus::Ready);
+        task.provenance = TaskMutationProvenance::new(OriginSessionKind::Main)
+            .with_thread_turn(Some("other-thread".to_string()), Some("turn-1".to_string()))
+            .with_parent(Some("thread-1".to_string()), Some("turn-1".to_string()));
+        let mut mutation = PlanningTaskAuthorityMutationRecord {
+            planning_revision: 1,
+            task_id: task.id.clone(),
+            task_title: task.title.clone(),
+            mutation_kind: PlanningTaskAuthorityMutationKind::Created,
+            before_status: None,
+            before_updated_at: None,
+            after_status: Some(task.status),
+            after_updated_at: Some(task.updated_at.clone()),
+            after_task: Some(task.clone()),
+            legacy_source_turn_id: None,
+            provenance: task.provenance.clone(),
+        };
+
+        assert!(!task_mutation_belongs_to_turn(
+            &mutation, "thread-1", "turn-1"
+        ));
+
+        mutation.provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+            .with_thread_turn(
+                Some("worker-thread".to_string()),
+                Some("turn-1".to_string()),
+            )
+            .with_parent(Some("other-thread".to_string()), Some("turn-1".to_string()));
+        assert!(!task_mutation_belongs_to_turn(
+            &mutation, "thread-1", "turn-1"
+        ));
+
+        mutation.provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+            .with_parent(Some("thread-1".to_string()), Some("turn-1".to_string()));
+        assert!(task_mutation_belongs_to_turn(
+            &mutation, "thread-1", "turn-1"
+        ));
+    }
+
+    #[test]
+    fn queue_receipt_rejects_plain_rewrite_absorbed_by_later_current_promotion() {
+        let current_provenance = TaskMutationProvenance::new(OriginSessionKind::Planner)
+            .with_parent(Some("thread-1".to_string()), Some("turn-1".to_string()));
+        let mut proposed = task_definition("task-1", "Current title", TaskStatus::Proposed);
+        proposed.provenance = current_provenance.clone();
+        proposed.updated_at = "created".to_string();
+        let proposed_authority = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![proposed.clone()],
+        };
+        let task_id = proposed.id.clone();
+        let current_audit = PlanningTaskAuthorityMutationAudit {
+            task_ids: std::slice::from_ref(&task_id),
+            legacy_source_turn_id: None,
+            provenance: &current_provenance,
+        };
+        let mut mutations =
+            task_authority_mutation_records(None, &proposed_authority, 11, Some(current_audit));
+
+        let mut externally_rewritten = proposed;
+        externally_rewritten.title = "Admin title contribution".to_string();
+        let rewritten_authority = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![externally_rewritten.clone()],
+        };
+        mutations.extend(task_authority_mutation_records(
+            Some(&proposed_authority),
+            &rewritten_authority,
+            12,
+            None,
+        ));
+
+        let mut promoted = externally_rewritten;
+        promoted.status = TaskStatus::Ready;
+        promoted.updated_at = "promoted".to_string();
+        let promoted_authority = TaskAuthorityDocument {
+            version: 1,
+            tasks: vec![promoted.clone()],
+        };
+        mutations.extend(task_authority_mutation_records(
+            Some(&rewritten_authority),
+            &promoted_authority,
+            13,
+            Some(current_audit),
+        ));
+
+        let receipt = build_queue_mutation_receipt(
+            "thread-1",
+            "turn-1",
+            10,
+            mutations,
+            PlanningQueueAuthoritySnapshot {
+                planning_revision: 13,
+                tasks: vec![promoted],
+            },
+        );
+
+        assert_eq!(receipt.entries.len(), 1);
+        assert_eq!(
+            receipt.entries[0].mutation_kind,
+            PlanningQueueMutationKind::Created
+        );
+        assert!(!receipt.entries[0].unchanged_since_mutation);
+        assert!(!receipt.created_batch_is_cancellable());
     }
 
     #[test]
@@ -1232,7 +1747,7 @@ mod tests {
     }
 
     #[test]
-    fn service_evaluate_paused_request_reconciles_projection_without_worker_refresh() {
+    fn service_evaluate_auto_follow_off_still_settles_queue_without_next_prompt() {
         with_test_event_logging(|| {
             let service = test_service();
             let mut context = test_context(ready_projection(Some(queue_task())));
@@ -1247,7 +1762,7 @@ mod tests {
 
             assert_eq!(
                 service.worker_panel_start_state(&request),
-                PlanningPostTurnWorkerPanelStartState::PreserveCurrent
+                PlanningPostTurnWorkerPanelStartState::RefreshRunning
             );
 
             let execution = service.evaluate(request);
@@ -1279,8 +1794,179 @@ mod tests {
                     .planning_worker_panel_state
                     .last_summary
                     .as_deref(),
+                Some("planning worker disabled")
+            );
+            let receipt = execution.evaluation.provenance.queue_mutation_receipt;
+            assert!(receipt.is_none());
+        });
+    }
+
+    #[test]
+    fn service_evaluate_explicit_stop_skips_queue_settlement() {
+        with_test_event_logging(|| {
+            let service = test_service();
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            let workspace = TempPlanningWorkspace::new_git("post-turn-explicit-stop");
+            context.planning_workspace_directory = workspace.path.clone();
+            context.continuation_paused = true;
+            context.planning_settlement_paused = true;
+            let mut request = test_request(context);
+            request.workspace_directory = workspace.path.clone();
+            request.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
+            request.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
+
+            assert_eq!(
+                service.worker_panel_start_state(&request),
+                PlanningPostTurnWorkerPanelStartState::PreserveCurrent
+            );
+
+            let execution = service.evaluate(request);
+
+            assert_eq!(
+                execution.evaluation.action,
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PostTurnContinuationPaused
+                }
+            );
+            assert!(
+                execution
+                    .evaluation
+                    .provenance
+                    .queue_mutation_receipt
+                    .is_none()
+            );
+            assert_eq!(
+                execution
+                    .planning_worker_panel_state
+                    .last_summary
+                    .as_deref(),
                 Some("previous summary")
             );
+        });
+    }
+
+    #[test]
+    fn service_receipt_detects_tool_only_worker_mutation_with_empty_final_commands() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new_git("post-turn-tool-only-receipt");
+            seed_ready_queue_authority(&workspace.path);
+            let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+            let worker = Arc::new(ToolOnlyMutationWorkerPort {
+                repository: repository.clone(),
+            });
+            let planning = PlanningServices::from_ports(
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                Arc::new(NoopPlanningAuthorityPort::default()),
+                repository.clone(),
+                worker,
+            );
+            let service = PostTurnEvaluationService::new(
+                planning,
+                ParallelModeTurnService::new(ParallelModeService::new(
+                    Arc::new(SqlitePlanningAuthorityAdapter::new()),
+                    Arc::new(GithubAutomationAdapter::new()),
+                    Arc::new(GitParallelModeRuntimeAdapter::new()),
+                )),
+            );
+            let baseline = repository
+                .load_task_authority_snapshot(&workspace.path)
+                .unwrap()
+                .unwrap();
+            let mut context = test_context(ready_projection(Some(queue_task())));
+            context.planning_workspace_directory = workspace.path.clone();
+            context.continuation_paused = true;
+            let mut request = test_request(context);
+            request.workspace_directory = workspace.path.clone();
+            request.execution_snapshot_capture = Some(
+                crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::ready(
+                    workspace.path.clone(),
+                    crate::application::service::planning::PlanningExecutionSnapshot {
+                        result_output_markdown: None,
+                        planning_revision: Some(baseline.planning_revision),
+                        task_authority: Some(baseline.task_authority),
+                    },
+                ),
+            );
+
+            let execution = service.evaluate(request);
+            let receipt = execution
+                .evaluation
+                .provenance
+                .queue_mutation_receipt
+                .expect("tool-only mutation should produce a receipt");
+
+            assert!(receipt.entries.iter().any(|entry| {
+                entry.mutation_kind == PlanningQueueMutationKind::Created
+                    && entry.task_title == "Tool-only follow-up"
+            }));
+            assert_eq!(
+                execution.evaluation.action,
+                PostTurnContinuationAction::SkipAutoFollow {
+                    reason: PostTurnAutoFollowSkipReason::PostTurnContinuationPaused
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn service_receipt_folds_current_turn_proposal_promotion_into_created_entry() {
+        with_test_event_logging(|| {
+            let workspace = TempPlanningWorkspace::new_git("post-turn-tool-promotion-receipt");
+            seed_queue_idle_review_authority(&workspace.path);
+            let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+            let worker = Arc::new(ToolOnlyMutationWorkerPort {
+                repository: repository.clone(),
+            });
+            let planning = PlanningServices::from_ports(
+                Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+                Arc::new(NoopPlanningAuthorityPort::default()),
+                repository.clone(),
+                worker,
+            );
+            let service = PostTurnEvaluationService::new(
+                planning,
+                ParallelModeTurnService::new(ParallelModeService::new(
+                    Arc::new(SqlitePlanningAuthorityAdapter::new()),
+                    Arc::new(GithubAutomationAdapter::new()),
+                    Arc::new(GitParallelModeRuntimeAdapter::new()),
+                )),
+            );
+            let baseline = repository
+                .load_task_authority_snapshot(&workspace.path)
+                .unwrap()
+                .unwrap();
+            let mut context = test_context(ready_projection(None));
+            context.planning_workspace_directory = workspace.path.clone();
+            context.continuation_paused = true;
+            let mut request = test_request(context);
+            request.workspace_directory = workspace.path.clone();
+            request.execution_snapshot_capture = Some(
+                crate::application::service::planning::PlanningTurnExecutionSnapshotCapture::ready(
+                    workspace.path.clone(),
+                    crate::application::service::planning::PlanningExecutionSnapshot {
+                        result_output_markdown: None,
+                        planning_revision: Some(baseline.planning_revision),
+                        task_authority: Some(baseline.task_authority),
+                    },
+                ),
+            );
+
+            let execution = service.evaluate(request);
+            let receipt = execution
+                .evaluation
+                .provenance
+                .queue_mutation_receipt
+                .expect("created proposal and host promotion should produce one receipt");
+            let entry = receipt
+                .entries
+                .iter()
+                .find(|entry| entry.task_title == "Tool-only follow-up")
+                .expect("tool-created task should remain attributed to the completed turn");
+
+            assert_eq!(entry.mutation_kind, PlanningQueueMutationKind::Created);
+            assert_eq!(entry.after_status, TaskStatus::Ready);
+            assert!(entry.unchanged_since_mutation);
+            assert!(entry.is_created_and_cancellable());
         });
     }
 
@@ -2695,6 +3381,7 @@ mod tests {
             current_runtime_projection,
             parallel_mode_enabled: false,
             parallel_automation_epoch_id: Some(1),
+            planning_settlement_paused: false,
             continuation_paused: false,
             can_queue_next: true,
             stop_keyword: "stop".to_string(),
@@ -2972,6 +3659,55 @@ mod tests {
 
     struct FailingPlanningWorkerPort;
     struct PanickingPlanningWorkerPort;
+
+    struct ToolOnlyMutationWorkerPort {
+        repository: Arc<NoopPlanningTaskRepositoryPort>,
+    }
+
+    impl PlanningWorkerPort for ToolOnlyMutationWorkerPort {
+        fn run_planning_session(
+            &self,
+            request: PlanningWorkerRequest,
+        ) -> anyhow::Result<PlanningWorkerResponse> {
+            let mut tool_request =
+                PlanningTaskToolRequest::CreateTask(PlanningTaskToolCreateRequest {
+                    version: 1,
+                    apply: true,
+                    legacy_source_turn_id: Some("spoof-source".to_string()),
+                    origin_session_kind: Some(OriginSessionKind::Main),
+                    thread_id: Some("spoof-thread".to_string()),
+                    turn_id: Some("spoof-turn".to_string()),
+                    parent_thread_id: Some("spoof-parent-thread".to_string()),
+                    parent_turn_id: Some("spoof-parent-turn".to_string()),
+                    input: PlanningTaskCreatePayload {
+                        direction_id: None,
+                        direction_relation_note: None,
+                        title: "Tool-only follow-up".to_string(),
+                        description: None,
+                        status: Some(TaskStatus::Proposed),
+                        base_priority: None,
+                        dynamic_priority_delta: None,
+                        priority_reason: None,
+                        depends_on: Vec::new(),
+                        blocked_by: Vec::new(),
+                    },
+                });
+            tool_request.apply_cli_host_context(
+                request.parent_thread_id.clone(),
+                request.parent_turn_id.clone(),
+            );
+            PlanningTaskToolService::new(self.repository.clone(), PriorityQueueService::new())
+                .handle_request(&request.workspace_directory, tool_request)?;
+            Ok(PlanningWorkerResponse {
+                operation: request.operation,
+                thread_id: Some("tool-worker-thread".to_string()),
+                turn_id: Some("tool-worker-turn".to_string()),
+                runtime_envelope: Some(test_planning_worker_runtime_envelope()),
+                final_agent_message: Some(empty_task_commands_worker_message().to_string()),
+                changed_planning_file_paths: Vec::new(),
+            })
+        }
+    }
 
     struct BlockingPlanningWorkerPort {
         started_tx: std::sync::mpsc::Sender<()>,

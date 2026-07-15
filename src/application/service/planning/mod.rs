@@ -128,8 +128,9 @@ pub use self::shared::contract::{
 };
 // task mutation 타입은 task 생성/수정 명령 추출, preview, commit 결과를 외부 입력 처리 경로에 제공한다.
 pub use self::task_mutation::{
-    PlanningTaskCommandExtraction, PlanningTaskCreateInput, PlanningTaskCreatePreview,
-    PlanningTaskCreatePreviewRequest, PlanningTaskMutationCommand,
+    PlanningQueueAuthoritySnapshot, PlanningQueueCancellationRequest,
+    PlanningQueueCancellationTarget, PlanningTaskCommandExtraction, PlanningTaskCreateInput,
+    PlanningTaskCreatePreview, PlanningTaskCreatePreviewRequest, PlanningTaskMutationCommand,
     PlanningTaskMutationCommitResult, PlanningTaskMutationRequest, PlanningTaskMutationService,
     PlanningTaskMutationSource, PlanningTaskUpdateInput, extract_planning_task_commands,
 };
@@ -159,9 +160,10 @@ pub use self::use_cases::{
     PlanningPostTurnRepairAttemptResult, PlanningPostTurnRepairOutcome,
     PlanningPostTurnRepairRequest, PlanningPostTurnWorkerPanelStartRequest,
     PlanningPostTurnWorkerPanelStartState, PlanningPreparedOfficialCompletionRefresh,
-    PlanningPreparedQueueRefresh, PlanningRuntimeUseCases, PlanningTaskToolUseCases,
-    PlanningTurnExecutionSnapshotCapture, PlanningTurnExecutionSnapshotCaptureRequest,
-    PlanningTurnExecutionSnapshotCaptureState, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
+    PlanningPreparedQueueRefresh, PlanningQueueUseCases, PlanningRuntimeUseCases,
+    PlanningTaskToolUseCases, PlanningTurnExecutionSnapshotCapture,
+    PlanningTurnExecutionSnapshotCaptureRequest, PlanningTurnExecutionSnapshotCaptureState,
+    PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
 // worker orchestration 타입은 queue refresh, official completion refresh, worker run outcome처럼 app-server worker 경로의
 // 입력과 결과를 공개한다.

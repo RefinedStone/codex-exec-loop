@@ -31,6 +31,7 @@ use crate::domain::conversation_runtime_envelope::{
 };
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::parallel_mode::ParallelModePostTurnQueueSignal;
+use crate::domain::planning::PlanningQueueMutationReceipt;
 use serde_json::json;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
@@ -133,6 +134,7 @@ pub(super) struct PostTurnEvaluationProvenance {
     pub completed_turn_id: String,
     pub handoff_task: Option<PlanningTaskHandoff>,
     pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+    pub queue_mutation_receipt: Option<PlanningQueueMutationReceipt>,
 }
 impl PostTurnEvaluationProvenance {
     pub(super) fn new(completed_turn_id: String) -> Self {
@@ -140,6 +142,7 @@ impl PostTurnEvaluationProvenance {
             completed_turn_id,
             handoff_task: None,
             parallel_queue_signal: None,
+            queue_mutation_receipt: None,
         }
     }
 
@@ -153,6 +156,14 @@ impl PostTurnEvaluationProvenance {
         parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
     ) -> Self {
         self.parallel_queue_signal = parallel_queue_signal;
+        self
+    }
+
+    pub(super) fn with_queue_mutation_receipt(
+        mut self,
+        queue_mutation_receipt: Option<PlanningQueueMutationReceipt>,
+    ) -> Self {
+        self.queue_mutation_receipt = queue_mutation_receipt;
         self
     }
 }
@@ -258,12 +269,14 @@ pub(super) fn reduce_conversation_runtime(
                     state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_follow_skip();
                     state.clear_last_planning_task_handoff();
+                    state.latest_queue_mutation_receipt = None;
                 }
                 PromptOrigin::ManualIntake(context) => {
                     state.planning_repair_state = None;
                     state.auto_follow_state.reset_for_manual_turn();
                     state.clear_auto_follow_skip();
                     state.record_manual_intake_handoff(context.handoff_task.as_ref());
+                    state.latest_queue_mutation_receipt = None;
                 }
                 PromptOrigin::AutoFollow(context) => {
                     // Record the completed turn that queued this prompt before the provider stream starts.
@@ -649,11 +662,13 @@ pub(super) fn reduce_conversation_runtime(
                 action,
                 operator_alerts,
             } = *evaluation;
+            state.complete_post_turn_settlement(&provenance.completed_turn_id);
             // Apply the new planning view before acting on the decision; queued
             // or skipped auto-follow copy should describe the latest queue state.
             state.replace_reducer_event_projection_cache(runtime_projection);
             state.planning_repair_state = planning_repair_state;
             state.extend_runtime_notices(runtime_notices);
+            state.record_queue_mutation_receipt(provenance.queue_mutation_receipt.clone());
             match action {
                 PostTurnContinuationAction::QueueAutoPrompt(queued_prompt) => {
                     let parallel_dispatch_queued = matches!(
@@ -876,7 +891,7 @@ fn queue_post_turn_evaluation(
 ) {
     let changed_planning_file_count = changed_planning_file_paths.len();
     let workspace_directory = state.finish_turn(&turn_id, &changed_planning_file_paths);
-    state.begin_auto_follow_evaluation();
+    state.begin_post_turn_settlement(&turn_id);
     event_log::emit_lazy("post_turn_evaluation_queued", || {
         json!({
             "thread_id": state.thread_id.as_str(),
@@ -929,6 +944,9 @@ mod tests {
         ConversationRuntimeEnvelope, ConversationRuntimeLaunchEnvironment,
         ConversationRuntimeObservedValue, ConversationRuntimeRequestedValue,
         ConversationRuntimeThreadStatus,
+    };
+    use crate::domain::planning::{
+        PlanningQueueMutationKind, PlanningQueueMutationReceiptEntry, TaskStatus,
     };
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
@@ -1955,7 +1973,7 @@ mod tests {
     fn completed_turn_with_auto_follow_off_blocks_manual_input_until_evaluation_settles() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.thread_id = "thread-1".to_string();
-        state.auto_follow_state.set_max_auto_turns(0);
+        state.auto_follow_state.set_max_auto_turns(3);
         state.messages.extend([
             ConversationMessage::new(ConversationMessageKind::User, "operator task", None, None),
             ConversationMessage::new(
@@ -1966,7 +1984,7 @@ mod tests {
             ),
         ]);
 
-        let reduction = reduce_conversation_runtime(
+        let mut reduction = reduce_conversation_runtime(
             state,
             stream_snapshot_event(completed_stream_event("thread-1", "turn-1")),
         );
@@ -1979,6 +1997,10 @@ mod tests {
             } if completed_turn_id == "turn-1"
         )));
         assert!(reduction.state.auto_follow_state.has_live_activity());
+        assert!(!reduction.state.can_accept_manual_prompt());
+        reduction.state.auto_follow_state.set_max_auto_turns(0);
+        assert!(!reduction.state.auto_follow_state.has_live_activity());
+        assert!(reduction.state.has_post_turn_settlement_in_flight());
         assert!(!reduction.state.can_accept_manual_prompt());
 
         let reduction = reduce_conversation_runtime(
@@ -1999,6 +2021,17 @@ mod tests {
 
         assert!(!reduction.state.auto_follow_state.has_live_activity());
         assert!(reduction.state.can_accept_manual_prompt());
+    }
+
+    #[test]
+    fn post_turn_settlement_only_clears_for_the_correlated_turn() {
+        let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        state.begin_post_turn_settlement("turn-a");
+
+        assert!(!state.complete_post_turn_settlement("turn-b"));
+        assert!(state.has_post_turn_settlement_in_flight());
+        assert!(state.complete_post_turn_settlement("turn-a"));
+        assert!(!state.has_post_turn_settlement_in_flight());
     }
 
     #[test]
@@ -2371,6 +2404,54 @@ mod tests {
 
         assert!(reduction.state.status_text.contains("auto-follow disabled"));
         assert!(!reduction.state.status_text.contains("disarmed"));
+    }
+
+    #[test]
+    fn post_turn_queue_receipt_is_rendered_from_structured_authority_changes() {
+        let receipt = PlanningQueueMutationReceipt {
+            completed_turn_id: "turn-receipt".to_string(),
+            planning_revision: 42,
+            entries: vec![PlanningQueueMutationReceiptEntry {
+                task_id: "follow-up".to_string(),
+                task_title: "Protocol-native live execution rail".to_string(),
+                mutation_kind: PlanningQueueMutationKind::Created,
+                before_status: None,
+                after_status: TaskStatus::Ready,
+                after_updated_at: "2026-07-15T00:00:00Z".to_string(),
+                unchanged_since_mutation: true,
+            }],
+        };
+        let reduction = reduce_conversation_runtime(
+            ConversationViewModel::new_draft("/tmp/receipt".to_string()),
+            ConversationRuntimeEvent::PostTurnEvaluationCompleted {
+                evaluation: Box::new(PostTurnEvaluationOutcome {
+                    provenance: PostTurnEvaluationProvenance::new("turn-receipt".to_string())
+                        .with_queue_mutation_receipt(Some(receipt.clone())),
+                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
+                    planning_repair_state: None,
+                    runtime_notices: Vec::new(),
+                    action: PostTurnContinuationAction::SkipAutoFollow {
+                        reason: AutoFollowSkipReason::PostTurnContinuationPaused,
+                    },
+                    operator_alerts: Vec::new(),
+                }),
+            },
+        );
+
+        assert_eq!(reduction.state.latest_queue_mutation_receipt, Some(receipt));
+        let message = reduction
+            .state
+            .messages
+            .iter()
+            .find(|message| message.display_label.as_deref() == Some("Akra Queue"))
+            .expect("structured queue receipt should be visible in the transcript");
+        assert!(message.text.contains("committed / revision 42"));
+        assert!(
+            message
+                .text
+                .contains("+ READY  Protocol-native live execution rail")
+        );
+        assert!(message.text.contains("1 newly queued"));
     }
 
     #[test]

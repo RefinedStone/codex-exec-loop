@@ -30,6 +30,10 @@ pub struct PlanningWorkerRequest {
     // planning runtime이 조립한 최종 worker prompt이다. port는 이 문자열을 재해석하지 않고
     // Codex turn으로 전달해 prompt 정책을 application service 안에 남긴다.
     pub prompt: String,
+    // Host-owned parent identity is forwarded to the hidden thread environment so a
+    // planning-tool subprocess can attribute its DB mutation without trusting model JSON.
+    pub parent_thread_id: Option<String>,
+    pub parent_turn_id: Option<String>,
     // Post-turn launches carry a generation permit. Direct/manual worker calls use None.
     pub continuation_permit: Option<crate::domain::planning::PostTurnContinuationPermit>,
 }

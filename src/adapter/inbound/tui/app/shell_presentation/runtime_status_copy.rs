@@ -17,7 +17,10 @@ pub(super) fn compact_inline_detail(text: &str, max_len: usize) -> String {
 pub(super) fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
     // auto-follow가 평가/큐/실행 중이면 사용자의 수동 turn이 없어도 하단 상태는
     // working이어야 한다. prompt 입력은 가능하더라도 런타임은 아직 살아 있기 때문이다.
-    if conversation.has_running_turn() || conversation.auto_follow_state.has_live_activity() {
+    if conversation.has_running_turn()
+        || conversation.auto_follow_state.has_live_activity()
+        || conversation.has_post_turn_settlement_in_flight()
+    {
         "working"
     } else {
         "idle"
@@ -30,7 +33,12 @@ pub(super) fn build_working_line(
 ) -> Option<Line<'static>> {
     // auto-follow activity가 있으면 manual turn보다 우선해 표시한다. 자동 후속 작업은
     // 내부적으로 turn을 만들기 전 평가/큐 단계도 있으므로 별도 시작 시각을 사용한다.
-    let (started_at, detail) = if conversation.auto_follow_state.has_live_activity() {
+    let (started_at, detail) = if conversation.has_post_turn_settlement_in_flight() {
+        (
+            conversation.live_activity_started_at()?,
+            "settling planning queue".to_string(),
+        )
+    } else if conversation.auto_follow_state.has_live_activity() {
         (
             conversation.auto_follow_state.active_started_at()?,
             auto_follow_working_detail(conversation),
@@ -107,6 +115,13 @@ pub(super) fn auto_follow_prompt_status_line(
     conversation: &ConversationViewModel,
     inline: bool,
 ) -> Option<String> {
+    if conversation.has_post_turn_settlement_in_flight() {
+        return Some(if inline {
+            "prompt: planning queue settling  |  type now, Enter when ready".to_string()
+        } else {
+            "planning queue settling".to_string()
+        });
+    }
     let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
     // prompt 영역 문구는 working line보다 짧다. interrupt 가능 여부는 이미 working
     // line에 있으므로 여기서는 사용자가 지금 입력해도 되는지에 초점을 둔다.

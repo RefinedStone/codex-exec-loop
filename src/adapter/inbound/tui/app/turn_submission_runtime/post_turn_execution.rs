@@ -40,7 +40,7 @@ impl NativeTuiApp {
             .planning()
             .runtime()
             .post_turn_worker_panel_start_state(PlanningPostTurnWorkerPanelStartRequest {
-                continuation_paused: context.continuation_paused,
+                planning_settlement_paused: context.planning_settlement_paused,
                 changed_planning_file_paths: &request.changed_planning_file_paths,
                 current_runtime_projection: &context.current_runtime_projection,
             });
@@ -152,6 +152,7 @@ fn post_turn_context_from_conversation(
         // sticky kill switch for both paths.
         parallel_mode_enabled,
         parallel_automation_epoch_id,
+        planning_settlement_paused: operator_stopped && !parallel_continuation_enabled,
         continuation_paused: (!conversation.auto_follow_state.is_enabled() || operator_stopped)
             && !parallel_continuation_enabled,
         can_queue_next: conversation.auto_follow_state.can_queue_next()
@@ -264,6 +265,7 @@ fn tui_post_turn_evaluation_provenance(
     PostTurnEvaluationProvenance::new(provenance.completed_turn_id)
         .with_handoff_task(provenance.handoff_task)
         .with_parallel_queue_signal(provenance.parallel_queue_signal)
+        .with_queue_mutation_receipt(provenance.queue_mutation_receipt)
 }
 
 fn tui_post_turn_action(
@@ -332,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn off_and_stop_suppress_hidden_post_turn_continuation_until_explicit_rearm() {
+    fn auto_follow_off_allows_settlement_while_explicit_stop_pauses_it() {
         let request = request();
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
 
@@ -344,6 +346,7 @@ mod tests {
             None,
         );
         assert!(disabled.continuation_paused);
+        assert!(!disabled.planning_settlement_paused);
         assert!(!disabled.can_queue_next);
 
         conversation.auto_follow_state.set_max_auto_turns(3);
@@ -355,6 +358,7 @@ mod tests {
             None,
         );
         assert!(!enabled.continuation_paused);
+        assert!(!enabled.planning_settlement_paused);
         assert!(enabled.can_queue_next);
 
         conversation
@@ -369,6 +373,7 @@ mod tests {
             None,
         );
         assert!(stopped.continuation_paused);
+        assert!(stopped.planning_settlement_paused);
         assert!(!stopped.can_queue_next);
 
         conversation.auto_follow_state.set_max_auto_turns(3);
@@ -380,6 +385,7 @@ mod tests {
             None,
         );
         assert!(!rearmed.continuation_paused);
+        assert!(!rearmed.planning_settlement_paused);
         assert!(rearmed.can_queue_next);
     }
 

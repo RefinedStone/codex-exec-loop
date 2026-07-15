@@ -161,6 +161,17 @@ pub(super) fn ensure_schema(
                 FOREIGN KEY (task_id) REFERENCES planning_tasks(task_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS planning_task_mutation_events (
+                planning_revision INTEGER NOT NULL,
+                event_order INTEGER NOT NULL,
+                task_id TEXT NOT NULL,
+                content_json TEXT NOT NULL,
+                PRIMARY KEY (planning_revision, event_order)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_planning_task_mutation_events_revision
+                ON planning_task_mutation_events(planning_revision, event_order);
+
             CREATE TABLE IF NOT EXISTS review_center_thread_reviews (
                 workspace_root TEXT NOT NULL,
                 thread_id TEXT NOT NULL,

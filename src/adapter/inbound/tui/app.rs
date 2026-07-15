@@ -120,6 +120,8 @@ mod planning_worker_debug_preview;
 mod post_turn_continuation;
 #[path = "app/progressive_activity_overlay_ui.rs"]
 mod progressive_activity_overlay_ui;
+#[path = "app/queue_overlay_ui.rs"]
+mod queue_overlay_ui;
 #[path = "app/ratatui_frontend.rs"]
 mod ratatui_frontend;
 #[path = "app/reviews_overlay_ui.rs"]
@@ -318,6 +320,7 @@ struct NativeTuiApp {
     supersession_mud_ui_state: SupersessionMudUiState,
     parallel_peek_overlay_ui_state: ParallelPeekOverlayUiState,
     progressive_activity_overlay_ui_state: ProgressiveActivityOverlayUiState,
+    queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState,
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
     next_manual_prompt_preparation_request_id: u64,

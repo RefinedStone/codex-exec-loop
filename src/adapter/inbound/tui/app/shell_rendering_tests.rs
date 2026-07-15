@@ -11,6 +11,9 @@ use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationObservation, ConversationRuntimeEnvelope,
     ConversationRuntimeLaunchEnvironment, ConversationRuntimeObservedValue,
 };
+use crate::domain::planning::{
+    PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
+};
 
 #[test]
 fn inline_main_buffer_ready_shell_matches_snapshot() {
@@ -43,6 +46,7 @@ fn queue_overlay_matches_snapshot() {
         "Queue Summary",
     ));
     app.shell_overlay = ShellOverlay::Queue;
+    app.sync_queue_overlay_selection();
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
 
@@ -50,6 +54,81 @@ fn queue_overlay_matches_snapshot() {
     assert!(rendered.contains("Queue Summary"));
     assert!(!rendered.contains("┌"));
     assert_snapshot!("queue_overlay", rendered);
+}
+
+#[test]
+fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let queue_task = |rank: usize| PriorityQueueTask {
+        rank,
+        task_id: format!("task-{rank}"),
+        direction_id: "direction-1".to_string(),
+        direction_title: "Direction 1".to_string(),
+        task_title: format!("Deep queue task {rank}"),
+        status: TaskStatus::Ready,
+        combined_priority: 100 - rank as i32,
+        updated_at: format!("2026-07-15T00:00:0{rank}Z"),
+        rank_reasons: vec!["ready".to_string()],
+    };
+    let active_tasks = (1..=4).map(queue_task).collect::<Vec<_>>();
+    let proposal = PriorityQueueTask {
+        rank: 1,
+        task_id: "proposal-deep".to_string(),
+        direction_id: "direction-1".to_string(),
+        direction_title: "Direction 1".to_string(),
+        task_title: "Deep proposal selection".to_string(),
+        status: TaskStatus::Proposed,
+        combined_priority: 40,
+        updated_at: "2026-07-15T00:00:05Z".to_string(),
+        rank_reasons: vec!["proposed".to_string()],
+    };
+    app.sync_ready_conversation_planning_runtime_projection(
+        crate::application::service::planning::PlanningRuntimeProjection::ready_with_queue_projection(
+            "context".to_string(),
+            "queue ready".to_string(),
+            Some("proposal ready".to_string()),
+            active_tasks.first().cloned(),
+            PriorityQueueProjection {
+                next_task: active_tasks.first().cloned(),
+                active_tasks,
+                proposed_tasks: vec![proposal],
+                skipped_tasks: vec![PriorityQueueSkippedTask {
+                    task_id: "skipped-deep".to_string(),
+                    task_title: "Deep skipped selection".to_string(),
+                    direction_id: "direction-1".to_string(),
+                    status: TaskStatus::Ready,
+                    reason: "waiting on dependency".to_string(),
+                }],
+            },
+        )
+        .with_planning_revision(Some(9)),
+    );
+    app.shell_overlay = ShellOverlay::Queue;
+    app.sync_queue_overlay_selection();
+    let task_ids = app
+        .queue_action_tasks()
+        .into_iter()
+        .map(|task| task.task_id)
+        .collect::<Vec<_>>();
+
+    app.queue_overlay_ui_state.move_selection(&task_ids, 3);
+    let hidden = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
+    assert!(hidden.contains("> #4"));
+    assert!(hidden.contains("Deep queue task 4"));
+
+    app.queue_overlay_ui_state.move_selection(&task_ids, 1);
+    let proposal = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
+    assert!(proposal.contains("> #1 [proposed"));
+    assert!(proposal.contains("Deep proposal selection"));
+
+    app.queue_overlay_ui_state.move_selection(&task_ids, 1);
+    let skipped = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
+    assert!(skipped.contains("> [ready / skipped]"));
+    assert!(skipped.contains("Deep skipped selection"));
+
+    let narrow_skipped = tui_testkit::render_shell_snapshot(&mut app, 48, 16);
+    assert!(narrow_skipped.contains("> [ready / skipped]"));
 }
 
 #[test]
@@ -541,11 +620,13 @@ fn vt100_queue_overlay_matches_snapshot() {
         "Queue Summary",
     ));
     app.shell_overlay = ShellOverlay::Queue;
+    app.sync_queue_overlay_selection();
 
     let rendered = tui_testkit::render_shell_vt100_snapshot(&mut app, 96, 28);
 
     assert!(rendered.contains("Ready Queue"));
     assert!(rendered.contains("Proposals"));
+    assert!(rendered.contains("x/Delete: remove"));
     assert!(!rendered.contains("┌"));
     assert_snapshot!("vt100_queue_overlay", rendered);
 }

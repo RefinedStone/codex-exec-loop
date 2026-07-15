@@ -66,6 +66,9 @@ use crate::application::port::outbound::startup_probe_port::{
 use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, ConversationStreamSender,
 };
+use crate::application::service::planning::task_tool::{
+    PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
+};
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalReviewStatus,
@@ -141,6 +144,30 @@ fn protected_thread_workspace(cwd: &str) -> Result<ProtectedThreadWorkspace> {
         cwd: normalized_cwd,
         config: BTreeMap::from([("projects".to_string(), Value::Object(projects))]),
     })
+}
+
+fn protected_planning_thread_workspace(
+    cwd: &str,
+    parent_thread_id: Option<&str>,
+    parent_turn_id: Option<&str>,
+) -> Result<ProtectedThreadWorkspace> {
+    let mut workspace = protected_thread_workspace(cwd)?;
+    let mut environment = Map::new();
+    for (name, value) in [
+        (PLANNING_TOOL_PARENT_THREAD_ID_ENV, parent_thread_id),
+        (PLANNING_TOOL_PARENT_TURN_ID_ENV, parent_turn_id),
+    ] {
+        if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+            environment.insert(name.to_string(), Value::String(value.to_string()));
+        }
+    }
+    if !environment.is_empty() {
+        workspace.config.insert(
+            "shell_environment_policy".to_string(),
+            json!({ "set": environment }),
+        );
+    }
+    Ok(workspace)
 }
 
 fn exact_applied_workspace_cwd(
@@ -757,12 +784,22 @@ impl CodexAppServerAdapter {
 
     #[tracing::instrument(
         level = "trace",
-        skip(self, workspace_directory, prompt, event_sender, continuation_permit)
+        skip(
+            self,
+            workspace_directory,
+            prompt,
+            parent_thread_id,
+            parent_turn_id,
+            event_sender,
+            continuation_permit
+        )
     )]
     fn run_hidden_planning_thread_stream(
         &self,
         workspace_directory: &str,
         prompt: &str,
+        parent_thread_id: Option<&str>,
+        parent_turn_id: Option<&str>,
         event_sender: ConversationStreamSender,
         continuation_permit: Option<PostTurnContinuationPermit>,
     ) -> Result<ConversationTurnTerminalReceipt> {
@@ -795,7 +832,11 @@ impl CodexAppServerAdapter {
                     "post-turn continuation was superseded before hidden planning thread launch"
                 );
             }
-            let workspace = protected_thread_workspace(workspace_directory)?;
+            let workspace = protected_planning_thread_workspace(
+                workspace_directory,
+                parent_thread_id,
+                parent_turn_id,
+            )?;
             let requested_cwd = workspace.cwd.clone();
             let thread_request = runtime_configuration_request(
                 Some(PLANNING_WORKER_MODEL),
@@ -1575,12 +1616,22 @@ impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
 impl PlanningThreadLauncher for CodexAppServerAdapter {
     #[tracing::instrument(
         level = "trace",
-        skip(self, workspace_directory, prompt, event_sender, continuation_permit)
+        skip(
+            self,
+            workspace_directory,
+            prompt,
+            parent_thread_id,
+            parent_turn_id,
+            event_sender,
+            continuation_permit
+        )
     )]
     fn run_hidden_planning_thread(
         &self,
         workspace_directory: &str,
         prompt: &str,
+        parent_thread_id: Option<&str>,
+        parent_turn_id: Option<&str>,
         event_sender: ConversationStreamSender,
         continuation_permit: Option<PostTurnContinuationPermit>,
     ) -> Result<ConversationTurnTerminalReceipt> {
@@ -1588,6 +1639,8 @@ impl PlanningThreadLauncher for CodexAppServerAdapter {
         self.run_hidden_planning_thread_stream(
             workspace_directory,
             prompt,
+            parent_thread_id,
+            parent_turn_id,
             event_sender,
             continuation_permit,
         )
@@ -1917,7 +1970,8 @@ mod tests {
         bounded_app_server_stream_event, codex_raw_trust_key, finish_stream_result,
         persisted_error_summary, prompt_log_input_records, prompt_log_output_record,
         prompt_log_stream_forwarder, prompt_log_terminal_error, prompt_log_terminal_status,
-        protected_thread_workspace, reasoning_effort_label, send_required_app_server_event,
+        protected_planning_thread_workspace, protected_thread_workspace, reasoning_effort_label,
+        send_required_app_server_event,
     };
     #[cfg(unix)]
     use super::{ConversationTurnTerminalOutcome, PLANNING_WORKER_MODEL};
@@ -1937,6 +1991,9 @@ mod tests {
     use crate::application::port::outbound::startup_probe_port::StartupProbePort;
     use crate::application::service::conversation_runtime_event::{
         ConversationStreamEvent, conversation_stream_channel,
+    };
+    use crate::application::service::planning::task_tool::{
+        PLANNING_TOOL_PARENT_THREAD_ID_ENV, PLANNING_TOOL_PARENT_TURN_ID_ENV,
     };
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
@@ -2469,7 +2526,7 @@ mod tests {
 
         let (planning_tx, planning_rx) = conversation_stream_channel();
         adapter
-            .run_hidden_planning_thread("/repo", "refresh queue", planning_tx, None)
+            .run_hidden_planning_thread("/repo", "refresh queue", None, None, planning_tx, None)
             .expect("hidden planning worker stream should complete");
         let planning_events = planning_rx.try_iter().collect::<Vec<_>>();
         assert!(has_thread_prepared(&planning_events, "started-thread"));
@@ -3357,6 +3414,32 @@ mod tests {
             workspace.config["projects"]
                 [codex_raw_trust_key(&base).expect("base trust key should encode")]["trust_level"],
             "untrusted"
+        );
+    }
+
+    #[test]
+    fn planning_thread_workspace_sets_host_provenance_without_losing_project_protection() {
+        let base = std::env::current_dir().expect("test cwd should resolve");
+        let requested = base.join("planning-worker-context");
+
+        let workspace = protected_planning_thread_workspace(
+            &requested.to_string_lossy(),
+            Some(" parent-thread "),
+            Some("parent-turn"),
+        )
+        .expect("planning workspace should be protected");
+
+        assert_eq!(
+            workspace.config["projects"][&workspace.cwd]["trust_level"],
+            "untrusted"
+        );
+        assert_eq!(
+            workspace.config["shell_environment_policy"]["set"][PLANNING_TOOL_PARENT_THREAD_ID_ENV],
+            "parent-thread"
+        );
+        assert_eq!(
+            workspace.config["shell_environment_policy"]["set"][PLANNING_TOOL_PARENT_TURN_ID_ENV],
+            "parent-turn"
         );
     }
 

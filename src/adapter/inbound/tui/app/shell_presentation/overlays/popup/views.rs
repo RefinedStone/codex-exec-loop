@@ -149,6 +149,8 @@ pub(crate) struct QueueOverlayView {
     pub(crate) proposal_lines: Vec<Line<'static>>,
     // Empty/invalid/blocked explanations that tell the operator why rows may be absent.
     pub(crate) note_lines: Vec<Line<'static>>,
+    // Index in the inline renderer's merged queue/proposal/note content.
+    pub(crate) selected_content_line_index: Option<usize>,
     // Queue overlay navigation and close hints.
     pub(crate) key_lines: Vec<Line<'static>>,
 }

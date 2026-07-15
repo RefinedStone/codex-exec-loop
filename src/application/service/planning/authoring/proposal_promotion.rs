@@ -4,7 +4,8 @@ use anyhow::{Result, anyhow};
 use chrono::{SecondsFormat, Utc};
 
 use crate::application::port::outbound::planning_task_repository_port::{
-    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult, PlanningTaskRepositoryPort,
+    PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
+    PlanningTaskAuthorityMutationAudit, PlanningTaskRepositoryPort,
     load_consistent_planning_authority_snapshots,
 };
 
@@ -19,7 +20,7 @@ use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningProposalPromotionDecision,
     PlanningProposalPromotionPolicy, PlanningWorkspaceFiles, TaskActor, TaskAuthorityDocument,
-    TaskStatus,
+    TaskMutationProvenance, TaskStatus,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,7 @@ use crate::domain::planning::{
 pub struct PlanningProposalPromotionRequest<'a> {
     // filesystem adapter와 repository adapter가 모두 이 값을 planning workspace boundary로 사용한다.
     pub workspace_directory: &'a str,
+    pub provenance: TaskMutationProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +146,7 @@ impl PlanningProposalPromotionService {
         promoted_task.status = TaskStatus::Ready;
         promoted_task.last_updated_by = TaskActor::System;
         promoted_task.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let promoted_task_id = promoted_task.id.clone();
 
         // commit에는 post-mutation projection을 넘긴다. repository adapter가 denormalized queue state를 같은 transaction
         // 의미로 저장할 수 있게 하기 위해서다.
@@ -154,13 +157,18 @@ impl PlanningProposalPromotionService {
         // 관찰한 revision으로 보호해 stale worker-side promotion이 operator edit를 덮어쓰지 않게 한다.
         match self
             .planning_task_repository_port
-            .commit_task_authority_snapshot(
+            .commit_task_authority_mutation_snapshot(
                 request.workspace_directory,
                 PlanningTaskAuthorityCommit {
                     // optimistic locking은 오래된 worker-side promotion이 operator edit를 덮어쓰는 것을 막는다.
                     observed_planning_revision: Some(observed_planning_revision),
                     task_authority: &task_authority,
                     queue_projection: &next_queue_projection,
+                },
+                PlanningTaskAuthorityMutationAudit {
+                    task_ids: std::slice::from_ref(&promoted_task_id),
+                    legacy_source_turn_id: None,
+                    provenance: &request.provenance,
                 },
             )? {
             // 성공한 commit 뒤에는 refreshed runtime projection이 다음 source of truth가 된다.
@@ -335,6 +343,7 @@ mod tests {
             .service
             .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                 workspace_directory: fixture.workspace.path_str(),
+                provenance: TaskMutationProvenance::default(),
             })
             .expect("top proposal should promote");
 
@@ -406,6 +415,7 @@ mod tests {
             .service
             .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                 workspace_directory: fixture.workspace.path_str(),
+                provenance: TaskMutationProvenance::default(),
             })
             .expect("ready queue head should make promotion a no-op");
 
@@ -457,6 +467,7 @@ mod tests {
             .service
             .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                 workspace_directory: fixture.workspace.path_str(),
+                provenance: TaskMutationProvenance::default(),
             })
             .expect_err("invalid result output should block promotion");
 
@@ -500,6 +511,7 @@ mod tests {
             .service
             .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                 workspace_directory: fixture.workspace.path_str(),
+                provenance: TaskMutationProvenance::default(),
             })
             .expect_err("stale promotion should report a commit conflict");
 
@@ -518,6 +530,7 @@ mod tests {
             .service
             .promote_top_proposal_to_ready_if_needed(PlanningProposalPromotionRequest {
                 workspace_directory: fixture.workspace.path_str(),
+                provenance: TaskMutationProvenance::default(),
             })
             .expect_err("missing task authority should block promotion");
 

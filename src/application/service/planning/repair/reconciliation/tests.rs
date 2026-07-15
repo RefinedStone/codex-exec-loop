@@ -1,5 +1,18 @@
-use super::{PlanningChangeSet, PlanningExecutionSnapshot, execution_snapshot_to_workspace_record};
+use super::{
+    PlanningChangeSet, PlanningExecutionSnapshot, PlanningReconciliationService,
+    execution_snapshot_to_workspace_record,
+};
 use super::{PlanningRepairRequest, build_planning_repair_prompt};
+use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+use crate::application::port::outbound::planning_task_repository_port::{
+    PlanningAuthoritySnapshotCommit, PlanningDirectionAuthorityCommit,
+    PlanningDirectionAuthoritySnapshot, PlanningTaskAuthorityCommit,
+    PlanningTaskAuthorityCommitResult, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+};
+use crate::application::port::outbound::planning_workspace_port::{
+    PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+};
+use crate::application::service::planning::runtime::validation::PlanningValidationService;
 use crate::domain::planning::repair_candidate::{
     PlanningRepairCandidatePolicy, PlanningRepairPreviousHandoff,
 };
@@ -7,6 +20,58 @@ use crate::domain::planning::{
     PLANNING_FORMAT_VERSION, PriorityQueueProjection, PriorityQueueTask, TaskActor,
     TaskAuthorityDocument, TaskDefinition, TaskStatus,
 };
+use anyhow::{Result, anyhow};
+use std::sync::Arc;
+
+struct FailingSnapshotTaskRepository;
+
+impl PlanningTaskRepositoryPort for FailingSnapshotTaskRepository {
+    fn load_direction_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Option<PlanningDirectionAuthoritySnapshot>> {
+        unreachable!("execution snapshot should not load direction authority")
+    }
+
+    fn commit_direction_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+        _commit: PlanningDirectionAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        unreachable!("execution snapshot should not commit direction authority")
+    }
+
+    fn clear_direction_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+        unreachable!("execution snapshot should not clear direction authority")
+    }
+
+    fn load_task_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+    ) -> Result<Option<PlanningTaskAuthoritySnapshot>> {
+        Err(anyhow!("task authority is temporarily unavailable"))
+    }
+
+    fn commit_task_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+        _commit: PlanningTaskAuthorityCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        unreachable!("execution snapshot should not commit task authority")
+    }
+
+    fn commit_planning_authority_snapshot(
+        &self,
+        _workspace_dir: &str,
+        _commit: PlanningAuthoritySnapshotCommit<'_>,
+    ) -> Result<PlanningTaskAuthorityCommitResult> {
+        unreachable!("execution snapshot should not commit planning authority")
+    }
+
+    fn clear_task_authority_snapshot(&self, _workspace_dir: &str) -> Result<()> {
+        unreachable!("execution snapshot should not clear task authority")
+    }
+}
 
 /*
  * 이 파일은 복구 워커가 생성한 planning_task_commands 주변의 방어 계약을 고정한다.
@@ -89,9 +154,51 @@ fn reconciliation_change_set_only_tracks_active_result_output_paths() {
 fn execution_snapshot_restore_payload_preserves_absent_result_output() {
     let record = execution_snapshot_to_workspace_record(&PlanningExecutionSnapshot {
         result_output_markdown: None,
+        ..PlanningExecutionSnapshot::default()
     });
 
     assert_eq!(record.result_output_markdown, None);
+}
+
+#[test]
+fn execution_snapshot_keeps_protected_file_when_task_authority_read_fails() {
+    let workspace = std::env::temp_dir().join(format!(
+        "akra-snapshot-task-read-failure-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should follow epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&workspace).expect("snapshot workspace should create");
+    let workspace_dir = workspace.to_string_lossy().to_string();
+    let workspace_port = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+    workspace_port
+        .commit_planning_workspace_files(
+            &workspace_dir,
+            &PlanningWorkspaceLoadRecord {
+                result_output_markdown: Some("# Protected result".to_string()),
+            },
+        )
+        .expect("protected file should seed");
+    let service = PlanningReconciliationService::with_task_repository(
+        workspace_port,
+        PlanningValidationService::new(),
+        crate::domain::planning::PriorityQueueService::new(),
+        Arc::new(FailingSnapshotTaskRepository),
+    );
+
+    let snapshot = service
+        .load_execution_snapshot(&workspace_dir)
+        .expect("task authority failure should not discard protected file capture");
+
+    assert_eq!(
+        snapshot.result_output_markdown.as_deref(),
+        Some("# Protected result")
+    );
+    assert_eq!(snapshot.planning_revision, None);
+    assert_eq!(snapshot.task_authority, None);
+    std::fs::remove_dir_all(workspace).expect("snapshot workspace should clean up");
 }
 
 // 이전 ready handoff를 변경 없이 다시 내보내면 자동 후속 복구 루프가 생긴다.
