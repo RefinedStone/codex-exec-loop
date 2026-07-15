@@ -1,17 +1,12 @@
 # Agent Reference
 
-`AGENTS.md` is the canonical fast-path agent file. `AGENT.md` is only a
-compatibility pointer for tools that still probe that filename.
+`AGENTS.md` is the canonical fast-path instruction file. Open only the task-specific reference:
 
-Keep both root files compact. Read `AGENTS.md` first, then open only the
-reference that matches the task.
+- [Current product](../reference/current-product.md): shipped surfaces and operator behavior
+- [Runtime architecture](../reference/architecture.md): layers, state authority, planning, parallel, and security boundaries
+- [Development guide](../reference/development.md): repository map, code rules, tests, worktrees, GitHub delivery, and cleanup
+- [TUI contract](../design/07-tui-layered-architecture-and-aesthetic-contract.md): visual/presentation ownership
+- [Validation methodology](../validation/terminal-ui-testing-methodology.md): terminal/TUI proof rules
 
-## Files
-
-- [`01-project-playbook.md`](./01-project-playbook.md): product focus, module map, architecture, commands, style, testing, and day-to-day working rules
-- [`02-github-and-worktree.md`](./02-github-and-worktree.md): GitHub identity, PR flow, review handling, and worktree coordination
-- [`../design/04-hexagonal-runtime-architecture.md`](../design/04-hexagonal-runtime-architecture.md): core/application/domain/adapters runtime boundary
-- [`../design/05-parallel-control-plane-architecture.md`](../design/05-parallel-control-plane-architecture.md): parallel-mode control-plane and projection ownership
-- [`../design/07-tui-layered-architecture-and-aesthetic-contract.md`](../design/07-tui-layered-architecture-and-aesthetic-contract.md): TUI layer ownership, Akra theme rules, and LLM-safe visual editing guardrails
-- [`../plan/04-worktree-branch-rules.md`](../plan/04-worktree-branch-rules.md): branch naming and lane mapping
-- [`../plan/11-parallel-worktree-plan.md`](../plan/11-parallel-worktree-plan.md): current parallel-work snapshot
+Future plans and competitor research are not implementation truth; follow their explicit status and
+evidence dates.

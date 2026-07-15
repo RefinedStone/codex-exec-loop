@@ -1,5 +1,7 @@
 # TUI Layered Architecture And Aesthetic Contract
 
+[한국어](../ko/reference/tui-contract.md)
+
 ## Context And Goals
 
 The native shell TUI must stay easy to edit in small context windows. A change to wording should
@@ -128,7 +130,7 @@ the fixed Akra theme.
 1. Open this file and the smallest file in the layer table that matches the requested change.
 2. Decide the layer before editing. If the request is about copy, do not edit rendering first.
 3. Use `AkraTheme` for all visual styling and markers.
-4. Keep new modules under roughly the same context budget rules as `docs/agent/01-project-playbook.md`.
+4. Keep new modules under the context budget rules in `docs/reference/development.md`.
 5. Run `bash scripts/check_tui_layering.sh` before PR review for TUI visual or presentation work.
 6. Add or update the smallest focused test or snapshot that proves the visible contract.
 

@@ -287,11 +287,11 @@ from the two `verified` snapshots. The presence of a guard is not the same as a 
 The comparison read current Akra source and contracts at the pinned commit. Local links make the
 files easy to open; the adjacent immutable links preserve snapshot evidence.
 
-- [current product state](../../design/01-current-product-state.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/design/01-current-product-state.md))
+- [current product state](../../reference/current-product.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/design/01-current-product-state.md))
 - [docs surface map](../../README.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/README.md))
-- [supersession contract](../../supersession/current-contract.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/supersession/current-contract.md))
+- [current operator contract](../../reference/current-product.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/supersession/current-contract.md))
 - [TUI architecture](../../design/07-tui-layered-architecture-and-aesthetic-contract.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/design/07-tui-layered-architecture-and-aesthetic-contract.md))
-- [parallel control plane](../../design/05-parallel-control-plane-architecture.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/design/05-parallel-control-plane-architecture.md))
+- [runtime architecture](../../reference/architecture.md) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/docs/design/05-parallel-control-plane-architecture.md))
 - [app-server adapter](../../../src/adapter/outbound/app_server/mod.rs) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/src/adapter/outbound/app_server/mod.rs))
 - [parallel services](../../../src/application/service/parallel_mode/mod.rs) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/src/application/service/parallel_mode/mod.rs))
 - [Admin inbound adapter](../../../src/adapter/inbound/admin_api/mod.rs) ([pinned](https://github.com/RefinedStone/codex-exec-loop/blob/66333152170124a42aca6f49ed2f72fa6a8293d7/src/adapter/inbound/admin_api/mod.rs))

@@ -17,7 +17,7 @@ operator는 다음 세 질문에 즉시 답할 수 있어야 한다.
 각 inbound adapter는 text 또는 web interaction으로만 다르게 표현한다.
 
 이 문서는 장기 제품·상태·권한·품질 계약이다. 실제 병렬 구현 branch와 파일 소유권은 작업 시작
-시점에만 `docs/plan/11-parallel-worktree-plan.md`에 기록한다.
+시점에만 PR 또는 해당 작업 branch note에 기록한다.
 Delivery slice는 dependency order를 설명하는 proposed design이며 live backlog가 아니다. 구현이 완료되면
 이 문서는 shipped contract로 압축하고 일회성 slice 설명은 제거한다.
 
@@ -767,7 +767,7 @@ legacy로 내려도 planning/parallel durable state는 그대로 남는다.
 
 각 구현 slice는 시작 직전 active worktree/PR과 hotspot ownership을 다시 확인하고 최신
 `origin/prerelease`에서 분기한다. 오래된 remote admin branch를 새 base나 무비판적 cherry-pick 원천으로
-사용하지 않는다. 일시적인 lane 충돌 정보는 `docs/plan/11-parallel-worktree-plan.md`에만 둔다.
+사용하지 않는다. 일시적인 lane 충돌 정보는 PR 또는 해당 작업 branch note에만 둔다.
 
 ## 16. Definition of Done
 
@@ -789,8 +789,8 @@ legacy로 내려도 planning/parallel durable state는 그대로 남는다.
 
 ## References
 
-- `docs/design/04-hexagonal-runtime-architecture.md`
-- `docs/design/05-parallel-control-plane-architecture.md`
+- `docs/reference/architecture.md`
+- `docs/reference/development.md`
 - `docs/competitive/agent-canvas/gap-matrix.md` — Truthful Game Operations
 - `docs/competitive/jcode/gap-matrix.md` — Operational Game Board and guarded controls
 - `src/adapter/inbound/admin_api/akra_dashboard.rs`

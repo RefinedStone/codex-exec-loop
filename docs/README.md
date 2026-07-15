@@ -1,120 +1,57 @@
-# Docs Map
+# Documentation Map
 
-Use this map to find the current implementation truth quickly. The docs are intentionally compact:
-implemented behavior belongs in current contract and design notes; long roadmaps, future backlog,
-and one-off research notes are not kept in this tree. Reproducible competitor research is the
-exception and lives under `competitive/`, with a pinned source snapshot and an explicit Akra
-adoption decision. A user-requested proposed design may stay temporarily when it defines a cross-slice
-product and safety contract; it must declare its status and be compressed into current truth after delivery.
+[한국어](ko/docs-map.md)
 
-## Read First
+Use this page to select one source of truth. Current implementation references are compact and
+bilingual. Executable validation contracts stay separate because repository tests parse their
+markers and inventories. Future plans and competitor evidence remain unabridged.
 
-- [../README.md](../README.md): product surface, install, commands, development, and diagnostics
-- [supersession/current-contract.md](supersession/current-contract.md): shipped planning,
-  continuation, and parallel-mode operator contract
-- [agent/README.md](agent/README.md): compact Codex agent reference map
+## Current Implementation
 
-## Current Design
+| Need | Canonical document | Korean |
+| --- | --- | --- |
+| Product surfaces, commands, planning, parallel flow, limits | [reference/current-product.md](reference/current-product.md) | [ko/reference/current-product.md](ko/reference/current-product.md) |
+| Layer ownership, state authority, security boundaries | [reference/architecture.md](reference/architecture.md) | [ko/reference/architecture.md](ko/reference/architecture.md) |
+| Repository map, coding rules, tests, worktrees, GitHub delivery | [reference/development.md](reference/development.md) | [ko/reference/development.md](ko/reference/development.md) |
+| Install and first run | [../README.md](../README.md) | [ko/README.md](ko/README.md) |
+| Native packaging and publication | [plan/13-native-packaging-and-operator-runbook.md](plan/13-native-packaging-and-operator-runbook.md) | [ko/reference/release.md](ko/reference/release.md) |
 
-- [design/01-current-product-state.md](design/01-current-product-state.md): product identity,
-  surface map, runtime shape, and code entry
-- [design/02-tui-shell-flow.md](design/02-tui-shell-flow.md): operator-visible shell modes,
-  conversation flow, planning/continuation flow, and recovery states
-- [design/04-hexagonal-runtime-architecture.md](design/04-hexagonal-runtime-architecture.md):
-  `core`, `application`, `domain`, and adapter dependency rules and current boundary ownership
-- [design/05-parallel-control-plane-architecture.md](design/05-parallel-control-plane-architecture.md):
-  parallel-mode control-plane ownership, R6 runtime decision, and projection rules
-- [design/06-planning-runtime-and-draft-editor.md](design/06-planning-runtime-and-draft-editor.md):
-  DB-backed planning authority, staged draft promotion, runtime task intake, and recovery rules
-- [design/07-tui-layered-architecture-and-aesthetic-contract.md](design/07-tui-layered-architecture-and-aesthetic-contract.md):
-  TUI layer ownership, theme rules, and visual editing guardrails
-- [design/08-parallel-mode-supersession-board.md](design/08-parallel-mode-supersession-board.md):
-  shipped parallel-mode board and selected-detail timeline shape
+## TUI and Validation Contracts
 
-## Proposed Design
+These files are intentionally separate from the narrative references. Architecture tests check
+their exact headings, phrases, surface rows, or test-entrypoint inventory.
 
-- [design/09-admin-game-control-center.md](design/09-admin-game-control-center.md): proposed truthful
-  Admin game scene, CLI/Admin capability parity, guarded actions, and quality rollout contract
+- [design/07-tui-layered-architecture-and-aesthetic-contract.md](design/07-tui-layered-architecture-and-aesthetic-contract.md): TUI layer and visual ownership ([한국어](ko/reference/tui-contract.md))
+- [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): required platform rows and capture profiles ([한국어](ko/reference/validation.md))
+- [validation/terminal-ui-testing-methodology.md](validation/terminal-ui-testing-methodology.md): automated and manual proof method ([한국어](ko/reference/validation.md))
+- [validation/tui-coverage-matrix.md](validation/tui-coverage-matrix.md): code-mapped TUI test inventory ([한국어 안내](ko/reference/validation.md))
+- [validation/README.md](validation/README.md): checked-in evidence and capture commands
 
-## Operations
+## Future and External Material
 
-- [plan/04-worktree-branch-rules.md](plan/04-worktree-branch-rules.md): branch naming, worktree,
-  review, merge, and cleanup rules
-- [plan/10-inline-scrollback-shell.md](plan/10-inline-scrollback-shell.md): inline shell and host
-  scrollback contract
-- [plan/11-parallel-worktree-plan.md](plan/11-parallel-worktree-plan.md): live parallel worktree
-  coordination snapshot
-- [plan/12-platform-validation-matrix.md](plan/12-platform-validation-matrix.md): platform terminal
-  validation matrix and capture profiles
-- [plan/13-native-packaging-and-operator-runbook.md](plan/13-native-packaging-and-operator-runbook.md):
-  native bundle, npm, release, and operator handoff runbook
-- [plan/14-codex-for-oss-application.md](plan/14-codex-for-oss-application.md): Codex for Open
-  Source application positioning and form-answer draft
-- [validation/README.md](validation/README.md): real validation artifact index
-- [validation/terminal-ui-testing-methodology.md](validation/terminal-ui-testing-methodology.md):
-  terminal UI test design for rendering, scrollback, resize, and snapshots
+The following content is not compacted into current truth:
 
-## Competitive Research
+- [design/09-admin-game-control-center.md](design/09-admin-game-control-center.md): proposed Admin game control center and rollout plan
+- [design/resources/admin-animation-map-concepts/](design/resources/admin-animation-map-concepts/): concept assets and prompts supporting that proposal
+- [plan/14-codex-for-oss-application.md](plan/14-codex-for-oss-application.md): future program application draft with explicitly archival metrics
+- [competitive/README.md](competitive/README.md): pinned competitor analyses, evidence ledgers, and gap matrices
 
-- [competitive/README.md](competitive/README.md): evidence rules, coverage index, comparison
-  dimensions, and refresh order
-- [competitive/upstream-codex/analysis.md](competitive/upstream-codex/analysis.md): OpenAI Codex
-  v0.144.1 official runtime, typed in-process TUI, protocol, safety, performance, and authority audit
-- [competitive/upstream-codex/evidence.md](competitive/upstream-codex/evidence.md): immutable source
-  and release identity, schema/handshake probes, direct app-server samples, tests, and audit limits
-- [competitive/upstream-codex/gap-matrix.md](competitive/upstream-codex/gap-matrix.md): terminal-truth
-  correction, typed projection, capability, recovery, security, and delivery-boundary decisions
-- [competitive/jcode/analysis.md](competitive/jcode/analysis.md): jcode v0.43.0 product and
-  architecture deep dive
-- [competitive/jcode/evidence.md](competitive/jcode/evidence.md): immutable source ledger,
-  reproduction commands, and audit limits
-- [competitive/jcode/gap-matrix.md](competitive/jcode/gap-matrix.md): Akra-relative gaps,
-  selective adoption decisions, and implementation slices
-- [competitive/agent-canvas/analysis.md](competitive/agent-canvas/analysis.md): Agent Canvas v1.2.1
-  browser control-center, released Codex ACP, remote-backend, and Automation deep dive
-- [competitive/agent-canvas/evidence.md](competitive/agent-canvas/evidence.md): pinned Canvas, Agent
-  Server, ACP, and Automation source ledger, release-gate output, and audit limits
-- [competitive/agent-canvas/gap-matrix.md](competitive/agent-canvas/gap-matrix.md): Codex-first
-  adoption boundaries, truthful fleet-operation gaps, and reviewable Akra slices
-- [competitive/opencode/analysis.md](competitive/opencode/analysis.md): OpenCode v1.17.18 TUI,
-  attach/server, desktop/web/IDE, GitHub automation, performance, and trust-boundary deep dive
-- [competitive/opencode/evidence.md](competitive/opencode/evidence.md): immutable release/source
-  ledger, reproduced tests and resolved-secret canary, artifact identity, and audit limits
-- [competitive/opencode/gap-matrix.md](competitive/opencode/gap-matrix.md): Akra-relative adoption
-  boundaries, attach/recovery and permission/secret lessons, reviewed-delivery differentiation, and
-  dependency-aware session/TUI amendments
-- [competitive/orca/analysis.md](competitive/orca/analysis.md): Orca v1.4.137 worktree lifecycle,
-  terminal/session continuity, hosted review, recovery, and trust-boundary deep dive
-- [competitive/orca/evidence.md](competitive/orca/evidence.md): installed artifact identity,
-  immutable source ledger, sanitized runtime inventory, Akra baseline, and audit limits
-- [competitive/orca/gap-matrix.md](competitive/orca/gap-matrix.md): repository-wide worktree
-  portfolio adoption, worktree-as-sandbox rejection, and reviewed-delivery differentiation
+These documents may describe work that is not shipped. Their own status and evidence dates control
+how they should be read.
 
-## Implemented Surfaces
+## Historical Evidence
 
-- TUI: Ratatui/Crossterm inline shell in `src/adapter/inbound/tui/`, including sessions,
-  diagnostics, planning, directions, queue, model/think controls, follow-up, and parallel-mode
-  overlays.
-- Core runtime: headless app command/effect/completion/snapshot coordination in `src/core/`,
-  separated from TUI-only shell code so inbound adapters can share the same lifecycle boundary.
-- CLI: `akra doctor`, `akra status`, `akra queue`, `akra reset`, `akra planning-tool`,
-  `akra parallel-tick`, `akra admin`, and `akra telegram` dispatch through
-  `src/adapter/inbound/cli.rs`.
-- Admin: Axum/Askama planning admin UI and JSON API in `src/adapter/inbound/admin_api/`, with
-  templates under `templates/admin/` and packaged assets under `assets/admin/`.
-- Telegram: control-plane inbound adapter in `src/adapter/inbound/telegram_bot/` and HTTP outbound
-  adapter in `src/adapter/outbound/telegram/`.
-- Planning runtime: services under `src/application/service/planning/`, persisted by SQLite
-  authority adapters and mirrored to planning workspace files.
-- Parallel mode: services under `src/application/service/parallel_mode/` with git worktree, GitHub
-  delivery, lease/session detail, distributor, and runtime event storage boundaries.
-- Packaging: native release scripts, GitHub Actions, and npm wrapper packages under `scripts/`,
-  `.github/workflows/`, and `npm/`.
+- `docs/validation/*.txt` and [validation/artifacts/](validation/artifacts/) contain reviewable
+  validation evidence.
+- [../artifacts/terminal-bridge-readiness-2026-04-23/](../artifacts/terminal-bridge-readiness-2026-04-23/) is historical feasibility evidence, not a current required-row pass.
 
-## Rules
+One-off audits, completed status reports, stale training baselines, and empty coordination plans do
+not belong in this map. Use Git history when their historical reasoning is needed.
 
-- Keep current operator behavior in `docs/supersession/current-contract.md`.
-- Keep technical depth in `docs/design/` and operational workflow in `docs/plan/`.
-- Do not reintroduce future implementation backlogs into `docs/plan/`; open issues or task
-  planning should live outside the repo docs unless it is part of a current PR contract.
-- Prefer links to current truth over repeating the same contract in multiple places.
+## Maintenance Rules
+
+- Update one canonical current reference instead of copying the same contract into several files.
+- Keep the English source and its `docs/ko/` translation linked in both directions.
+- Update translations in the same PR when current reference meaning changes.
+- Do not compact future plans or competitor evidence into shipped behavior.
+- Do not hand-edit generated validation status counts; run the summary helpers against real records.

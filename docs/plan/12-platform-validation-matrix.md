@@ -1,70 +1,15 @@
 # Platform Validation Matrix
 
-Use this matrix when a change affects terminal behavior:
+[한국어](../ko/reference/validation.md)
 
-- raw mode or restore handling
-- inline behavior
-- prompt editing, overlays, or shell chrome
-- resize, scrollback, or visible cursor behavior
+Use this matrix when a change affects raw mode, terminal restore, inline behavior, prompt editing,
+overlays, resize, scrollback, or cursor behavior. It validates terminal behavior, not feature
+completeness.
 
-This matrix is about terminal behavior, not feature completeness.
-This matrix stays broader than the first-class rendering contract in
-`docs/validation/terminal-ui-testing-methodology.md`.
-The E1-E4 first-class keys define release-blocking rendering ownership; they do not implicitly
-downgrade the required macOS Terminal.app and iTerm2 terminal-baseline rows listed here.
+The shipped frontend is inline main-buffer mode. Counted `terminal-baseline` rows cover that default;
+alternate-screen or branch-family evidence is supplemental and does not replace a required row.
 
-## Frontend
-
-- shipped product frontend: inline main-buffer only
-- the current counted terminal-baseline gate tracks only inline rows; alternate-screen evidence lives in supplemental captures instead of counted matrix rows
-
-## Common Commands
-
-Build:
-
-```bash
-cd <path-to-repo>
-. "$HOME/.cargo/env"
-cargo build
-```
-
-Run:
-
-```bash
-cd <path-to-repo>
-. "$HOME/.cargo/env"
-cargo run
-```
-
-Record a validation row:
-
-```bash
-bash scripts/capture_native_validation.sh \
-  --frontend inline \
-  --check-profile terminal-baseline \
-  --terminal "iTerm2 3.5" \
-  --result pass \
-  --output-dir docs/validation
-```
-
-Supplemental primitive-sensitive captures may still use `--frontend alternate` when the review needs alternate-screen or restore evidence, but those rows are no longer part of the counted terminal-baseline gate.
-Summarize recorded coverage (informational; warns when required rows are incomplete):
-
-```bash
-bash scripts/summarize_native_validation.sh
-```
-
-Gate recorded coverage explicitly:
-
-```bash
-bash scripts/summarize_native_validation.sh --fail-on-incomplete
-```
-
-The summary helper counts only exact matrix-row captures. Supplemental primitive-sensitive artifacts may stay outside the summary entirely, or appear under `Unmatched Records`, depending on their `check_profile` and row metadata.
-Counted `terminal-baseline` rows are the release gate for shipped/default terminal behavior.
-Supplemental replay-policy captures document representative branch-family behavior, but they do not replace counted baseline rows unless a future release-policy decision says otherwise.
-
-## Minimum Matrix
+## Required Terminal Baseline
 
 | OS | Terminal | Shell | Frontend | Priority |
 | --- | --- | --- | --- | --- |
@@ -75,145 +20,83 @@ Supplemental replay-policy captures document representative branch-family behavi
 | Windows | Git Bash or equivalent | bash | inline | optional |
 | Windows | JetBrains IDE terminal | WSL bash | inline | optional |
 
-## Check Profiles
+Run once per required row:
 
-### `terminal-baseline`
+1. launch, render the first frame, exit with `Ctrl+q`, and confirm prompt/cursor restoration
+2. edit with `Ctrl+j`, `Ctrl+u`, `Ctrl+w`, cursor movement, multiline input, and `Enter`
+3. open and close diagnostics, sessions, queue, and planning
+4. stream a turn and verify buffered input and compact status behavior
+5. resize narrower, wider, shorter, and taller; inspect committed host scrollback
+6. exercise failure/interrupt recovery when terminal restoration changed
 
-Use this profile for terminal-behavior changes such as raw mode, cursor restore, resize handling, prompt editing, or streaming behavior.
+## Operator-Surface Profile
 
-Run these checks once per required row:
+Use `phase1-operator-surface` when changing status wording, session-resume context, queue,
+automation, planning/directions, or matching `akra`/`:` lifecycle commands. Run the baseline plus:
 
-1. Launch and clean exit
-   - start the app
-   - confirm the first frame renders cleanly
-   - exit with `Ctrl+q`
-   - confirm the shell prompt and cursor restore normally
-2. Frontend baseline
-   - run the default inline startup path
-   - confirm the app always opens in inline main-buffer mode
-3. Input editing
-   - verify `Ctrl+j`, `Ctrl+u`, `Ctrl+w`, and `Enter`
-   - confirm the prompt owns a visible cursor
-4. Inspection flow
-   - open diagnostics, sessions, queue, and planning at least once
-   - close each surface with `Esc` or `Ctrl+C`
-5. Streaming and status
-   - confirm streamed text changes before completion
-   - buffer input during streaming
-   - confirm routine status hides raw ids and stays readable
-6. Resize and scrollback
-   - resize narrower, wider, shorter, and taller
-   - in inline mode, inspect scrollback after a completed turn
-7. Failure and recovery
-   - terminate the app during a live session if the change touched restore behavior
-   - confirm the terminal returns to a usable state
+- verify operator vocabulary and an actionable next step for paused/blocked states
+- load an existing session and confirm planning/queue context appears immediately
+- compare `akra doctor|status|queue|reset` with `:doctor|:planning|:queue|:reset`
+- keep routine copy free of raw internal IDs and implementation-only terms
 
-### `phase1-operator-surface`
+## Prompt-Input-Delay Profile
 
-Use this profile when a change touches:
+Use `prompt-input-delay-pty` when prompt echo, input buffering, PTY bridges, multiplexers, or
+integrated terminals change.
 
-- compact status wording or next-action copy
-- queue, automation, planning, or directions operator surfaces
-- session resume context
-- external `akra doctor`, `akra status`, `akra queue`, `akra reset`
-- in-shell `:doctor`, `:planning`, `:queue`, `:reset`
+| OS | Terminal | Shell | Priority |
+| --- | --- | --- | --- |
+| Linux | direct terminal | bash | required |
+| Linux | tmux detached PTY | bash | required |
+| Linux | Zellij | bash | required |
+| Windows | Windows Terminal | PowerShell | required |
+| Windows | Windows Terminal | WSL bash | required |
+| macOS | Terminal.app or iTerm2 | zsh | optional |
+| Windows/Linux | IDE integrated terminal | WSL bash or bash | optional |
 
-Record these rows with:
+Verify startup-pending echo, editing/cursor responsiveness, multiline input, submit-to-stream
+transition, prompt history/cursor restoration, and interrupt/exit recovery. Historical or
+supplemental rows do not count as a new approval-grade pass.
+
+## Capture and Summary
+
+Build and run:
+
+```bash
+. "$HOME/.cargo/env"
+cargo build
+cargo run
+```
+
+Record one row:
 
 ```bash
 bash scripts/capture_native_validation.sh \
   --frontend inline \
-  --check-profile phase1-operator-surface \
+  --check-profile terminal-baseline \
   --terminal "iTerm2 3.5" \
   --result pass \
   --output-dir docs/validation
 ```
 
-Run the full `terminal-baseline` checklist plus these additional checks:
-
-8. Status language and next action
-   - confirm the compact shell status stays in operator vocabulary such as `ready`, `waiting`, `paused`, `blocked`, `repairing`, or `review needed`
-   - confirm the visible status text names the next action when the shell is paused or blocked
-   - confirm routine copy avoids raw internal ids or implementation-only terms
-9. Resumed session context
-   - load an existing session in a workspace with accepted planning
-   - confirm the shell immediately surfaces planning status and queue summary after the thread loads
-10. Queue and continuation explanation
-   - open the queue and planning surfaces
-   - confirm they explain current state, cause, and next action in operator language
-   - confirm executable work, proposals, and blocked work read like work framing rather than file dumps
-11. Lifecycle command parity
-   - exercise the relevant external command path with `akra doctor`, `akra status`, `akra queue`, and the applicable `akra reset <target>`
-   - exercise the matching in-shell path with `:doctor`, `:planning`, `:queue`, and the matching `:reset <target>`
-   - confirm both command surfaces report the same lifecycle state and safety expectation
-
-### `prompt-input-delay-pty`
-
-Use this profile when prompt echo latency or input buffering changes, especially when the TUI runs
-inside a PTY bridge, multiplexer, or integrated terminal.
-The current checked-in status is `0/5` required passes: the historical tmux record is supplemental-only, so fresh approval-grade prompt-delay evidence still requires a new counted tmux pass.
-
-Record these rows with:
+Use `phase1-operator-surface` or `prompt-input-delay-pty` as `--check-profile` when applicable.
+PowerShell uses `scripts/capture_native_validation.ps1` with the corresponding parameters.
 
 ```bash
-bash scripts/capture_native_validation.sh \
-  --frontend inline \
-  --check-profile prompt-input-delay-pty \
-  --terminal "tmux 3.4 detached PTY" \
-  --result pass \
-  --output-dir docs/validation
+bash scripts/summarize_native_validation.sh
+bash scripts/summarize_native_validation.sh --fail-on-incomplete
+bash scripts/summarize_native_validation.sh --format markdown
+bash scripts/summarize_native_validation.sh \
+  --check-profile prompt-input-delay-pty --fail-on-incomplete
 ```
 
-Summarize this profile separately from the broad terminal baseline:
+The plain summary is informational; `--fail-on-incomplete` is the explicit gate. Counted rows use
+`capture_role: counted-row`. Representative branch-family evidence uses
+`capture_role: supplemental-unmatched` and never waives a required row by itself.
 
-```bash
-bash scripts/summarize_native_validation.sh --check-profile prompt-input-delay-pty
-```
+Every record includes date, commit SHA, OS, terminal/version, shell, frontend, `TERM` when
+available, capture role, exact profile, emitted checks, result, and notes. Primitive-sensitive
+changes also follow [the TUI methodology](../validation/terminal-ui-testing-methodology.md) and may
+require E1-E4 environment/mode metadata beyond the helper's baseline fields.
 
-Use the same profile with `--fail-on-incomplete` when this checklist is the release gate.
-
-Required rows:
-
-| OS | Terminal | Shell | Frontend | Priority |
-| --- | --- | --- | --- | --- |
-| Linux | direct terminal | bash | inline | required |
-| Linux | tmux detached PTY | bash | inline | required |
-| Linux | Zellij | bash | inline | required |
-| Windows | Windows Terminal | PowerShell | inline | required |
-| Windows | Windows Terminal | WSL bash | inline | required |
-
-Optional rows:
-
-| OS | Terminal | Shell | Frontend | Priority |
-| --- | --- | --- | --- | --- |
-| macOS | Terminal.app | zsh | inline | optional |
-| macOS | iTerm2 | zsh | inline | optional |
-| Windows | JetBrains IDE terminal | WSL bash | inline | optional |
-| Linux | VS Code integrated terminal | bash | inline | optional |
-
-Run these checks once per required row:
-
-1. Launch with the detached PTY backend or the terminal bridge that reproduces the latency-sensitive path.
-2. Confirm prompt input echoes without visible delay during startup-pending state.
-3. Confirm `Ctrl+u`, `Ctrl+w`, cursor movement, and multiline input stay responsive before submit.
-4. Submit a prompt and confirm the shell transitions into streaming output without losing buffered input.
-5. Confirm completion preserves prompt history and restores the cursor.
-6. Interrupt or exit after delayed input checks and confirm terminal recovery remains responsive.
-
-## Record Format
-
-Each completed row should capture:
-
-- date
-- commit SHA
-- OS
-- terminal app and version
-- shell
-- frontend
-- `TERM` when available
-- capture_role (`counted-row` or `supplemental-unmatched`)
-- exact `check_profile`
-- emitted `checks` block
-- result and notes
-
-Committed validation rows live under [`../validation/`](../validation/).
+Committed records live under [docs/validation/](../validation/).

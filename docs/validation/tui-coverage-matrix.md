@@ -1,5 +1,7 @@
 # TUI Coverage Matrix
 
+[한국어 통합 안내](../ko/reference/validation.md)
+
 This matrix tracks automated coverage for `src/adapter/inbound/tui/**`. Use it with
 [`terminal-ui-testing-methodology.md`](terminal-ui-testing-methodology.md) before adding or changing
 native TUI behavior.

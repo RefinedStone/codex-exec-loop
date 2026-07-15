@@ -954,7 +954,7 @@ All links below use Akra commit `226e4794b84107704378ecc1ea65f7d5c27750e5`.
 
 ### Delivery and packaging
 
-- [Current contract](../../supersession/current-contract.md) defines accepted planning, parallel
+- [Current contract](../../reference/current-product.md) defines accepted planning, parallel
   worktree/lease, review, integration, and cleanup behavior. Class: `verified/source` with the
   normal implementation caveat.
 - [Native packaging runbook](../../plan/13-native-packaging-and-operator-runbook.md) and

@@ -16,7 +16,7 @@ Read this first, then open only the referenced markdown that matches the task.
 - Product: native-first Rust client on `codex app-server`
 - Operator command: `akra`
 - Optimize for the TUI and `codex app-server` flow first; keep CLI, admin API, Telegram, and automation surfaces on the same application services
-- Keep agent files compact; move detail into `docs/agent/`
+- Keep agent files compact; move current implementation detail into `docs/reference/`
 
 ## Quick Rules
 
@@ -31,14 +31,13 @@ Read this first, then open only the referenced markdown that matches the task.
 - Delivery default: once a change is reviewable, finish with `commit -> push -> PR` unless the user says to hold locally
 - Parallel work: one worktree and one reviewable slice per branch, usually from `origin/prerelease`; inspect active work before choosing a lane
 - Worktree cleanup: after a branch is merged into `prerelease`, remove the finished worktree from the integration checkout. Prefer `bash scripts/cleanup_merged_worktrees.sh --apply --branch <finished-branch>` for the lane you just integrated, but never for `akra-agent/slot-*` parallel-mode slot branches. If the lane is fully disposable but the repo still reports dirty CRLF or local churn noise, use `--force-dirty` explicitly for that finished branch only.
-- Do not expand this file into backlog or design notes; keep stable design detail in `docs/design` and operational workflow in `docs/plan`
+- Do not expand this file into backlog or design notes; keep shipped truth in `docs/reference/`, executable TUI/validation contracts in their guarded docs, and future work explicitly marked as proposed
 
 ## Open When Needed
 
 - [`docs/agent/README.md`](./docs/agent/README.md)
-- [`docs/agent/01-project-playbook.md`](./docs/agent/01-project-playbook.md)
-- [`docs/agent/02-github-and-worktree.md`](./docs/agent/02-github-and-worktree.md)
-- [`docs/design/04-hexagonal-runtime-architecture.md`](./docs/design/04-hexagonal-runtime-architecture.md)
-- [`docs/design/05-parallel-control-plane-architecture.md`](./docs/design/05-parallel-control-plane-architecture.md)
-- [`docs/plan/04-worktree-branch-rules.md`](./docs/plan/04-worktree-branch-rules.md)
-- [`docs/plan/11-parallel-worktree-plan.md`](./docs/plan/11-parallel-worktree-plan.md)
+- [`docs/reference/current-product.md`](./docs/reference/current-product.md)
+- [`docs/reference/architecture.md`](./docs/reference/architecture.md)
+- [`docs/reference/development.md`](./docs/reference/development.md)
+- [`docs/design/07-tui-layered-architecture-and-aesthetic-contract.md`](./docs/design/07-tui-layered-architecture-and-aesthetic-contract.md)
+- [`docs/validation/terminal-ui-testing-methodology.md`](./docs/validation/terminal-ui-testing-methodology.md)

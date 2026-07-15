@@ -1,5 +1,7 @@
 # Terminal UI Testing Methodology
 
+[한국어 통합 안내](../ko/reference/validation.md)
+
 Use this method when native TUI changes affect terminal rendering, history insertion, viewport
 state, resize behavior, overlays, prompt editing, or live-tail presentation.
 
@@ -354,6 +356,6 @@ clear behavior, or scrollback behavior. Record manual rows with
 ## Related Docs
 
 - [README.md](README.md)
-- [../plan/10-inline-scrollback-shell.md](../plan/10-inline-scrollback-shell.md)
+- [../reference/current-product.md](../reference/current-product.md)
 - [../plan/12-platform-validation-matrix.md](../plan/12-platform-validation-matrix.md)
 - [../design/07-tui-layered-architecture-and-aesthetic-contract.md](../design/07-tui-layered-architecture-and-aesthetic-contract.md)

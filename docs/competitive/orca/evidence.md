@@ -412,8 +412,8 @@ The Akra comparison read these current boundaries at
   PR, integration, verification, and cleanup delivery;
 - [`github/automation.rs`](../../../src/adapter/outbound/github/automation.rs): isolated frozen
   Git/GitHub delivery target and compare-if-unchanged remote operations;
-- [`current-contract.md`](../../supersession/current-contract.md) and
-  [`05-parallel-control-plane-architecture.md`](../../design/05-parallel-control-plane-architecture.md):
+- [`current-product.md`](../../reference/current-product.md) and
+  [`architecture.md`](../../reference/architecture.md):
   shipped operator and architecture contracts.
 
 Verified Akra baseline findings:

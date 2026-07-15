@@ -106,7 +106,7 @@ docs. At minimum inspect:
 - `src/adapter/inbound/admin_api/`
 - `src/adapter/outbound/app_server/`
 - `src/application/service/parallel_mode/`
-- `docs/supersession/current-contract.md`
+- `docs/reference/current-product.md`
 
 Conflicts between Akra documentation and code are findings, not details to smooth over.
 
