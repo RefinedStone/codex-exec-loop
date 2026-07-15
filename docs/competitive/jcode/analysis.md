@@ -1,5 +1,7 @@
 # jcode v0.43.0 Deep Dive
 
+[한국어 번역](../../ko/competitive/jcode/analysis.md)
+
 This analysis compares jcode v0.43.0 with Akra at prerelease commit
 `66333152170124a42aca6f49ed2f72fa6a8293d7`. Source links, commands, counts, and limitations are in
 [evidence.md](evidence.md). Product decisions and implementation slices are in

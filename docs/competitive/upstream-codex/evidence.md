@@ -1,5 +1,7 @@
 # Upstream OpenAI Codex v0.144.1 Evidence Ledger
 
+[한국어 번역](../../ko/competitive/upstream-codex/evidence.md)
+
 This ledger separates immutable source inspection, released-binary reproduction, official
 documentation, inference, and unverified behavior. Product conclusions are in
 [analysis.md](analysis.md); Akra decisions and implementation contracts are in

@@ -34,7 +34,7 @@ The following content is not compacted into current truth:
 - [design/09-admin-game-control-center.md](design/09-admin-game-control-center.md): proposed Admin game control center and rollout plan
 - [design/resources/admin-animation-map-concepts/](design/resources/admin-animation-map-concepts/): concept assets and prompts supporting that proposal
 - [plan/14-codex-for-oss-application.md](plan/14-codex-for-oss-application.md): future program application draft with explicitly archival metrics
-- [competitive/README.md](competitive/README.md): pinned competitor analyses, evidence ledgers, and gap matrices
+- [competitive/README.md](competitive/README.md): pinned competitor analyses, evidence ledgers, and gap matrices ([한국어](ko/competitive/README.md))
 
 These documents may describe work that is not shipped. Their own status and evidence dates control
 how they should be read.

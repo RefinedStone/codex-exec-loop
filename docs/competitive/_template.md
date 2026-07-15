@@ -1,5 +1,7 @@
 # Product Analysis Template
 
+[한국어](../ko/competitive/_template.md)
+
 Replace every placeholder before review. Delete non-applicable sections only with a short reason.
 
 ## Snapshot

@@ -1,5 +1,7 @@
 # Orca v1.4.137 Deep Dive
 
+[한국어 번역](../../ko/competitive/orca/analysis.md)
+
 This analysis compares StablyAI Orca v1.4.137 with Akra at prerelease commit
 `6274a7fc9703f85e4fb6247541dc0d4ed6c5fb9b`. Immutable source links, reproduced local observations,
 artifact identity, and audit limits are in [evidence.md](evidence.md). Akra-relative decisions and

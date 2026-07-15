@@ -1,5 +1,7 @@
 # Orca Evidence Ledger
 
+[한국어 번역](../../ko/competitive/orca/evidence.md)
+
 This ledger separates immutable source inspection, installed-artifact observation, documented
 behavior, inference, and unverified experiments. Product conclusions are in
 [analysis.md](analysis.md), and Akra work decisions are in [gap-matrix.md](gap-matrix.md).

@@ -1,5 +1,7 @@
 # Competitive Research
 
+[한국어](../ko/competitive/README.md)
+
 This directory is the durable evidence base for products that compete with, wrap, or materially
 shape Akra. Each analyzed product owns one directory. The goal is not a feature checklist. The goal
 is to decide what makes Akra worth choosing as a Codex-first operator runtime and to turn verified

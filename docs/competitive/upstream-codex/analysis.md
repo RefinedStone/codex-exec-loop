@@ -1,5 +1,7 @@
 # Upstream OpenAI Codex v0.144.1 Baseline Audit
 
+[한국어 번역](../../ko/competitive/upstream-codex/analysis.md)
+
 This audit compares the upstream OpenAI Codex release `rust-v0.144.1` with Akra at prerelease
 commit `226e4794b84107704378ecc1ea65f7d5c27750e5`. Upstream Codex is not a normal competitor: its
 `codex app-server` is Akra's runtime authority, while its first-party TUI is the fastest-moving

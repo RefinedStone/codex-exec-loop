@@ -1,5 +1,7 @@
 # Agent Canvas Evidence Ledger
 
+[한국어 번역](../../ko/competitive/agent-canvas/evidence.md)
+
 This ledger separates inspected source, reproduced release-gate output, vendor documentation,
 inference, and unverified experiments. Product conclusions are in [analysis.md](analysis.md), and
 Akra work decisions are in [gap-matrix.md](gap-matrix.md).
