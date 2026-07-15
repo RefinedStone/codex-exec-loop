@@ -109,6 +109,9 @@ impl NativeTuiApp {
     pub(crate) fn parallel_mode_readiness_snapshot(&self) -> Option<ParallelModeReadinessSnapshot> {
         self.current_parallel_mode_readiness_projection()
     }
+    pub(crate) fn parallel_mode_control_effect_in_flight(&self) -> bool {
+        self.parallel_mode_control_plane.control_effect_in_flight()
+    }
     #[cfg(test)]
     pub(crate) fn parallel_mode_automation_epoch_id(&self) -> Option<u64> {
         let workspace_directory = self.planning_workspace_directory();
@@ -156,6 +159,7 @@ impl NativeTuiApp {
             .force_supervisor_refresh_in_flight_for_test(workspace_directory, epoch_id);
         (epoch_id, effect_id)
     }
+    #[cfg(test)]
     pub(crate) fn last_parallel_mode_automation_trigger(
         &self,
     ) -> Option<ParallelModeAutomationTrigger> {

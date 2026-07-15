@@ -733,14 +733,14 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Parallel Mode"),
+        inline_overlay_title("Parallel"),
         body_lines,
         true,
     );
     render_inline_titled_panel(
         frame,
         layout[1],
-        Line::from("Basic Info"),
+        Line::from("Overview"),
         summary_lines,
         true,
     );
@@ -756,17 +756,17 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
     render_inline_supersession_panel(
         frame,
         status_layout[0],
-        Line::from("Distributor"),
+        Line::from("Delivery"),
         capability_lines,
     );
-    render_inline_supersession_panel(frame, status_layout[1], Line::from("Pool"), pool_lines);
+    render_inline_supersession_panel(frame, status_layout[1], Line::from("Capacity"), pool_lines);
     render_inline_supersession_panel(
         frame,
         status_layout[2],
         Line::from(if selection_visible {
-            "Selection / Orchestrator"
+            "Current / Diagnostics"
         } else {
-            "Orchestrator"
+            "Tasks"
         }),
         orchestrator_lines,
     );

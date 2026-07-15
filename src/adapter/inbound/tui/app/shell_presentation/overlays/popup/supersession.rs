@@ -2,10 +2,11 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 
 use crate::adapter::inbound::tui::supersession_mud::{
-    SupersessionMudFocusZone, build_supersession_mud_view,
+    ParallelModeProgressSummary, SupersessionMudFocusZone, build_supersession_mud_view,
+    parallel_mode_progress_summary,
 };
 use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeSupervisorSnapshot,
@@ -14,7 +15,7 @@ use crate::domain::parallel_mode::{
 use crate::domain::parallel_mode::{ParallelModePoolSlotSnapshot, ParallelModePoolSlotState};
 
 use super::super::super::super::parallel_supervisor_events::parallel_supervisor_snapshot_stream_lines;
-use super::super::super::super::{AkraTheme, NativeTuiApp, TuiLanguage};
+use super::super::super::super::{AkraTheme, ConversationState, NativeTuiApp, TuiLanguage};
 use super::SupersessionOverlayView;
 
 /* Supersession is the operator board for parallel mode. It intentionally keeps
@@ -23,30 +24,26 @@ use super::SupersessionOverlayView;
  * running?", and "why is integration blocked?" without requiring navigation.
  */
 pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> SupersessionOverlayView {
-    let mode_label = if app.parallel_mode_enabled() {
-        "parallel"
-    } else {
-        "normal"
-    };
     let readiness_snapshot = app.parallel_mode_readiness_snapshot();
     let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
+    let planning_projection = app.planning_runtime_projection_snapshot();
     let readiness_snapshot_ref = readiness_snapshot.as_ref();
     let activity_frame = supersession_activity_frame();
     let mud_view =
         build_supersession_mud_view(&supervisor_snapshot, &app.supersession_mud_ui_state);
+    let progress = parallel_mode_progress_summary(
+        &supervisor_snapshot,
+        planning_projection.queue_projection(),
+        app.parallel_mode_control_effect_in_flight(),
+    );
     /*
     The core app projection remains the first source for live readiness and
     supervisor snapshots. This adapter only chooses popup grouping and copy, so service-layer
     invariants such as queue ordering, pool reconciliation, and official completion
     refresh stay testable outside ratatui rendering.
     */
-    let summary_lines = build_summary_lines(
-        app,
-        mode_label,
-        readiness_snapshot_ref,
-        &supervisor_snapshot,
-        activity_frame,
-    );
+    let summary_lines =
+        build_summary_lines(app, readiness_snapshot_ref, &supervisor_snapshot, &progress);
     let capability_lines = build_distributor_lines_with_mud(
         &supervisor_snapshot.distributor,
         if app.supersession_mud_ui_state.focused_zone() == SupersessionMudFocusZone::ExitCorridor {
@@ -64,7 +61,20 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
             &[]
         },
     );
-    let roster_lines = build_orchestrator_lines(&supervisor_snapshot.distributor);
+    let roster_lines = if matches!(
+        app.supersession_mud_ui_state.focused_zone(),
+        SupersessionMudFocusZone::RealmMap | SupersessionMudFocusZone::ExitCorridor
+    ) {
+        mud_view
+            .roster_lines
+            .iter()
+            .cloned()
+            .map(Line::from)
+            .chain(build_orchestrator_lines(&supervisor_snapshot.distributor))
+            .collect::<Vec<_>>()
+    } else {
+        build_orchestrator_lines(&supervisor_snapshot.distributor)
+    };
     let detail_lines = build_parallel_event_stream_lines(
         &supervisor_snapshot,
         app.parallel_supervisor_event_lines(),
@@ -86,15 +96,23 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
 
     SupersessionOverlayView {
         header_lines: vec![
-            AkraTheme::title_line("Parallel Mode", " / activity stream"),
-            Line::from(format!(
-                "activity {activity_frame} / {}",
-                if app.parallel_mode_prompt_input_locked() {
-                    "prompt locked while parallel loading is active"
-                } else {
-                    "prompt available"
-                }
-            )),
+            AkraTheme::title_line("Parallel", " / live workspace"),
+            Line::styled(
+                format!(
+                    "{}  ·  {}",
+                    if is_pending_pool_board(&supervisor_snapshot.pool) {
+                        format!("{activity_frame} Preparing workspace")
+                    } else {
+                        "Live workspace".to_string()
+                    },
+                    if app.parallel_mode_prompt_input_locked() {
+                        "prompt paused while setup completes"
+                    } else {
+                        "prompt available"
+                    }
+                ),
+                AkraTheme::subtle(),
+            ),
         ],
         summary_lines,
         capability_lines,
@@ -117,16 +135,16 @@ fn build_command_hint_lines(
      * to only "Ctrl+R" while off/close/peek remain hidden below it.
      */
     let primary = if parallel_mode_enabled {
-        "Ctrl+R refresh | Ctrl+P off | :peek agents | Ctrl+O/Esc/Ctrl+C close"
+        "Ctrl+R refresh  ·  Ctrl+P off  ·  :peek agents  ·  Ctrl+O/Esc/Ctrl+C close"
     } else if readiness_allows_parallel_mode {
-        "Ctrl+R refresh | :parallel enable | Ctrl+O/Esc/Ctrl+C close"
+        "Ctrl+R refresh  ·  :parallel enable  ·  Ctrl+O/Esc/Ctrl+C close"
     } else {
-        "Ctrl+R refresh | fix readiness then :parallel | Ctrl+O/Esc/Ctrl+C close"
+        "Ctrl+R refresh  ·  fix readiness then :parallel  ·  Ctrl+O/Esc/Ctrl+C close"
     };
     let secondary = if prompt_input_locked {
-        "Tab/arrows select | Enter/Space inspect"
+        "Tab section  ·  ↑↓ select  ·  Enter/Space inspect"
     } else {
-        "Tab/arrows select | Enter sends prompt when composer is active"
+        "Tab section  ·  ↑↓ select  ·  Enter sends prompt when composer is active"
     };
 
     vec![AkraTheme::key_line(primary), AkraTheme::key_line(secondary)]
@@ -134,95 +152,125 @@ fn build_command_hint_lines(
 
 fn build_summary_lines(
     app: &NativeTuiApp,
-    mode_label: &str,
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
-    activity_frame: &'static str,
+    progress: &ParallelModeProgressSummary,
 ) -> Vec<Line<'static>> {
     /*
     Summary lines are the popup's triage header: readiness tells whether parallel
     mode can be enabled, pool and roster summaries show dispatch capacity, and the
     distributor compact summary shows whether completed work is stuck downstream.
     */
-    let mut lines = Vec::new();
-    lines.extend([
-        Line::from(format!(
-            "mode: {mode_label}  |  board: {}  |  activity: {}",
-            supervisor_snapshot.state_label(),
-            activity_frame,
-        )),
-        Line::from(format!(
-            "workers: {}  |  prompt: {}",
-            if supervisor_snapshot.roster.active_count() > 0 {
-                "running"
-            } else if is_pending_pool_board(&supervisor_snapshot.pool) {
-                "loading"
-            } else {
-                "idle"
-            },
-            if supervisor_snapshot.roster.active_count() > 0 {
-                "parallel context active"
-            } else {
-                "available"
-            }
-        )),
-        Line::from(format!(
-            "readiness: {}",
+    let mut lines = vec![Line::from(vec![
+        Span::styled("Parallel", AkraTheme::accent()),
+        Span::raw(format!("  {}", progress.compact_line())),
+    ])];
+    lines.push(build_current_task_line(app, supervisor_snapshot, progress));
+    lines.push(Line::styled(
+        format!(
+            "{}  ·  {}",
             readiness_snapshot
                 .map(|snapshot| snapshot.readiness_label().to_string())
-                .unwrap_or_else(|| "not checked yet".to_string())
-        )),
-        Line::from(format!(
-            "workspace: {}",
-            truncate_timeline_text(&supervisor_snapshot.workspace_path, 96)
-        )),
-        Line::from(format!(
-            "pool: {}  |  agents: {}  |  queue: {}",
-            pool_summary_label(&supervisor_snapshot.pool),
-            roster_summary_label(supervisor_snapshot),
-            distributor_summary_label(&supervisor_snapshot.distributor)
-        )),
-    ]);
+                .unwrap_or_else(|| "checking readiness".to_string()),
+            truncate_timeline_text(&supervisor_snapshot.workspace_path, 82)
+        ),
+        AkraTheme::muted(),
+    ));
     if let Some(alert) = readiness_snapshot.and_then(|snapshot| snapshot.top_alert.as_deref()) {
-        lines.push(Line::from(format!("alert: {alert}")));
+        lines.push(Line::styled(
+            format!("Needs attention  ·  {alert}"),
+            AkraTheme::warning(),
+        ));
     } else if let Some(notice) = supervisor_snapshot.top_notice.as_deref() {
-        lines.push(Line::from(format!("notice: {notice}")));
-    }
-    if let Some(trigger) = app.last_parallel_mode_automation_trigger() {
-        lines.push(Line::from(format!(
-            "last automation trigger: {}",
-            trigger.label()
-        )));
+        lines.push(Line::styled(
+            format!("Update  ·  {notice}"),
+            AkraTheme::muted(),
+        ));
     }
     if let Some(reason) = app.last_parallel_mode_dispatch_withheld_reason() {
-        lines.push(Line::from(format!("dispatch withheld: {reason}")));
+        lines.push(Line::styled(
+            format!("Waiting  ·  {reason}"),
+            AkraTheme::warning(),
+        ));
     }
 
     lines
 }
 
-fn pool_summary_label(pool: &ParallelModePoolBoardSnapshot) -> String {
-    if is_pending_pool_board(pool) {
-        return pool.reconcile_status.clone();
+fn build_current_task_line(
+    app: &NativeTuiApp,
+    supervisor_snapshot: &ParallelModeSupervisorSnapshot,
+    progress: &ParallelModeProgressSummary,
+) -> Line<'static> {
+    let handoff = match &app.conversation_state {
+        ConversationState::Ready(conversation) => conversation.last_planning_task_handoff(),
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    };
+    let selected_entry = handoff
+        .and_then(|handoff| {
+            supervisor_snapshot.roster.entries.iter().find(|entry| {
+                entry
+                    .lease_identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.task_id == handoff.task_id)
+            })
+        })
+        .or_else(|| {
+            supervisor_snapshot
+                .roster
+                .entries
+                .get(app.supersession_mud_ui_state.selected_actor_index())
+        });
+
+    if let Some(entry) = selected_entry {
+        let stage = if supervisor_snapshot
+            .distributor
+            .queue_items
+            .iter()
+            .any(|item| item.source_agent == entry.agent_id)
+        {
+            "delivery"
+        } else {
+            crate::adapter::inbound::tui::supersession_mud::lifecycle_progress_label(
+                &entry.state_label,
+            )
+        };
+        return Line::from(vec![
+            Span::styled("Current", AkraTheme::accent()),
+            Span::raw(format!(
+                "  {}  ·  {}  ·  {}",
+                truncate_timeline_text(&entry.task_title, 54),
+                stage,
+                entry.duration_label
+            )),
+        ]);
+    }
+    if let Some(next_task_title) = progress.next_task_title.as_deref() {
+        return Line::from(vec![
+            Span::styled("Next", AkraTheme::accent()),
+            Span::raw(format!(
+                "  {}  ·  waiting for a slot",
+                truncate_timeline_text(next_task_title, 64)
+            )),
+        ]);
+    }
+    if progress.syncing {
+        let task_title = handoff.map(|handoff| handoff.task_title.as_str());
+        return Line::from(vec![
+            Span::styled("Preparing", AkraTheme::accent()),
+            Span::raw(format!(
+                "  {}",
+                task_title
+                    .map(|title| truncate_timeline_text(title, 64))
+                    .unwrap_or_else(|| "refreshing parallel workspace".to_string())
+            )),
+        ]);
     }
 
-    pool.compact_summary()
-}
-
-fn roster_summary_label(supervisor_snapshot: &ParallelModeSupervisorSnapshot) -> String {
-    if is_pending_pool_board(&supervisor_snapshot.pool) {
-        return "pending".to_string();
-    }
-
-    supervisor_snapshot.roster.compact_summary()
-}
-
-fn distributor_summary_label(distributor: &ParallelModeDistributorSnapshot) -> String {
-    if is_pending_distributor(distributor) {
-        return distributor.head_summary.clone();
-    }
-
-    distributor.compact_summary()
+    Line::styled(
+        format!("Ready for work  ·  {} slots available", progress.available),
+        AkraTheme::muted(),
+    )
 }
 
 #[cfg(test)]

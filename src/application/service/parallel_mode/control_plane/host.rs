@@ -119,6 +119,10 @@ where
             .flatten()
     }
 
+    pub fn control_effect_in_flight(&self) -> bool {
+        self.service().control_effect_in_flight()
+    }
+
     #[cfg(test)]
     pub fn automation_epoch_is_active(&self, workspace_directory: &str, epoch_id: u64) -> bool {
         self.service()

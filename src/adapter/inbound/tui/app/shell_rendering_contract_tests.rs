@@ -899,12 +899,11 @@ fn inline_supersession_inspection_renders_prepare_panels_inside_shell_frame() {
         .expect("inline supersession inspection render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel Mode / inline inspection"));
-    assert!(rendered.contains("board: supervise"));
-    assert!(rendered.contains("Basic Info"));
-    assert!(rendered.contains("Distributor"));
-    assert!(rendered.contains("Pool"));
-    assert!(rendered.contains("Orchestrator"));
+    assert!(rendered.contains("Parallel / inline inspection"));
+    assert!(rendered.contains("Overview"));
+    assert!(rendered.contains("Delivery"));
+    assert!(rendered.contains("Capacity"));
+    assert!(rendered.contains("Tasks"));
     assert!(rendered.contains("Parallel Event Stream"));
     assert!(rendered.contains("loading pool board"));
     assert!(rendered.contains("loading distributor board"));
@@ -994,7 +993,7 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         .expect("inline supersession deep slot render succeeds");
     let pool_rendered = tui_testkit::screen_text(&terminal);
     assert!(
-        pool_rendered.contains("> slot slot-11"),
+        pool_rendered.contains("> slot-11"),
         "deep selected pool slot must be visible:\n{pool_rendered}"
     );
 
@@ -1006,12 +1005,12 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         .expect("inline supersession selected roster render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Selection / Orchestrator"));
+    assert!(rendered.contains("Current / Diagnostics"));
     assert!(
-        rendered.contains("> agent agent-11 in slot-11"),
+        rendered.contains("> Task 11"),
         "deep selected roster row must be visible:\n{rendered}"
     );
-    assert!(!rendered.contains("> agent agent-1 in slot-1"));
+    assert!(!rendered.contains("> Task 1  "));
 
     app.supersession_mud_ui_state.focus_next_zone();
     terminal
@@ -1019,9 +1018,8 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         .expect("inline supersession selected detail fallback render succeeds");
     let detail_rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(detail_rendered.contains("> selected agent: agent-11"));
-    assert!(detail_rendered.contains("latest summary: testing 11"));
-    assert!(!detail_rendered.contains("session detail: slot-1 / agent-1"));
+    assert!(detail_rendered.contains("> Current  Task 11"));
+    assert!(detail_rendered.contains("Latest  testing 11"));
 
     app.supersession_mud_ui_state.focus_next_zone();
     app.supersession_mud_ui_state.move_selection(&snapshot, 10);
@@ -1030,7 +1028,7 @@ fn inline_supersession_deep_actor_and_matching_fallback_stay_visible() {
         .expect("inline supersession deep distributor render succeeds");
     let distributor_rendered = tui_testkit::screen_text(&terminal);
     assert!(
-        distributor_rendered.contains("> held queued | agent agent-11"),
+        distributor_rendered.contains("> Task 11  ·  queued  ·  next"),
         "deep selected distributor item must be visible:\n{distributor_rendered}"
     );
 }
@@ -1317,7 +1315,7 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
         .expect("inline parallel home render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel Mode / inline inspection"));
+    assert!(rendered.contains("Parallel / inline inspection"));
     assert!(rendered.contains("Parallel Event Stream"));
     assert!(rendered.contains("You: 안녕하세요"));
     assert!(!rendered.contains("Operator: first user word"));
@@ -1351,9 +1349,9 @@ fn inline_parallel_home_suppresses_startup_banner_on_empty_draft() {
         .expect("inline parallel empty draft render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel Mode / inline inspection"));
+    assert!(rendered.contains("Parallel / inline inspection"));
     assert!(rendered.contains("Parallel Event Stream"));
-    assert!(rendered.contains("parallel: ready  |  mode: parallel"));
+    assert!(rendered.contains("Parallel  ready"));
     assert!(!rendered.contains("█████"));
     assert!(!rendered.contains("╚═╝"));
 }
@@ -1542,9 +1540,9 @@ fn inline_supersession_narrow_snapshot_keeps_selected_timeline_visible() {
     assert!(rendered.contains("Agent agent-1: Timeline UI"));
     assert!(rendered.contains("Ledger: accepted Timeline UI"));
     assert!(rendered.contains("head: idle"));
-    assert!(rendered.contains("Selection"));
+    assert!(rendered.contains("Current"));
     assert!(
-        rendered.contains("> session detail:"),
+        rendered.contains("> Current"),
         "selected session detail must survive the narrow layout:\n{rendered}"
     );
     assert!(!rendered.contains("commit_ready"));
@@ -1605,8 +1603,8 @@ fn inline_parallel_home_keeps_loading_spinner_when_overlay_hidden() {
         .expect("inline parallel home loading render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Parallel Mode / inline inspection"));
-    assert!(rendered.contains("prompt locked while parallel loading is active"));
+    assert!(rendered.contains("Parallel / inline inspection"));
+    assert!(rendered.contains("prompt paused while setup completes"));
     assert!(
         [
             "⠋ >", "⠙ >", "⠹ >", "⠸ >", "⠼ >", "⠴ >", "⠦ >", "⠧ >", "⠇ >", "⠏ >"
@@ -1677,10 +1675,50 @@ fn inline_tail_surfaces_parallel_mode_summary_when_enabled() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("parallel: ready  |  mode: parallel"));
-    assert!(rendered.contains("agents: 0 active"));
-    assert!(rendered.contains("queue: idle"));
+    assert!(rendered.contains("Parallel  ready"));
+    assert!(!rendered.contains("agents:"));
+    assert!(!rendered.contains("queue: idle"));
     assert!(rendered.contains("parallel alert:"));
+}
+
+#[test]
+fn inline_tail_shows_syncing_instead_of_idle_before_dispatch_projection_arrives() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_readiness_snapshot_for_test(Some(sample_parallel_mode_snapshot(
+        ParallelModeReadinessState::Ready,
+    )));
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+        ParallelModeSupervisorState::Supervise,
+        "/tmp/root",
+        ParallelModePoolBoardSnapshot::new(
+            1,
+            "/tmp/pool",
+            "idle",
+            vec![ParallelModePoolSlotSnapshot::new(
+                "slot-1",
+                ParallelModePoolSlotState::Idle,
+                "prerelease",
+                "/tmp/pool/slot-1",
+                "idle",
+            )],
+        ),
+        ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+        ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+        ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+        None,
+    )));
+    let _ = app.mark_parallel_mode_supervisor_refresh_in_flight_for_test();
+
+    let rendered = build_inline_tail_lines(&app)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Parallel  ◐ syncing  ·  1 available"));
+    assert!(!rendered.contains("pool: idle"));
 }
 
 #[test]
@@ -1731,7 +1769,7 @@ fn inline_tail_omits_legacy_planning_valid_status_in_single_and_parallel_home() 
 
     let parallel_rendered = rendered_tail(true);
     assert!(!parallel_rendered.contains("planning: valid"));
-    assert!(parallel_rendered.contains("parallel: ready  |  mode: parallel"));
+    assert!(parallel_rendered.contains("Parallel  ○ 2 queued"));
     assert!(!parallel_rendered.contains("queue: queue head: rank 1 / task-1"));
     assert!(parallel_rendered.contains("now: Implement shell planning status"));
 }

@@ -1,5 +1,7 @@
 use ratatui::text::Line;
 
+use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summary;
+
 use super::super::{
     ConversationViewModel, INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT,
     NativeTuiApp, compact_inline_detail, format_conversation_lines,
@@ -35,34 +37,27 @@ pub(super) fn current_live_agent_lines(
 
 pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> Option<String> {
     /*
-     * parallel mode summary는 readiness, mode toggle, pool, roster, distributor queue를 한 줄로 압축한다.
-     * supersession overlay와 footer가 모두 이 문장을 읽으므로, app-wide snapshot 조합을 이곳에 둔다.
+     * 기본 tail은 사용자가 지금 기다려야 하는 단계만 보여 준다. pool 내부 ID, agent 수, distributor
+     * 구현 용어는 supersession board/event stream에서 계속 확인할 수 있지만, 일상 화면에서는 작업 흐름과
+     * 사용 가능한 capacity가 먼저 보여야 dispatch 지연을 idle로 오해하지 않는다.
      */
     match app.parallel_mode_readiness_snapshot() {
-        Some(snapshot) => {
+        Some(_) if app.parallel_mode_enabled() => {
             let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
-            Some(format!(
-                "parallel: {}  |  mode: {}  |  pool: {}  |  agents: {}  |  queue: {}",
-                snapshot.readiness_label(),
-                if app.parallel_mode_enabled() {
-                    "parallel"
-                } else {
-                    "normal"
-                },
-                supervisor_snapshot.pool.compact_summary(),
-                supervisor_snapshot.roster.compact_summary(),
-                supervisor_snapshot.distributor.compact_summary(),
-            ))
+            let planning_projection = app.planning_runtime_projection_snapshot();
+            let progress = parallel_mode_progress_summary(
+                &supervisor_snapshot,
+                planning_projection.queue_projection(),
+                app.parallel_mode_control_effect_in_flight(),
+            );
+            Some(format!("Parallel  {}", progress.compact_line()))
         }
+        Some(_) => None,
         /*
          * mode는 켜졌지만 readiness snapshot이 아직 없으면 background reconcile 전이다.
          * 이 상태를 "off"로 보이면 사용자가 toggle이 먹지 않았다고 오해하므로 preparing copy를 별도로 둔다.
          */
-        None if app.parallel_mode_enabled() => {
-            Some(
-                "parallel: preparing  |  mode: parallel  |  pool: pending reconcile  |  agents: 0 active  |  queue: pending".to_string(),
-            )
-        }
+        None if app.parallel_mode_enabled() => Some("Parallel  ◐ preparing workspace".to_string()),
         /*
          * snapshot도 없고 mode도 꺼져 있으면 parallel subsystem은 의도적으로 inactive다.
          * 이 상태는 operator가 조치할 정보가 없으므로 inline tail에서는 숨긴다.
