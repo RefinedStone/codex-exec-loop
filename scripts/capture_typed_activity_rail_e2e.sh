@@ -475,7 +475,7 @@ assert_transient_tail_absent_from_history() {
     'input: streaming' \
     'model:gpt-5.6-synthetic' \
     'task:' \
-    'prompt: turn running'; do
+    'prompt: type now'; do
     assert_count 0 "$marker" "$raw_root/$name.history"
   done
 }
@@ -486,12 +486,14 @@ assert_active_checkpoint() {
   local height="$3"
   local model_count="$4"
   assert_checkpoint_geometry "$name" "$width" "$height"
-  assert_count 1 'notice: activity: cmd:1 lines | active:command' "$raw_root/$name.current"
+  assert_count 1 'notice: activity: active:command | cmd:1 lines' "$raw_root/$name.current"
   assert_count 1 'notice: activity:' "$raw_root/$name.current"
   assert_count 1 'active:command' "$raw_root/$name.current"
   assert_count 1 'Working (' "$raw_root/$name.current"
-  assert_count 1 'prompt: turn running' "$raw_root/$name.current"
+  assert_count 1 'prompt: type now' "$raw_root/$name.current"
   assert_count "$model_count" 'model:gpt-5.6-synthetic' "$raw_root/$name.current"
+  assert_count 0 'turn: working' "$raw_root/$name.current"
+  assert_count 0 'input: streaming' "$raw_root/$name.current"
   assert_transient_tail_absent_from_history "$name"
   assert_count 0 'D4_RAW_ACTIVITY_SECRET' "$raw_root/$name.full"
 }
@@ -512,7 +514,7 @@ assert_startup_checkpoint startup
 
 tmux -L "$socket_name" send-keys -t "$pane_target" -l 'D4_CAPTURE_START'
 tmux -L "$socket_name" send-keys -t "$pane_target" Enter
-wait_for_current 'notice: activity: cmd:1 lines | active:command' 200
+wait_for_current 'notice: activity: active:command | cmd:1 lines' 200
 wait_for_current 'model:gpt-5.6-synthetic' 200
 capture_checkpoint active_wide
 assert_active_checkpoint active_wide 160 24 1
@@ -520,7 +522,7 @@ assert_active_checkpoint active_wide 160 24 1
 tmux -L "$socket_name" resize-window -t "$session_name:0" -x 48 -y 18
 wait_for_geometry 48x18 100
 sleep 0.15
-wait_for_current 'notice: activity: cmd:1 lines | active:command' 100
+wait_for_current 'notice: activity: active:command | cmd:1 lines' 100
 capture_checkpoint active_narrow
 assert_active_checkpoint active_narrow 48 18 0
 
@@ -536,7 +538,7 @@ tmux -L "$socket_name" resize-window -t "$session_name:0" -x 48 -y 18
 wait_for_geometry 48x18 100
 wait_for_raw_pty_growth "$raw_bytes_before_repeat" 100
 sleep 0.15
-wait_for_current 'notice: activity: cmd:1 lines | active:command' 100
+wait_for_current 'notice: activity: active:command | cmd:1 lines' 100
 capture_checkpoint active_narrow_repeat
 assert_active_checkpoint active_narrow_repeat 48 18 0
 (( $(<"$raw_root/active_transition_wide.raw-bytes") > $(<"$raw_root/active_narrow.raw-bytes") )) || {
@@ -572,7 +574,7 @@ capture_checkpoint active_restored
 assert_active_checkpoint active_restored 160 24 1
 
 : >"$release_file"
-wait_for_current 'turn: idle' 200
+wait_for_current 'prompt: session ready' 200
 wait_for_full 'D4_COMMITTED_OUTPUT_CANARY' 200
 capture_checkpoint completed
 assert_count 0 'notice: activity:' "$raw_root/completed.current"
@@ -704,9 +706,11 @@ function checkpoint(name) {
       currentActiveCommand: count(current, 'active:command'),
       currentActivityRail: count(current, 'notice: activity:'),
       currentWorkingState: count(current, 'Working ('),
-      currentRunningPrompt: count(current, 'prompt: turn running'),
+      currentRunningPrompt: count(current, 'prompt: type now'),
       currentReadyPrompt: count(current, 'prompt: new thread ready'),
       currentModelFact: count(current, 'model:gpt-5.6-synthetic'),
+      currentTurnWorking: count(current, 'turn: working'),
+      currentInputStreaming: count(current, 'input: streaming'),
       historyActivityRail: count(history, 'notice: activity:'),
       historyActiveCommand: count(history, 'active:command'),
       historyWorkingState: count(history, 'Working ('),
@@ -714,7 +718,7 @@ function checkpoint(name) {
       historyInputStreaming: count(history, 'input: streaming'),
       historyModelFact: count(history, 'model:gpt-5.6-synthetic'),
       historyTaskFact: count(history, 'task:'),
-      historyRunningPrompt: count(history, 'prompt: turn running'),
+      historyRunningPrompt: count(history, 'prompt: type now'),
       fullRawSecret: count(full, 'D4_RAW_ACTIVITY_SECRET'),
       fullCommittedCanary: count(full, 'D4_COMMITTED_OUTPUT_CANARY'),
     },
