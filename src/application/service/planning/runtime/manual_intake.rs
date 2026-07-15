@@ -1,6 +1,6 @@
 use crate::application::service::planning::runtime::facade::PlanningRuntimeFacadeService;
 use crate::application::service::planning::runtime::intake::{
-    PlanningTaskIntakeRequest, PlanningTaskIntakeService,
+    PlanningTaskIntakeProposal, PlanningTaskIntakeRequest, PlanningTaskIntakeService,
 };
 use crate::diagnostics::event_log;
 use crate::domain::planning::{
@@ -88,20 +88,18 @@ impl ManualPromptIntakeService {
         request: &ManualPromptIntakeRequest,
         transcript_text: &str,
     ) -> ManualPromptIntakeOutcome {
-        let proposal = match self
-            .task_intake
-            .prepare_task_intake(PlanningTaskIntakeRequest {
-                workspace_directory: request.workspace_directory.clone(),
-                raw_prompt: transcript_text.to_string(),
-                legacy_source_turn_id: request.legacy_source_turn_id.clone(),
-                provenance: TaskMutationProvenance::new(OriginSessionKind::ManualIntake)
-                    .with_parent(
-                        request.parent_thread_id.clone(),
-                        request.parent_turn_id.clone(),
-                    ),
-                requested_direction_id: None,
-                observed_planning_revision: None,
-            }) {
+        let intake_request = PlanningTaskIntakeRequest {
+            workspace_directory: request.workspace_directory.clone(),
+            raw_prompt: transcript_text.to_string(),
+            legacy_source_turn_id: request.legacy_source_turn_id.clone(),
+            provenance: TaskMutationProvenance::new(OriginSessionKind::ManualIntake).with_parent(
+                request.parent_thread_id.clone(),
+                request.parent_turn_id.clone(),
+            ),
+            requested_direction_id: None,
+            observed_planning_revision: None,
+        };
+        let proposal = match self.prepare_task_intake_with_retry(intake_request) {
             Ok(proposal) => proposal,
             Err(error) => {
                 return ManualPromptIntakeOutcome::Failed {
@@ -130,6 +128,18 @@ impl ManualPromptIntakeService {
                 transcript_text: transcript_text.to_string(),
                 task: Some(handoff.task),
             },
+        }
+    }
+
+    fn prepare_task_intake_with_retry(
+        &self,
+        request: PlanningTaskIntakeRequest,
+    ) -> anyhow::Result<PlanningTaskIntakeProposal> {
+        // Preparation is read-only, so one retry can absorb a transient authority read without
+        // risking a duplicate task. The revision-aware commit below remains single-shot.
+        match self.task_intake.prepare_task_intake(request.clone()) {
+            Ok(proposal) => Ok(proposal),
+            Err(_) => self.task_intake.prepare_task_intake(request),
         }
     }
 }
@@ -402,6 +412,60 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(matching_ids.len(), 2);
         assert!(matching_ids.contains(&committed_task_id.as_str()));
+    }
+
+    #[test]
+    fn manual_prompt_intake_retries_a_transient_prepare_read_failure() {
+        let workspace_dir = create_temp_git_repo("manual-intake-prepare-retry");
+        let workspace = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let bootstrap_planning = PlanningServices::from_ports(
+            workspace.clone(),
+            authority.clone(),
+            authority.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        bootstrap_planning_workspace(&bootstrap_planning, &workspace_dir);
+        let retry_repository = Arc::new(InterceptingTaskRepositoryPort::prepare_fail_once(
+            authority.clone(),
+        ));
+        let planning = PlanningServices::from_ports(
+            workspace,
+            authority.clone(),
+            retry_repository.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+
+        let outcome = planning
+            .runtime
+            .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
+                workspace_directory: workspace_dir.clone(),
+                raw_prompt: "Recover the operator prompt".to_string(),
+                legacy_source_turn_id: None,
+                parent_thread_id: None,
+                parent_turn_id: None,
+            });
+
+        let ManualPromptIntakeOutcome::TaskCommitted {
+            committed_task_id, ..
+        } = outcome
+        else {
+            panic!("manual prompt should recover after a read retry: {outcome:?}");
+        };
+        assert!(retry_repository.was_intercepted());
+        let snapshot = authority
+            .load_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority should exist");
+        assert_eq!(
+            snapshot
+                .task_authority
+                .tasks
+                .iter()
+                .filter(|task| task.id == committed_task_id)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -681,6 +745,7 @@ mod tests {
     enum TaskCommitInterception {
         Fail,
         ConflictOnce,
+        PrepareFailOnce,
     }
 
     struct InterceptingTaskRepositoryPort {
@@ -706,6 +771,14 @@ mod tests {
             }
         }
 
+        fn prepare_fail_once(inner: Arc<SqlitePlanningAuthorityAdapter>) -> Self {
+            Self {
+                inner,
+                interception: TaskCommitInterception::PrepareFailOnce,
+                intercepted: AtomicBool::new(false),
+            }
+        }
+
         fn was_intercepted(&self) -> bool {
             self.intercepted.load(Ordering::SeqCst)
         }
@@ -716,6 +789,11 @@ mod tests {
             &self,
             workspace_dir: &str,
         ) -> anyhow::Result<Option<PlanningDirectionAuthoritySnapshot>> {
+            if matches!(self.interception, TaskCommitInterception::PrepareFailOnce)
+                && !self.intercepted.swap(true, Ordering::SeqCst)
+            {
+                return Err(anyhow!("synthetic transient authority read failure"));
+            }
             self.inner.load_direction_authority_snapshot(workspace_dir)
         }
 
@@ -768,6 +846,7 @@ mod tests {
                         });
                     }
                     TaskCommitInterception::ConflictOnce => {}
+                    TaskCommitInterception::PrepareFailOnce => {}
                 }
             }
             self.inner

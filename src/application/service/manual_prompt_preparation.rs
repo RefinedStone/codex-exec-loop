@@ -1,5 +1,6 @@
 use crate::application::service::planning::{
-    ManualPromptIntakeRequest, PlanningRuntimeProjection, PlanningServices,
+    ManualPromptIntakeOutcome, ManualPromptIntakeRequest, PlanningRuntimeProjection,
+    PlanningRuntimeWorkspaceStatus, PlanningServices,
 };
 use crate::domain::planning::{
     ManualPlanningBootstrapFailureKind as DomainManualPlanningBootstrapFailureKind,
@@ -75,6 +76,21 @@ impl ManualPromptPreparationService {
                     parent_thread_id: request.parent_thread_id,
                     parent_turn_id: request.parent_turn_id,
                 });
+        if matches!(
+            intake,
+            ManualPromptIntakeOutcome::TaskCommitted { .. }
+                | ManualPromptIntakeOutcome::TaskUpdated { .. }
+        ) {
+            let refreshed_projection = self
+                .planning
+                .runtime
+                .load_runtime_projection_or_invalid(&request.correlation.workspace_directory);
+            if refreshed_projection.workspace_status() != PlanningRuntimeWorkspaceStatus::Invalid
+                || runtime_projection.workspace_status() == PlanningRuntimeWorkspaceStatus::Invalid
+            {
+                runtime_projection = refreshed_projection;
+            }
+        }
         ManualPromptPreparationResult::PromptReady {
             correlation: request.correlation,
             transcript_text,
@@ -495,6 +511,29 @@ mod tests {
                             reason: String::new(),
                         },
                     )
+        ));
+    }
+
+    #[test]
+    fn successful_intake_replaces_a_stale_invalid_projection() {
+        let outcome = service_for(WorkspaceBehavior::Normal).prepare_with_runtime_projection(
+            request("recover the manual turn"),
+            PlanningRuntimeProjection::invalid("transient authority read failure"),
+        );
+
+        assert!(matches!(
+            outcome,
+            ManualPromptPreparationResult::PromptReady {
+                runtime_projection,
+                intake,
+                ..
+            } if runtime_projection.workspace_status()
+                    != PlanningRuntimeWorkspaceStatus::Invalid
+                && matches!(
+                    intake.as_ref(),
+                    ManualPromptIntakeOutcome::TaskCommitted { .. }
+                        | ManualPromptIntakeOutcome::TaskUpdated { .. }
+                )
         ));
     }
 
