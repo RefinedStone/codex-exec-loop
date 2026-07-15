@@ -1,5 +1,7 @@
 # jcode To Akra Gap Matrix
 
+[한국어 번역](../../ko/competitive/jcode/gap-matrix.md)
+
 This document turns the [jcode v0.43.0 analysis](analysis.md) into Akra decisions. Evidence and
 limitations are in [evidence.md](evidence.md). `Ahead` means stronger evidence for the named
 dimension at the pinned snapshots, not a total product score.

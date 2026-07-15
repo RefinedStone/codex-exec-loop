@@ -137,7 +137,7 @@ contract in [.gemini/styleguide.md](.gemini/styleguide.md).
 - [Development and delivery guide](docs/reference/development.md)
 - [TUI visual contract](docs/design/07-tui-layered-architecture-and-aesthetic-contract.md)
 - [Validation records and gates](docs/validation/README.md)
-- [Competitive research](docs/competitive/README.md)
+- [Competitive research](docs/competitive/README.md) ([한국어](docs/ko/competitive/README.md))
 
 Current implementation references are compact and have Korean translations under `docs/ko/`.
 Future plans and reproducible competitor research remain unabridged.

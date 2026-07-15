@@ -1,5 +1,7 @@
 # OpenCode Evidence Ledger
 
+[한국어 번역](../../ko/competitive/opencode/evidence.md)
+
 This ledger separates immutable source inspection, reproduced release/runtime output, documented
 behavior, inference, and unverified experiments. Product conclusions are in
 [analysis.md](analysis.md), and Akra work decisions are in [gap-matrix.md](gap-matrix.md).

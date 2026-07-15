@@ -1,5 +1,7 @@
 # Orca To Akra Gap Matrix
 
+[한국어 번역](../../ko/competitive/orca/gap-matrix.md)
+
 This matrix compares Orca v1.4.137 at
 `6013055491943336660e12e5dec93c9ece4575bb` with Akra 1.3.5 at
 `6274a7fc9703f85e4fb6247541dc0d4ed6c5fb9b`. It is a product-relative decision source, not a total

@@ -1,5 +1,7 @@
 # Agent Canvas v1.2.1 Deep Dive
 
+[한국어 번역](../../ko/competitive/agent-canvas/analysis.md)
+
 This analysis compares OpenHands Agent Canvas v1.2.1 with Akra at prerelease commit
 `0229ed71a541d91abc04ad13b188d28b9eafcaf8`. Reproduction commands, immutable source links, and
 limitations are in [evidence.md](evidence.md). Akra decisions and reviewable implementation slices

@@ -1,5 +1,7 @@
 # OpenCode To Akra Gap Matrix
 
+[한국어 번역](../../ko/competitive/opencode/gap-matrix.md)
+
 This matrix turns the [v1.17.18 analysis](analysis.md) and
 [evidence ledger](evidence.md) into Akra-relative decisions. `Ahead` means stronger evidence for the
 named dimension at the pinned snapshots, not a total product score. Accepted work must strengthen

@@ -1,5 +1,7 @@
 # OpenCode v1.17.18 Deep Dive
 
+[한국어 번역](../../ko/competitive/opencode/analysis.md)
+
 This analysis compares OpenCode v1.17.18 with Akra at prerelease commit
 `354f4782a73ffabab6abf342cb0f37285a96c177`. Immutable source links, reproduced commands, release
 artifact identity, and audit limits are in [evidence.md](evidence.md). Akra-relative decisions and

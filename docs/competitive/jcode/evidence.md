@@ -1,5 +1,7 @@
 # jcode Evidence Ledger
 
+[한국어 번역](../../ko/competitive/jcode/evidence.md)
+
 This ledger separates inspected source from vendor claims and proposed design. The corresponding
 product conclusions live in [analysis.md](analysis.md), and Akra decisions live in
 [gap-matrix.md](gap-matrix.md).

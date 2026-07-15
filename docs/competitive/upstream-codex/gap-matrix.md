@@ -1,5 +1,7 @@
 # Upstream Codex To Akra Gap Matrix
 
+[한국어 번역](../../ko/competitive/upstream-codex/gap-matrix.md)
+
 This document turns the [OpenAI Codex v0.144.1 audit](analysis.md) into Akra decisions. Immutable
 source, released-binary probes, raw samples, Akra baseline links, and limitations are in
 [evidence.md](evidence.md). `Ahead` means stronger evidence for the named boundary at the pinned

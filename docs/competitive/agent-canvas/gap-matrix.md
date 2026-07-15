@@ -1,5 +1,7 @@
 # Agent Canvas To Akra Gap Matrix
 
+[한국어 번역](../../ko/competitive/agent-canvas/gap-matrix.md)
+
 This matrix turns the [v1.2.1 analysis](analysis.md) and [evidence ledger](evidence.md) into
 Akra-relative decisions. It does not treat browser surface area or provider count as goals. Accepted
 work must strengthen Akra's Codex-first operating and delivery position and remain reviewable as a

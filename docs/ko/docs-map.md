@@ -31,7 +31,7 @@
 - [Admin Game Control Center 제안](../design/09-admin-game-control-center.md)
 - [Admin animation map concept](../design/resources/admin-animation-map-concepts/)
 - [Codex for OSS 지원서 초안](../plan/14-codex-for-oss-application.md)
-- [경쟁 앱 분석·근거·gap matrix](../competitive/README.md)
+- [경쟁 앱 분석·근거·gap matrix 원문](../competitive/README.md) · [전체 한국어 번역](competitive/README.md)
 
 각 문서에 적힌 상태와 근거 시점을 기준으로 읽어야 하며, 이 자료의 내용이 곧 구현 완료를 뜻하지
 않습니다.
