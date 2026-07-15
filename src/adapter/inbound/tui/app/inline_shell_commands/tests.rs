@@ -1,5 +1,6 @@
 use super::{
     InlineShellCommand, InlineShellCommandInput, InlineShellCommandPaletteState, RESET_USAGE,
+    TuiLanguage,
 };
 
 /* Inline shell commands are typed directly into the prompt, so these tests pin
@@ -324,7 +325,7 @@ fn help_entries_use_renderable_command_forms() {
     tests keep broad parser aliases out of help copy while preserving argument
     grammar for commands whose execution depends on typed values.
     */
-    let rendered = InlineShellCommand::help_entries()
+    let rendered = InlineShellCommand::help_entries(TuiLanguage::English)
         .iter()
         .map(|entry| format!("{} - {}", entry.usage, entry.detail))
         .collect::<Vec<_>>()
@@ -347,12 +348,54 @@ fn help_entries_use_renderable_command_forms() {
     );
     assert!(!rendered.contains(":auto"));
     assert!(rendered.contains(":help - command help"));
+
+    let korean = InlineShellCommand::help_entries(TuiLanguage::Korean)
+        .iter()
+        .map(|entry| format!("{} - {}", entry.usage, entry.detail))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(korean.contains(":diag - 진단"));
+    assert!(korean.contains(":turns <positive|infinite|off> - 자동 후속 실행 설정"));
+    assert!(korean.contains(":help - 명령 도움말"));
     assert!(!rendered.contains(InlineShellCommand::command_list_line()));
 }
 
 // The following hint tests protect operator-facing copy at the point where a
 // command is still buffered. Invalid arguments should explain the supported shape
 // before the user commits the command with Enter.
+#[test]
+fn buffered_command_hints_follow_the_selected_tui_language() {
+    let reset = InlineShellCommandInput::parse(":reset queue").expect("command should parse");
+    assert_eq!(
+        reset.localized_buffered_hint(TuiLanguage::Korean),
+        "Enter로 큐 측 계획 상태를 초기화합니다."
+    );
+    assert_eq!(
+        reset.localized_buffered_hint(TuiLanguage::English),
+        reset.buffered_hint()
+    );
+
+    let invalid = InlineShellCommandInput::parse(":activity all").expect("command should parse");
+    let korean = invalid.localized_buffered_hint(TuiLanguage::Korean);
+    assert!(korean.contains("지원하지 않습니다"));
+    assert!(korean.contains("diff, output"));
+    assert!(!korean.contains("Press Enter"));
+
+    let diagnostics = InlineShellCommandInput::parse(":diag").expect("command should parse");
+    assert_eq!(
+        diagnostics
+            .localized_execution_status(TuiLanguage::Korean)
+            .as_deref(),
+        Some("진단 화면을 열었습니다.")
+    );
+    assert_eq!(
+        diagnostics
+            .localized_execution_status(TuiLanguage::English)
+            .as_deref(),
+        Some("opened diagnostics inspection")
+    );
+}
+
 #[test]
 fn planning_command_hint_is_argument_aware() {
     let plain = InlineShellCommandInput::parse(":planning").expect("command should parse");

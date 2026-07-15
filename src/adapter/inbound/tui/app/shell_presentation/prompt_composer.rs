@@ -20,6 +20,7 @@ pub(super) struct PromptBufferView {
 
 pub(super) fn build_shell_command_palette_lines(
     conversation: &ConversationViewModel,
+    language: TuiLanguage,
 ) -> Vec<Line<'static>> {
     let palette_state = &conversation.inline_shell_command_palette_state;
     // Dismissed palettes should leave the typed buffer visible without suggestion rows.
@@ -32,11 +33,10 @@ pub(super) fn build_shell_command_palette_lines(
     };
     // Empty results still render feedback so the user knows the palette is active and filtering.
     if palette_state.suggestions().is_empty() {
-        return vec![Line::from(vec![
-            Span::raw("  no shell commands match `"),
-            Span::raw(prefix),
-            Span::raw("`"),
-        ])];
+        return vec![Line::from(format!(
+            "  {}",
+            language.inline_command_palette_no_matches(&prefix)
+        ))];
     }
     let selected_index = palette_state.selected_index().unwrap_or(0);
     let suggestions = palette_state.suggestions();
@@ -68,9 +68,12 @@ pub(super) fn build_shell_command_palette_lines(
                 Span::raw(selector),
                 Span::styled(command.command_name(), label_style),
                 Span::raw("  "),
-                Span::styled(command.suggestion_detail(), detail_style),
+                Span::styled(command.suggestion_detail(language), detail_style),
                 if command.requires_argument() {
-                    Span::styled(" / add value", detail_style)
+                    Span::styled(
+                        language.inline_command_palette_argument_suffix(),
+                        detail_style,
+                    )
                 } else {
                     Span::raw("")
                 },

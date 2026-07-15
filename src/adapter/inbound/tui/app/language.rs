@@ -1,6 +1,17 @@
+use crate::application::service::planning::PlanningResetTarget;
+use crate::domain::conversation::ConversationReasoningEffort;
 use crate::domain::recent_sessions::SessionCatalogTier;
 
-use super::ShellActionAvailability;
+use super::inline_shell_commands::is_turn_option_clear_argument;
+use super::parallel_mode_shell_command::{
+    ParsedParallelModeShellCommand, parse_parallel_mode_shell_argument,
+};
+use super::planning_overlay_shell_command::parse_planning_overlay_shell_argument;
+use super::planning_reset_shell_command::parse_planning_reset_shell_argument;
+use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
+use super::progressive_activity_overlay_ui::parse_progressive_activity_detail_kind;
+use super::view_selection_overlay_ui::ConversationViewMode;
+use super::{InlineShellCommand, ShellActionAvailability};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum TuiLanguage {
@@ -65,6 +76,376 @@ impl TuiLanguage {
         match self {
             Self::English => "language set to English",
             Self::Korean => "언어가 한국어로 설정되었습니다.",
+        }
+    }
+
+    pub(super) const fn inline_shell_command_detail(
+        self,
+        command: InlineShellCommand,
+    ) -> &'static str {
+        match (self, command) {
+            (Self::English, InlineShellCommand::Diagnostics) => "diagnostics",
+            (Self::English, InlineShellCommand::Parallel) => "parallel mode",
+            (Self::English, InlineShellCommand::Peek) => "parallel agent peek",
+            (Self::English, InlineShellCommand::Activity) => "turn activity detail",
+            (Self::English, InlineShellCommand::Sessions) => "recent sessions",
+            (Self::English, InlineShellCommand::Reviews) => "review center",
+            (Self::English, InlineShellCommand::Queue) => "planning queue",
+            (Self::English, InlineShellCommand::Directions) => "directions maintenance",
+            (Self::English, InlineShellCommand::Turns) => "auto-follow opt-in; off or 0 disables",
+            (Self::English, InlineShellCommand::Stop) => "stop active sessions",
+            (Self::English, InlineShellCommand::Model) => "model and think",
+            (Self::English, InlineShellCommand::View) => "conversation view",
+            (Self::English, InlineShellCommand::Language) => "TUI language",
+            (Self::English, InlineShellCommand::Think) => "reasoning effort",
+            (Self::English, InlineShellCommand::Doctor) => "planning health",
+            (Self::English, InlineShellCommand::PlanningInit) => "planning control center",
+            (Self::English, InlineShellCommand::Reset) => "planning reset",
+            (Self::English, InlineShellCommand::NewDraft) => "new draft",
+            (Self::English, InlineShellCommand::Help) => "command help",
+            (Self::Korean, InlineShellCommand::Diagnostics) => "진단",
+            (Self::Korean, InlineShellCommand::Parallel) => "병렬 모드",
+            (Self::Korean, InlineShellCommand::Peek) => "병렬 에이전트 보기",
+            (Self::Korean, InlineShellCommand::Activity) => "턴 활동 상세",
+            (Self::Korean, InlineShellCommand::Sessions) => "최근 세션",
+            (Self::Korean, InlineShellCommand::Reviews) => "리뷰 센터",
+            (Self::Korean, InlineShellCommand::Queue) => "계획 큐",
+            (Self::Korean, InlineShellCommand::Directions) => "계획 지침 관리",
+            (Self::Korean, InlineShellCommand::Turns) => "자동 후속 실행 설정; off 또는 0으로 끔",
+            (Self::Korean, InlineShellCommand::Stop) => "실행 중인 세션 중지",
+            (Self::Korean, InlineShellCommand::Model) => "모델 및 추론 수준",
+            (Self::Korean, InlineShellCommand::View) => "대화 표시 방식",
+            (Self::Korean, InlineShellCommand::Language) => "TUI 언어",
+            (Self::Korean, InlineShellCommand::Think) => "추론 수준",
+            (Self::Korean, InlineShellCommand::Doctor) => "계획 상태 점검",
+            (Self::Korean, InlineShellCommand::PlanningInit) => "계획 제어 센터",
+            (Self::Korean, InlineShellCommand::Reset) => "계획 상태 초기화",
+            (Self::Korean, InlineShellCommand::NewDraft) => "새 초안",
+            (Self::Korean, InlineShellCommand::Help) => "명령 도움말",
+        }
+    }
+
+    pub(super) fn inline_command_palette_header(self, selected: usize, total: usize) -> String {
+        match self {
+            Self::English => format!("palette {selected}/{total}"),
+            Self::Korean => format!("팔레트 {selected}/{total}"),
+        }
+    }
+
+    pub(super) const fn inline_command_palette_key_lines(self) -> [&'static str; 2] {
+        match self {
+            Self::English => [
+                "Up/Shift+Tab previous | Down/Tab next",
+                "Enter choose | Esc close",
+            ],
+            Self::Korean => ["Up/Shift+Tab 이전 | Down/Tab 다음", "Enter 선택 | Esc 닫기"],
+        }
+    }
+
+    pub(super) const fn inline_command_palette_empty_key_line(self) -> &'static str {
+        match self {
+            Self::English => "Esc close",
+            Self::Korean => "Esc 닫기",
+        }
+    }
+
+    const fn inline_shell_command_base_buffered_hint(
+        self,
+        command: InlineShellCommand,
+        english: &'static str,
+    ) -> &'static str {
+        if matches!(self, Self::English) {
+            return english;
+        }
+        match command {
+            InlineShellCommand::Diagnostics => "Enter로 진단 화면을 엽니다.",
+            InlineShellCommand::Parallel => "Enter로 병렬 모드를 시작합니다.",
+            InlineShellCommand::Peek => "Enter로 실행 중인 병렬 에이전트를 봅니다.",
+            InlineShellCommand::Activity => {
+                "`:activity [diff|output]`으로 보관된 턴 활동을 확인합니다."
+            }
+            InlineShellCommand::Sessions => "Enter로 최근 세션을 엽니다.",
+            InlineShellCommand::Reviews => "Enter로 리뷰 센터를 엽니다.",
+            InlineShellCommand::Queue => "Enter로 계획 큐를 엽니다.",
+            InlineShellCommand::Directions => "Enter로 계획 지침을 검토하거나 편집합니다.",
+            InlineShellCommand::Turns => {
+                "`:turns <positive|infinite>`로 자동 후속 실행을 켜거나 `:turns off`로 끕니다."
+            }
+            InlineShellCommand::Stop => "Enter로 실행 중인 app-server 세션을 중지합니다.",
+            InlineShellCommand::Model => "Enter로 모델과 추론 수준을 선택합니다.",
+            InlineShellCommand::View => "Enter로 대화의 도구·상태 행 표시 방식을 선택합니다.",
+            InlineShellCommand::Language => "Enter로 TUI 언어를 선택합니다.",
+            InlineShellCommand::Think => "`:think <level>`로 추론 수준을 선택합니다.",
+            InlineShellCommand::Doctor => "Enter로 계획 상태를 점검합니다.",
+            InlineShellCommand::PlanningInit => "Enter로 계획 제어 센터를 엽니다.",
+            InlineShellCommand::Reset => {
+                "`:reset <queue|directions|all>`로 초기화할 계획 상태를 지정합니다."
+            }
+            InlineShellCommand::NewDraft => "Enter로 새 초안을 엽니다.",
+            InlineShellCommand::Help => "Enter로 셸 명령 도움말을 엽니다.",
+        }
+    }
+
+    pub(super) fn inline_shell_command_buffered_hint(
+        self,
+        command: InlineShellCommand,
+        argument: Option<&str>,
+        english: &'static str,
+    ) -> String {
+        if self == Self::English {
+            return english.to_string();
+        }
+
+        let base_hint = || {
+            self.inline_shell_command_base_buffered_hint(command, english)
+                .to_string()
+        };
+        match command {
+            InlineShellCommand::Parallel => match parse_parallel_mode_shell_argument(argument) {
+                Ok(ParsedParallelModeShellCommand::Enable) => base_hint(),
+                Ok(ParsedParallelModeShellCommand::Disable) => {
+                    "Enter로 병렬 모드를 끕니다.".to_string()
+                }
+                Err(error) => format!(
+                    "`:parallel {}`은 지원하지 않습니다. 사용 가능: :parallel, :pa, :parallel off, :pa off.",
+                    error.argument()
+                ),
+            },
+            InlineShellCommand::Activity => match argument {
+                None => base_hint(),
+                Some(argument) => match parse_progressive_activity_detail_kind(argument) {
+                    Some(_) => format!(
+                        "Enter로 보관된 `{}` 활동 상세를 확인합니다.",
+                        argument.trim().to_ascii_lowercase()
+                    ),
+                    None => format!(
+                        "`:activity {}`은 지원하지 않습니다. 사용 가능: diff, output.",
+                        argument.trim()
+                    ),
+                },
+            },
+            InlineShellCommand::PlanningInit => match parse_planning_shell_argument(argument) {
+                Ok(ParsedPlanningShellCommand::OpenControlCenter) => base_hint(),
+                Ok(ParsedPlanningShellCommand::Doctor) => {
+                    "Enter로 계획 상태를 점검합니다.".to_string()
+                }
+                Err(error) => format!(
+                    "`:planning {}`은 지원하지 않습니다. 사용 가능한 인자: doctor.",
+                    error.argument()
+                ),
+            },
+            InlineShellCommand::Directions => {
+                match parse_planning_overlay_shell_argument(argument) {
+                    Ok(()) => base_hint(),
+                    Err(error) => format!(
+                        "`:directions`는 인자를 받지 않습니다 (`{}`). Enter로 계획 지침을 엽니다.",
+                        error.argument()
+                    ),
+                }
+            }
+            InlineShellCommand::Turns => match argument {
+                Some(value) if value.eq_ignore_ascii_case("off") || value == "0" => {
+                    "Enter로 자동 후속 실행을 끕니다.".to_string()
+                }
+                Some(value) => {
+                    format!("Enter로 자동 후속 실행을 켜고 턴 한도를 `{value}`로 설정합니다.")
+                }
+                None => base_hint(),
+            },
+            InlineShellCommand::Model => match argument {
+                None => base_hint(),
+                Some(value) if is_turn_option_clear_argument(value) => {
+                    "Enter로 app-server 기본 모델을 사용합니다.".to_string()
+                }
+                Some(_) => {
+                    "`:model`은 입력한 모델명을 무시합니다. Enter로 모델 선택을 엽니다.".to_string()
+                }
+            },
+            InlineShellCommand::View => match argument {
+                None => base_hint(),
+                Some(argument) => match ConversationViewMode::parse(argument) {
+                    Some(mode) => {
+                        format!(
+                            "Enter로 대화 표시 방식을 `{}`(으)로 설정합니다.",
+                            mode.label()
+                        )
+                    }
+                    None => format!(
+                        "`:view {}`은 지원하지 않습니다. 사용 가능: {}.",
+                        argument.trim(),
+                        ConversationViewMode::SUPPORTED_LABELS
+                    ),
+                },
+            },
+            InlineShellCommand::Language => match argument {
+                None => base_hint(),
+                Some(argument) => match Self::parse(argument) {
+                    Some(selected_language) => format!(
+                        "Enter로 TUI 언어를 {}(으)로 설정합니다.",
+                        selected_language.label()
+                    ),
+                    None => format!(
+                        "`:language {}`은 지원하지 않습니다. 사용 가능: {}.",
+                        argument.trim(),
+                        Self::SUPPORTED_LABELS
+                    ),
+                },
+            },
+            InlineShellCommand::Think => match argument {
+                None => base_hint(),
+                Some(argument) if is_turn_option_clear_argument(argument) => {
+                    "Enter로 app-server 기본 추론 수준을 사용합니다.".to_string()
+                }
+                Some(argument) => match ConversationReasoningEffort::parse(argument) {
+                    Some(effort) => {
+                        format!("Enter로 추론 수준을 `{}`(으)로 설정합니다.", effort.label())
+                    }
+                    None => format!(
+                        "`:think {}`은 지원하지 않습니다. 사용 가능: {}.",
+                        argument.trim(),
+                        ConversationReasoningEffort::SUPPORTED_LABELS
+                    ),
+                },
+            },
+            InlineShellCommand::Queue => match parse_planning_overlay_shell_argument(argument) {
+                Ok(()) => base_hint(),
+                Err(error) => format!(
+                    "`:queue`는 인자를 받지 않습니다 (`{}`). Enter로 계획 큐를 엽니다.",
+                    error.argument()
+                ),
+            },
+            InlineShellCommand::Reviews => match parse_planning_overlay_shell_argument(argument) {
+                Ok(()) => base_hint(),
+                Err(error) => format!(
+                    "`:reviews`는 인자를 받지 않습니다 (`{}`). Enter로 리뷰 센터를 엽니다.",
+                    error.argument()
+                ),
+            },
+            InlineShellCommand::Reset => match parse_planning_reset_shell_argument(argument).ok() {
+                Some(parsed) => match (parsed.target, parsed.confirmed) {
+                    (PlanningResetTarget::Queue, _) => {
+                        "Enter로 큐 측 계획 상태를 초기화합니다.".to_string()
+                    }
+                    (PlanningResetTarget::Directions, true) => {
+                        "Enter로 계획 지침 초기화를 확정합니다.".to_string()
+                    }
+                    (PlanningResetTarget::Directions, false) => {
+                        "계획 지침 파일을 다시 쓰기 전에 `:reset directions confirm`을 확인하세요."
+                            .to_string()
+                    }
+                    (PlanningResetTarget::All, true) => {
+                        "Enter로 전체 계획 초기화를 확정합니다.".to_string()
+                    }
+                    (PlanningResetTarget::All, false) => {
+                        "전체 계획 구조를 바꾸기 전에 `:reset all confirm`을 확인하세요."
+                            .to_string()
+                    }
+                },
+                None => match argument.map(str::trim).filter(|value| !value.is_empty()) {
+                    None => base_hint(),
+                    Some(argument) => format!(
+                        "`:reset {argument}`은 지원하지 않습니다. 사용 가능: queue, directions, all."
+                    ),
+                },
+            },
+            InlineShellCommand::Diagnostics
+            | InlineShellCommand::Peek
+            | InlineShellCommand::Sessions
+            | InlineShellCommand::Stop
+            | InlineShellCommand::Doctor
+            | InlineShellCommand::NewDraft
+            | InlineShellCommand::Help => base_hint(),
+        }
+    }
+
+    pub(super) fn inline_shell_command_execution_status(
+        self,
+        command: InlineShellCommand,
+        english: &str,
+    ) -> String {
+        match (self, command) {
+            (Self::Korean, InlineShellCommand::Diagnostics) => {
+                "진단 화면을 열었습니다.".to_string()
+            }
+            (Self::Korean, InlineShellCommand::Sessions) => "최근 세션을 열었습니다.".to_string(),
+            (Self::Korean, InlineShellCommand::Reviews) => "리뷰 센터를 열었습니다.".to_string(),
+            (Self::Korean, InlineShellCommand::Queue) => "계획 큐를 열었습니다.".to_string(),
+            (Self::Korean, InlineShellCommand::Help) => "셸 명령 도움말을 열었습니다.".to_string(),
+            _ => english.to_string(),
+        }
+    }
+
+    pub(super) const fn parallel_control_tower_opened_status(self) -> &'static str {
+        match self {
+            Self::English => "opened supersession control tower",
+            Self::Korean => "병렬 제어 센터를 열었습니다.",
+        }
+    }
+
+    pub(super) fn inline_command_palette_no_matches(self, prefix: &str) -> String {
+        match self {
+            Self::English => format!("no shell commands match `{prefix}`"),
+            Self::Korean => format!("`{prefix}`와 일치하는 셸 명령이 없습니다"),
+        }
+    }
+
+    pub(super) const fn inline_command_palette_argument_suffix(self) -> &'static str {
+        match self {
+            Self::English => " / add value",
+            Self::Korean => " / 값 입력",
+        }
+    }
+
+    pub(super) const fn shell_command_help_title(self) -> &'static str {
+        match self {
+            Self::English => "Shell Command Help",
+            Self::Korean => "셸 명령 도움말",
+        }
+    }
+
+    pub(super) const fn shell_command_help_context(self) -> &'static str {
+        match self {
+            Self::English => " / inline inspection",
+            Self::Korean => " / 인라인 보기",
+        }
+    }
+
+    pub(super) const fn shell_command_help_intro(self) -> &'static str {
+        match self {
+            Self::English => "Type commands in the prompt; type `:` to open the palette.",
+            Self::Korean => "프롬프트에 명령을 입력하세요. `:`를 입력하면 팔레트가 열립니다.",
+        }
+    }
+
+    pub(super) const fn shell_command_help_keys(self) -> &'static str {
+        match self {
+            Self::English => {
+                "Up/Down or j/k: scroll  |  PgUp/PgDn: page  |  Home/End  |  Esc/Ctrl+C: close"
+            }
+            Self::Korean => {
+                "Up/Down 또는 j/k: 스크롤  |  PgUp/PgDn: 페이지  |  Home/End  |  Esc/Ctrl+C: 닫기"
+            }
+        }
+    }
+
+    pub(super) const fn shell_commands_panel_title(self) -> &'static str {
+        match self {
+            Self::English => "Shell Commands",
+            Self::Korean => "셸 명령",
+        }
+    }
+
+    pub(super) const fn commands_section_title(self) -> &'static str {
+        match self {
+            Self::English => "Commands",
+            Self::Korean => "명령",
+        }
+    }
+
+    pub(super) const fn keys_section_title(self) -> &'static str {
+        match self {
+            Self::English => "Keys",
+            Self::Korean => "키",
         }
     }
 
@@ -504,8 +885,8 @@ mod tests {
     use crate::domain::recent_sessions::SessionCatalogTier;
 
     use super::{
-        LanguageSelectionOverlayUiState, ShellActionAvailability, TUI_LOCALIZED_IMPORTANT_MARKERS,
-        TuiLanguage, language_option_index,
+        InlineShellCommand, LanguageSelectionOverlayUiState, ShellActionAvailability,
+        TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage, language_option_index,
     };
 
     #[test]
@@ -541,6 +922,53 @@ mod tests {
         assert_eq!(state.selected_language(), TuiLanguage::English);
         state.reset_from_language(TuiLanguage::English);
         assert_eq!(state.selected_language(), TuiLanguage::English);
+    }
+
+    #[test]
+    fn command_palette_and_help_copy_are_localized_without_translating_keys() {
+        assert_eq!(
+            TuiLanguage::English.inline_shell_command_detail(InlineShellCommand::Queue),
+            "planning queue"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.inline_shell_command_detail(InlineShellCommand::Queue),
+            "계획 큐"
+        );
+        let english = TuiLanguage::English.inline_command_palette_header(3, 19);
+        let korean = TuiLanguage::Korean.inline_command_palette_header(3, 19);
+        assert!(english.contains("palette 3/19"));
+        assert!(korean.contains("팔레트 3/19"));
+        let english_keys = TuiLanguage::English
+            .inline_command_palette_key_lines()
+            .join("\n");
+        let korean_keys = TuiLanguage::Korean
+            .inline_command_palette_key_lines()
+            .join("\n");
+        for literal_key in ["Up", "Shift+Tab", "Down", "Tab", "Enter", "Esc"] {
+            assert!(english_keys.contains(literal_key));
+            assert!(korean_keys.contains(literal_key));
+        }
+        assert_eq!(
+            TuiLanguage::Korean.inline_command_palette_empty_key_line(),
+            "Esc 닫기"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.inline_command_palette_no_matches(":zzzz"),
+            "`:zzzz`와 일치하는 셸 명령이 없습니다"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.inline_shell_command_execution_status(
+                InlineShellCommand::Queue,
+                "opened planning queue inspection"
+            ),
+            "계획 큐를 열었습니다."
+        );
+        assert!(
+            TuiLanguage::English
+                .shell_command_help_intro()
+                .contains(":")
+        );
+        assert!(TuiLanguage::Korean.shell_command_help_intro().contains(":"));
     }
 
     #[test]

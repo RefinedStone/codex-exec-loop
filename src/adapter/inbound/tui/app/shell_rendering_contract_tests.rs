@@ -180,8 +180,9 @@ fn inline_main_buffer_rendering_avoids_box_borders() {
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("Controls / shell shortcuts and live status"));
     assert!(!rendered.contains("Prompt / ready"));
-    assert!(rendered.contains("Akra  |  thread: new draft  |  turn: idle"));
-    assert!(rendered.contains("input: draft"));
+    assert!(rendered.contains("Akra  |  thread: new draft"));
+    assert!(!rendered.contains("turn: idle"));
+    assert!(!rendered.contains("input: draft"));
     assert!(!rendered.contains("auto: queue/idle"));
     assert!(!rendered.contains("done: off"));
     assert!(!rendered.contains("Plan ready"));
@@ -206,7 +207,7 @@ fn inline_main_buffer_tail_anchors_below_transcript_area_after_history() {
         .iter()
         .position(|line| {
             line.trim_matches('"')
-                .starts_with("Akra  |  thread: new draft  |  turn: idle")
+                .starts_with("Akra  |  thread: new draft")
         })
         .expect("inline viewport should contain visible tail text");
     assert!(
@@ -284,9 +285,65 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     let rendered = tui_testkit::screen_text(&terminal);
 
     assert!(rendered.contains("> :"));
-    assert!(rendered.contains("command: palette"));
+    assert!(rendered.contains("palette 1/19"));
+    assert!(rendered.contains("Down/Tab next"));
     assert!(rendered.contains(":diag"));
     assert!(rendered.contains(":peek"));
+
+    let mut narrow_terminal = tui_testkit::inline_terminal(48, 10);
+    narrow_terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("narrow inline render succeeds");
+    let narrow = tui_testkit::screen_text(&narrow_terminal);
+    assert!(narrow.contains("palette 1/19"), "{narrow}");
+    assert!(narrow.contains("> :diag"), "{narrow}");
+    assert!(narrow.contains("Down/Tab next"), "{narrow}");
+}
+
+#[test]
+fn startup_prompt_command_palette_uses_selected_korean_language() {
+    let mut terminal = tui_testkit::inline_terminal(48, 10);
+    let mut app = make_test_app();
+    app.tui_language = TuiLanguage::Korean;
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start with a ready draft conversation");
+    };
+    conversation.input_buffer = ":".to_string();
+    conversation.sync_inline_shell_command_palette();
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("팔레트 1/19"));
+    assert!(rendered.contains(":diag  진단"));
+    assert!(rendered.contains("Down/Tab 다음"));
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should keep a ready draft conversation");
+    };
+    conversation.input_buffer = ":zzzz".to_string();
+    conversation.sync_inline_shell_command_palette();
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("no-match palette render succeeds");
+    let no_match = tui_testkit::screen_text(&terminal);
+    assert!(no_match.contains("팔레트 0/0"), "{no_match}");
+    assert!(no_match.contains("Esc 닫기"), "{no_match}");
+    assert!(!no_match.contains("Enter 선택"), "{no_match}");
+    assert!(!no_match.contains("Down/Tab 다음"), "{no_match}");
+
+    let mut fresh_terminal = tui_testkit::inline_terminal(48, 10);
+    fresh_terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("fresh no-match palette render succeeds");
+    let fresh_no_match = tui_testkit::screen_text(&fresh_terminal);
+    assert!(
+        fresh_no_match.contains("일치하는 셸 명령이 없습니다"),
+        "{fresh_no_match}"
+    );
 }
 #[test]
 fn inline_main_buffer_clears_stale_live_tail_rows_after_turn_finishes() {
@@ -445,9 +502,10 @@ fn inline_queue_overlay_rendering_shows_compact_sections() {
         .expect("queue render succeeds");
     let rendered = tui_testkit::screen_text(&terminal);
 
-    assert!(rendered.contains("Ready Queue"));
-    assert!(rendered.contains("Proposals"));
+    assert!(rendered.contains("Planning Queue"));
+    assert!(rendered.contains("queued:"));
     assert!(rendered.contains("x/Delete: remove"));
+    assert!(!rendered.contains("Review the next actionable work"));
 }
 
 // Inline inspection overlays replace the transcript region rather than drawing
@@ -553,6 +611,25 @@ fn inline_help_inspection_renders_command_help() {
     assert!(!rendered.contains("Shell commands: :diag  :parallel"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+
+#[test]
+fn inline_help_inspection_uses_selected_korean_language() {
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = make_test_app();
+    app.tui_language = TuiLanguage::Korean;
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.shell_overlay = ShellOverlay::Help;
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("inline help inspection render succeeds");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    assert!(rendered.contains("셸 명령 / 인라인 보기"));
+    assert!(rendered.contains(":diag"));
+    assert!(rendered.contains("진단"));
+    assert!(rendered.contains("PgUp/PgDn: 페이지"));
 }
 
 #[test]
@@ -1766,7 +1843,7 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
     let startup = shell_presentation::build_startup_overlay_view(&app);
     let sessions = shell_presentation::build_session_overlay_view(&app);
-    let help = shell_presentation::build_help_overlay_view();
+    let help = shell_presentation::build_help_overlay_view(TuiLanguage::English);
     app.show_model_selection_overlay();
     let model_selection = shell_presentation::build_model_selection_overlay_view(&app);
     app.show_view_selection_overlay();

@@ -3,6 +3,7 @@ use super::{
     make_dispatch_ready_parallel_runtime, make_test_runtime, mark_core_turn_completed,
     post_turn_evaluation_completed_message, sample_startup_diagnostics,
 };
+use crate::adapter::inbound::tui::app::TuiLanguage;
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
     PostTurnQueuedPrompt,
@@ -1220,6 +1221,53 @@ fn down_then_enter_on_palette_item_with_argument_inserts_completion() {
 }
 
 #[test]
+fn enter_on_empty_command_palette_does_not_submit_raw_command_text() {
+    let mut runtime = make_test_runtime();
+    for character in ":zzzz".chars() {
+        runtime.app_mut().push_input_character(character);
+    }
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, ":zzzz");
+    assert!(conversation.inline_shell_command_palette_state.is_active());
+    assert!(
+        conversation
+            .inline_shell_command_palette_state
+            .selected_command()
+            .is_none()
+    );
+    assert!(runtime.take_redraw_request());
+}
+
+#[test]
+fn palette_command_execution_status_uses_selected_korean_language() {
+    let mut runtime = make_test_runtime();
+    runtime.app_mut().tui_language = TuiLanguage::Korean;
+    runtime.app_mut().push_input_character(':');
+    runtime.app_mut().push_input_character('d');
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(conversation.status_text, "진단 화면을 열었습니다.");
+    assert!(!conversation.status_text.contains("opened"));
+}
+
+#[test]
 fn up_wraps_inline_command_palette_selection() {
     /*
      * Palette selection은 위쪽 이동에서 끝 항목으로 wrap된다. keyboard-only 사용자가 짧은 prefix
@@ -1239,6 +1287,40 @@ fn up_wraps_inline_command_palette_selection() {
             .selected_command(),
         Some(InlineShellCommand::Help)
     );
+}
+
+#[test]
+fn tab_and_backtab_navigate_inline_command_palette() {
+    let mut runtime = make_test_runtime();
+    runtime.app_mut().push_input_character(':');
+    runtime.take_redraw_request();
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(
+        conversation
+            .inline_shell_command_palette_state
+            .selected_command(),
+        Some(InlineShellCommand::Parallel)
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::BackTab,
+        KeyModifiers::SHIFT,
+    )));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(
+        conversation
+            .inline_shell_command_palette_state
+            .selected_command(),
+        Some(InlineShellCommand::Diagnostics)
+    );
+    assert_eq!(conversation.input_buffer, ":");
+    assert!(runtime.take_redraw_request());
 }
 
 #[test]

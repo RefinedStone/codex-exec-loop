@@ -14,19 +14,6 @@ pub(super) fn compact_inline_detail(text: &str, max_len: usize) -> String {
     compact_whitespace_detail(text, max_len)
 }
 
-pub(super) fn turn_status_label(conversation: &ConversationViewModel) -> &'static str {
-    // auto-follow가 평가/큐/실행 중이면 사용자의 수동 turn이 없어도 하단 상태는
-    // working이어야 한다. prompt 입력은 가능하더라도 런타임은 아직 살아 있기 때문이다.
-    if conversation.has_running_turn()
-        || conversation.auto_follow_state.has_live_activity()
-        || conversation.has_post_turn_settlement_in_flight()
-    {
-        "working"
-    } else {
-        "idle"
-    }
-}
-
 pub(super) fn build_working_line(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
@@ -140,9 +127,9 @@ pub(super) fn auto_follow_prompt_status_line(
     };
 
     Some(if inline {
-        // inline 모드는 입력 줄 옆에 붙기 때문에 "idle이 되면 Enter"라는 행동 단서까지
-        // 한 줄로 압축한다.
-        format!("prompt: {detail}  |  type now, Enter when idle")
+        // The working rail already owns phase and turn identity. Keep the prompt
+        // action-only so compact tails do not repeat the same running truth.
+        "prompt: type now  |  Enter when idle".to_string()
     } else {
         detail
     })
@@ -162,17 +149,6 @@ pub(in super::super) fn format_elapsed(duration: Duration) -> String {
         format!("{minutes}m {seconds}s")
     } else {
         format!("{seconds}s")
-    }
-}
-
-pub(super) fn inline_input_state_label(input_state: ConversationInputState) -> &'static str {
-    // 좁은 footer에 들어가는 machine-readable에 가까운 라벨이다. 상세한 사용자 문장은
-    // working line과 prompt notice에서만 만든다.
-    match input_state {
-        ConversationInputState::DraftReady => "draft",
-        ConversationInputState::ReadyToContinue => "ready",
-        ConversationInputState::SubmittingTurn => "sending",
-        ConversationInputState::StreamingTurn => "streaming",
     }
 }
 
@@ -202,7 +178,7 @@ mod tests {
         );
         assert_eq!(
             auto_follow_prompt_status_line(&conversation, true).as_deref(),
-            Some("prompt: auto turn 2/infinite running  |  type now, Enter when idle")
+            Some("prompt: type now  |  Enter when idle")
         );
     }
 }

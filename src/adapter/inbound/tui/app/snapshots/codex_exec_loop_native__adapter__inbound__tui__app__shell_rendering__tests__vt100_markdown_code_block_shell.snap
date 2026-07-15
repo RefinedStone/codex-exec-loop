@@ -8,13 +8,13 @@ expression: rendered
 
 
 
+
 Codex:
   ```rust
   let ok = true;
   ```
 
-Akra  |  thread: new draft  |  turn: working  |  input: streaming
-status: new thread draft
+Akra  |  thread: new draft
 ◦ Working (0s • turn running / interrupt runtime-native)
 >
-prompt: turn running  |  type now, Enter when idle
+prompt: type now  |  Enter when idle

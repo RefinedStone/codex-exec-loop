@@ -9,12 +9,12 @@ expression: rendered
 
 
 
+
 Codex:
   viewport replay stream remains separate
 
-Akra  |  thread: new draft  |  turn: working  |  input: streaming
-status: new thread draft
+Akra  |  thread: new draft
 ◦ Working (0s • turn running / interrupt runtime-native)
 recent codex: viewport replay transcript remains an...
 >
-prompt: turn running  |  type now, Enter when idle
+prompt: type now  |  Enter when idle

@@ -134,7 +134,7 @@ pub(super) fn build_planning_draft_editor_key_lines(
     confirmation_pending: bool,
 ) -> Vec<Line<'static>> {
     vec![
-        AkraTheme::key_line("controls: Tab/BackTab switches files  |  arrows move the cursor"),
+        AkraTheme::key_line("controls: Tab/Shift+Tab switches files  |  arrows move the cursor"),
         AkraTheme::key_line(
             "controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word",
         ),

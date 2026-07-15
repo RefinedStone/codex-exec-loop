@@ -146,21 +146,66 @@ fn compact_inspection_tail_lines(
     }
 
     let prefix_row_budget = max_tail_rows - prompt_rows;
-    let mut compacted = Vec::new();
+    let mut priority_lines = prefix_lines.iter().enumerate().collect::<Vec<_>>();
+    priority_lines.sort_by_key(|(_, line)| compact_tail_priority(line));
+    let mut selected_lines = Vec::new();
     let mut used_prefix_rows = 0usize;
-    for line in prefix_lines {
+    for (index, line) in priority_lines {
         let line_rows = wrapped_row_count(line.width(), content_width);
         if used_prefix_rows.saturating_add(line_rows) > prefix_row_budget {
-            if compact_activity_tail {
-                continue;
-            }
-            break;
+            continue;
         }
-        compacted.push(line.clone());
+        selected_lines.push((index, line));
         used_prefix_rows = used_prefix_rows.saturating_add(line_rows);
     }
+    selected_lines.sort_by_key(|(index, _)| *index);
+    let mut compacted = selected_lines
+        .into_iter()
+        .map(|(_, line)| line.clone())
+        .collect::<Vec<_>>();
     compacted.extend(prompt_lines);
     compacted
+}
+
+fn compact_tail_priority(line: &Line<'_>) -> u8 {
+    let text = line.to_string();
+    if text.starts_with(QUEUE_RECEIPT_UNDO_ACTION_LABEL)
+        || text.starts_with("COMPLETE")
+        || text.contains("approval: decision")
+    {
+        return 0;
+    }
+    if text.starts_with("notice: activity: terminal:")
+        || text.starts_with("notice: activity: term:")
+        || matches!(
+            text.strip_prefix("notice: "),
+            Some("recover" | "interrupt" | "failed" | "unknown" | "runtime-fail")
+        )
+    {
+        return 1;
+    }
+    if text.starts_with("runtime:")
+        || text.starts_with("warn:")
+        || text.starts_with("startup:")
+        || text.starts_with("parallel alert:")
+        || text.starts_with("planning notice:")
+        || text.starts_with("planning: unavailable")
+        || text.starts_with("planning: invalid")
+        || text.starts_with("planning: stale")
+        || text.contains("blocked:") && !text.contains("blocked: none")
+    {
+        return 2;
+    }
+    if text.starts_with('◦') {
+        return 3;
+    }
+    if text.starts_with("notice: activity:") {
+        return 4;
+    }
+    if text.starts_with("Akra") {
+        return 5;
+    }
+    6
 }
 
 fn rendered_rows(lines: &[Line<'static>], content_width: u16) -> usize {

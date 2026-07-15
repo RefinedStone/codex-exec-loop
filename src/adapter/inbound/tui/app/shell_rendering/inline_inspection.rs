@@ -121,7 +121,6 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
         document.as_ref().map(|document| document.sequence),
     );
     let document_view = document.as_ref().map(|document| ActivityOverlayDocument {
-        sequence: document.sequence,
         text: document.text(),
         source_bytes: document.source_bytes,
         retained_bytes: document.retained_bytes,
@@ -143,10 +142,17 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
     let desired_header_height = count_rendered_inline_rows(&header_view.header_lines, area.width)
         .saturating_add(1)
         .min(usize::from(u16::MAX)) as u16;
-    let header_height = desired_header_height.min(area.height.saturating_sub(2));
+    let key_height =
+        inline_section_height(&header_view.key_lines, 4).min(area.height.saturating_sub(4));
+    let header_height =
+        desired_header_height.min(area.height.saturating_sub(key_height).saturating_sub(2));
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(header_height), Constraint::Min(2)])
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(2),
+            Constraint::Length(key_height),
+        ])
         .split(area);
     let body_height = layout[1].height.saturating_sub(1);
     app.progressive_activity_overlay_ui_state
@@ -158,6 +164,7 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
         header_lines,
         detail_title,
         detail_lines,
+        key_lines,
         current_page_start,
         next_page_start,
     } = build_activity_overlay_view(
@@ -180,6 +187,7 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
         false,
     );
     render_inline_scrolled_panel(frame, layout[1], detail_title, detail_lines, 0);
+    render_inline_titled_panel(frame, layout[2], Line::from("Keys"), key_lines, true);
 }
 
 fn draw_inline_approval_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
@@ -389,7 +397,7 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut Nati
         header_lines,
         command_lines,
         key_lines,
-    } = build_help_overlay_view();
+    } = build_help_overlay_view(app.tui_language);
     let body_lines = take_panel_body_lines(header_lines);
     let key_height = count_rendered_inline_rows(&key_lines, area.width)
         .saturating_add(1)
@@ -406,7 +414,10 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut Nati
     render_inline_titled_panel(
         frame,
         layout[0],
-        inline_overlay_title("Shell Commands"),
+        AkraTheme::title_line(
+            app.tui_language.shell_commands_panel_title(),
+            app.tui_language.shell_command_help_context(),
+        ),
         body_lines,
         true,
     );
@@ -417,11 +428,17 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut Nati
     render_inline_scrolled_panel(
         frame,
         layout[1],
-        Line::from("Commands"),
+        Line::from(app.tui_language.commands_section_title()),
         command_lines,
         app.help_scroll_offset.min(usize::from(u16::MAX)) as u16,
     );
-    render_inline_titled_panel(frame, layout[2], Line::from("Keys"), key_lines, true);
+    render_inline_titled_panel(
+        frame,
+        layout[2],
+        Line::from(app.tui_language.keys_section_title()),
+        key_lines,
+        true,
+    );
 }
 fn draw_inline_directions_maintenance_inspection(
     frame: &mut Frame<'_>,
@@ -892,7 +909,7 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     let body_lines = take_panel_body_lines(header_lines);
     // Queue, proposal, and note lines are merged into one scrollable section to
     // preserve vertical space in inline mode.
-    let mut content_lines = vec![Line::from("Ready Queue")];
+    let mut content_lines = Vec::new();
     content_lines.extend(queue_lines);
     if !proposal_lines.is_empty() {
         content_lines.push(Line::from("Proposals"));
@@ -902,13 +919,18 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
         content_lines.push(Line::from("Notes"));
         content_lines.extend(note_lines);
     }
+    let header_height = if body_lines.is_empty() {
+        1
+    } else {
+        inline_section_height(&body_lines, 3)
+    };
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(inline_section_height(&body_lines, 3)),
+            Constraint::Length(header_height),
             Constraint::Length(inline_section_height(&summary_lines, 3)),
             Constraint::Min(4),
-            Constraint::Length(inline_section_height(&key_lines, 2)),
+            Constraint::Length(inline_section_height(&key_lines, 4)),
         ])
         .split(area);
     let visible_content_rows = layout[2].height.saturating_sub(1) as usize;
@@ -920,13 +942,20 @@ fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeT
     )
     .min(u16::MAX as usize) as u16;
 
-    render_inline_titled_panel(
-        frame,
-        layout[0],
-        inline_overlay_title("Planning Queue"),
-        body_lines,
-        true,
-    );
+    if body_lines.is_empty() {
+        frame.render_widget(
+            Paragraph::new(inline_overlay_title("Planning Queue")),
+            layout[0],
+        );
+    } else {
+        render_inline_titled_panel(
+            frame,
+            layout[0],
+            inline_overlay_title("Planning Queue"),
+            body_lines,
+            true,
+        );
+    }
     render_inline_titled_panel(frame, layout[1], Line::from("Summary"), summary_lines, true);
     render_inline_scrolled_panel(
         frame,

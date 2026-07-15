@@ -65,7 +65,6 @@ pub(super) use overlays::{
 };
 use runtime_status_copy::{
     auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
-    inline_input_state_label, turn_status_label,
 };
 use shell_core::{ShellConversationState, ShellCorePresentationContext};
 pub(super) use startup_banner::startup_ascii_art_lines;

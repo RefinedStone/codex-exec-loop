@@ -21,25 +21,21 @@ pub(super) fn build_activity_rail_notice_line(
     let mut facts: Vec<(String, Option<String>)> = Vec::new();
 
     if let Some(terminal_state) = conversation.activity_rail_terminal_state {
-        return fit_activity_facts(
+        let fitted = fit_activity_facts(
             vec![(
                 format!("terminal:{}", terminal_state.label()),
                 Some(format!("term:{}", terminal_state.compact_label())),
             )],
             max_detail_cells,
         );
+        return fitted.or_else(|| {
+            let compact = terminal_state.compact_label().to_string();
+            (display_width(&compact) <= max_detail_cells).then_some(compact)
+        });
     }
-    if activity.command_line_count() > 0 {
-        facts.push((
-            format!("cmd:{} lines", activity.command_line_count()),
-            Some(format!("cmd:{}", activity.command_line_count())),
-        ));
-    }
-    if activity.patch_count() > 0 {
-        facts.push((
-            format!("patch:{} files", activity.patch_count()),
-            Some(format!("patch:{}", activity.patch_count())),
-        ));
+    if let Some(kind) = activity.active_item_kind() {
+        let label = progressive_item_kind_label(kind);
+        facts.push((format!("active:{label}"), Some(label.to_string())));
     }
     if activity.plan_total_count() > 0 {
         let retained_total = activity
@@ -69,16 +65,6 @@ pub(super) fn build_activity_rail_notice_line(
         };
         facts.push((plan, Some(compact_plan)));
     }
-    if let Some(kind) = activity.active_item_kind() {
-        let label = progressive_item_kind_label(kind);
-        facts.push((format!("active:{label}"), Some(label.to_string())));
-    }
-    if activity.mcp_update_count() > 0 {
-        facts.push((
-            format!("mcp:{} updates", activity.mcp_update_count()),
-            Some(format!("mcp:{}", activity.mcp_update_count())),
-        ));
-    }
     if activity.diff_addition_count() > 0
         || activity.diff_deletion_count() > 0
         || activity.diff_hunk_count() > 0
@@ -95,6 +81,24 @@ pub(super) fn build_activity_rail_notice_line(
                 activity.diff_addition_count(),
                 activity.diff_deletion_count()
             )),
+        ));
+    }
+    if activity.command_line_count() > 0 {
+        facts.push((
+            format!("cmd:{} lines", activity.command_line_count()),
+            Some(format!("cmd:{}", activity.command_line_count())),
+        ));
+    }
+    if activity.patch_count() > 0 {
+        facts.push((
+            format!("patch:{} files", activity.patch_count()),
+            Some(format!("patch:{}", activity.patch_count())),
+        ));
+    }
+    if activity.mcp_update_count() > 0 {
+        facts.push((
+            format!("mcp:{} updates", activity.mcp_update_count()),
+            Some(format!("mcp:{}", activity.mcp_update_count())),
         ));
     }
     if let Some(basis_points) = activity.context_pressure_basis_points() {
@@ -114,7 +118,9 @@ pub(super) fn build_activity_rail_notice_line(
         if let Some(task_fact) = current_task_fact(conversation) {
             facts.push(task_fact);
         }
-        if let Some(lane_fact) = coarse_lane_fact(conversation) {
+        if !activity.has_primary_fact()
+            && let Some(lane_fact) = coarse_lane_fact(conversation)
+        {
             facts.push(lane_fact);
         }
     }
@@ -125,13 +131,13 @@ pub(super) fn build_activity_rail_notice_line(
 fn effective_model_fact(conversation: &ConversationViewModel) -> Option<(String, Option<String>)> {
     let model = &conversation.runtime_envelope.as_ref()?.applied.model;
     match model {
-        ConversationRuntimeObservedValue::Observed(model)
-        | ConversationRuntimeObservedValue::Defaulted(model) => {
+        ConversationRuntimeObservedValue::Observed(model) => {
             let full = bounded_fact_value(model, MAX_MODEL_FACT_CELLS)?;
             let compact = bounded_fact_value(model, MAX_MODEL_COMPACT_FACT_CELLS)
                 .map(|model| format!("model:{model}"));
             Some((format!("model:{full}"), compact))
         }
+        ConversationRuntimeObservedValue::Defaulted(_) => None,
         ConversationRuntimeObservedValue::Null => Some(("model:null".to_string(), None)),
         ConversationRuntimeObservedValue::Malformed(_) => Some(("model:invalid".to_string(), None)),
         ConversationRuntimeObservedValue::UnavailableOnStableResponse
@@ -312,8 +318,9 @@ mod tests {
     use crate::domain::conversation_runtime_envelope::{
         ConversationRuntimeConfigurationObservation, ConversationRuntimeConfigurationRequest,
         ConversationRuntimeEnvelope, ConversationRuntimeLaunchEnvironment,
-        ConversationRuntimeModelReroute, ConversationRuntimeModelRerouteReason,
-        ConversationRuntimeObservedValue, ConversationRuntimeRequestedValue,
+        ConversationRuntimeMalformedValue, ConversationRuntimeModelReroute,
+        ConversationRuntimeModelRerouteReason, ConversationRuntimeObservedValue,
+        ConversationRuntimeRequestedValue,
     };
 
     const SECRET: &str = "ultra-secret-payload";
@@ -340,6 +347,10 @@ mod tests {
             build_activity_rail_notice_line(&conversation, 32).as_deref(),
             Some("activity: term:runtime-fail")
         );
+        assert_eq!(
+            build_activity_rail_notice_line(&conversation, 12).as_deref(),
+            Some("runtime-fail")
+        );
     }
 
     #[test]
@@ -350,9 +361,10 @@ mod tests {
 
         assert_eq!(
             notice,
-            "activity: cmd:2 lines | patch:3 files | plan:2/3 +2 hidden | active:command | mcp:1 updates | diff:+1 -1 h1 | ctx:75.00% | model:applied-model | task:Ship typed priority rail | lane:cmd1/files2"
+            "activity: active:command | plan:2/3 +2 hidden | diff:+1 -1 h1 | cmd:2 lines | patch:3 files | mcp:1 updates | ctx:75.00% | model:applied-model | task:Ship typed priority rail"
         );
         assert!(!notice.contains("requested-model"));
+        assert!(!notice.contains("lane:"));
         assert!(!notice.contains(SECRET));
     }
 
@@ -362,15 +374,15 @@ mod tests {
 
         assert_eq!(
             build_activity_rail_notice_line(&conversation, 37).as_deref(),
-            Some("activity: cmd:2 lines | patch:3 files")
+            Some("activity: active:command")
         );
         assert_eq!(
             build_activity_rail_notice_line(&conversation, 55).as_deref(),
-            Some("activity: cmd:2 lines | patch:3 files | plan:2/3+2?")
+            Some("activity: active:command | plan:2/3 +2 hidden")
         );
         assert_eq!(
             build_activity_rail_notice_line(&conversation, 20).as_deref(),
-            Some("activity: cmd:2")
+            Some("activity: command")
         );
         assert_eq!(build_activity_rail_notice_line(&conversation, 12), None);
     }
@@ -430,6 +442,28 @@ mod tests {
             .applied
             .model = ConversationRuntimeObservedValue::Missing;
         assert_eq!(build_activity_rail_notice_line(&conversation, 80), None);
+    }
+
+    #[test]
+    fn defaulted_effective_model_is_benign_but_invalid_model_remains_visible() {
+        let mut conversation = running_conversation();
+        let mut envelope = runtime_envelope("requested-model", "applied-model");
+        envelope.applied.model = ConversationRuntimeObservedValue::Defaulted("gpt-default".into());
+        conversation.runtime_envelope = Some(envelope);
+        assert_eq!(build_activity_rail_notice_line(&conversation, 80), None);
+
+        conversation
+            .runtime_envelope
+            .as_mut()
+            .expect("runtime envelope")
+            .applied
+            .model = ConversationRuntimeObservedValue::Malformed(
+            ConversationRuntimeMalformedValue::ExpectedString,
+        );
+        assert_eq!(
+            build_activity_rail_notice_line(&conversation, 80).as_deref(),
+            Some("activity: model:invalid")
+        );
     }
 
     #[test]

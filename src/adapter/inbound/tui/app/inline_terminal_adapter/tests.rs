@@ -115,7 +115,6 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
     for label in ["wide-live", "narrow-live", "restored-live"] {
         let frame = frames.frame(label);
         assert!(frame.screen_text.contains("notice: activity:"), "{label}");
-        assert!(frame.screen_text.contains("cmd:2"), "{label}");
         assert!(frame.screen_text.contains("active:command"), "{label}");
         assert!(!frame.screen_text.contains(secret), "{label}");
         assert!(!frame.host_scrollback_text.contains("activity:"), "{label}");
@@ -123,12 +122,14 @@ fn host_history_sync_keeps_progressive_activity_rail_transient() {
     }
     for label in ["wide-live", "restored-live"] {
         let screen = &frames.frame(label).screen_text;
+        assert!(screen.contains("cmd:2"), "{label}");
         assert!(screen.contains("model:gpt-5.5"), "{label}");
         assert!(screen.contains("task:P0-D3 rail"), "{label}");
-        assert!(screen.contains("lane:cmd1/files2"), "{label}");
+        assert!(!screen.contains("lane:"), "{label}");
         assert!(!screen.contains("requested-model-hidden"), "{label}");
     }
     let narrow = &frames.frame("narrow-live").screen_text;
+    assert!(!narrow.contains("cmd:2"));
     assert!(!narrow.contains("model:"));
     assert!(!narrow.contains("task:"));
     assert!(!narrow.contains("lane:"));
@@ -190,18 +191,19 @@ fn vt100_progressive_activity_rail_stays_transient_across_resize() {
             .expect("progressive VT100 draw transaction");
         let screen = tui_testkit::screen_text(&terminal);
         assert!(screen.contains("notice: activity:"), "{width}x{height}");
-        assert!(screen.contains("cmd:2"), "{width}x{height}");
         assert!(screen.contains("active:command"), "{width}x{height}");
         assert!(!screen.contains(secret), "{width}x{height}");
         if width == 160 {
+            assert!(screen.contains("cmd:2"), "{width}x{height}");
             assert!(screen.contains("model:gpt-5.5"), "{width}x{height}");
             assert!(screen.contains("task:P0-D3 rail"), "{width}x{height}");
-            assert!(screen.contains("lane:cmd1/files2"), "{width}x{height}");
+            assert!(!screen.contains("lane:"), "{width}x{height}");
             assert!(
                 !screen.contains("requested-model-hidden"),
                 "{width}x{height}"
             );
         } else {
+            assert!(!screen.contains("cmd:2"), "{width}x{height}");
             assert!(!screen.contains("model:"), "{width}x{height}");
             assert!(!screen.contains("task:"), "{width}x{height}");
             assert!(!screen.contains("lane:"), "{width}x{height}");
@@ -340,22 +342,22 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
     assert!(open.screen_text.contains(secret));
     assert!(open.screen_text.contains("\\x1b[31m"));
     assert!(!open.screen_text.contains('\u{1b}'));
-    assert!(open.screen_text.contains("bytes 0.."));
+    assert!(open.screen_text.contains("Diff | 0-"));
     let paged = frames.frame("paged");
     assert!(
         paged
             .screen_text
-            .contains(&format!("bytes {next_page_start}.."))
+            .contains(&format!("Diff | {next_page_start}-"))
     );
     assert!(paged.screen_text.contains(&next_page_fragment));
     assert!(!paged.screen_text.contains(secret));
     assert!(frames.frame("page-up").screen_text.contains(secret));
-    assert!(frames.frame("page-up").screen_text.contains("bytes 0.."));
+    assert!(frames.frame("page-up").screen_text.contains("Diff | 0-"));
     assert!(frames.frame("home").screen_text.contains(secret));
-    assert!(frames.frame("home").screen_text.contains("bytes 0.."));
+    assert!(frames.frame("home").screen_text.contains("Diff | 0-"));
     assert!(frames.frame("narrow").screen_text.contains(secret));
-    assert!(frames.frame("narrow").screen_text.contains("bytes 0.."));
-    assert!(frames.frame("restored").screen_text.contains("bytes 0.."));
+    assert!(frames.frame("narrow").screen_text.contains("Diff | 0-"));
+    assert!(frames.frame("restored").screen_text.contains("Diff | 0-"));
     assert!(
         frames
             .frame("approval")
@@ -366,16 +368,23 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
         !frames
             .frame("approval")
             .screen_text
-            .contains("Retained Diff")
+            .contains("Activity / inline inspection")
     );
-    assert!(!frames.frame("closed").screen_text.contains("Retained Diff"));
+    assert!(
+        !frames
+            .frame("closed")
+            .screen_text
+            .contains("Activity / inline inspection")
+    );
     for label in [
         "open", "paged", "page-up", "home", "narrow", "restored", "approval", "closed",
     ] {
         let frame = frames.frame(label);
         assert!(!frame.host_scrollback_text.contains(secret), "{label}");
         assert!(
-            !frame.host_scrollback_text.contains("Retained Diff"),
+            !frame
+                .host_scrollback_text
+                .contains("Activity / inline inspection"),
             "{label}"
         );
         assert!(
@@ -416,10 +425,7 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("activity VT100 draw transaction");
         let screen = tui_testkit::screen_text(&terminal);
-        assert!(
-            screen.contains("Retained Output Tail"),
-            "{width}x{height}: {screen:?}"
-        );
+        assert!(screen.contains("Output |"), "{width}x{height}: {screen:?}");
         assert!(!screen.contains('\u{1b}'), "{width}x{height}");
         let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
         assert!(!host_scrollback.contains(secret), "{width}x{height}");
@@ -448,7 +454,7 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
     let approval_screen = tui_testkit::screen_text(&terminal);
     assert!(approval_screen.contains("Approval Required"));
     assert!(approval_screen.contains("Y: approve once"));
-    assert!(!approval_screen.contains("Retained Output Tail"));
+    assert!(!approval_screen.contains("Activity / inline inspection"));
     let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
     assert!(!host_scrollback.contains(secret));
     assert!(!host_scrollback.contains("vt100 activity row"));

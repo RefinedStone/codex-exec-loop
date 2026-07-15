@@ -30,7 +30,7 @@ pub(super) fn build_session_project_context_line(
         return format!("context: showing only {current_workspace_label}");
     }
     // Otherwise, use the separately preserved current-workspace count as a hint
-    // that Tab/BackTab may reveal relevant sessions.
+    // that Tab/Shift+Tab may reveal relevant sessions.
     match projection.current_workspace_session_count {
         0 => format!("context: {current_workspace_label} has no recent sessions"),
         1 => format!("context: {current_workspace_label} has 1 recent session"),
@@ -86,7 +86,7 @@ pub(super) fn build_session_empty_hint_line(browser_page: &SessionBrowserPage<'_
     // A zero filtered count points to filter/search recovery; rows without a
     // selected item point to navigation or reload.
     if browser_page.projection.filtered_session_count == 0 {
-        "Press c to clear the browser, Tab/BackTab to cycle filters, or r to reload.".to_string()
+        "Press c to clear the browser, Tab/Shift+Tab to cycle filters, or r to reload.".to_string()
     } else {
         "Use Up/Down or Home/End to pick another session, or reload with r.".to_string()
     }

@@ -12,9 +12,9 @@ expression: rendered
 
 
 
-Akra  |  thread: Progressive activity  |  turn: working  |  input: streaming
-status: turn started
+
+Akra  |  thread: Progressive activity
 ◦ Working (0s • waiting for response / interrupt runtime-...)
-notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail | lane:cmd1/files2
+notice: activity: active:command | diff:+1 -1 h1 | cmd:2 lines | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail
 >
-prompt: turn running  |  type now, Enter when idle
+prompt: type now  |  Enter when idle

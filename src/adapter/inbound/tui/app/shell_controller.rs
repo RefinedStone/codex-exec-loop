@@ -191,10 +191,12 @@ impl NativeTuiApp {
             InlineShellCommand::Help => self.show_help_overlay(),
         }
         let status_text = match command_input.command() {
-            InlineShellCommand::Sessions if self.parallel_mode_enabled() => {
-                Some("opened supersession control tower".to_string())
-            }
-            _ => command_input.execution_status(),
+            InlineShellCommand::Sessions if self.parallel_mode_enabled() => Some(
+                self.tui_language
+                    .parallel_control_tower_opened_status()
+                    .to_string(),
+            ),
+            _ => command_input.localized_execution_status(self.tui_language),
         };
         // Command execution consumes the prompt buffer after any command-specific
         // status is emitted; commands that need arguments insert text before
@@ -1737,7 +1739,7 @@ mod tests {
             hidden_active_view
                 .queue_lines
                 .iter()
-                .any(|line| line.to_string().contains("> #4"))
+                .any(|line| line.to_string().starts_with("> #4 [ready]"))
         );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));

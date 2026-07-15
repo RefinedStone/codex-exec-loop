@@ -57,7 +57,6 @@ struct InlineShellCommandSpec {
     command: InlineShellCommand,
     primary_name: &'static str,
     aliases: &'static [&'static str],
-    suggestion_detail: &'static str,
     buffered_hint: &'static str,
     execution_status: Option<&'static str>,
     requires_argument: bool,
@@ -85,7 +84,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Diagnostics,
         primary_name: ":diag",
         aliases: &[":diag", ":diagnostics"],
-        suggestion_detail: "diagnostics",
         buffered_hint: "Press Enter to open the diagnostics inspection.",
         execution_status: Some("opened diagnostics inspection"),
         requires_argument: false,
@@ -94,7 +92,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Parallel,
         primary_name: ":parallel",
         aliases: &[":pa", ":parallel"],
-        suggestion_detail: "parallel mode",
         buffered_hint: "Press Enter to enter parallel mode.",
         execution_status: None,
         requires_argument: false,
@@ -103,7 +100,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Peek,
         primary_name: ":peek",
         aliases: &[":peek"],
-        suggestion_detail: "parallel agent peek",
         buffered_hint: "Press Enter to inspect active parallel agents.",
         execution_status: None,
         requires_argument: false,
@@ -112,7 +108,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Activity,
         primary_name: ":activity",
         aliases: &[":activity", ":act"],
-        suggestion_detail: "turn activity detail",
         buffered_hint: ACTIVITY_USAGE,
         execution_status: None,
         requires_argument: false,
@@ -121,7 +116,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Sessions,
         primary_name: ":sessions",
         aliases: &[":session", ":sessions"],
-        suggestion_detail: "recent sessions",
         buffered_hint: "Press Enter to open the recent-sessions inspection.",
         execution_status: Some("opened recent sessions inspection"),
         requires_argument: false,
@@ -130,7 +124,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Reviews,
         primary_name: ":reviews",
         aliases: &[":reviews", ":review"],
-        suggestion_detail: "review center",
         buffered_hint: "Press Enter to open the review center inspection.",
         execution_status: Some("opened review center inspection"),
         requires_argument: false,
@@ -139,7 +132,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Queue,
         primary_name: ":queue",
         aliases: &[":q", ":queue"],
-        suggestion_detail: "planning queue",
         buffered_hint: "Press Enter to open the planning queue inspection.",
         execution_status: Some("opened planning queue inspection"),
         requires_argument: false,
@@ -148,7 +140,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Directions,
         primary_name: ":directions",
         aliases: &[":directions"],
-        suggestion_detail: "directions maintenance",
         buffered_hint: "Press Enter to review or edit planning directions.",
         execution_status: None,
         requires_argument: false,
@@ -157,7 +148,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Turns,
         primary_name: ":turns",
         aliases: &[":turns", ":auto-turns"],
-        suggestion_detail: "auto-follow opt-in; off or 0 disables",
         buffered_hint: "Type `:turns <positive|infinite>` to enable auto-follow, or `:turns off` to disable it.",
         execution_status: None,
         requires_argument: true,
@@ -166,7 +156,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Stop,
         primary_name: ":stop",
         aliases: &[":stop"],
-        suggestion_detail: "stop active sessions",
         buffered_hint: "Press Enter to stop active app-server sessions.",
         execution_status: None,
         requires_argument: false,
@@ -175,7 +164,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Model,
         primary_name: ":model",
         aliases: &[":model"],
-        suggestion_detail: "model and think",
         buffered_hint: MODEL_USAGE,
         execution_status: None,
         requires_argument: false,
@@ -184,7 +172,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::View,
         primary_name: ":view",
         aliases: &[":view"],
-        suggestion_detail: "conversation view",
         buffered_hint: VIEW_USAGE,
         execution_status: None,
         requires_argument: false,
@@ -193,7 +180,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Language,
         primary_name: ":language",
         aliases: &[":language", ":lang"],
-        suggestion_detail: "TUI language",
         buffered_hint: LANGUAGE_USAGE,
         execution_status: None,
         requires_argument: false,
@@ -202,7 +188,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Think,
         primary_name: ":think",
         aliases: &[":think"],
-        suggestion_detail: "reasoning effort",
         buffered_hint: THINK_USAGE,
         execution_status: None,
         requires_argument: true,
@@ -211,7 +196,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Doctor,
         primary_name: ":doctor",
         aliases: &[":doctor"],
-        suggestion_detail: "planning health",
         buffered_hint: "Press Enter to inspect planning health.",
         execution_status: None,
         requires_argument: false,
@@ -220,7 +204,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::PlanningInit,
         primary_name: ":planning",
         aliases: &[":planning", ":planning-init"],
-        suggestion_detail: "planning control center",
         buffered_hint: "Press Enter to open the planning control center.",
         execution_status: None,
         requires_argument: false,
@@ -229,7 +212,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Reset,
         primary_name: ":reset",
         aliases: &[":r", ":reset"],
-        suggestion_detail: "planning reset",
         buffered_hint: RESET_USAGE,
         execution_status: None,
         requires_argument: true,
@@ -238,7 +220,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::NewDraft,
         primary_name: ":new",
         aliases: &[":new"],
-        suggestion_detail: "new draft",
         buffered_hint: "Press Enter to open a new draft in the shell.",
         execution_status: None,
         requires_argument: false,
@@ -247,7 +228,6 @@ const INLINE_SHELL_COMMAND_SPECS: &[InlineShellCommandSpec] = &[
         command: InlineShellCommand::Help,
         primary_name: ":help",
         aliases: &[":help"],
-        suggestion_detail: "command help",
         buffered_hint: "Press Enter to open shell command help.",
         execution_status: Some("opened shell command help"),
         requires_argument: false,
@@ -301,6 +281,17 @@ impl InlineShellCommandInput {
             _ => self.command.spec().buffered_hint.to_string(),
         }
     }
+
+    pub(super) fn localized_buffered_hint(&self, language: TuiLanguage) -> String {
+        if language == TuiLanguage::English {
+            return self.buffered_hint();
+        }
+        language.inline_shell_command_buffered_hint(
+            self.command,
+            self.argument(),
+            self.command.spec().buffered_hint,
+        )
+    }
     pub(super) fn execution_status(&self) -> Option<String> {
         // Commands that perform asynchronous or state-dependent work report
         // status from their controller handlers, not the generic command layer.
@@ -315,6 +306,11 @@ impl InlineShellCommandInput {
             InlineShellCommand::Think => None,
             _ => self.command.spec().execution_status.map(str::to_string),
         }
+    }
+    pub(super) fn localized_execution_status(&self, language: TuiLanguage) -> Option<String> {
+        self.execution_status().map(|english| {
+            language.inline_shell_command_execution_status(self.command, english.as_str())
+        })
     }
     pub(super) fn from_command(command: InlineShellCommand) -> Self {
         Self {
@@ -428,8 +424,8 @@ impl InlineShellCommand {
     pub(super) fn command_name(self) -> &'static str {
         self.spec().primary_name
     }
-    pub(super) fn suggestion_detail(self) -> &'static str {
-        self.spec().suggestion_detail
+    pub(super) fn suggestion_detail(self, language: TuiLanguage) -> &'static str {
+        language.inline_shell_command_detail(self)
     }
     pub(super) fn requires_argument(self) -> bool {
         self.spec().requires_argument
@@ -457,12 +453,12 @@ impl InlineShellCommand {
             | InlineShellCommand::Help => self.command_name(),
         }
     }
-    pub(crate) fn help_entries() -> Vec<InlineShellCommandHelpEntry> {
+    pub(super) fn help_entries(language: TuiLanguage) -> Vec<InlineShellCommandHelpEntry> {
         INLINE_SHELL_COMMAND_SPECS
             .iter()
             .map(|spec| InlineShellCommandHelpEntry {
                 usage: spec.command.help_usage(),
-                detail: spec.suggestion_detail,
+                detail: spec.command.suggestion_detail(language),
             })
             .collect()
     }

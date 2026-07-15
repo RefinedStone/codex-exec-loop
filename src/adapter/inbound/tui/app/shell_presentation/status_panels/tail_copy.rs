@@ -15,8 +15,8 @@ use super::super::{
     INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT, INLINE_TAIL_STATUS_DETAIL_LIMIT,
     INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode, InlineShellCommandInput, Modifier,
     NativeTuiApp, ShellActionAvailability, ShellConversationState, ShellCorePresentationContext,
-    ShellOverlay, StartupState, auto_follow_prompt_status_line, build_working_line,
-    compact_inline_detail, inline_input_state_label, turn_status_label,
+    ShellOverlay, StartupState, TuiLanguage, auto_follow_prompt_status_line, build_working_line,
+    compact_inline_detail,
 };
 use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
@@ -91,9 +91,15 @@ pub(super) fn build_inline_tail_lines_with_context(
                 context.shell_action_availability.status_text(),
                 context.recent_session_status_label.as_str(),
             )));
+            let github_status = (context.github_review_polling_status_label != "off").then(|| {
+                format!(
+                    "  |  gh: {}",
+                    context.github_review_polling_status_label.as_str()
+                )
+            });
             lines.push(Line::from(format!(
-                "runtime: loading thread history  |  gh: {}  |  flow: terminal main buffer",
-                context.github_review_polling_status_label.as_str(),
+                "runtime: loading thread history{}  |  flow: terminal main buffer",
+                github_status.unwrap_or_default(),
             )));
             lines.push(Line::from(format!(
                 "status: {}",
@@ -106,9 +112,15 @@ pub(super) fn build_inline_tail_lines_with_context(
                 context.shell_action_availability.status_text(),
                 context.recent_session_status_label.as_str(),
             )));
+            let github_status = (context.github_review_polling_status_label != "off").then(|| {
+                format!(
+                    "  |  gh: {}",
+                    context.github_review_polling_status_label.as_str()
+                )
+            });
             lines.push(Line::from(format!(
-                "runtime: unavailable  |  gh: {}  |  flow: terminal main buffer",
-                context.github_review_polling_status_label.as_str(),
+                "runtime: unavailable{}  |  flow: terminal main buffer",
+                github_status.unwrap_or_default(),
             )));
             lines.push(Line::from(format!("status: {message}")));
         }
@@ -132,7 +144,10 @@ pub(super) fn build_inline_tail_lines_with_context(
             transcript, and notice detail that may appear only in specific states.
             */
             lines.push(build_ready_status_ribbon_line(conversation));
-            lines.push(build_ready_status_detail_line(conversation, context));
+            if let Some(status_detail_line) = build_ready_status_detail_line(conversation, context)
+            {
+                lines.push(status_detail_line);
+            }
             if let Some(completion_line) = build_completion_alert_line(conversation) {
                 lines.push(completion_line);
             }
@@ -165,9 +180,11 @@ pub(super) fn build_inline_tail_lines_with_context(
                 */
                 lines.push(Line::from(parallel_mode_alert_line));
             }
-            if let Some(working_line) =
-                build_working_line(conversation, INLINE_TAIL_STATUS_DETAIL_LIMIT)
-            {
+            // The notice budget excludes the eight-cell `notice: ` prefix while
+            // the working line has seventeen fixed cells around its detail.
+            let working_detail_limit =
+                INLINE_TAIL_STATUS_DETAIL_LIMIT.min(notice_detail_limit.saturating_sub(9));
+            if let Some(working_line) = build_working_line(conversation, working_detail_limit) {
                 lines.push(working_line);
             }
             if let Some(planning_projection) = planning_status_projection.as_ref() {
@@ -219,18 +236,14 @@ pub(super) fn build_inline_tail_lines_with_context(
 }
 fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<'static> {
     /*
-    The ribbon is the single-line state index for the ready shell. It carries
-    thread identity, turn lifecycle, and input readiness. Auto-follow details are
-    only added while an automatic chain has useful state to report.
+    The ribbon anchors thread identity. Working state and input actions have
+    dedicated rows below it, so repeating them here would consume compact rows
+    without adding operator information. Auto-follow details are only added
+    while an automatic chain has useful state to report.
     */
     let mut parts = vec![
         "Akra".to_string(),
         format!("thread: {}", inline_thread_label(conversation)),
-        format!("turn: {}", turn_status_label(conversation)),
-        format!(
-            "input: {}",
-            inline_input_state_label(conversation.input_state)
-        ),
     ];
     if should_show_auto_follow_status(conversation) {
         parts.push(format!(
@@ -272,11 +285,23 @@ fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool 
 fn build_ready_status_detail_line(
     conversation: &ConversationViewModel,
     context: &ShellCorePresentationContext<'_>,
-) -> Line<'static> {
-    let mut parts = vec![format!(
-        "status: {}",
-        compact_inline_detail(&conversation.status_text, INLINE_TAIL_STATUS_DETAIL_LIMIT)
-    )];
+) -> Option<Line<'static>> {
+    let status = conversation.status_text.trim();
+    let terminal_status_is_owned_by_notice = conversation.activity_rail_terminal_state.is_some()
+        && status.eq_ignore_ascii_case("turn failed");
+    let running_draft_status_is_stale =
+        conversation.has_running_turn() && status.eq_ignore_ascii_case("new thread draft");
+    let mut parts = Vec::new();
+    if !status.is_empty()
+        && !status.eq_ignore_ascii_case("turn started")
+        && !terminal_status_is_owned_by_notice
+        && !running_draft_status_is_stale
+    {
+        parts.push(format!(
+            "status: {}",
+            compact_inline_detail(status, INLINE_TAIL_STATUS_DETAIL_LIMIT)
+        ));
+    }
     if context.shell_action_availability != ShellActionAvailability::Ready {
         parts.push(format!(
             "startup: {}",
@@ -288,7 +313,7 @@ fn build_ready_status_detail_line(
         parts.push(format!("gh: {github_status}"));
     }
 
-    Line::from(parts.join("  |  "))
+    (!parts.is_empty()).then(|| Line::from(parts.join("  |  ")))
 }
 
 fn warning_summary_has_signal(warning_summary: &str) -> bool {
@@ -553,9 +578,11 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
         ShellConversationState::Failed(message) => {
             vec![Line::from(format!("prompt: unavailable  |  {message}"))]
         }
-        ShellConversationState::Ready(conversation) => {
-            build_inline_ready_prompt_lines(conversation, shell_action_availability)
-        }
+        ShellConversationState::Ready(conversation) => build_inline_ready_prompt_lines(
+            conversation,
+            shell_action_availability,
+            context.tui_language,
+        ),
     };
     if app.parallel_mode_loading_prompt_indicator_visible()
         && let Some(first_line) = lines.first_mut()
@@ -583,6 +610,7 @@ fn parallel_loading_prompt_indicator_frame() -> &'static str {
 fn build_inline_ready_prompt_lines(
     conversation: &ConversationViewModel,
     shell_action_availability: ShellActionAvailability,
+    language: TuiLanguage,
 ) -> Vec<Line<'static>> {
     let prompt_buffer = build_prompt_buffer_view(conversation);
     let mut lines = prompt_buffer.lines;
@@ -613,10 +641,10 @@ fn build_inline_ready_prompt_lines(
                 "prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help".to_string()
             }
             (ConversationInputState::SubmittingTurn, _) => {
-                "prompt: sending  |  wait for turn start".to_string()
+                "prompt: wait for turn start".to_string()
             }
             (ConversationInputState::StreamingTurn, _) => {
-                "prompt: turn running  |  type now, Enter when idle".to_string()
+                "prompt: type now  |  Enter when idle".to_string()
             }
         };
         lines.push(Line::from(line));
@@ -629,10 +657,23 @@ fn build_inline_ready_prompt_lines(
         operator is navigating an already-open menu; showing parse hints here
         would fight with Up/Down/Enter semantics.
         */
-        lines.push(Line::from(
-            "command: palette  |  Up/Down move  |  Enter choose  |  Esc close",
-        ));
-        lines.extend(build_shell_command_palette_lines(conversation));
+        let palette = &conversation.inline_shell_command_palette_state;
+        let selected = palette.selected_index().map_or(0, |index| index + 1);
+        lines.push(Line::from(language.inline_command_palette_header(
+            selected,
+            palette.suggestions().len(),
+        )));
+        if palette.suggestions().is_empty() {
+            lines.push(Line::from(language.inline_command_palette_empty_key_line()));
+        } else {
+            lines.extend(
+                language
+                    .inline_command_palette_key_lines()
+                    .into_iter()
+                    .map(Line::from),
+            );
+        }
+        lines.extend(build_shell_command_palette_lines(conversation, language));
         return lines;
     }
 
@@ -642,7 +683,10 @@ fn build_inline_ready_prompt_lines(
         guidance. That keeps destructive or overlay-opening commands legible
         while the text is still just buffered input.
         */
-        lines.push(Line::from(format!("command: {}", command.buffered_hint())));
+        lines.push(Line::from(format!(
+            "command: {}",
+            command.localized_buffered_hint(language)
+        )));
         return lines;
     }
 
@@ -703,7 +747,9 @@ mod coverage_tests {
     use crate::adapter::inbound::tui::app::conversation_model::RecordedAutoFollowActivity;
     use crate::adapter::inbound::tui::app::language::TuiLanguage;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
-    use crate::adapter::inbound::tui::app::{AutoFollowRuntimePhase, ConversationState};
+    use crate::adapter::inbound::tui::app::{
+        AutoFollowRuntimePhase, ConversationState, InlineShellCommand,
+    };
     use crate::core::app::StartupReadySnapshot;
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -875,9 +921,24 @@ mod coverage_tests {
             ShellActionAvailability::Blocked,
             ShellConversationState::Ready(&conversation),
         );
-        let detail = build_ready_status_detail_line(&conversation, &context).to_string();
+        let detail = build_ready_status_detail_line(&conversation, &context)
+            .expect("non-benign status detail")
+            .to_string();
         assert!(detail.contains("startup: startup diagnostics need attention"));
         assert!(detail.contains("gh: polling"));
+
+        let mut running_draft = ConversationViewModel::new_draft("/tmp/root".to_string());
+        running_draft.record_turn_started("turn-1".to_string());
+        running_draft.status_text = "new thread draft".to_string();
+        let running_context = context_for(
+            &startup_state,
+            ShellActionAvailability::Ready,
+            ShellConversationState::Ready(&running_draft),
+        );
+        let running_detail = build_ready_status_detail_line(&running_draft, &running_context)
+            .expect("github polling remains visible")
+            .to_string();
+        assert!(!running_detail.contains("new thread draft"));
 
         assert!(!warning_summary_has_signal("warn: none"));
         assert!(!warning_summary_has_signal("none"));
@@ -958,17 +1019,21 @@ mod coverage_tests {
             (
                 ConversationInputState::SubmittingTurn,
                 ShellActionAvailability::Ready,
-                "sending",
+                "wait for turn start",
             ),
             (
                 ConversationInputState::StreamingTurn,
                 ShellActionAvailability::Ready,
-                "turn running",
+                "type now",
             ),
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
             conversation.input_state = state;
-            let prompt = rendered(build_inline_ready_prompt_lines(&conversation, availability));
+            let prompt = rendered(build_inline_ready_prompt_lines(
+                &conversation,
+                availability,
+                TuiLanguage::English,
+            ));
             assert!(
                 prompt.contains(expected),
                 "expected `{expected}` in `{prompt}`"
@@ -978,18 +1043,53 @@ mod coverage_tests {
         let mut palette = ConversationViewModel::new_draft("/tmp/root".to_string());
         palette.input_buffer = ":".to_string();
         palette.sync_inline_shell_command_palette();
+        palette.move_inline_shell_command_palette_selection(2);
         let palette_prompt = rendered(build_inline_ready_prompt_lines(
             &palette,
             ShellActionAvailability::Ready,
+            TuiLanguage::English,
         ));
-        assert!(palette_prompt.contains("command: palette"));
+        assert!(palette_prompt.contains("palette 3/19"));
+        assert!(palette_prompt.contains("Up/Shift+Tab previous"));
+        assert!(palette_prompt.contains("Down/Tab next"));
         assert!(palette_prompt.contains(":diag"));
+
+        let korean_palette_prompt = rendered(build_inline_ready_prompt_lines(
+            &palette,
+            ShellActionAvailability::Ready,
+            TuiLanguage::Korean,
+        ));
+        assert!(
+            korean_palette_prompt
+                .contains(&TuiLanguage::Korean.inline_command_palette_header(3, 19))
+        );
+        for key_line in TuiLanguage::Korean.inline_command_palette_key_lines() {
+            assert!(korean_palette_prompt.contains(key_line));
+        }
+        assert!(korean_palette_prompt.contains(&format!(
+            ":peek  {}",
+            TuiLanguage::Korean.inline_shell_command_detail(InlineShellCommand::Peek)
+        )));
+
+        let mut korean_command = ConversationViewModel::new_draft("/tmp/root".to_string());
+        korean_command.input_buffer = ":reset queue".to_string();
+        let korean_command_prompt = rendered(build_inline_ready_prompt_lines(
+            &korean_command,
+            ShellActionAvailability::Ready,
+            TuiLanguage::Korean,
+        ));
+        let korean_hint = InlineShellCommandInput::parse(":reset queue")
+            .expect("reset command should parse")
+            .localized_buffered_hint(TuiLanguage::Korean);
+        assert!(korean_command_prompt.contains(&format!("command: {korean_hint}")));
+        assert!(!korean_command_prompt.contains("Press Enter"));
 
         let mut command = ConversationViewModel::new_draft("/tmp/root".to_string());
         command.input_buffer = ":reset queue".to_string();
         let command_prompt = rendered(build_inline_ready_prompt_lines(
             &command,
             ShellActionAvailability::Ready,
+            TuiLanguage::English,
         ));
         assert!(
             command_prompt.contains("command: Press Enter to reset queue-side planning state.")
@@ -1001,6 +1101,7 @@ mod coverage_tests {
         let busy_prompt = rendered(build_inline_ready_prompt_lines(
             &busy,
             ShellActionAvailability::Ready,
+            TuiLanguage::English,
         ));
         assert!(busy_prompt.contains("auto-follow busy"));
 
@@ -1010,6 +1111,7 @@ mod coverage_tests {
         let armed_prompt = rendered(build_inline_ready_prompt_lines(
             &armed,
             ShellActionAvailability::Pending,
+            TuiLanguage::English,
         ));
         assert!(armed_prompt.contains("editing cancels the queued send"));
 
@@ -1033,7 +1135,11 @@ mod coverage_tests {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
             conversation.input_buffer = "buffered".to_string();
             conversation.input_state = state;
-            let prompt = rendered(build_inline_ready_prompt_lines(&conversation, availability));
+            let prompt = rendered(build_inline_ready_prompt_lines(
+                &conversation,
+                availability,
+                TuiLanguage::English,
+            ));
             assert!(
                 prompt.contains(expected),
                 "expected `{expected}` in `{prompt}`"
@@ -1050,7 +1156,6 @@ mod coverage_tests {
         conversation.auto_follow_state.set_max_auto_turns(0);
 
         assert!(!conversation.can_accept_manual_prompt());
-        assert_eq!(turn_status_label(&conversation), "working");
         assert!(
             build_working_line(&conversation, 40)
                 .is_some_and(|line| line.to_string().contains("settling planning queue"))
@@ -1058,6 +1163,7 @@ mod coverage_tests {
         let empty_prompt = rendered(build_inline_ready_prompt_lines(
             &conversation,
             ShellActionAvailability::Ready,
+            TuiLanguage::English,
         ));
         assert!(empty_prompt.contains("planning queue settling"));
         assert!(!empty_prompt.contains("Enter send"));
@@ -1066,6 +1172,7 @@ mod coverage_tests {
         let buffered_prompt = rendered(build_inline_ready_prompt_lines(
             &conversation,
             ShellActionAvailability::Ready,
+            TuiLanguage::English,
         ));
         assert!(buffered_prompt.contains("planning queue settling"));
         assert!(buffered_prompt.contains("Enter when ready"));

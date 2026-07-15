@@ -177,10 +177,33 @@ fn queue_overlay_matches_snapshot() {
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
 
-    assert!(rendered.contains("Ready Queue"));
-    assert!(rendered.contains("Queue Summary"));
+    assert!(rendered.contains("queued: 2"));
+    assert!(!rendered.contains("revision:"));
+    assert!(!rendered.contains("next:"));
+    assert!(!rendered.contains("No promotable proposals"));
     assert!(!rendered.contains("┌"));
     assert_snapshot!("queue_overlay", rendered);
+
+    let narrow = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
+    assert!(narrow.contains("> #1 [ready]"), "{narrow}");
+    assert!(
+        narrow.contains("Implement shell planning status"),
+        "{narrow}"
+    );
+    assert!(narrow.contains("Up/Down, j/k: select"), "{narrow}");
+    assert!(narrow.contains("x/Delete: remove"), "{narrow}");
+    assert!(narrow.contains("Esc/Ctrl+C: close"), "{narrow}");
+    assert!(!narrow.contains("Proposals"), "{narrow}");
+    let narrow_lines = narrow.lines().collect::<Vec<_>>();
+    let title_line = narrow_lines
+        .iter()
+        .position(|line| line.contains("Planning Queue"))
+        .expect("queue title should be visible");
+    let summary_line = narrow_lines
+        .iter()
+        .position(|line| line.contains("Summary"))
+        .expect("queue summary should be visible");
+    assert_eq!(summary_line, title_line + 1, "{narrow}");
 }
 
 #[test]
@@ -241,12 +264,12 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
 
     app.queue_overlay_ui_state.move_selection(&task_ids, 3);
     let hidden = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
-    assert!(hidden.contains("> #4"));
+    assert!(hidden.contains("> #4 [ready]"));
     assert!(hidden.contains("Deep queue task 4"));
 
     app.queue_overlay_ui_state.move_selection(&task_ids, 1);
     let proposal = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
-    assert!(proposal.contains("> #1 [proposed"));
+    assert!(proposal.contains("> #1 [proposed]"));
     assert!(proposal.contains("Deep proposal selection"));
 
     app.queue_overlay_ui_state.move_selection(&task_ids, 1);
@@ -457,7 +480,7 @@ fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
     let wide = tui_testkit::render_inline_snapshot(&mut wide_app, 160, 24);
     assert!(
         wide.contains(
-            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail | lane:cmd1/files2"
+            "notice: activity: active:command | diff:+1 -1 h1 | cmd:2 lines | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail"
         )
     );
     assert!(!wide.contains("requested-model-hidden"));
@@ -474,8 +497,11 @@ fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
     );
 
     let narrow = tui_testkit::render_inline_snapshot(&mut narrow_app, 48, 10);
-    assert!(narrow.contains("notice: activity: cmd:2 lines | active:command"));
-    assert!(!narrow.contains("diff:"));
+    assert!(
+        narrow.contains("notice: activity: active:command | diff:+1 -1 h1"),
+        "{narrow}"
+    );
+    assert!(!narrow.contains("cmd:"));
     assert!(!narrow.contains("ctx:"));
     assert!(!narrow.contains(secret));
     assert!(
@@ -485,6 +511,58 @@ fn progressive_activity_rail_matches_wide_and_narrow_snapshots() {
         "{narrow:?}"
     );
     assert_snapshot!("inline_progressive_activity_rail_narrow", narrow);
+}
+
+#[test]
+fn compact_operator_tail_prioritizes_approval_terminal_and_live_activity() {
+    let mut activity_app = make_test_app();
+    activity_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    activity_app.show_startup_ascii_art = false;
+    tui_testkit::set_progressive_command_activity(&mut activity_app, "first\nsecond", false);
+    assert!(activity_app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
+
+    let activity = tui_testkit::render_inline_snapshot(&mut activity_app, 48, 10);
+    assert!(
+        activity.contains("notice: activity: active:command"),
+        "{activity}"
+    );
+    assert!(!activity.contains("status: turn started"), "{activity}");
+    assert!(!activity.contains("prompt: turn running"), "{activity}");
+
+    let mut terminal_app = make_test_app();
+    terminal_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    terminal_app.show_startup_ascii_art = false;
+    let ConversationState::Ready(conversation) = &mut terminal_app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.fail_turn("runtime failed".to_string());
+    terminal_app.shell_overlay = ShellOverlay::Activity;
+
+    let terminal = tui_testkit::render_inline_snapshot(&mut terminal_app, 48, 10);
+    assert!(
+        terminal.contains("notice: activity: terminal:runtime-failed"),
+        "{terminal}"
+    );
+
+    let mut approval_app = make_test_app();
+    approval_app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut approval_app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.pending_approval_request = Some(ConversationApprovalRequest {
+        approval_id: "approval-compact".to_string(),
+        server_request_id: "server-compact".to_string(),
+        method: "item/commandExecution/requestApproval".to_string(),
+        kind: ConversationApprovalRequestKind::CommandExecution,
+        summary: "Review compact approval".to_string(),
+        details: vec!["Command: cargo test".to_string()],
+    });
+    approval_app.shell_overlay = ShellOverlay::Approval;
+
+    let approval = tui_testkit::render_inline_snapshot(&mut approval_app, 48, 10);
+    assert!(approval.contains("Approval Required"), "{approval}");
+    assert!(approval.contains("Y: approve once"), "{approval}");
+    assert!(approval.contains("N / Esc: decline"), "{approval}");
 }
 
 #[test]
@@ -503,7 +581,7 @@ fn vt100_progressive_activity_rail_is_transient_and_payload_free() {
 
     assert!(
         rendered.contains(
-            "notice: activity: cmd:2 lines | active:command | diff:+1 -1 h1 | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail | lane:cmd1/files2"
+            "notice: activity: active:command | diff:+1 -1 h1 | cmd:2 lines | ctx:75.00% | model:gpt-5.5 | task:P0-D3 rail"
         )
     );
     assert!(!rendered.contains("requested-model-hidden"));
@@ -565,9 +643,9 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     let wide = tui_testkit::render_inline_snapshot(&mut app, 120, 30);
     assert!(wide.contains("Activity / inline inspection"));
     assert!(wide.contains("> Diff"));
-    assert!(wide.contains("Retained Diff"));
+    assert!(wide.contains("Diff |"));
     assert!(wide.contains("history:incomplete"));
-    assert!(wide.contains(&format!("{secret}\\x1b[31m")));
+    assert!(wide.contains(&format!("{secret}\\x1b[31m")), "{wide}");
     assert!(!wide.contains('\u{1b}'));
     assert!(wide.contains("prompt:"));
     assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
@@ -576,8 +654,9 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     let narrow = tui_testkit::render_inline_snapshot(&mut app, 48, 10);
     assert!(narrow.contains("Activity / inline inspection"));
     assert!(narrow.contains("> Diff"));
-    assert!(narrow.contains("Retained Diff"));
-    assert!(narrow.contains("status:"), "{narrow}");
+    assert!(narrow.contains("Diff |"));
+    assert!(narrow.contains("Up/Down/PgUp/PgDn: page"), "{narrow}");
+    assert!(narrow.contains("notice: activity:"), "{narrow}");
     assert!(narrow.contains("prompt:"), "{narrow}");
     assert!(!narrow.contains('\u{1b}'));
     assert!(
@@ -595,11 +674,34 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
     let vt100 = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
     assert!(vt100.contains("> Output"));
-    assert!(vt100.contains("Retained Output Tail"));
+    assert!(vt100.contains("Output |"));
     assert!(!vt100.contains("Full Output"));
     assert!(!vt100.contains('\u{1b}'));
     assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
     assert_snapshot!("vt100_progressive_activity_inspector_output", vt100);
+}
+
+#[test]
+fn narrow_activity_inspector_omits_normal_metadata_and_keeps_exact_keys() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_startup_ascii_art = false;
+    let _core_snapshot =
+        tui_testkit::set_progressive_command_activity(&mut app, "complete detail", false);
+    assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Diff));
+
+    let rendered = tui_testkit::render_inline_snapshot(&mut app, 48, 18);
+
+    assert!(rendered.contains("complete detail"), "{rendered}");
+    assert!(
+        rendered.contains("Tab/Shift+Tab/Left/Right: view"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Up/Down/PgUp/PgDn: page"), "{rendered}");
+    assert!(rendered.contains("Home: first | Esc: close"), "{rendered}");
+    assert!(!rendered.contains("truncated:0"), "{rendered}");
+    assert!(!rendered.contains("history:complete"), "{rendered}");
+    assert!(!rendered.contains("sequence:"), "{rendered}");
 }
 
 #[test]
@@ -633,7 +735,7 @@ fn activity_inspector_resets_page_when_new_turn_reuses_document_sequence() {
     let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
     assert!(rendered.contains("SECOND_TURN_SAME_SEQUENCE_CANARY"));
-    assert!(rendered.contains("Retained Diff / bytes 0.."));
+    assert!(rendered.contains("Diff | 0-"));
     assert_eq!(
         app.progressive_activity_overlay_ui_state
             .current_page_start(),
@@ -736,9 +838,9 @@ fn vt100_markdown_code_block_shell_matches_snapshot() {
 #[test]
 fn vt100_queue_overlay_matches_snapshot() {
     /*
-     * Queue overlay의 vt100 path는 popup planning sections가 terminal backend에서도 보존되는지 확인한다.
-     * TestBackend snapshot만 통과하면 ANSI write/clear/resize path의 section loss를 놓칠 수 있어
-     * queue/proposal headings를 실제 terminal output에서도 고정한다.
+     * Queue overlay의 vt100 path는 compact planning rows와 action keys가 terminal backend에서도
+     * 보존되는지 확인한다. TestBackend snapshot만 통과하면 ANSI write/clear/resize path의 section
+     * loss를 놓칠 수 있어 selected task와 key guide를 실제 terminal output에서도 고정한다.
      */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
@@ -751,8 +853,8 @@ fn vt100_queue_overlay_matches_snapshot() {
 
     let rendered = tui_testkit::render_shell_vt100_snapshot(&mut app, 96, 28);
 
-    assert!(rendered.contains("Ready Queue"));
-    assert!(rendered.contains("Proposals"));
+    assert!(rendered.contains("> #1 [ready] Implement shell planning status"));
+    assert!(!rendered.contains("Proposals"));
     assert!(rendered.contains("x/Delete: remove"));
     assert!(!rendered.contains("┌"));
     assert_snapshot!("vt100_queue_overlay", rendered);
@@ -794,6 +896,7 @@ fn vt100_narrow_shell_matches_snapshot() {
     let rendered = tui_testkit::render_inline_vt100_snapshot(&mut app, 48, 10);
 
     assert_snapshot!("vt100_narrow_shell", rendered);
-    assert!(rendered.contains("turn running"));
+    assert!(rendered.contains("type now"));
+    assert!(!rendered.contains("prompt: turn running"));
     assert!(rendered.lines().all(|line| line.chars().count() <= 48));
 }

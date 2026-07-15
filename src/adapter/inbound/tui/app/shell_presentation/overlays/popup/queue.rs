@@ -16,10 +16,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
      * active/proposed/skipped 분류와 rank를 계산했으므로, 이 파일은 queue 의미를 재판단하지 않고
      * 좁은 popup 폭에 맞춰 title/detail을 압축하는 presentation adapter로 남는다.
      */
-    let header_lines = vec![
-        AkraTheme::title_line("Planning Queue", " / shell inspection"),
-        Line::from("Review the next actionable work without opening raw planning artifacts."),
-    ];
+    let header_lines = vec![AkraTheme::title_line(
+        "Planning Queue",
+        " / shell inspection",
+    )];
 
     let selected_task_id = app.queue_overlay_ui_state.selected_task_id();
     let latest_registration_undo_available = matches!(
@@ -42,12 +42,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
              * Conversation이 아직 load 중이면 planning runtime projection 자체가 없다. 이 상태에서 queue/proposal
              * section을 추측하지 않고 "thread load 뒤 가능" copy로 고정해 stale planning data처럼 보이지 않게 한다.
              */
-            summary_lines: vec![Line::from("status: loading conversation planning state")],
-            queue_lines: vec![Line::from(
-                "Queue inspection becomes available after the thread loads.",
-            )],
-            proposal_lines: vec![Line::from("Proposal data is unavailable while loading.")],
-            note_lines: vec![Line::from("No planning worker notes yet.")],
+            summary_lines: vec![Line::from("status: loading")],
+            queue_lines: Vec::new(),
+            proposal_lines: Vec::new(),
+            note_lines: Vec::new(),
             selected_content_line_index: None,
             key_lines: build_queue_overlay_key_lines(false),
         },
@@ -57,13 +55,9 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
              * Conversation load 실패는 planning queue failure와 다르다. queue projection을 만들 수 없는 상태라
              * queue 자체를 empty로 오해시키지 않고 load error와 recovery action만 보여 준다.
              */
-            summary_lines: vec![Line::from("status: conversation unavailable")],
-            queue_lines: vec![Line::from(
-                "Queue inspection is unavailable while the conversation failed to load.",
-            )],
-            proposal_lines: vec![Line::from(
-                "Open a new draft or reload a session to restore planning state.",
-            )],
+            summary_lines: vec![Line::from("status: unavailable")],
+            queue_lines: vec![Line::from("Reload the session or open a new draft.")],
+            proposal_lines: Vec::new(),
             note_lines: vec![Line::from(format!(
                 "conversation error: {}",
                 compact_whitespace_detail(message, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
@@ -83,7 +77,6 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             let queue_section = if projection.has_structured_queue_projection {
                 build_queue_task_lines(
                     &projection.visible_tasks,
-                    "No executable tasks in the current planning queue.",
                     QUEUE_INSPECTION_TASK_LIMIT,
                     selected_task_id,
                 )
@@ -91,13 +84,10 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 match projection.queue_head.as_ref() {
                     Some(queue_head) => build_queue_task_lines(
                         std::slice::from_ref(queue_head),
-                        "No executable tasks in the current planning queue.",
                         1,
                         selected_task_id,
                     ),
-                    None => QueueTaskLines::unselected(vec![Line::from(
-                        "No executable tasks in the current planning queue.",
-                    )]),
+                    None => QueueTaskLines::unselected(Vec::new()),
                 }
             };
             /*
@@ -107,7 +97,6 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             let proposal_section = if projection.has_structured_queue_projection {
                 build_queue_task_lines(
                     &projection.proposed_tasks,
-                    "No promotable proposals are queued right now.",
                     QUEUE_INSPECTION_PROPOSAL_LIMIT,
                     selected_task_id,
                 )
@@ -117,47 +106,27 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                     compact_whitespace_detail(summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 ))])
             } else {
-                QueueTaskLines::unselected(vec![Line::from(
-                    "No promotable proposals are queued right now.",
-                )])
+                QueueTaskLines::unselected(Vec::new())
             };
             let queue_lines = queue_section.lines;
             let queue_selected_line_index = queue_section.selected_line_index;
             let proposal_lines = proposal_section.lines;
             let proposal_selected_line_index = proposal_section.selected_line_index;
-            /*
-             * Summary는 popup 첫 시선에 필요한 queue-head/queue/proposal 상태만 한 줄로 합친다. 상세 row를
-             * 읽기 전에 현재 queue head, queue health, proposal lane 유무를 빠르게 확인하게 하는 headline이다.
-             */
-            let mut summary_segments = Vec::new();
-            if let Some(planning_revision) = projection.planning_revision {
-                summary_segments.push(format!("revision: {planning_revision}"));
+            // Rows own task titles. The summary keeps only global state and lane counts.
+            let queued_count = if projection.has_structured_queue_projection {
+                projection.visible_tasks.len()
+            } else {
+                usize::from(projection.queue_head.is_some())
+            };
+            let mut summary_segments = vec![
+                format!("status: {}", projection.status_label),
+                format!("queued: {queued_count}"),
+            ];
+            if projection.has_structured_queue_projection {
+                summary_segments.push(format!("proposed: {}", projection.proposed_tasks.len()));
             }
-            if let Some(queue_head) = projection.queue_head.as_ref() {
-                summary_segments.push(format!(
-                    "next: {}",
-                    compact_queue_title(queue_head.task_title.as_str())
-                ));
-            }
-            if let Some(queue_summary) = projection.queue_summary.as_deref() {
-                summary_segments.push(format!(
-                    "queue: {}",
-                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                ));
-                if projection.queue_head.is_none() {
-                    summary_segments
-                        .push(format!("policy: {}", projection.queue_idle_policy.label()));
-                }
-            }
-            if let Some(proposal_summary) = projection.proposal_summary.as_deref() {
-                summary_segments.push(format!(
-                    "proposals: {}",
-                    compact_whitespace_detail(proposal_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                ));
-            }
-            if summary_segments.is_empty() {
-                // queue/proposal 요약이 모두 없을 때는 projection의 preview status가 가장 압축된 상태 설명이다.
-                summary_segments.push(format!("status: {}", projection.status_label));
+            if queued_count == 0 {
+                summary_segments.push(format!("idle: {}", projection.queue_idle_policy.label()));
             }
             let summary_lines = vec![Line::from(summary_segments.join("  |  "))];
 
@@ -193,19 +162,9 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             {
                 note_lines.push(Line::from(format!("planning notice: {summary}")));
             }
-            if let Some(queue_summary) = app
-                .planning_worker_panel_state
-                .last_queue_summary
-                .as_deref()
-            {
-                note_lines.push(Line::from(format!(
-                    "planning worker queue: {}",
-                    compact_whitespace_detail(queue_summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-                )));
-            }
             if let Some(detail) = app.planning_worker_panel_state.last_host_detail.as_deref() {
                 note_lines.push(Line::from(format!(
-                    "planning worker host detail: {}",
+                    "worker: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
                 )));
             }
@@ -214,21 +173,16 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             {
                 note_lines.push(detail);
             }
-            if note_lines.is_empty() {
-                note_lines.push(Line::from(
-                    "No planning worker notices or skipped queue items.",
-                ));
-            } else {
+            if !note_lines.is_empty() {
                 // popup height를 보호하기 위해 가장 중요한 두 줄만 남긴다. 상세 진단은 shell status/notice panel에 남아 있다.
                 note_lines.truncate(2);
             }
 
-            let proposal_heading_index = 1 + queue_lines.len();
+            let proposal_heading_index = queue_lines.len();
             let notes_heading_index = proposal_heading_index
                 + usize::from(!proposal_lines.is_empty())
                 + proposal_lines.len();
             let selected_content_line_index = queue_selected_line_index
-                .map(|index| 1 + index)
                 .or_else(|| {
                     proposal_selected_line_index.map(|index| proposal_heading_index + 1 + index)
                 })
@@ -251,11 +205,15 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
 }
 
 fn build_queue_overlay_key_lines(latest_registration_undo_available: bool) -> Vec<Line<'static>> {
-    vec![AkraTheme::key_line(if latest_registration_undo_available {
-        "Up/Down or j/k: select  |  x/Delete: remove  |  u: undo added  |  Esc: close"
-    } else {
-        "Up/Down or j/k: select  |  x/Delete: remove  |  Esc: close"
-    })]
+    let mut lines = vec![
+        AkraTheme::key_line("Up/Down, j/k: select"),
+        AkraTheme::key_line("x/Delete: remove"),
+    ];
+    if latest_registration_undo_available {
+        lines[1] = AkraTheme::key_line("x/Delete: remove | u: undo added");
+    }
+    lines.push(AkraTheme::key_line("Esc/Ctrl+C: close"));
+    lines
 }
 
 struct QueueTaskLines {
@@ -274,18 +232,14 @@ impl QueueTaskLines {
 
 fn build_queue_task_lines(
     tasks: &[PlanningApplicationQueueTask],
-    empty_message: &str,
     max_visible_tasks: usize,
     selected_task_id: Option<&str>,
 ) -> QueueTaskLines {
     if tasks.is_empty() {
-        return QueueTaskLines::unselected(vec![Line::from(empty_message.to_string())]);
+        return QueueTaskLines::unselected(Vec::new());
     }
 
-    /*
-     * Popup row는 rank, status, combined priority, title만 남긴다. dependency/blocker 설명은 application
-     * projection의 rank_reasons에 있지만 popup에서는 한 줄 scan 비용이 더 중요해 상세 원인은 생략한다.
-     */
+    // Rank is the stable visible discriminator when compacted titles collide.
     let max_visible_tasks = max_visible_tasks.max(1);
     let selected_index = selected_task_id
         .and_then(|selected_task_id| {
@@ -303,10 +257,9 @@ fn build_queue_task_lines(
         let selected = selected_task_id == Some(task.task_id.as_str());
         let marker = if selected { ">" } else { " " };
         let line = Line::from(format!(
-            "{marker} #{} [{} / p{}] {}",
+            "{marker} #{} [{}] {}",
             task.rank,
             task.status_label,
-            task.combined_priority,
             compact_queue_title(task.task_title.as_str())
         ));
         if selected {
@@ -325,16 +278,10 @@ fn build_queue_task_lines(
         .saturating_sub(window_start.saturating_add(max_visible_tasks));
     match (hidden_before, hidden_after) {
         (0, 0) => {}
-        (0, hidden_after) => lines.push(Line::from(format!(
-            "+{hidden_after} more queue item{} hidden for readability",
-            if hidden_after == 1 { "" } else { "s" }
-        ))),
-        (hidden_before, 0) => lines.push(Line::from(format!(
-            "+{hidden_before} earlier queue item{} hidden for readability",
-            if hidden_before == 1 { "" } else { "s" }
-        ))),
+        (0, hidden_after) => lines.push(Line::from(format!("+{hidden_after} more"))),
+        (hidden_before, 0) => lines.push(Line::from(format!("+{hidden_before} earlier"))),
         (hidden_before, hidden_after) => lines.push(Line::from(format!(
-            "{hidden_before} earlier / {hidden_after} later queue items hidden"
+            "+{hidden_before} earlier / +{hidden_after} later"
         ))),
     }
 
@@ -393,7 +340,7 @@ fn build_skipped_queue_note_line(
 #[cfg(test)]
 mod tests {
     use super::super::super::super::terminal_text::display_width;
-    use super::compact_queue_title;
+    use super::{build_queue_overlay_key_lines, compact_queue_title};
 
     #[test]
     fn queue_titles_compact_whitespace_and_respect_terminal_cell_budget() {
@@ -403,5 +350,25 @@ mod tests {
         assert!(!compact.contains("  "));
         assert!(compact.ends_with('…'));
         assert!(display_width(&compact) <= 56);
+    }
+
+    #[test]
+    fn queue_keys_only_show_undo_when_the_latest_batch_is_cancellable() {
+        let normal = build_queue_overlay_key_lines(false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cancellable = build_queue_overlay_key_lines(true)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(normal.contains("Up/Down, j/k: select"));
+        assert!(normal.contains("x/Delete: remove"));
+        assert!(normal.contains("Esc/Ctrl+C: close"));
+        assert!(!normal.contains("u: undo"));
+        assert!(cancellable.contains("u: undo added"));
     }
 }

@@ -304,10 +304,22 @@ impl ShellRuntime {
                     self.request_redraw_at(now);
                     return;
                 }
-                KeyCode::Enter
+                KeyCode::Tab
                     if key.modifiers.is_empty()
-                        && self.app.accept_inline_command_palette_selection() =>
+                        && self.app.move_inline_command_palette_selection(1) =>
                 {
+                    self.request_redraw_at(now);
+                    return;
+                }
+                KeyCode::BackTab
+                    if (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+                        && self.app.move_inline_command_palette_selection(-1) =>
+                {
+                    self.request_redraw_at(now);
+                    return;
+                }
+                KeyCode::Enter if key.modifiers.is_empty() => {
+                    self.app.accept_inline_command_palette_selection();
                     self.request_redraw_at(now);
                     return;
                 }

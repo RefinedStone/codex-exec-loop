@@ -7,7 +7,6 @@ const PAGE_OUTPUT_BYTES_PER_CELL: usize = 8;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ActivityOverlayDocument<'a> {
-    pub(crate) sequence: u64,
     pub(crate) text: &'a str,
     pub(crate) source_bytes: u64,
     pub(crate) retained_bytes: u64,
@@ -19,6 +18,7 @@ pub(crate) struct ActivityOverlayView {
     pub(crate) header_lines: Vec<Line<'static>>,
     pub(crate) detail_title: Line<'static>,
     pub(crate) detail_lines: Vec<Line<'static>>,
+    pub(crate) key_lines: Vec<Line<'static>>,
     pub(crate) current_page_start: usize,
     pub(crate) next_page_start: Option<usize>,
 }
@@ -46,6 +46,7 @@ pub(crate) fn build_activity_overlay_view(
                 "No retained {} is available for the active turn.",
                 detail_label(selected_kind).to_ascii_lowercase()
             ))],
+            key_lines: build_activity_overlay_key_lines(viewport_width),
             current_page_start: 0,
             next_page_start: None,
         };
@@ -59,8 +60,8 @@ pub(crate) fn build_activity_overlay_view(
         viewport_height,
     );
     let detail_title = Line::from(format!(
-        "{} / bytes {}..{} of {}",
-        detail_title(selected_kind),
+        "{} | {}-{} / {} B",
+        detail_label(selected_kind),
         page.start_byte,
         page.end_byte,
         document.retained_bytes
@@ -70,6 +71,7 @@ pub(crate) fn build_activity_overlay_view(
         header_lines,
         detail_title,
         detail_lines: page.lines,
+        key_lines: build_activity_overlay_key_lines(viewport_width),
         current_page_start: page.start_byte,
         next_page_start: page.next_page_start,
     }
@@ -108,39 +110,47 @@ fn tab_span(label: &'static str, selected: bool, available: bool) -> Span<'stati
 }
 
 fn build_document_status_lines(document: &ActivityOverlayDocument<'_>) -> Vec<Line<'static>> {
-    let truncation_style = if document.truncated_bytes > 0 {
-        AkraTheme::warning()
-    } else {
-        AkraTheme::muted()
-    };
-    let history_label = if document.history_incomplete {
-        "incomplete"
-    } else {
-        "complete"
-    };
-    let history_style = if document.history_incomplete {
-        AkraTheme::warning()
-    } else {
-        AkraTheme::muted()
-    };
+    if document.truncated_bytes == 0 && !document.history_incomplete {
+        return Vec::new();
+    }
 
+    let mut spans = vec![Span::styled(
+        format!(
+            "retained:{}/{} B",
+            document.retained_bytes, document.source_bytes
+        ),
+        AkraTheme::warning(),
+    )];
+    if document.truncated_bytes > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("truncated:{} B", document.truncated_bytes),
+            AkraTheme::warning(),
+        ));
+    }
+    if document.history_incomplete {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("history:incomplete", AkraTheme::warning()));
+    }
+    vec![Line::from(spans)]
+}
+
+fn build_activity_overlay_key_lines(viewport_width: u16) -> Vec<Line<'static>> {
+    if viewport_width >= 96 {
+        return vec![AkraTheme::key_line(
+            "Tab/Shift+Tab/Left/Right: view | Up/Down/PgUp/PgDn: page | Home: first | Esc: close",
+        )];
+    }
+    if viewport_width >= 64 {
+        return vec![
+            AkraTheme::key_line("Tab/Shift+Tab/Left/Right: view | Up/Down/PgUp/PgDn: page"),
+            AkraTheme::key_line("Home: first | Esc: close"),
+        ];
+    }
     vec![
-        Line::from(format!(
-            "source:{} bytes  retained:{} bytes",
-            document.source_bytes, document.retained_bytes
-        )),
-        Line::from(vec![
-            Span::styled(
-                format!("truncated:{} bytes", document.truncated_bytes),
-                truncation_style,
-            ),
-            Span::raw("  "),
-            Span::styled(format!("history:{history_label}"), history_style),
-            Span::styled(
-                format!("  sequence:{}", document.sequence),
-                AkraTheme::muted(),
-            ),
-        ]),
+        AkraTheme::key_line("Up/Down/PgUp/PgDn: page | Esc: close"),
+        AkraTheme::key_line("Tab/Shift+Tab/Left/Right: view"),
+        AkraTheme::key_line("Home: first | Esc: close"),
     ]
 }
 
@@ -397,7 +407,6 @@ mod tests {
             true,
             false,
             Some(ActivityOverlayDocument {
-                sequence: 42,
                 text: "@@ -1 +1 @@\n-old\n+new",
                 source_bytes: 100,
                 retained_bytes: 24,
@@ -415,10 +424,42 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(status.contains("source:100 bytes  retained:24 bytes"));
-        assert!(status.contains("truncated:76 bytes"));
+        assert!(status.contains("retained:24/100 B"));
+        assert!(status.contains("truncated:76 B"));
         assert!(status.contains("history:incomplete"));
-        assert!(status.contains("sequence:42"));
+        assert!(!status.contains("sequence:"));
+    }
+
+    #[test]
+    fn complete_retained_document_omits_zero_value_metadata() {
+        let view = build_activity_overlay_view(
+            ProgressiveActivityDetailKind::Output,
+            false,
+            true,
+            Some(ActivityOverlayDocument {
+                text: "complete output",
+                source_bytes: 15,
+                retained_bytes: 15,
+                truncated_bytes: 0,
+                history_incomplete: false,
+            }),
+            0,
+            48,
+            4,
+        );
+        let header = view
+            .header_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(view.header_lines.len(), 1);
+        assert!(!header.contains("truncated:0"));
+        assert!(!header.contains("history:complete"));
+        assert_eq!(view.key_lines.len(), 3);
+        assert!(view.key_lines[0].to_string().contains("Esc: close"));
+        assert!(view.key_lines[1].to_string().contains("Tab/Shift+Tab"));
     }
 
     #[test]

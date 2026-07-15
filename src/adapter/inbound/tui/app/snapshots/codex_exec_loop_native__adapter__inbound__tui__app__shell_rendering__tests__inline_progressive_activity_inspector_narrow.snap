@@ -4,11 +4,11 @@ expression: narrow
 ---
 "Akra / Activity / inline inspection             "
 "> Diff      Output                              "
-"source:795 bytes  retained:795 bytes            "
-"truncated:0 bytes  history:incomplete           "
-"Retained Diff / bytes 0..19 of 795              "
+"Diff | 0-19 / 795 B                             "
 "한글 wide detail                                " Hidden by multi-width symbols: [(1, " "), (3, " ")]
-"status: turn started                            "
+"Keys                                            "
+"Up/Down/PgUp/PgDn: page | Esc: close            "
+"◦ Working (0s • waiting for response / inter...)"
+"notice: activity: active:command | diff:+1 -1 h1"
 ">                                               "
-"prompt: turn running  |  type now, Enter when   "
-"idle                                            "
+"prompt: type now  |  Enter when idle            "

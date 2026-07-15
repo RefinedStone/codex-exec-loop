@@ -284,7 +284,7 @@ pub(super) fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> 
 
     vec![
         AkraTheme::key_line(
-            "/: query    c: clear    Tab/BackTab: filter    [ ] or PgUp/PgDn: page",
+            "/: query    c: clear    Tab/Shift+Tab: filter    [ ] or PgUp/PgDn: page",
         ),
         AkraTheme::key_line("Up/Down or Home/End or g/G: move    Enter: open    Esc/Ctrl+C: close"),
         AkraTheme::key_line("n: draft    r: reload    Ctrl+d: diagnostics"),

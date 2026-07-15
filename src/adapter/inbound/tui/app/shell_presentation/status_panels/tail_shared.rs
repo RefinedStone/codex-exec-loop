@@ -140,19 +140,27 @@ pub(super) fn build_operator_notice_line(
          * turn이 끝난 뒤에도 command/file-change count는 마지막 활동 요약으로 의미가 있다.
          * live 상태는 아니지만 approval과 함께 operator notice로 남겨 최근 변경 맥락을 보존한다.
          */
-        let mut notice_line = format!(
-            "tool activity: {}  |  {activity_scope} commands: {}  |  {activity_scope} file changes: {}",
-            compact_inline_detail(activity_summary, max_detail_len),
-            activity_command_count,
-            activity_file_change_count,
-        );
+        let mut parts = vec![format!(
+            "tool activity: {}",
+            compact_inline_detail(activity_summary, max_detail_len)
+        )];
+        if activity_command_count > 0 {
+            parts.push(format!(
+                "{activity_scope} commands: {activity_command_count}"
+            ));
+        }
+        if activity_file_change_count > 0 {
+            parts.push(format!(
+                "{activity_scope} file changes: {activity_file_change_count}"
+            ));
+        }
         if let Some(approval_summary) = conversation.approval_summary().as_deref() {
-            notice_line.push_str(&format!(
-                "  |  approval: {}",
+            parts.push(format!(
+                "approval: {}",
                 compact_inline_detail(approval_summary, max_detail_len)
             ));
         }
-        return Some(notice_line);
+        return Some(parts.join("  |  "));
     }
 
     /*
@@ -261,13 +269,13 @@ mod tests {
     }
 
     #[test]
-    fn typed_terminal_suppresses_lower_priority_review_when_too_narrow() {
+    fn typed_terminal_compacts_before_lower_priority_review_when_narrow() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
         conversation.activity_rail_terminal_state = Some(ActivityRailTerminalState::RuntimeFailed);
 
         assert_eq!(
             build_operator_notice_line(Some("review changed"), &conversation, 160, 12),
-            None
+            Some("runtime-fail".to_string())
         );
     }
 

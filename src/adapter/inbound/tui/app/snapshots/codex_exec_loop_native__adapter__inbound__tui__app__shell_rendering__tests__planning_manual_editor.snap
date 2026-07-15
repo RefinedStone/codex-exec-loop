@@ -23,7 +23,7 @@ expression: rendered
 "validation state: ok                                                                            "
 "staged path: /tmp/root/.codex-exec-loop/planning/drafts/bootstrap-...                           "
 "Keys                                                                                            "
-"controls: Tab/BackTab switches files  |  arrows move the cursor                                 "
+"controls: Tab/Shift+Tab switches files  |  arrows move the cursor                               "
 "controls: Enter inserts newline  |  Backspace deletes  |  Ctrl+W deletes the previous word      "
 "controls: Ctrl+S saves and validates  |  Ctrl+P saves and promotes active planning              "
 "controls: Esc/Ctrl+C closes this surface                                                        "
