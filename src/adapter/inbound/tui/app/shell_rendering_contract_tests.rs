@@ -1,10 +1,13 @@
 use super::super::tui_testkit;
 use super::*;
 use crate::adapter::inbound::tui::app::shell_presentation::{
-    format_conversation_lines_for_view, format_conversation_lines_with_debug,
+    build_reviews_overlay_view, format_conversation_lines_for_view,
+    format_conversation_lines_with_debug,
 };
-use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
-use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::adapter::inbound::tui::app::shell_runtime::ShellRuntime;
+use crate::adapter::inbound::tui::app::test_helpers::{
+    sample_planning_runtime_projection, test_native_tui_app_with_review_center_repository,
+};
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
@@ -24,7 +27,12 @@ use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::layout::Position;
 use ratatui::style::Color;
-use std::fs;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
+use std::time::{Duration, Instant};
 
 // Rendering contract tests use TestBackend snapshots instead of golden files so
 // each assertion can name the specific TUI invariant it protects.
@@ -659,110 +667,228 @@ fn narrow_help_inspection_scrolls_to_the_last_command() {
         "composer tail must remain visible:\n{rendered}"
     );
 }
+
+#[derive(Default)]
+struct CountingReviewCenterRepository {
+    thread_loads: AtomicUsize,
+    inbox_loads: AtomicUsize,
+    history_loads: AtomicUsize,
+    expected_workspace: Option<String>,
+    expected_thread_id: Option<String>,
+}
+
+impl CountingReviewCenterRepository {
+    fn for_context(workspace_directory: impl Into<String>, thread_id: impl Into<String>) -> Self {
+        Self {
+            expected_workspace: Some(workspace_directory.into()),
+            expected_thread_id: Some(thread_id.into()),
+            ..Self::default()
+        }
+    }
+
+    fn load_counts(&self) -> (usize, usize, usize) {
+        (
+            self.thread_loads.load(Ordering::SeqCst),
+            self.inbox_loads.load(Ordering::SeqCst),
+            self.history_loads.load(Ordering::SeqCst),
+        )
+    }
+
+    fn workspace_label(&self, workspace_dir: &str) -> &'static str {
+        match self.expected_workspace.as_deref() {
+            Some(expected) if expected != workspace_dir => "wrong",
+            Some(_) | None => "correct",
+        }
+    }
+
+    fn thread_label(&self, thread_id: &str) -> &'static str {
+        match self.expected_thread_id.as_deref() {
+            Some(expected) if expected != thread_id => "wrong",
+            Some(_) | None => "correct",
+        }
+    }
+}
+
+impl ReviewCenterRepositoryPort for CountingReviewCenterRepository {
+    fn load_thread_reviews(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> anyhow::Result<Vec<ReviewCenterThreadProjection>> {
+        self.thread_loads.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![ReviewCenterThreadProjection::new(
+            thread_id,
+            "review-1",
+            "Architecture review",
+            "pending",
+            format!(
+                "{} workspace {} thread review",
+                self.workspace_label(workspace_dir),
+                self.thread_label(thread_id)
+            ),
+            "2026-07-16T10:00:00Z",
+            "2026-07-16T10:01:00Z",
+        )])
+    }
+
+    fn load_pending_inbox(
+        &self,
+        workspace_dir: &str,
+    ) -> anyhow::Result<Vec<ReviewCenterInboxItem>> {
+        self.inbox_loads.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![ReviewCenterInboxItem::new(
+            "review-1",
+            "thread-1",
+            "pending",
+            format!("{} workspace inbox", self.workspace_label(workspace_dir)),
+            "2026-07-16T10:00:00Z",
+            "2026-07-16T10:01:00Z",
+        )])
+    }
+
+    fn load_recent_history(
+        &self,
+        workspace_dir: &str,
+    ) -> anyhow::Result<Vec<ReviewCenterHistoryEntry>> {
+        self.history_loads.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![ReviewCenterHistoryEntry::new(
+            "review-1",
+            "thread-1",
+            "review_requested",
+            format!("{} workspace history", self.workspace_label(workspace_dir)),
+            "2026-07-16T10:02:00Z",
+        )])
+    }
+
+    fn upsert_thread_review(
+        &self,
+        _workspace_dir: &str,
+        _review: &ReviewCenterThreadProjection,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn replace_pending_inbox(
+        &self,
+        _workspace_dir: &str,
+        _inbox: &[ReviewCenterInboxItem],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn append_history_entry(
+        &self,
+        _workspace_dir: &str,
+        _entry: &ReviewCenterHistoryEntry,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+struct GatedReviewCenterRepository {
+    thread_loads: AtomicUsize,
+    first_load_started: mpsc::SyncSender<()>,
+    release_first_load: Mutex<mpsc::Receiver<()>>,
+}
+
+impl ReviewCenterRepositoryPort for GatedReviewCenterRepository {
+    fn load_thread_reviews(
+        &self,
+        workspace_dir: &str,
+        thread_id: &str,
+    ) -> anyhow::Result<Vec<ReviewCenterThreadProjection>> {
+        let load_index = self.thread_loads.fetch_add(1, Ordering::SeqCst);
+        if load_index == 0 {
+            self.first_load_started.send(()).map_err(|error| {
+                anyhow::anyhow!("first review load start signal failed: {error}")
+            })?;
+            self.release_first_load
+                .lock()
+                .expect("first review load release mutex should remain healthy")
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|error| anyhow::anyhow!("first review load release failed: {error}"))?;
+        }
+        Ok(vec![ReviewCenterThreadProjection::new(
+            thread_id,
+            format!("review-{}", load_index + 1),
+            "Architecture review",
+            "pending",
+            format!("{workspace_dir}::{thread_id}"),
+            "2026-07-16T10:00:00Z",
+            "2026-07-16T10:01:00Z",
+        )])
+    }
+
+    fn load_pending_inbox(
+        &self,
+        _workspace_dir: &str,
+    ) -> anyhow::Result<Vec<ReviewCenterInboxItem>> {
+        Ok(Vec::new())
+    }
+
+    fn load_recent_history(
+        &self,
+        _workspace_dir: &str,
+    ) -> anyhow::Result<Vec<ReviewCenterHistoryEntry>> {
+        Ok(Vec::new())
+    }
+
+    fn upsert_thread_review(
+        &self,
+        _workspace_dir: &str,
+        _review: &ReviewCenterThreadProjection,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn replace_pending_inbox(
+        &self,
+        _workspace_dir: &str,
+        _inbox: &[ReviewCenterInboxItem],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn append_history_entry(
+        &self,
+        _workspace_dir: &str,
+        _entry: &ReviewCenterHistoryEntry,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+fn complete_reviews_overlay_load(runtime: &mut ShellRuntime) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        runtime.poll_background_messages();
+        if matches!(
+            runtime.app().reviews_overlay_ui_state.screen_model(),
+            crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Ready { .. }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "review overlay authority should load through ShellRuntime"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        runtime.take_redraw_request(),
+        "review overlay completion should request a redraw"
+    );
+}
+
 #[test]
 fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_workspace() {
-    let mut app = make_test_app();
+    let thread_workspace = "/tmp/review-thread-workspace".to_string();
+    let repository = Arc::new(CountingReviewCenterRepository::for_context(
+        thread_workspace.clone(),
+        "thread-1",
+    ));
+    let mut app = test_native_tui_app_with_review_center_repository(repository.clone());
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let wrong_workspace = std::env::temp_dir().join(format!(
-        "codex-exec-loop-review-overlay-root-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be valid")
-            .as_nanos()
-    ));
-    fs::create_dir_all(&wrong_workspace).expect("wrong workspace should exist");
-    let wrong_workspace = wrong_workspace.display().to_string();
-    let thread_workspace = std::env::temp_dir().join(format!(
-        "codex-exec-loop-review-overlay-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be valid")
-            .as_nanos()
-    ));
-    fs::create_dir_all(&thread_workspace).expect("thread workspace should exist");
-    let thread_workspace = thread_workspace.display().to_string();
-    let root_adapter = SqlitePlanningAuthorityAdapter::new();
-    let mut root_review = ReviewCenterThreadProjection::new(
-        "thread-1",
-        "root-review",
-        "Root review",
-        "pending",
-        "wrong workspace review",
-        "2026-07-06T10:00:00Z",
-        "2026-07-06T10:01:00Z",
-    );
-    root_review.handoff_target = Some("operator".to_string());
-    root_adapter
-        .upsert_thread_review(&wrong_workspace, &root_review)
-        .expect("root review should persist");
-    root_adapter
-        .replace_pending_inbox(
-            &wrong_workspace,
-            &[ReviewCenterInboxItem::new(
-                "root-review",
-                "thread-1",
-                "pending",
-                "wrong workspace inbox",
-                "2026-07-06T10:00:00Z",
-                "2026-07-06T10:01:00Z",
-            )],
-        )
-        .expect("root inbox should persist");
-    root_adapter
-        .append_history_entry(
-            &wrong_workspace,
-            &ReviewCenterHistoryEntry::new(
-                "root-review",
-                "thread-1",
-                "review_requested",
-                "wrong workspace history",
-                "2026-07-06T10:02:00Z",
-            ),
-        )
-        .expect("root history should persist");
-
-    let thread_adapter = SqlitePlanningAuthorityAdapter::new();
-    let mut thread_review = ReviewCenterThreadProjection::new(
-        "thread-1",
-        "thread-review",
-        "Thread review",
-        "pending",
-        "correct workspace review",
-        "2026-07-06T11:00:00Z",
-        "2026-07-06T11:01:00Z",
-    );
-    thread_review.handoff_target = Some("operator".to_string());
-    thread_adapter
-        .upsert_thread_review(&thread_workspace, &thread_review)
-        .expect("thread review should persist");
-    thread_adapter
-        .replace_pending_inbox(
-            &thread_workspace,
-            &[ReviewCenterInboxItem::new(
-                "thread-review",
-                "thread-1",
-                "pending",
-                "correct workspace inbox",
-                "2026-07-06T11:00:00Z",
-                "2026-07-06T11:01:00Z",
-            )],
-        )
-        .expect("thread inbox should persist");
-    thread_adapter
-        .append_history_entry(
-            &thread_workspace,
-            &ReviewCenterHistoryEntry::new(
-                "thread-review",
-                "thread-1",
-                "review_requested",
-                "correct workspace history",
-                "2026-07-06T11:02:00Z",
-            ),
-        )
-        .expect("thread history should persist");
-
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should have a ready conversation");
     };
@@ -771,15 +897,26 @@ fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_work
         "Loaded thread".to_string(),
         thread_workspace.clone(),
     );
-    app.shell_overlay = ShellOverlay::Reviews;
+    app.show_reviews_overlay();
+    let mut runtime = ShellRuntime::new(app);
+    assert!(runtime.take_redraw_request());
+    complete_reviews_overlay_load(&mut runtime);
+    assert_eq!(repository.load_counts(), (1, 1, 1));
 
-    let overlay_view = app.build_reviews_overlay_view();
+    let app = runtime.app_mut();
+    let overlay_view = build_reviews_overlay_view(app.reviews_overlay_ui_state.screen_model());
 
     assert!(overlay_view.header_lines.iter().any(|line| {
         line.to_string()
             .contains("Review Center / shell inspection")
     }));
     assert_eq!(overlay_view.current_thread_reviews.len(), 1);
+    assert!(
+        overlay_view.current_thread_reviews[0]
+            .summary_line
+            .to_string()
+            .contains("correct workspace correct thread review")
+    );
     assert_eq!(overlay_view.inbox_reviews.len(), 1);
     assert!(
         overlay_view.inbox_reviews[0]
@@ -798,7 +935,7 @@ fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_work
         !overlay_view.current_thread_reviews[0]
             .summary_line
             .to_string()
-            .contains("wrong workspace review")
+            .contains("wrong thread review")
     );
     assert!(
         !overlay_view.inbox_reviews[0]
@@ -812,6 +949,120 @@ fn inline_reviews_inspection_keeps_current_thread_and_inbox_history_on_same_work
             .to_string()
             .contains("wrong workspace history")
     );
+}
+
+#[test]
+fn repeated_reviews_inspection_draws_do_not_reload_application_authority() {
+    let repository = Arc::new(CountingReviewCenterRepository::default());
+    let mut app = test_native_tui_app_with_review_center_repository(repository.clone());
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should have a ready conversation");
+    };
+    conversation.record_thread_prepared(
+        "thread-1".to_string(),
+        "Loaded thread".to_string(),
+        "/tmp/root".to_string(),
+    );
+
+    app.show_reviews_overlay();
+    let mut runtime = ShellRuntime::new(app);
+    assert!(runtime.take_redraw_request());
+    complete_reviews_overlay_load(&mut runtime);
+    assert_eq!(repository.load_counts(), (1, 1, 1));
+
+    let mut terminal = Terminal::new(TestBackend::new(104, 34)).expect("test terminal");
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                runtime.app_mut(),
+                ShellFrontendMode::InlineMainBuffer,
+            )
+        })
+        .expect("first reviews inspection render succeeds");
+    let first_render = tui_testkit::screen_text(&terminal);
+    assert!(first_render.contains("Review Center"));
+    assert_eq!(repository.load_counts(), (1, 1, 1));
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                runtime.app_mut(),
+                ShellFrontendMode::InlineMainBuffer,
+            )
+        })
+        .expect("second reviews inspection render succeeds");
+    let second_render = tui_testkit::screen_text(&terminal);
+
+    assert!(second_render.contains("Review Center"));
+    assert_eq!(repository.load_counts(), (1, 1, 1));
+}
+
+#[test]
+fn reviews_identity_drift_reloads_latest_context_through_shell_runtime() {
+    let (started_tx, started_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let repository = Arc::new(GatedReviewCenterRepository {
+        thread_loads: AtomicUsize::new(0),
+        first_load_started: started_tx,
+        release_first_load: Mutex::new(release_rx),
+    });
+    let mut app = test_native_tui_app_with_review_center_repository(repository.clone());
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should have a ready conversation");
+    };
+    conversation.record_thread_prepared(
+        "thread-1".to_string(),
+        "First thread".to_string(),
+        "/tmp/root".to_string(),
+    );
+    app.show_reviews_overlay();
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first review authority load should start");
+
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should have a ready conversation");
+    };
+    conversation.record_thread_prepared(
+        "thread-2".to_string(),
+        "Replacement thread".to_string(),
+        "/tmp/other".to_string(),
+    );
+    let mut runtime = ShellRuntime::new(app);
+    assert!(runtime.take_redraw_request());
+    release_tx
+        .send(())
+        .expect("first review authority load should release");
+
+    complete_reviews_overlay_load(&mut runtime);
+
+    assert_eq!(repository.thread_loads.load(Ordering::SeqCst), 2);
+    let crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Ready {
+        request,
+        authority,
+    } = runtime.app().reviews_overlay_ui_state.screen_model()
+    else {
+        panic!("latest Review Center context should become ready");
+    };
+    assert_eq!(request.context.workspace_directory, "/tmp/other");
+    assert_eq!(
+        request
+            .context
+            .active_thread
+            .as_ref()
+            .map(|thread| thread.thread_id.as_str()),
+        Some("thread-2")
+    );
+    let reviews = authority
+        .current_thread_reviews
+        .as_ref()
+        .expect("latest thread reviews should load");
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].thread_id, "thread-2");
+    assert_eq!(reviews[0].review_summary, "/tmp/other::thread-2");
 }
 
 #[test]

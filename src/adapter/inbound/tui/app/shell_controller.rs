@@ -99,6 +99,20 @@ impl NativeTuiApp {
     }
     pub(super) fn show_reviews_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::ReviewsOverlayShown);
+        self.start_reviews_overlay_authority_load();
+    }
+
+    pub(super) fn start_reviews_overlay_authority_load(&mut self) {
+        if self.shell_overlay != ShellOverlay::Reviews {
+            return;
+        }
+        let request = self.begin_reviews_overlay_load();
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let authority = application.load_reviews_overlay_authority(&request);
+            let _ = tx.send(BackgroundMessage::ReviewsOverlayLoaded { request, authority });
+        });
     }
 
     pub(super) fn toggle_startup_overlay(&mut self) {
@@ -1437,6 +1451,18 @@ mod tests {
             ProgressiveActivityOverlayUiState::default()
         );
 
+        app.shell_overlay = ShellOverlay::Reviews;
+        app.begin_reviews_overlay_load();
+        assert!(matches!(
+            app.reviews_overlay_ui_state.screen_model(),
+            crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Loading(_)
+        ));
+        app.close_shell_overlay();
+        assert!(matches!(
+            app.reviews_overlay_ui_state.screen_model(),
+            crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Idle
+        ));
+
         for overlay in [
             ShellOverlay::DirectionsMaintenance,
             ShellOverlay::PlanningInit,
@@ -1450,6 +1476,21 @@ mod tests {
             app.close_shell_overlay();
             assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
         }
+    }
+
+    #[test]
+    fn reviews_overlay_load_does_not_start_while_approval_owns_focus() {
+        let mut app = test_native_tui_app();
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+
+        app.show_reviews_overlay();
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert!(matches!(
+            app.reviews_overlay_ui_state.screen_model(),
+            crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Idle
+        ));
+        assert!(app.rx.try_recv().is_err());
     }
 
     #[test]

@@ -78,6 +78,14 @@ the fixed Akra theme.
 - Popup overlays must use the shared Akra panel frame from `AkraTheme::panel_block`.
 - Overlay content should follow this order when the surface needs all sections: header, summary,
   primary content, status, keys.
+- The Review Center read-only overlay must load application authority through controller-owned
+  asynchronous work into a request-correlated immutable screen model.
+- Review Center projection and rendering must read only that screen model; displaying its loading
+  state, resizing, or repeatedly redrawing it must not perform service, repository, filesystem, or
+  database I/O.
+- Async Review Center results may replace the current screen model only when the request identifier,
+  workspace, and active-thread identity (thread ID) still match; workspace or thread identity drift
+  must trigger a correlated reload.
 - Selected rows must use `AkraTheme::selected()` and `AkraTheme::list_highlight_symbol()` or the
   option-line helpers that wrap them.
 - Key footers must use `AkraTheme::key_line`.

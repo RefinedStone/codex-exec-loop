@@ -20,6 +20,7 @@ use crate::application::port::outbound::planning_authority_port::NoopPlanningAut
 use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
+use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
 use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
 use crate::application::port::outbound::startup_probe_port::{
     AppServerStartupContext, StartupProbePort,
@@ -561,6 +562,14 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
 }
 
 pub(super) fn test_native_tui_app() -> NativeTuiApp {
+    test_native_tui_app_with_review_center_repository(Arc::new(
+        SqlitePlanningAuthorityAdapter::new(),
+    ))
+}
+
+pub(super) fn test_native_tui_app_with_review_center_repository(
+    review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
+) -> NativeTuiApp {
     /*
      * Build the same production-shaped service graph used by TUI fixtures, with app-server IO
      * pinned to deterministic responses. Tests can then seed NativeTuiApp state directly while
@@ -571,11 +580,10 @@ pub(super) fn test_native_tui_app() -> NativeTuiApp {
     let parallel_mode_binding = NativeTuiParallelModeBinding::from_composition(
         test_parallel_mode_control_plane_composition(planning),
     );
-    let conversation_service = ConversationService::new(app_server_port.clone())
-        .with_review_center_read_service(ReviewCenterReadService::new(
-            "/tmp/root",
-            Arc::new(SqlitePlanningAuthorityAdapter::new()),
-        ));
+    let conversation_service =
+        ConversationService::new(app_server_port.clone()).with_review_center_read_service(
+            ReviewCenterReadService::new("/tmp/root", review_center_repository),
+        );
     let mut app = NativeTuiApp::new(
         StartupService::new(app_server_port.clone()),
         SessionService::new(app_server_port.clone()),

@@ -250,6 +250,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/planning/controller.rs",
             "src/adapter/inbound/tui/app/progressive_activity_overlay_ui.rs",
             "src/adapter/inbound/tui/app/queue_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/reviews_overlay_ui.rs",
             "src/adapter/inbound/tui/app/session_overlay_ui.rs",
             "src/adapter/inbound/tui/app/model_selection_overlay_ui.rs",
             "src/adapter/inbound/tui/app/view_selection_overlay_ui.rs",
@@ -735,6 +736,25 @@ fn tui_session_catalog_loads_enter_through_core_runtime() {
         "TUI session catalog loads must be dispatched through core runtime, not SessionService directly",
         &["src/adapter/inbound/tui/app/app_runtime.rs"],
         &[".load_session_catalog(", "NativeTuiSessionCatalogHandle"],
+    );
+}
+
+#[test]
+fn tui_review_presentation_reads_screen_model_without_effects() {
+    // Review Center authority loading belongs to the controller/effect path. Presentation must
+    // remain a pure projection of the request-correlated immutable screen model.
+    assert_no_forbidden_references_in_paths(
+        "TUI Review Center presentation must consume its screen model without service or I/O effects",
+        &["src/adapter/inbound/tui/app/shell_presentation/overlays/popup/reviews.rs"],
+        &[
+            "NativeTuiApp",
+            ".application",
+            "load_review_center_",
+            "ReviewCenterRepositoryPort",
+            "std::fs",
+            "std::thread",
+            "std::sync",
+        ],
     );
 }
 

@@ -990,7 +990,7 @@ fn selected_content_scroll_offset(
 }
 
 fn draw_inline_reviews_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_reviews_overlay_view(app);
+    let overlay_view = build_reviews_overlay_view(app.reviews_overlay_ui_state.screen_model());
     let current_thread_lines = overlay_view.current_thread_section_lines();
     let inbox_lines = overlay_view.inbox_section_lines();
     let history_lines = overlay_view.history_section_lines();
