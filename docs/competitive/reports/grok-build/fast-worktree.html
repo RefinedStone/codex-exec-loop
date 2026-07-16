@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Grok Build xai-fast-worktree (CoW/BTRFS) 심층 기술 리포트">
+  <title>Fast Worktree (CoW/BTRFS) Deep Dive · Akra</title>
+  <style>
+    :root {
+      --bg: #0a0d10;
+      --surface: #11161b;
+      --surface-2: #171d23;
+      --surface-3: #20272e;
+      --ink: #f2f5f7;
+      --muted: #9aa6af;
+      --faint: #84919a;
+      --line: #2a333b;
+      --line-strong: #46535d;
+      --green: #55d98b;
+      --green-dark: #153724;
+      --blue: #6bb7ff;
+      --blue-dark: #142b3f;
+      --amber: #f2c45e;
+      --amber-dark: #3c3017;
+      --red: #ff7c78;
+      --red-dark: #3c1c1d;
+      --violet: #b99cff;
+      --focus: #f7de88;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--bg); }
+    body {
+      min-height: 100vh; margin: 0; color: var(--ink); background: var(--bg);
+      font-family: var(--sans); line-height: 1.6;
+    }
+    a { color: inherit; }
+    code {
+      padding: 0.1em 0.35em; border-radius: 4px;
+      color: #c6e8ff; background: #1a2229; font-family: var(--mono); font-size: 0.9em;
+    }
+    pre {
+      overflow-x: auto; padding: 16px 18px; border: 1px solid var(--line);
+      border-radius: 12px; background: #0d1217; color: #d7e6f2;
+      font: 12.5px/1.5 var(--mono);
+    }
+    pre code { padding: 0; background: transparent; color: inherit; }
+    .skip-link {
+      position: fixed; z-index: 200; top: 12px; left: 12px; padding: 10px 14px;
+      color: #10140f; background: var(--focus); font-weight: 800;
+      transform: translateY(-160%); transition: transform 140ms ease-out;
+    }
+    .skip-link:focus { transform: translateY(0); }
+    .topbar {
+      position: sticky; z-index: 100; top: 0;
+      display: grid; grid-template-columns: 1fr auto auto; align-items: center;
+      min-height: 64px; padding: 8px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(10, 13, 16, 0.96); backdrop-filter: blur(14px);
+    }
+    .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; }
+    .brand-mark {
+      display: grid; place-items: center; width: 38px; height: 38px;
+      border: 1px solid #67757f; color: var(--green); background: #121a18;
+      font: 900 18px/1 var(--mono);
+    }
+    .brand > span:last-child { display: grid; }
+    .brand strong { font: 800 14px/1.2 var(--mono); }
+    .brand small { margin-top: 3px; color: var(--muted); font: 11px/1.2 var(--mono); }
+    .topbar-meta {
+      display: flex; align-items: center; gap: 9px; color: var(--muted);
+      font: 11px/1 var(--mono); text-transform: uppercase;
+    }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+      box-shadow: 0 0 0 4px rgba(85, 217, 139, 0.12);
+    }
+    .topbar-date { padding-left: 10px; border-left: 1px solid var(--line); }
+    .icon-button {
+      display: none; place-items: center; width: 40px; height: 40px; margin-left: 12px;
+      border: 1px solid var(--line-strong); border-radius: 6px; color: var(--ink);
+      background: var(--surface-2); cursor: pointer;
+    }
+    .report-shell {
+      display: grid; grid-template-columns: 240px minmax(0, 1fr);
+      max-width: 1680px; margin: 0 auto;
+    }
+    .section-nav {
+      position: sticky; top: 64px; height: calc(100vh - 64px);
+      padding: 28px 16px 24px; border-right: 1px solid var(--line); background: #0d1114;
+      overflow-y: auto;
+    }
+    .rail-label {
+      margin: 0 0 16px; color: var(--faint); font: 700 10px/1 var(--mono); letter-spacing: 0.08em;
+    }
+    .section-nav nav { display: grid; gap: 2px; }
+    .section-nav nav a {
+      display: grid; grid-template-columns: 28px 1fr; align-items: center;
+      min-height: 34px; padding: 5px 8px; border-left: 2px solid transparent;
+      color: var(--muted); font-size: 12.5px; font-weight: 650; text-decoration: none;
+    }
+    .section-nav nav a span { color: var(--faint); font: 10px/1 var(--mono); }
+    .section-nav nav a:hover { color: var(--ink); background: var(--surface); }
+    .section-nav nav a.active {
+      border-left-color: var(--green); color: var(--ink); background: #151b1f;
+    }
+    .section-nav nav a.active span { color: var(--green); }
+    .rail-scope {
+      margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line);
+      display: grid; gap: 5px; color: var(--faint); font: 10px/1.35 var(--mono);
+    }
+    main { min-width: 0; }
+    .report-section {
+      padding: 64px clamp(22px, 4.5vw, 64px);
+      border-bottom: 1px solid var(--line);
+      scroll-margin-top: 64px;
+    }
+    .hero {
+      display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+      gap: clamp(24px, 4vw, 56px); align-items: start;
+      background: #0b0f12; padding-top: 56px; padding-bottom: 56px;
+    }
+    .kicker, .eyebrow {
+      margin: 0 0 12px; color: var(--green);
+      font: 800 11px/1.25 var(--mono); text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .hero h1 {
+      margin: 0; font-size: clamp(32px, 4.6vw, 48px);
+      line-height: 1.12; letter-spacing: -0.03em;
+    }
+    .hero-lead { margin: 16px 0 0; color: var(--muted); font-size: 16px; max-width: 640px; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .primary-action, .secondary-action {
+      display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px;
+      border-radius: 8px; font-weight: 700; text-decoration: none; font-size: 13px;
+    }
+    .primary-action { color: #0b120e; background: var(--green); }
+    .secondary-action {
+      color: var(--ink); border: 1px solid var(--line-strong); background: var(--surface-2);
+    }
+    .hero-box {
+      padding: 18px; border: 1px solid var(--line); border-radius: 14px;
+      background: linear-gradient(180deg, #12181e, #0e1318);
+    }
+    .hero-box h3 { margin: 0 0 10px; font-size: 13px; color: var(--faint); font-family: var(--mono); text-transform: uppercase; }
+    .hero-box ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+    .hero-box li { margin: 6px 0; }
+    .section-head { max-width: 820px; margin-bottom: 24px; }
+    .section-head h2 {
+      margin: 0; font-size: clamp(26px, 3.2vw, 34px); letter-spacing: -0.03em; line-height: 1.15;
+    }
+    .section-head p { margin: 12px 0 0; color: var(--muted); font-size: 15px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .card {
+      padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+    }
+    .card h3 { margin: 0 0 8px; font-size: 15px; }
+    .card p, .card li { color: var(--muted); font-size: 13.5px; }
+    .card ul { margin: 8px 0 0; padding-left: 18px; }
+    .card li { margin: 4px 0; }
+    .tag {
+      display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
+      border-radius: 999px; font: 700 10px/1 var(--mono); text-transform: uppercase;
+    }
+    .tag-green { color: var(--green); background: var(--green-dark); }
+    .tag-blue { color: var(--blue); background: var(--blue-dark); }
+    .tag-amber { color: var(--amber); background: var(--amber-dark); }
+    .tag-red { color: var(--red); background: var(--red-dark); }
+    .tag-violet { color: var(--violet); background: #2a2140; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    table.matrix {
+      width: 100%; border-collapse: collapse; font-size: 13.5px;
+      border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    }
+    table.matrix th, table.matrix td {
+      padding: 11px 12px; border-bottom: 1px solid var(--line);
+      text-align: left; vertical-align: top;
+    }
+    table.matrix th {
+      color: var(--faint); background: var(--surface-2);
+      font: 700 10px/1.2 var(--mono); text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    table.matrix tr:last-child td { border-bottom: 0; }
+    table.matrix td:first-child { font-weight: 650; }
+    .callout {
+      padding: 16px 18px; border-left: 3px solid var(--amber); border-radius: 0 12px 12px 0;
+      background: linear-gradient(90deg, rgba(242,196,94,.08), transparent); margin: 18px 0;
+    }
+    .callout.green { border-left-color: var(--green); background: linear-gradient(90deg, rgba(85,217,139,.08), transparent); }
+    .callout.blue { border-left-color: var(--blue); background: linear-gradient(90deg, rgba(107,183,255,.08), transparent); }
+    .callout strong { color: var(--amber); }
+    .callout.green strong { color: var(--green); }
+    .callout.blue strong { color: var(--blue); }
+    .callout p { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
+    .flow {
+      padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+      font: 12.5px/1.55 var(--mono); color: #c9d6e0; white-space: pre-wrap; overflow-x: auto;
+    }
+    .step {
+      display: grid; grid-template-columns: 48px 1fr; gap: 14px; margin-bottom: 12px;
+      padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+    }
+    .step .n {
+      display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px;
+      font: 800 13px/1 var(--mono); color: var(--green); background: var(--green-dark);
+    }
+    .step h3 { margin: 0 0 4px; font-size: 14px; }
+    .step p { margin: 0; color: var(--muted); font-size: 13px; }
+    footer.report-foot {
+      padding: 28px clamp(22px, 4.5vw, 64px) 48px; color: var(--faint); font: 12px/1.5 var(--mono);
+    }
+    @media (max-width: 1100px) {
+      .report-shell { grid-template-columns: 1fr; }
+      .section-nav {
+        position: fixed; z-index: 90; top: 64px; left: 0; width: min(300px, 88vw);
+        transform: translateX(-105%); transition: transform 160ms ease;
+        box-shadow: 12px 0 40px rgba(0,0,0,.4);
+      }
+      .section-nav.open { transform: translateX(0); }
+      .icon-button { display: grid; }
+      .hero, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      table.matrix { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#report">본문으로 이동</a>
+  <header class="topbar">
+    <a class="brand" href="#summary">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span>
+        <strong>AKRA</strong>
+        <small>Fast worktree deep dive</small>
+      </span>
+    </a>
+    <div class="topbar-meta">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>source-audited</span>
+      <span class="topbar-date">2026-07-16 KST</span>
+    </div>
+    <button class="icon-button" id="navToggle" type="button" aria-label="목차 열기" aria-controls="sectionNav" aria-expanded="false">☰</button>
+  </header>
+
+  <div class="report-shell">
+    <aside class="section-nav" id="sectionNav" aria-label="목차">
+      <p class="rail-label">DEEP DIVE INDEX</p>
+      <nav>
+        <a href="#summary" data-section="summary"><span>01</span>개요</a>
+        <a href="#problem" data-section="problem"><span>02</span>문제</a>
+        <a href="#cow" data-section="cow"><span>03</span>CoW 원리</a>
+        <a href="#pipeline" data-section="pipeline"><span>04</span>생성 파이프라인</a>
+        <a href="#linked" data-section="linked"><span>05</span>Linked + 병렬 복사</a>
+        <a href="#btrfs" data-section="btrfs"><span>06</span>BTRFS snapshot</a>
+        <a href="#overlay" data-section="overlay"><span>07</span>Overlay/FUSE</a>
+        <a href="#modes" data-section="modes"><span>08</span>모드·옵션</a>
+        <a href="#pool" data-section="pool"><span>09</span>Pool &amp; Sync</a>
+        <a href="#cleanup" data-section="cleanup"><span>10</span>삭제·GC</a>
+        <a href="#akra" data-section="akra"><span>11</span>Akra 함의</a>
+        <a href="#sources" data-section="sources"><span>12</span>근거</a>
+      </nav>
+      <div class="rail-scope">
+        <span>crate: xai-fast-worktree</span>
+        <span>commit: b189869b</span>
+        <span>parent: grok-build report</span>
+        <span>no runtime benchmarks</span>
+      </div>
+    </aside>
+
+    <main id="report">
+      <section class="hero report-section" id="summary" data-observe>
+        <div>
+          <p class="kicker">GROK BUILD · XAI-FAST-WORKTREE</p>
+          <h1>Fast Worktree<br>(CoW / BTRFS)<br>심층 기술 리포트</h1>
+          <p class="hero-lead">
+            Grok Build의 <code>xai-fast-worktree</code>는 git worktree 생성을
+            <strong>파일시스템 CoW·snapshot 문제</strong>로 재정의한다.
+            이 문서는 소스 기준 동작, 전략 우선순위, pool/sync 모델, 그리고 Akra parallel pool과의
+            경계(채택/비채택)를 고정한다.
+          </p>
+          <nav class="hero-actions">
+            <a class="primary-action" href="#pipeline">파이프라인 보기</a>
+            <a class="secondary-action" href="index.html">← Grok Build 종합 리포트</a>
+          </nav>
+        </div>
+        <div class="hero-box">
+          <h3>One-line thesis</h3>
+          <ul>
+            <li><strong>목표:</strong> 대형 레포에서도 agent isolation 트리를 빠르게 만들고 재사용</li>
+            <li><strong>수단:</strong> <code>--no-checkout</code> + 병렬 reflink / BTRFS / overlay</li>
+            <li><strong>운영:</strong> pre-created pool + dirty-aware sync</li>
+            <li><strong>Akra:</strong> 성능 adapter 후보, delivery 정책 대체 아님 (Eval)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="report-section" id="problem" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">WHY</p>
+          <h2>왜 일반 worktree가 느린가</h2>
+          <p>비용은 “git 등록”이 아니라 “working tree를 채우는 I/O”에 있다.</p>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="matrix">
+            <thead>
+              <tr><th>단계</th><th>일반 경로</th><th>비용 특성</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>등록</td>
+                <td><code>git worktree add</code> metadata</td>
+                <td>저렴</td>
+              </tr>
+              <tr>
+                <td>Checkout</td>
+                <td>git가 객체→파일로 워킹트리 채움</td>
+                <td><strong>파일 수 × 단일 스레드 I/O</strong></td>
+              </tr>
+              <tr>
+                <td>Dirty 복제</td>
+                <td>status + 파일 복사</td>
+                <td>status가 큰 레포에서 초 단위</td>
+              </tr>
+              <tr>
+                <td>삭제</td>
+                <td><code>worktree remove</code> / <code>rm -rf</code></td>
+                <td>파일 수에 비례</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout" style="margin-top:18px;">
+          <strong>재정의</strong>
+          <p>
+            Fast worktree는 “git가 체크아웃을 잘하게 한다”가 아니라
+            <strong>이미 디스크에 있는 워킹트리(또는 FS snapshot)를 복제</strong>해서 checkout 비용을 우회한다.
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section" id="cow" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">COPY-ON-WRITE</p>
+          <h2>CoW / reflink 원리</h2>
+          <p>복사 순간에 바이트를 복제하지 않고, 수정 순간에만 블록을 분리한다.</p>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="meta-row"><span class="tag tag-red">Normal copy</span></div>
+            <h3>전체 바이트 복사</h3>
+            <div class="flow">source/file.rs ──read+write──▶ dest/file.rs
+디스크에 내용이 두 번 존재
+생성 비용 ≈ 파일 크기</div>
+          </div>
+          <div class="card">
+            <div class="meta-row"><span class="tag tag-green">CoW / reflink</span></div>
+            <h3>블록 공유 복제</h3>
+            <div class="flow">source/file.rs ──metadata clone──▶ dest/file.rs
+동일 물리 블록 공유
+수정 시 해당 블록만 분리
+생성 비용 ≈ 메타데이터</div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:14px;">
+          <div class="card">
+            <h3>구현</h3>
+            <p>
+              <code>copy/cow.rs</code> → <code>reflink_copy::reflink_or_copy()</code>.
+              지원 FS에서는 reflink, 아니면 일반 copy 폴백.
+              reflink는 기본 umask 권한으로 파일을 만들 수 있어, 직후
+              <code>set_permissions</code>로 소스 mode(실행 비트 등)를 복원한다.
+            </p>
+          </div>
+          <div class="card">
+            <h3>플랫폼</h3>
+            <ul>
+              <li><strong>macOS:</strong> APFS clonefile / reflink — 실사용 주력 경로</li>
+              <li><strong>Linux:</strong> Btrfs/XFS FICLONE; 더 빠른 btrfs subvolume 경로 우선</li>
+              <li><strong>기타 FS:</strong> 일반 copy (기능은 동작, 이득 감소)</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section" id="pipeline" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">PIPELINE</p>
+          <h2>생성 전략 우선순위</h2>
+          <p><code>CreationMode::Linked|Standalone</code> 실행 시 Linux에서 빠른 경로를 순차 시도한다.</p>
+        </div>
+        <div class="flow">WorktreeBuilder.create()
+        │
+        ├─ GitCheckout ──────────────────────▶ plain git worktree add (full checkout)
+        │
+        └─ Linked / Standalone
+                │
+                ├─ (Linux) try Overlay-on-FUSE  ── success ──▶ O(1) return
+                │
+                ├─ (Linux) try BTRFS snapshot   ── success ──▶ O(1) return
+                │         (+ lock/transient git cleanup)
+                │
+                └─ file-by-file fallback
+                      Linked      → git worktree --no-checkout + parallel CoW
+                      Standalone  → .git/ 포함 독립 복제 + CoW / snapshot 폴백 결과 정리</div>
+        <div class="grid-3" style="margin-top:16px;">
+          <div class="card">
+            <div class="meta-row"><span class="tag tag-violet">1</span></div>
+            <h3>Overlay-on-FUSE</h3>
+            <p>특수 워크스페이스 스택. lower 공유 + upper snapshot. 파일 복사 없음.</p>
+          </div>
+          <div class="card">
+            <div class="meta-row"><span class="tag tag-blue">2</span></div>
+            <h3>BTRFS subvolume</h3>
+            <p><code>btrfs subvolume snapshot</code>. 볼륨 단위 CoW. Linux 최적 경로.</p>
+          </div>
+          <div class="card">
+            <div class="meta-row"><span class="tag tag-green">3</span></div>
+            <h3>Parallel CoW</h3>
+            <p>파일 단위 reflink 병렬 복사. macOS 기본 주력. 범용 폴백.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section" id="linked" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">LINKED MODE</p>
+          <h2>Linked worktree + 병렬 CoW 복사</h2>
+          <p>기본 모드. object store는 git linked worktree로 공유하고, 워킹트리 파일만 빠르게 채운다.</p>
+        </div>
+        <div class="step">
+          <div class="n">①</div>
+          <div>
+            <h3><code>git worktree add --no-checkout</code></h3>
+            <p>
+              worktree 메타데이터만 등록. working tree는 비운 채 거의 즉시 완료.
+              git 단일 스레드 checkout을 의도적으로 우회한다.
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">②</div>
+          <div>
+            <h3>병렬 walk + hash shard workers</h3>
+            <p>
+              <code>ignore::WalkBuilder</code>로 소스 트리 walk. 경로 해시로 worker channel에 분배.
+              worker가 디렉 생성 / 파일 reflink / 심링크 재생성.
+              macOS worker 상한 8 (FD 256 ulimit 대비), 그 외 상한 32.
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">③</div>
+          <div>
+            <h3>Index / working-tree mode 마무리</h3>
+            <p>
+              PreserveWorkingTree / CleanTracked / CleanAll에 따라 reset·clean 적용.
+              옵션으로 ignored 파일 추가 복사.
+            </p>
+          </div>
+        </div>
+        <div class="callout blue">
+          <strong>Walk 정책 (함정 방지)</strong>
+          <p>
+            <code>.git</code>은 항상 스킵. global gitignore와 <code>.git/info/exclude</code>는
+            <strong>의도적으로 무시</strong>한다. 개인/외부 도구 패턴이 tracked 파일을 조용히
+            스킵하는 사고를 막기 위함. <code>ignore</code> 크레이트는 tracking 상태를 보지 않는다.
+          </p>
+        </div>
+        <div class="card" style="margin-top:14px;">
+          <h3>부분 실패 가드</h3>
+          <p>
+            <code>PartialWorktreeGuard</code>가 dest를 감시하다가 성공 전에 drop되면
+            디렉터리 제거 + linked worktree 등록 정리. 반쯤 만들어진 트리를 다음 요청이 재사용하지 못하게 한다.
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section" id="btrfs" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">BTRFS</p>
+          <h2>BTRFS subvolume snapshot</h2>
+          <p>소스가 btrfs subvolume이면 파일 단위 복사 없이 O(1) 복제한다.</p>
+        </div>
+        <pre><code>btrfs subvolume snapshot &lt;source&gt; &lt;dest&gt;</code></pre>
+        <div class="grid-2" style="margin-top:14px;">
+          <div class="card">
+            <h3>결과물</h3>
+            <ul>
+              <li>독립 subvolume (파일 트리 즉시 존재)</li>
+              <li>데이터 블록은 CoW로 소스와 공유</li>
+              <li>생성 비용 ≈ 메타데이터 (파일 수 비의존)</li>
+              <li>삭제 시 <code>btrfs subvolume delete</code>도 O(1) 경로</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Bind-mount 처리</h3>
+            <p>
+              레포가 <code>/workspace/repo</code>처럼 bind-mount된 경우 snapshot dest는
+              <strong>같은 btrfs FS 안</strong>에 만들어야 한다. 실제 snapshot을 mount 내부 경로에 두고,
+              사용자 dest에는 <strong>symlink</strong>로 노출한다.
+            </p>
+            <p style="margin-top:8px;">
+              bind mount 대신 symlink를 쓰는 이유: private mount namespace에서도 보이고,
+              프로세스 재시작 후에도 남는다.
+            </p>
+          </div>
+        </div>
+        <div class="card" style="margin-top:14px;">
+          <div class="meta-row"><span class="tag tag-amber">CAP_SYS_ADMIN</span></div>
+          <h3>BtrfsDelegate — 샌드박스 우회</h3>
+          <p>
+            bwrap 등에서 권한 부족 시 특권 helper에 snapshot/delete/overlay mount를 위임.
+            <code>BtrfsDelegate</code> 트레이트: <code>create_snapshot</code>, <code>delete_snapshot</code>,
+            <code>mount_overlay</code>, <code>unmount_overlay</code>.
+          </p>
+        </div>
+        <div class="callout" style="margin-top:14px;">
+          <strong>Snapshot 직후 필수 cleanup</strong>
+          <p>
+            snapshot은 소스 상태를 원자적으로 통째로 찍는다. 그래서 독성 상태도 같이 온다.
+            <code>cleanup_snapshot_git_state</code>가 즉시 제거:
+            모든 <code>*.lock</code> (특히 <code>index.lock</code>),
+            <code>MERGE_HEAD</code>/<code>REBASE_HEAD</code>/<code>sequencer/</code>/<code>rebase-merge/</code>,
+            linked 등록 <code>worktrees/</code> 등. 이 단계 없이 <code>git reset</code>조차 실패할 수 있다.
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section" id="overlay" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">OVERLAY</p>
+          <h2>Overlay-on-FUSE (특수 환경)</h2>
+          <p>repo-fuse 스택: FUSE lower + overlay upper(btrfs)가 감지되면 최우선 O(1) 경로.</p>
+        </div>
+        <div class="flow">new overlay mount
+  lower = existing FUSE lower   (공유, 읽기 전용 레이어)
+  upper = btrfs snapshot of current upper
+  work  = overlay work dir
+  target = worktree path
+
+→ 파일 복사 없음
+→ upper readdir로 pristine 여부 빠르게 판정 후 reset/clean skip 가능</div>
+        <div class="callout blue" style="margin-top:14px;">
+          <strong>Namespace 제약</strong>
+          <p>
+            overlay mount는 namespace-local이다. private mount namespace에서는 스킵하거나
+            delegate가 caller namespace 안에 마운트해야 한다. btrfs snapshot+symlink와 달리
+            “심링크로 노출”이 불가능하다는 점이 핵심 차이다.
+          </p>
+        </div>
+        <p style="color:var(--muted); font-size:14px; margin-top:12px;">
+          일반 macOS 개발 머신 경로가 아니라 SpaceXAI 내부/클라우드 워크스페이스 최적화에 가깝다.
+        </p>
+      </section>
+
+      <section class="report-section" id="modes" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">OPTIONS</p>
+          <h2>생성 모드와 working-tree 옵션</h2>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="matrix">
+            <thead>
+              <tr><th>CreationMode</th><th>의미</th><th>특징</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>Linked</code> (default)</td>
+                <td><code>git worktree</code> + object store 공유</td>
+                <td>가장 흔함, 디스크/시간 효율</td>
+              </tr>
+              <tr>
+                <td><code>Standalone</code></td>
+                <td>독립 <code>.git/</code> 포함 복제</td>
+                <td>rename 교체 가능, 소스 마커 <code>grok-worktree-source</code></td>
+              </tr>
+              <tr>
+                <td><code>GitCheckout</code></td>
+                <td>plain full checkout</td>
+                <td>단순/안전 폴백, pool bench 경로에도 사용</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="overflow-x:auto; margin-top:16px;">
+          <table class="matrix">
+            <thead>
+              <tr><th>WorkingTreeMode</th><th>결과</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>PreserveWorkingTree</code></td>
+                <td>로컬 수정·untracked까지 복제 (기본)</td>
+              </tr>
+              <tr>
+                <td><code>CleanTracked</code></td>
+                <td>tracked 기준 깨끗 (필요 시 reset --hard)</td>
+              </tr>
+              <tr>
+                <td><code>CleanAll</code></td>
+                <td>reset + clean -fd 성격 (ignored는 기본 clean 대상 아님)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card" style="margin-top:14px;">
+          <h3>IgnoredFilesMode</h3>
+          <p>
+            <code>Skip</code> / <code>Copy { skip_patterns }</code> / <code>CopyOnly</code>.
+            build artifact 등 ignored를 워커에 가져갈지 선택. 별도 병렬도 설정 가능.
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section" id="pool" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">POOL &amp; SYNC</p>
+          <h2>미리 만들고, 취득 시 최소 갱신</h2>
+          <p>생성 최적화만으로는 부족하다. 운영 모델은 pre-created pool + <code>WorktreeSync</code>다.</p>
+        </div>
+        <div class="flow">[idle pool]
+  worktree A, B, …
+        │ acquire
+        ▼
+WorktreeSync
+  1) HEAD resolve (gix) — 소스 vs worktree
+  2) 필요 시 git reset --hard &lt;source HEAD&gt;
+  3) git clean -fd (skip 가능)
+  4) dirty state 복제
+       - collect once: git status --porcelain=v2 -z
+       - SourceDirtyState (Bytes, 저렴한 clone)
+       - file reflink/delete + staged add/rm replay
+        │
+        ▼ agent 사용
+        │ release
+        ▼ reset/clean → pool 반환 또는 폐기</div>
+        <div class="grid-2" style="margin-top:14px;">
+          <div class="card">
+            <h3>왜 porcelain v2인가</h3>
+            <p>
+              gix status는 worktree-vs-index 중심이라 staged 칼럼과 worktree 칼럼
+              (<code>XY</code>) 구분이 부족할 수 있다. 예: <code>"D "</code>(staged 삭제, 파일 잔존) vs
+              <code>" D"</code>(worktree 삭제). sync는 둘을 정확히 재현해야 한다.
+            </p>
+          </div>
+          <div class="card">
+            <h3>status 재사용</h3>
+            <p>
+              큰 레포 status가 ~1.4s 급일 수 있어, 소스 status를 한 번 모아 여러 worktree sync에
+              공유한다. 리포트에 phase timing(<code>reset_hard_ms</code>, <code>dirty_sync_ms</code> 등)을 남긴다.
+            </p>
+          </div>
+        </div>
+        <div class="callout green">
+          <strong>설계 포인트</strong>
+          <p>
+            “매번 완벽한 트리를 처음부터 만든다”가 아니라
+            <strong>“거의 맞는 트리를 풀에 두고, acquire 때 HEAD/dirty만 맞춘다”</strong>가 완성형이다.
+            <code>pool_perf_bench</code>가 create/warm/sync/release/cleanup 라이프사이클을 측정한다.
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section" id="cleanup" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">TEARDOWN</p>
+          <h2>삭제·orphan GC</h2>
+        </div>
+        <div class="step">
+          <div class="n">1</div>
+          <div>
+            <h3>Overlay 제거</h3>
+            <p>unmount + upper snapshot 삭제 (Linux overlay 경로).</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">2</div>
+          <div>
+            <h3>BTRFS 삭제</h3>
+            <p>symlink/bind 정리 후 <code>btrfs subvolume delete</code> — O(1). metadata 기반 crash recovery 경로 포함.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">3</div>
+          <div>
+            <h3>일반 제거</h3>
+            <p>linked worktree registration 정리 + 디렉터리 삭제. 생성 대비 느린 폴백.</p>
+          </div>
+        </div>
+        <div class="card">
+          <h3>SQLite metadata (feature)</h3>
+          <p>
+            worktree inventory, status, GC, discovery/rebuild.
+            orphan btrfs/overlay snapshot cleanup API 제공.
+            제품 런타임이 “디스크에 남은 유령 트리”를 회수할 수 있게 한다.
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section" id="akra" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">AKRA IMPLICATIONS</p>
+          <h2>Akra에 대한 함의</h2>
+          <p>문제 공간은 겹치고, 성공 기준은 다르다.</p>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="matrix">
+            <thead>
+              <tr><th>축</th><th>Grok fast-worktree</th><th>Akra parallel pool</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>1차 목표</td>
+                <td>생성/동기화/삭제 지연 최소화</td>
+                <td>lease · frozen base · review delivery · cleanup 안전</td>
+              </tr>
+              <tr>
+                <td>권위</td>
+                <td>FS 엔진 + 선택적 inventory DB</td>
+                <td>SQLite planning + application control-plane</td>
+              </tr>
+              <tr>
+                <td>성공 정의</td>
+                <td>깨끗한 트리를 빨리 확보</td>
+                <td>검수된 범위가 안전하게 통합</td>
+              </tr>
+              <tr>
+                <td>격리 단위</td>
+                <td>worktree (linked/standalone/snapshot)</td>
+                <td>3-slot pool + branch + frozen OID bounds</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid-2" style="margin-top:14px;">
+          <div class="card">
+            <div class="meta-row"><span class="tag tag-amber">EVAL</span></div>
+            <h3>언제 볼 가치가 있나</h3>
+            <ul>
+              <li>대형 monorepo에서 pool create/sync가 operator-visible 병목</li>
+              <li>macOS APFS 또는 Linux btrfs 환경이 명확</li>
+              <li>정책 코드 변경 없이 outbound git adapter 성능 경로만 교체 가능</li>
+            </ul>
+          </div>
+          <div class="card">
+            <div class="meta-row"><span class="tag tag-red">REJECT as policy</span></div>
+            <h3>대체하면 안 되는 것</h3>
+            <ul>
+              <li>lease serialization / capacity 정책</li>
+              <li>frozen base OID · reviewed-range integration</li>
+              <li>human review default · fail-closed delivery</li>
+              <li>identity-checked cleanup 계약</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout green" style="margin-top:14px;">
+          <strong>권장 실험 형태</strong>
+          <p>
+            P2 실험: 실레포에서 (1) 현재 Akra create, (2) <code>--no-checkout</code>+reflink 병렬,
+            (3) 가능하면 btrfs snapshot을 비교. proof target은 latency 샘플 + 환경 스탬프.
+            이득이 없으면 채택하지 않는다. 라이선스는 Apache-2.0이나 플랫폼 전제·부분실패 정리·
+            sandboxed CAP 이슈를 함께 검토한다.
+          </p>
+        </div>
+        <div class="card" style="margin-top:14px;">
+          <h3>도입 시 체크리스트</h3>
+          <ul>
+            <li>macOS 기본: APFS reflink 경로가 실제로 타는지 확인</li>
+            <li>Linux: subvolume 여부, bind-mount, CAP_SYS_ADMIN / helper 필요 여부</li>
+            <li>partial failure reclaim이 Akra cleanup 계약과 충돌하지 않는지</li>
+            <li>policy/application 레이어 무변경, adapter 경계만 수정</li>
+            <li>벤치 없는 채택 금지</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="report-section" id="sources" data-observe>
+        <div class="section-head">
+          <p class="eyebrow">EVIDENCE</p>
+          <h2>근거 원장</h2>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>스냅샷</h3>
+            <ul>
+              <li>Repo: <code>https://github.com/xai-org/grok-build</code></li>
+              <li>Commit: <code>b189869b7755d2b482969acf6c92da3ecfeffd36</code></li>
+              <li>Crate: <code>crates/codegen/xai-fast-worktree</code></li>
+              <li>Audit: 2026-07-16 (Asia/Seoul)</li>
+              <li>Method: static source audit (no latency claims)</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>1차 경로</h3>
+            <ul>
+              <li><code>src/lib.rs</code> — crate contract</li>
+              <li><code>src/api.rs</code> — modes, builder, remove</li>
+              <li><code>src/worktree/execute.rs</code> — strategy dispatch, cleanup</li>
+              <li><code>src/copy/{cow,engine,worker}.rs</code> — reflink + parallel copy</li>
+              <li><code>src/btrfs/snapshot.rs</code> — subvolume + symlink</li>
+              <li><code>src/overlay/*</code> — FUSE+overlay path</li>
+              <li><code>src/sync.rs</code> — pool sync / dirty replay</li>
+              <li><code>src/bin/pool_perf_bench.rs</code> — lifecycle bench harness</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout" style="margin-top:14px;">
+          <strong>Limits</strong>
+          <p>
+            공개 monorepo sync 산출물 기준. 런타임 벤치마크 없음.
+            “코드 존재”와 “모든 환경에서 기본 활성”을 동일시하지 않는다.
+            status ~1.4s 등 수치는 소스 주석/문서 인용이며 본 감사의 실측이 아니다.
+          </p>
+        </div>
+      </section>
+
+      <footer class="report-foot">
+        Akra competitive deep dive · Fast Worktree (CoW/BTRFS) · 2026-07-16 (Asia/Seoul)<br>
+        Parent report: <code>docs/competitive/reports/grok-build/index.html</code><br>
+        Companion markdown: <code>docs/competitive/grok-build/fast-worktree.md</code><br>
+        Source: xai-org/grok-build @ b189869b · Apache-2.0
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      const nav = document.getElementById("sectionNav");
+      const toggle = document.getElementById("navToggle");
+      const links = [...nav.querySelectorAll("nav a")];
+      const sections = links.map((a) => document.getElementById(a.dataset.section)).filter(Boolean);
+
+      toggle?.addEventListener("click", () => {
+        const open = nav.classList.toggle("open");
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+      links.forEach((a) => a.addEventListener("click", () => {
+        nav.classList.remove("open");
+        toggle?.setAttribute("aria-expanded", "false");
+      }));
+
+      if ("IntersectionObserver" in window) {
+        const io = new IntersectionObserver((entries) => {
+          const visible = entries
+            .filter((e) => e.isIntersecting)
+            .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+          if (!visible) return;
+          links.forEach((a) => a.classList.toggle("active", a.dataset.section === visible.target.id));
+        }, { rootMargin: "-30% 0px -55% 0px", threshold: [0.1, 0.25, 0.5] });
+        sections.forEach((s) => io.observe(s));
+      }
+    })();
+  </script>
+</body>
+</html>

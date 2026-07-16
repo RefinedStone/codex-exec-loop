@@ -31,7 +31,7 @@ ls crates/codegen/xai-grok-pager/docs/user-guide/
 | E3 | `crates/codegen/xai-grok-shell/src/leader/mod.rs` | verified | leader multi-client IPC architecture |
 | E4 | `crates/codegen/xai-grok-tools/src/tool_taxonomy.rs` | verified | ToolKind taxonomy, read-only classification, meta envelope |
 | E5 | `crates/codegen/xai-grok-tools/src/implementations/` | verified | grok_build / codex / opencode tool implementations |
-| E6 | `crates/codegen/xai-fast-worktree/src/lib.rs` | verified | CoW / BTRFS / pool sync worktree engine |
+| E6 | `crates/codegen/xai-fast-worktree/src/lib.rs` and crate tree (`api`, `copy`, `btrfs`, `overlay`, `sync`, `worktree/execute`) | verified | CoW / BTRFS / overlay / pool sync worktree engine; see [fast-worktree.md](./fast-worktree.md) |
 | E7 | `crates/codegen/xai-hunk-tracker/src/lib.rs` | verified | agent vs external hunk attribution actor |
 | E8 | `crates/codegen/xai-ratatui-inline/src/` | verified | inline terminal delivery primitives |
 | E9 | `THIRD-PARTY-NOTICES` + tools crate notices | verified | codex/opencode ports, Apache-2.0 first-party |

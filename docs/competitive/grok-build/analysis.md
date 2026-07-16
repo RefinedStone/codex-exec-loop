@@ -14,7 +14,8 @@
 | Auditor environment | macOS, static source audit of shallow clone at `/tmp/grok-build` |
 
 Checkout is public, Apache-2.0 for first-party code. External contributions are not accepted.
-Interactive HTML report: [../reports/grok-build/index.html](../reports/grok-build/index.html).
+Interactive HTML report: [../reports/grok-build/index.html](../reports/grok-build/index.html).  
+Fast worktree deep dive: [../reports/grok-build/fast-worktree.html](../reports/grok-build/fast-worktree.html) · [fast-worktree.md](./fast-worktree.md).
 
 ## Evidence Discipline
 
