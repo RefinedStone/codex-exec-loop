@@ -38,9 +38,13 @@ Cross-product reports:
   official-source comparison of GJC, OpenCode, Codex, Claude Code, Pi, and jcode, including
   renderer stacks, state authority, mouse undo mechanics, extension surfaces, critical debt, and
   Akra decisions. Snapshot: 2026-07-16 (Asia/Seoul).
+- [Grok Build Open-Source Competitive Report](reports/grok-build/index.html): interactive HTML
+  audit of SpaceXAI `xai-org/grok-build` — features, differentiators, and Akra adopt/reject matrix.
+  Snapshot: 2026-07-16 (Asia/Seoul).
 
 | Product | Snapshot | Status | Primary threat |
 | --- | --- | --- | --- |
+| [Grok Build](grok-build/analysis.md) | OSS publish `b189869b7755d2b482969acf6c92da3ecfeffd36` | current as of 2026-07-16 (Asia/Seoul) | full-stack harness breadth, extension stack, plan/dashboard UX, PTY e2e density |
 | [Upstream OpenAI Codex](upstream-codex/analysis.md) | v0.144.1, `44918ea10c0f99151c6710411b4322c2f5c96bea` | current as of 2026-07-12 (Asia/Seoul) | runtime authority, typed in-process TUI, protocol truth and release velocity |
 | [jcode](jcode/analysis.md) | v0.43.0, `649276753ae11948759192c067dfc4c90fafd47f` | current as of 2026-07-12 (Asia/Seoul) | native TUI performance, multi-session runtime, memory, swarm |
 | [Agent Canvas](agent-canvas/analysis.md) | v1.2.1, `56d51c0767fb6fedc51c466f5138fdfc116a2707` | current as of 2026-07-12 (Asia/Seoul) | browser session inspection, remote backends, durable automation |
