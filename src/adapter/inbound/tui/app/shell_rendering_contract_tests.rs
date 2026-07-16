@@ -12,6 +12,7 @@ use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
 };
+use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
@@ -1063,6 +1064,67 @@ fn reviews_identity_drift_reloads_latest_context_through_shell_runtime() {
     assert_eq!(reviews.len(), 1);
     assert_eq!(reviews[0].thread_id, "thread-2");
     assert_eq!(reviews[0].review_summary, "/tmp/other::thread-2");
+}
+
+#[test]
+fn ready_reviews_identity_drift_reloads_latest_context_during_runtime_poll() {
+    let repository = Arc::new(CountingReviewCenterRepository::default());
+    let mut app = test_native_tui_app_with_review_center_repository(repository.clone());
+    app.show_reviews_overlay();
+    let mut runtime = ShellRuntime::new(app);
+    assert!(runtime.take_redraw_request());
+    complete_reviews_overlay_load(&mut runtime);
+    assert_eq!(repository.load_counts(), (0, 1, 1));
+
+    let correlation = runtime.app_mut().core_runtime.begin_test_turn_submission();
+    runtime
+        .app()
+        .tx
+        .send(BackgroundMessage::ConversationStream {
+            correlation,
+            event: ConversationStreamEvent::ThreadPrepared {
+                thread_id: "thread-2".to_string(),
+                title: "Replacement thread".to_string(),
+                cwd: "/tmp/other".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        })
+        .expect("thread-prepared event should enter the shell runtime");
+
+    runtime.poll_background_messages();
+
+    assert!(matches!(
+        runtime.app().reviews_overlay_ui_state.screen_model(),
+        crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Loading(request)
+            if request.context.workspace_directory == "/tmp/other"
+                && request.context.active_thread.as_ref().map(|thread| thread.thread_id.as_str())
+                    == Some("thread-2")
+    ));
+    complete_reviews_overlay_load(&mut runtime);
+
+    assert_eq!(repository.load_counts(), (1, 2, 2));
+    let crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Ready {
+        request,
+        authority,
+    } = runtime.app().reviews_overlay_ui_state.screen_model()
+    else {
+        panic!("latest Review Center context should become ready");
+    };
+    assert_eq!(request.context.workspace_directory, "/tmp/other");
+    assert_eq!(
+        request
+            .context
+            .active_thread
+            .as_ref()
+            .map(|thread| thread.thread_id.as_str()),
+        Some("thread-2")
+    );
+    let reviews = authority
+        .current_thread_reviews
+        .as_ref()
+        .expect("latest thread reviews should load");
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].thread_id, "thread-2");
 }
 
 #[test]

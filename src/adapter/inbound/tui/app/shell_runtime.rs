@@ -213,6 +213,7 @@ impl ShellRuntime {
         }
         self.last_live_activity_pulse = live_activity_pulse;
         redraw_requested |= self.app.tick_parallel_mode_control_plane(now);
+        redraw_requested |= self.app.reconcile_reviews_overlay_authority_context();
         if redraw_requested {
             self.request_redraw_at(now);
         } else if live_activity_pulse.is_some() {
