@@ -272,14 +272,21 @@ fn build_queue_mutation_line(app: &NativeTuiApp) -> Option<Line<'static>> {
     if let Some(operation_id) = app.pending_queue_mutation_operation_id() {
         // This status intentionally omits the undo action label so layout cannot bind a stale mouse target.
         return Some(Line::from(vec![
-            Span::styled(format!("queue: op-{operation_id}"), AkraTheme::warning()),
-            Span::raw("  |  authority acknowledgement pending"),
+            Span::styled(
+                app.tui_language
+                    .queue_mutation_tail_pending_label(operation_id),
+                AkraTheme::warning(),
+            ),
+            Span::raw(app.tui_language.queue_mutation_tail_pending_detail()),
         ]));
     }
     if app.queue_mutation_requires_authority_refresh() {
         return Some(Line::from(vec![
-            Span::styled("queue: refresh required", AkraTheme::warning()),
-            Span::raw("  |  open :queue before retrying"),
+            Span::styled(
+                app.tui_language.queue_mutation_tail_refresh_label(),
+                AkraTheme::warning(),
+            ),
+            Span::raw(app.tui_language.queue_mutation_tail_refresh_detail()),
         ]));
     }
 
@@ -1298,6 +1305,29 @@ mod coverage_tests {
             "{tail}"
         );
         assert!(!tail.contains(QUEUE_RECEIPT_UNDO_ACTION_LABEL), "{tail}");
+        assert!(tail_view.queue_receipt_undo_hit_area.is_none());
+
+        app.tui_language = TuiLanguage::Korean;
+        let korean_tail = render_tail(&app, None);
+        assert!(korean_tail.contains("큐: op-1  |  권한 확인 대기 중"));
+    }
+
+    #[test]
+    fn required_queue_authority_refresh_uses_localized_non_actionable_tail_copy() {
+        let mut app = test_native_tui_app();
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        app.tui_language = TuiLanguage::Korean;
+        ready_conversation_mut(&mut app).thread_id = "thread-refresh-required".to_string();
+        app.queue_mutation_ui_state.require_authority_refresh();
+
+        let tail_view = super::super::live_status_layout::build_inline_tail_view(&app, 96);
+        let tail = rendered(tail_view.lines);
+
+        assert!(
+            tail.contains("큐: 새로고침 필요  |  다시 시도하기 전에 :queue 열기"),
+            "{tail}"
+        );
+        assert!(!tail.contains(QUEUE_RECEIPT_UNDO_ACTION_LABEL));
         assert!(tail_view.queue_receipt_undo_hit_area.is_none());
     }
 

@@ -837,15 +837,15 @@ impl NativeTuiApp {
 
     fn cancel_selected_queue_task(&mut self) {
         if let Some(operation_id) = self.pending_queue_mutation_operation_id() {
-            self.queue_overlay_ui_state.set_feedback(format!(
-                "Queue change op-{operation_id} is waiting for authority acknowledgement."
-            ));
+            self.queue_overlay_ui_state.set_feedback(
+                self.tui_language
+                    .queue_mutation_pending_feedback(operation_id),
+            );
             return;
         }
         if self.queue_mutation_requires_authority_refresh() {
-            self.queue_overlay_ui_state.set_feedback(
-                "Queue authority needs refresh; close and reopen the queue before changing it.",
-            );
+            self.queue_overlay_ui_state
+                .set_feedback(self.tui_language.queue_mutation_refresh_required_feedback());
             return;
         }
         if let Some(reason) = self.queue_mutation_block_reason() {
@@ -863,8 +863,10 @@ impl NativeTuiApp {
             },
         );
         let Some((planning_revision, task_id, status, updated_at)) = selected else {
-            self.queue_overlay_ui_state
-                .set_feedback("The selected queue item changed; reopen the queue to refresh it.");
+            self.queue_overlay_ui_state.set_feedback(
+                self.tui_language
+                    .queue_mutation_selected_item_changed_feedback(),
+            );
             return;
         };
         self.start_queue_cancellation(
@@ -883,15 +885,15 @@ impl NativeTuiApp {
 
     pub(super) fn undo_latest_queue_registration(&mut self) -> bool {
         if let Some(operation_id) = self.pending_queue_mutation_operation_id() {
-            self.queue_overlay_ui_state.set_feedback(format!(
-                "Queue change op-{operation_id} is waiting for authority acknowledgement."
-            ));
+            self.queue_overlay_ui_state.set_feedback(
+                self.tui_language
+                    .queue_mutation_pending_feedback(operation_id),
+            );
             return false;
         }
         if self.queue_mutation_requires_authority_refresh() {
-            self.queue_overlay_ui_state.set_feedback(
-                "Queue authority needs refresh; close and reopen the queue before changing it.",
-            );
+            self.queue_overlay_ui_state
+                .set_feedback(self.tui_language.queue_mutation_refresh_required_feedback());
             return false;
         }
         if let Some(reason) = self.queue_receipt_undo_block_reason() {
@@ -958,9 +960,10 @@ impl NativeTuiApp {
             return false;
         };
         let operation_id = operation.operation_id;
-        self.queue_overlay_ui_state.set_feedback(format!(
-            "Queue change op-{operation_id} is waiting for authority acknowledgement."
-        ));
+        self.queue_overlay_ui_state.set_feedback(
+            self.tui_language
+                .queue_mutation_pending_feedback(operation_id),
+        );
         self.clear_queue_receipt_undo_hit_area();
         let planning = self.application.planning().clone();
         let tx = self.tx.clone();
@@ -998,13 +1001,20 @@ impl NativeTuiApp {
             Err(refresh_error) => {
                 self.queue_mutation_ui_state.require_authority_refresh();
                 self.queue_overlay_ui_state.clear_authority_binding();
+                let refresh_error = self
+                    .tui_language
+                    .queue_mutation_authority_refresh_error(&refresh_error);
                 let feedback = match completion.mutation {
-                    Ok(_) => format!(
-                        "Queue change op-{operation_id} committed, but authority refresh failed: {refresh_error}"
-                    ),
-                    Err(mutation_error) => format!(
-                        "Queue change op-{operation_id} is unresolved: {mutation_error}; authority refresh failed: {refresh_error}"
-                    ),
+                    Ok(_) => self
+                        .tui_language
+                        .queue_mutation_committed_refresh_failed(operation_id, &refresh_error),
+                    Err(mutation_error) => {
+                        self.tui_language.queue_mutation_unresolved_refresh_failed(
+                            operation_id,
+                            &mutation_error,
+                            &refresh_error,
+                        )
+                    }
                 };
                 self.surface_queue_mutation_feedback(feedback);
                 return;
@@ -1021,37 +1031,38 @@ impl NativeTuiApp {
         if let Err(error) = self.apply_queue_mutation_authority_snapshot(&authority) {
             self.queue_mutation_ui_state.require_authority_refresh();
             self.queue_overlay_ui_state.clear_authority_binding();
-            self.surface_queue_mutation_feedback(format!(
-                "Queue change op-{operation_id} could not reconcile its authority acknowledgement: {error}"
-            ));
+            self.surface_queue_mutation_feedback(
+                self.tui_language
+                    .queue_mutation_reconcile_failed(operation_id, &error),
+            );
             return;
         }
 
         let feedback = match completion.mutation {
             Ok(result) if authority_confirms_cancellation => {
                 self.settle_correlated_queue_receipt(&operation, &authority.queue_authority);
-                format!(
-                    "op-{operation_id} acknowledged / {}: {} task(s) marked Cancelled / revision {}",
-                    operation.kind.success_label(),
+                self.tui_language.queue_mutation_acknowledged(
+                    operation_id,
+                    self.tui_language
+                        .queue_mutation_success_label(operation.kind),
                     result.committed_task_ids.len(),
-                    result.committed_planning_revision
+                    result.committed_planning_revision,
                 )
             }
             Ok(_) => {
                 self.reconcile_correlated_queue_receipt(&operation, &authority.queue_authority);
-                format!(
-                    "Queue change op-{operation_id} was acknowledged, but the refreshed authority did not confirm every cancellation; review the queue."
-                )
+                self.tui_language
+                    .queue_mutation_acknowledged_without_confirmation(operation_id)
             }
             Err(error) if authority_confirms_cancellation => {
                 self.settle_correlated_queue_receipt(&operation, &authority.queue_authority);
-                format!(
-                    "op-{operation_id} authority confirmed cancellation after the worker reported an error: {error}"
-                )
+                self.tui_language
+                    .queue_mutation_authority_confirmed_after_error(operation_id, &error)
             }
             Err(error) => {
                 self.reconcile_correlated_queue_receipt(&operation, &authority.queue_authority);
-                format!("op-{operation_id} rejected / Queue change rejected: {error}")
+                self.tui_language
+                    .queue_mutation_rejected(operation_id, &error)
             }
         };
         self.surface_queue_mutation_feedback(feedback);
@@ -1064,15 +1075,19 @@ impl NativeTuiApp {
         let projection_revision = authority
             .runtime_projection
             .planning_revision()
-            .ok_or_else(|| "the refreshed projection has no planning revision".to_string())?;
+            .ok_or_else(|| {
+                self.tui_language
+                    .queue_mutation_projection_revision_missing()
+                    .to_string()
+            })?;
         if self
             .planning_runtime_projection_snapshot()
             .planning_revision()
             .is_some_and(|current_revision| current_revision > projection_revision)
         {
-            return Err(format!(
-                "completion revision {projection_revision} is older than the visible planning revision"
-            ));
+            return Err(self
+                .tui_language
+                .queue_mutation_completion_older_than_planning(projection_revision));
         }
         if matches!(
             &self.conversation_state,
@@ -1082,21 +1097,27 @@ impl NativeTuiApp {
                     .as_ref()
                     .is_some_and(|receipt| receipt.planning_revision > projection_revision)
         ) {
-            return Err(format!(
-                "completion revision {projection_revision} is older than the visible queue receipt"
-            ));
+            return Err(self
+                .tui_language
+                .queue_mutation_completion_older_than_receipt(projection_revision));
         }
         if projection_revision != authority.queue_authority.planning_revision {
-            return Err(format!(
-                "projection revision {projection_revision} does not match authority revision {}",
-                authority.queue_authority.planning_revision
-            ));
+            return Err(self
+                .tui_language
+                .queue_mutation_projection_authority_revision_mismatch(
+                    projection_revision,
+                    authority.queue_authority.planning_revision,
+                ));
         }
         let tokens = Self::queue_authority_tokens_for_projection(
             &authority.runtime_projection,
             &authority.queue_authority,
         )
-        .ok_or_else(|| "the refreshed queue rows do not match task authority".to_string())?;
+        .ok_or_else(|| {
+            self.tui_language
+                .queue_mutation_rows_mismatch_authority()
+                .to_string()
+        })?;
         self.sync_ready_conversation_planning_runtime_projection(
             authority.runtime_projection.clone(),
         );
@@ -2749,6 +2770,7 @@ mod tests {
                 .map(|task| task.status),
             Some(TaskStatus::Cancelled)
         );
+        app.tui_language = TuiLanguage::Korean;
         app.apply_queue_mutation_completion(completion);
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
@@ -2775,7 +2797,19 @@ mod tests {
             after.planning_revision
         );
         assert!(!preserved_newer_receipt.created_batch_is_cancellable());
-        assert!(status_text(&app).contains("op-1 acknowledged"));
+        let feedback = app
+            .queue_overlay_ui_state
+            .feedback()
+            .expect("localized remove feedback should be visible");
+        assert!(feedback.contains("선택한 큐 항목 제거"));
+        assert_eq!(status_text(&app), feedback);
+        assert_eq!(
+            ready_conversation(&app)
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some(feedback)
+        );
         std::fs::remove_dir_all(&workspace).expect("queue workspace should clean up");
     }
 
@@ -2803,7 +2837,11 @@ mod tests {
         app.apply_queue_mutation_completion(queue_overlay_ui::QueueMutationWorkerResult {
             operation,
             mutation: Err("old context mutation failed".to_string()),
-            authority: Err("old context refresh failed".to_string()),
+            authority: Err(
+                queue_overlay_ui::QueueMutationAuthorityRefreshError::AuthorityUnavailable(
+                    "old context refresh failed".to_string(),
+                ),
+            ),
         });
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
@@ -2836,6 +2874,7 @@ mod tests {
                 None,
             )
             .expect("queue operation should enter pending state");
+        app.tui_language = TuiLanguage::Korean;
 
         app.apply_queue_mutation_completion(queue_overlay_ui::QueueMutationWorkerResult {
             operation,
@@ -2858,7 +2897,7 @@ mod tests {
         assert!(app.queue_mutation_requires_authority_refresh());
         assert!(
             app.queue_overlay_ui_state.feedback().is_some_and(
-                |feedback| feedback.contains("older than the visible planning revision")
+                |feedback| feedback.contains("현재 표시된 계획 리비전보다 오래되었습니다")
             )
         );
     }
@@ -2954,7 +2993,11 @@ mod tests {
         let completion = queue_overlay_ui::QueueMutationWorkerResult {
             operation,
             mutation: Err("guard release failed".to_string()),
-            authority: Err("snapshot unavailable".to_string()),
+            authority: Err(
+                queue_overlay_ui::QueueMutationAuthorityRefreshError::AuthorityUnavailable(
+                    "snapshot unavailable".to_string(),
+                ),
+            ),
         };
 
         app.apply_queue_mutation_completion(completion.clone());
@@ -2980,6 +3023,93 @@ mod tests {
         let message_count = ready_conversation(&app).messages.len();
         app.apply_queue_mutation_completion(completion);
         assert_eq!(ready_conversation(&app).messages.len(), message_count);
+    }
+
+    #[test]
+    fn queue_mutation_refresh_failure_uses_the_selected_language_across_surfaces() {
+        let mut app = test_native_tui_app();
+        let context = app.current_queue_mutation_context();
+        let operation = app
+            .queue_mutation_ui_state
+            .begin(
+                context.clone(),
+                queue_overlay_ui::QueueMutationKind::RemoveSelected,
+                PlanningQueueCancellationRequest {
+                    workspace_directory: context.workspace_directory,
+                    expected_planning_revision: 3,
+                    targets: Vec::new(),
+                },
+                None,
+            )
+            .expect("queue operation should enter pending state");
+        app.tui_language = TuiLanguage::Korean;
+
+        app.apply_queue_mutation_completion(queue_overlay_ui::QueueMutationWorkerResult {
+            operation,
+            mutation: Err("변이 실패".to_string()),
+            authority: Err(
+                queue_overlay_ui::QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable,
+            ),
+        });
+
+        let feedback = app
+            .queue_overlay_ui_state
+            .feedback()
+            .expect("localized feedback should be visible");
+        assert!(feedback.contains("큐 변경 op-1 미확정"));
+        assert!(feedback.contains("큐 runtime projection을 사용할 수 없습니다"));
+        assert_eq!(status_text(&app), feedback);
+        assert_eq!(
+            ready_conversation(&app)
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some(feedback)
+        );
+    }
+
+    #[test]
+    fn queue_mutation_input_feedback_uses_the_selected_language() {
+        let mut app = test_native_tui_app();
+        app.tui_language = TuiLanguage::Korean;
+        let context = app.current_queue_mutation_context();
+        let operation = app
+            .queue_mutation_ui_state
+            .begin(
+                context.clone(),
+                queue_overlay_ui::QueueMutationKind::RemoveSelected,
+                PlanningQueueCancellationRequest {
+                    workspace_directory: context.workspace_directory,
+                    expected_planning_revision: 3,
+                    targets: Vec::new(),
+                },
+                None,
+            )
+            .expect("queue operation should enter pending state");
+
+        assert!(!app.undo_latest_queue_registration());
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("큐 변경 op-1의 권한 확인을 기다리는 중입니다.")
+        );
+
+        assert_eq!(
+            app.queue_mutation_ui_state.take_matching(&operation),
+            Some(operation)
+        );
+        app.queue_mutation_ui_state.require_authority_refresh();
+        assert!(!app.undo_latest_queue_registration());
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("큐 권한을 새로 확인해야 합니다. 큐를 닫았다가 다시 연 뒤 변경하세요.")
+        );
+
+        app.queue_mutation_ui_state.record_authority_refresh();
+        app.cancel_selected_queue_task();
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("선택한 큐 항목이 변경되었습니다. 큐를 다시 열어 새로 확인하세요.")
+        );
     }
 
     #[test]
@@ -3082,6 +3212,7 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             })
         );
+        app.tui_language = TuiLanguage::Korean;
         apply_next_queue_mutation_completion(&mut app);
 
         let after = app
@@ -3094,12 +3225,12 @@ mod tests {
         assert!(
             app.queue_overlay_ui_state
                 .feedback()
-                .is_some_and(|feedback| feedback.contains("Undid latest queue registration"))
+                .is_some_and(|feedback| feedback.contains("최근 큐 등록 되돌리기"))
         );
         assert!(ready_conversation(&app).messages.iter().any(|message| {
             message
                 .text
-                .contains("Undid latest queue registration: 1 task(s) marked Cancelled / revision")
+                .contains("최근 큐 등록 되돌리기: 작업 1개를 취소로 변경 / 리비전")
         }));
         assert!(
             ready_conversation(&app)
@@ -3107,6 +3238,7 @@ mod tests {
                 .is_none()
         );
         ready_conversation_mut(&mut app).mark_turn_finished();
+        app.tui_language = TuiLanguage::English;
 
         let individually_removed = app
             .application
@@ -3161,12 +3293,15 @@ mod tests {
             .expect("concurrent task should create");
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        app.tui_language = TuiLanguage::Korean;
         apply_next_queue_mutation_completion(&mut app);
         assert!(
             app.queue_overlay_ui_state
                 .feedback()
-                .is_some_and(|feedback| feedback.contains("Queue change rejected"))
+                .is_some_and(|feedback| feedback.contains("큐 변경 거부"))
         );
+        assert!(status_text(&app).contains("op-2 거부"));
+        app.tui_language = TuiLanguage::English;
         assert!(
             ready_conversation(&app)
                 .latest_queue_mutation_receipt

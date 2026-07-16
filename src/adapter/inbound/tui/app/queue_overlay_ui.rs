@@ -37,15 +37,6 @@ pub(super) enum QueueMutationKind {
     UndoLatestRegistration,
 }
 
-impl QueueMutationKind {
-    pub(super) const fn success_label(self) -> &'static str {
-        match self {
-            Self::RemoveSelected => "Removed selected queue item",
-            Self::UndoLatestRegistration => "Undid latest queue registration",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueMutationOperation {
     pub(super) operation_id: u64,
@@ -62,10 +53,21 @@ pub(super) struct QueueMutationAuthoritySnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum QueueMutationAuthorityRefreshError {
+    AuthorityUnavailable(String),
+    RevisionsKeptChanging {
+        projection_revision: i64,
+        authority_revision: i64,
+    },
+    RuntimeProjectionUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueMutationWorkerResult {
     pub(super) operation: QueueMutationOperation,
     pub(super) mutation: Result<PlanningTaskMutationCommitResult, String>,
-    pub(super) authority: Result<QueueMutationAuthoritySnapshot, String>,
+    pub(super) authority:
+        Result<QueueMutationAuthoritySnapshot, QueueMutationAuthorityRefreshError>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
