@@ -151,6 +151,13 @@ fn focus_lost_blocks_draw_until_focus_returns() {
 
     // Regaining focus schedules a fresh frame at the same timestamp to repair any stale layout.
     assert!(runtime.take_due_draw_request(now + Duration::from_millis(2)));
+    assert_eq!(runtime.terminal_focus_reacquire_epoch(), 1);
+
+    runtime.handle_terminal_event_at(Event::FocusGained, now + Duration::from_millis(3));
+
+    // Duplicate focus notifications are not a new visibility transition.
+    assert!(!runtime.take_due_draw_request(now + Duration::from_millis(3)));
+    assert_eq!(runtime.terminal_focus_reacquire_epoch(), 1);
 }
 
 // Supersession can display active worker state without any incoming stream event.

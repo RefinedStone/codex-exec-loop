@@ -143,7 +143,8 @@ pulsing.
 Required cases:
 
 - resize maps to a draw request
-- focus gain maps to draw and can refresh palette/theme state
+- a true focus-loss/focus-gain transition invalidates the visible back buffer and repaints the
+  semantic frame once without replaying host scrollback; duplicate focus-gain events coalesce
 - focus lost does not force a frame unless product behavior needs it
 - multiple immediate frame requests coalesce into one draw notification
 - delayed and immediate frame requests choose the earliest safe draw
@@ -177,6 +178,7 @@ Every TUI rendering PR should state which rows it touches.
 | Host scrollback history | pending suffix insert, shifted window insert, no duplicate replay |
 | Viewport replay | explicit-only fallback, no host scrollback insert, visible recent transcript, inline viewport contract |
 | Resize | shrink/restore frame sequence with no stale rows or duplicated live tail |
+| Focus reacquire | replaced visible tail repaints once; duplicate focus events do not draw or replay scrollback |
 | Clear/reset | pending history dropped, viewport reset, fresh header redraw |
 | Thread/session switch | old transcript and deferred history cannot leak into new thread |
 | Streaming turn | active cell or live delta stays live, final output becomes committed history |
@@ -278,6 +280,8 @@ For a primitive-sensitive change, the artifact must show at least:
    inside host scrollback
 7. if fallback insertion changed: fallback-specific proof of viewport state and cursor
    restoration
+8. focus-loss/reacquire after visible-frame replacement: exact live-tail recovery with no duplicate
+   host history, stale rows, or cursor drift
 
 ### Reviewer gate
 
