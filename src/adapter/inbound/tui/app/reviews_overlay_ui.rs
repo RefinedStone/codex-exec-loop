@@ -117,6 +117,16 @@ impl ReviewsOverlayUiState {
         )
     }
 
+    fn requires_authority_load_for(&self, context: &ReviewsOverlayContext) -> bool {
+        match &self.projection {
+            ReviewsOverlayProjectionState::Loading(request)
+            | ReviewsOverlayProjectionState::Ready { request, .. } => {
+                !request.context.has_same_authority_identity(context)
+            }
+            ReviewsOverlayProjectionState::Idle => true,
+        }
+    }
+
     pub(super) fn screen_model(&self) -> ReviewsOverlayScreenModel<'_> {
         match &self.projection {
             ReviewsOverlayProjectionState::Idle => ReviewsOverlayScreenModel::Idle,
@@ -160,11 +170,15 @@ impl NativeTuiApp {
             .reviews_overlay_ui_state
             .apply_loaded(request, authority);
         debug_assert!(applied);
-        if applied {
-            ReviewsOverlayLoadCompletion::Applied
-        } else {
-            ReviewsOverlayLoadCompletion::Ignored
+        ReviewsOverlayLoadCompletion::Applied
+    }
+
+    pub(super) fn reviews_overlay_authority_load_required(&self) -> bool {
+        if self.shell_overlay != ShellOverlay::Reviews {
+            return false;
         }
+        self.reviews_overlay_ui_state
+            .requires_authority_load_for(&self.current_reviews_overlay_context())
     }
 
     fn current_reviews_overlay_context(&self) -> ReviewsOverlayContext {

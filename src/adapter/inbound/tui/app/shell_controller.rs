@@ -115,6 +115,14 @@ impl NativeTuiApp {
         });
     }
 
+    pub(super) fn reconcile_reviews_overlay_authority_context(&mut self) -> bool {
+        if !self.reviews_overlay_authority_load_required() {
+            return false;
+        }
+        self.start_reviews_overlay_authority_load();
+        true
+    }
+
     pub(super) fn toggle_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayToggled);
     }
