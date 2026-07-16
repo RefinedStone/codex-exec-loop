@@ -21,6 +21,8 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         " / shell inspection",
     )];
 
+    let pending_operation_id = app.pending_queue_mutation_operation_id();
+    let authority_refresh_required = app.queue_mutation_requires_authority_refresh();
     let selected_task_id = app.queue_overlay_ui_state.selected_task_id();
     let latest_registration_undo_available = matches!(
         &app.conversation_state,
@@ -42,12 +44,20 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
              * Conversation이 아직 load 중이면 planning runtime projection 자체가 없다. 이 상태에서 queue/proposal
              * section을 추측하지 않고 "thread load 뒤 가능" copy로 고정해 stale planning data처럼 보이지 않게 한다.
              */
-            summary_lines: vec![Line::from("status: loading")],
+            summary_lines: build_queue_overlay_summary_lines(
+                "status: loading".to_string(),
+                pending_operation_id,
+                authority_refresh_required,
+            ),
             queue_lines: Vec::new(),
             proposal_lines: Vec::new(),
             note_lines: Vec::new(),
             selected_content_line_index: None,
-            key_lines: build_queue_overlay_key_lines(false),
+            key_lines: build_queue_overlay_key_lines(
+                false,
+                pending_operation_id,
+                authority_refresh_required,
+            ),
         },
         ConversationState::Failed(message) => QueueOverlayView {
             header_lines,
@@ -55,7 +65,11 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
              * Conversation load 실패는 planning queue failure와 다르다. queue projection을 만들 수 없는 상태라
              * queue 자체를 empty로 오해시키지 않고 load error와 recovery action만 보여 준다.
              */
-            summary_lines: vec![Line::from("status: unavailable")],
+            summary_lines: build_queue_overlay_summary_lines(
+                "status: unavailable".to_string(),
+                pending_operation_id,
+                authority_refresh_required,
+            ),
             queue_lines: vec![Line::from("Reload the session or open a new draft.")],
             proposal_lines: Vec::new(),
             note_lines: vec![Line::from(format!(
@@ -63,7 +77,11 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 compact_whitespace_detail(message, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
             ))],
             selected_content_line_index: None,
-            key_lines: build_queue_overlay_key_lines(false),
+            key_lines: build_queue_overlay_key_lines(
+                false,
+                pending_operation_id,
+                authority_refresh_required,
+            ),
         },
         ConversationState::Ready(conversation) => {
             // Ready conversation state only gates availability. The runtime read model itself comes from core.
@@ -128,7 +146,11 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
             if queued_count == 0 {
                 summary_segments.push(format!("idle: {}", projection.queue_idle_policy.label()));
             }
-            let summary_lines = vec![Line::from(summary_segments.join("  |  "))];
+            let summary_lines = build_queue_overlay_summary_lines(
+                summary_segments.join("  |  "),
+                pending_operation_id,
+                authority_refresh_required,
+            );
 
             /*
              * Note section은 actionability 순서로 채운다. auto-follow pause와 failure reason은 queue row보다
@@ -198,13 +220,58 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 proposal_lines,
                 note_lines,
                 selected_content_line_index,
-                key_lines: build_queue_overlay_key_lines(latest_registration_undo_available),
+                key_lines: build_queue_overlay_key_lines(
+                    latest_registration_undo_available,
+                    pending_operation_id,
+                    authority_refresh_required,
+                ),
             }
         }
     }
 }
 
-fn build_queue_overlay_key_lines(latest_registration_undo_available: bool) -> Vec<Line<'static>> {
+fn build_queue_overlay_summary_lines(
+    summary: String,
+    pending_operation_id: Option<u64>,
+    authority_refresh_required: bool,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(summary)];
+    if let Some(operation_id) = pending_operation_id {
+        lines.push(
+            Line::from(format!(
+                "op-{operation_id} | authority acknowledgement pending"
+            ))
+            .style(AkraTheme::warning()),
+        );
+    } else if authority_refresh_required {
+        lines.push(Line::from("queue authority refresh required").style(AkraTheme::warning()));
+    }
+    lines
+}
+
+fn build_queue_overlay_key_lines(
+    latest_registration_undo_available: bool,
+    pending_operation_id: Option<u64>,
+    authority_refresh_required: bool,
+) -> Vec<Line<'static>> {
+    if let Some(operation_id) = pending_operation_id {
+        // Navigation and dismissal stay live while the authority gate owns every destructive action.
+        return vec![
+            AkraTheme::key_line("Up/Down, j/k: select"),
+            Line::from(format!("op-{operation_id} pending: remove/undo disabled"))
+                .style(AkraTheme::warning()),
+            AkraTheme::key_line("Esc/Ctrl+C: close"),
+        ];
+    }
+    if authority_refresh_required {
+        return vec![
+            AkraTheme::key_line("Up/Down, j/k: select"),
+            Line::from("remove/undo disabled: close and reopen to refresh")
+                .style(AkraTheme::warning()),
+            AkraTheme::key_line("Esc/Ctrl+C: close"),
+        ];
+    }
+
     let mut lines = vec![
         AkraTheme::key_line("Up/Down, j/k: select"),
         AkraTheme::key_line("x/Delete: remove"),
@@ -340,7 +407,9 @@ fn build_skipped_queue_note_line(
 #[cfg(test)]
 mod tests {
     use super::super::super::super::terminal_text::display_width;
-    use super::{build_queue_overlay_key_lines, compact_queue_title};
+    use super::{
+        build_queue_overlay_key_lines, build_queue_overlay_summary_lines, compact_queue_title,
+    };
 
     #[test]
     fn queue_titles_compact_whitespace_and_respect_terminal_cell_budget() {
@@ -354,12 +423,12 @@ mod tests {
 
     #[test]
     fn queue_keys_only_show_undo_when_the_latest_batch_is_cancellable() {
-        let normal = build_queue_overlay_key_lines(false)
+        let normal = build_queue_overlay_key_lines(false, None, false)
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        let cancellable = build_queue_overlay_key_lines(true)
+        let cancellable = build_queue_overlay_key_lines(true, None, false)
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -370,5 +439,46 @@ mod tests {
         assert!(normal.contains("Esc/Ctrl+C: close"));
         assert!(!normal.contains("u: undo"));
         assert!(cancellable.contains("u: undo added"));
+    }
+
+    #[test]
+    fn pending_queue_mutation_keeps_navigation_and_hides_destructive_shortcuts() {
+        let summary =
+            build_queue_overlay_summary_lines("status: ready".to_string(), Some(17), false)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+        let keys = build_queue_overlay_key_lines(true, Some(17), false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(summary.contains("op-17 | authority acknowledgement pending"));
+        assert!(keys.contains("Up/Down, j/k: select"));
+        assert!(keys.contains("op-17 pending: remove/undo disabled"));
+        assert!(keys.contains("Esc/Ctrl+C: close"));
+        assert!(!keys.contains("x/Delete"));
+        assert!(!keys.contains("u: undo"));
+    }
+
+    #[test]
+    fn required_authority_refresh_disables_mutation_until_reopen() {
+        let summary = build_queue_overlay_summary_lines("status: ready".to_string(), None, true)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let keys = build_queue_overlay_key_lines(true, None, true)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(summary.contains("queue authority refresh required"));
+        assert!(keys.contains("close and reopen to refresh"));
+        assert!(!keys.contains("x/Delete"));
+        assert!(!keys.contains("u: undo"));
     }
 }

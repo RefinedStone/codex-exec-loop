@@ -179,6 +179,9 @@ impl ShellRuntime {
                         self.app.start_reviews_overlay_authority_load();
                     }
                 }
+                BackgroundMessage::QueueMutationCompleted(result) => {
+                    self.app.apply_queue_mutation_completion(*result);
+                }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
                 }

@@ -243,6 +243,90 @@ fn native_tui_app_keeps_parallel_control_plane_behind_application_handle() {
 }
 
 #[test]
+fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
+    /*
+     * Queue remove/undo input may only open the adapter correlation gate. The
+     * application handle performs the blocking cancellation and refresh, then
+     * ShellRuntime settles the exact pending operation from a background
+     * completion. Queue chrome is disposable; the pending gate is not.
+     */
+    const APP_RS: &str = include_str!("../../app.rs");
+    const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
+    const CONTROLLER_RS: &str = include_str!("../shell_controller.rs");
+    const QUEUE_UI_RS: &str = include_str!("../queue_overlay_ui.rs");
+    const SHELL_RUNTIME_RS: &str = include_str!("../shell_runtime.rs");
+
+    let controller_input_path = CONTROLLER_RS
+        .split("#[cfg(test)]\nmod tests")
+        .next()
+        .expect("controller production source must exist");
+    let queue_ui_input_path = QUEUE_UI_RS
+        .split("#[cfg(test)]\nmod tests")
+        .next()
+        .expect("queue UI production source must exist");
+    for input_path in [controller_input_path, queue_ui_input_path, SHELL_RUNTIME_RS] {
+        assert!(!input_path.contains(".cancel_tasks("));
+    }
+    assert!(CONTROLLER_RS.contains("std::thread::spawn"));
+    assert!(CONTROLLER_RS.contains("BackgroundMessage::QueueMutationCompleted"));
+    assert!(SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueMutationCompleted(result)"));
+    assert!(SHELL_RUNTIME_RS.contains("apply_queue_mutation_completion(*result)"));
+
+    assert!(QUEUE_UI_RS.contains("operation_id: u64"));
+    assert!(QUEUE_UI_RS.contains("workspace_directory: String"));
+    assert!(QUEUE_UI_RS.contains("active_thread_id: Option<String>"));
+    assert!(QUEUE_UI_RS.contains("request: PlanningQueueCancellationRequest"));
+    assert!(QUEUE_UI_RS.contains("if self.pending.as_ref() != Some(completed)"));
+    assert!(CONTROLLER_RS.contains("expected_planning_revision: planning_revision"));
+    assert!(CONTROLLER_RS.contains("expected_status: status"));
+    assert!(CONTROLLER_RS.contains("expected_updated_at: updated_at"));
+    assert!(CONTROLLER_RS.contains("expected_planning_revision: receipt.planning_revision"));
+    assert!(CONTROLLER_RS.contains("expected_status: entry.after_status"));
+    assert!(CONTROLLER_RS.contains("expected_updated_at: entry.after_updated_at.clone()"));
+    assert!(CONTROLLER_RS.contains("let current_context = self.current_queue_mutation_context()"));
+    assert!(CONTROLLER_RS.contains("current_context != operation.context"));
+    let show_queue = CONTROLLER_RS
+        .split("pub(super) fn show_queue_overlay")
+        .nth(1)
+        .expect("queue overlay opener must exist")
+        .split("pub(super) fn show_reviews_overlay")
+        .next()
+        .expect("queue overlay opener must stay bounded");
+    assert!(show_queue.contains("self.pending_queue_mutation_operation_id().is_none()"));
+    assert!(show_queue.contains("self.refresh_queue_overlay_authority_binding()"));
+
+    let executor = APP_RUNTIME_RS
+        .split("pub(super) fn execute_queue_mutation")
+        .nth(1)
+        .expect("queue mutation executor must exist")
+        .split("fn load_queue_mutation_authority")
+        .next()
+        .expect("queue authority refresh helper must follow the executor");
+    let mutation_index = executor
+        .find("let mutation = self")
+        .expect("executor must retain the mutation result without returning early");
+    let refresh_index = executor
+        .find("let authority = self.load_queue_mutation_authority")
+        .expect("executor must refresh authority after either mutation outcome");
+    assert!(mutation_index < refresh_index);
+    assert!(executor.contains("QueueMutationWorkerResult"));
+    assert!(executor.contains("mutation,"));
+    assert!(executor.contains("authority,"));
+
+    assert!(APP_RS.contains("queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState"));
+    assert!(APP_RS.contains("queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState"));
+    let close_overlay = CONTROLLER_RS
+        .split("pub(super) fn close_shell_overlay")
+        .nth(1)
+        .expect("overlay close handler must exist")
+        .split("pub(super) fn open_new_conversation_shell")
+        .next()
+        .expect("overlay close handler must remain bounded");
+    assert!(close_overlay.contains("self.queue_overlay_ui_state.reset()"));
+    assert!(!close_overlay.contains("queue_mutation_ui_state"));
+}
+
+#[test]
 fn parallel_post_turn_continuation_is_driven_by_control_plane_outcome() {
     /*
      * The parallel-mode TUI entrypoint must not inspect or consume
@@ -916,6 +1000,8 @@ fn queue_receipt_mouse_down_routes_to_the_inline_undo_action() {
         runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
         None
     );
+    assert_eq!(runtime.app().pending_queue_mutation_operation_id(), Some(1));
+    assert!(!runtime.app().queue_receipt_undo_mouse_capture_requested());
 }
 // Background loads must surface planning authority and queue context when a
 // resumed conversation points at a workspace that already has planning state.
