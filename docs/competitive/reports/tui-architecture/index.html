@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta
+    name="description"
+    content="GJC, OpenCode, Codex, Claude Code, Pi, jcode의 TUI 아키텍처와 Akra 적용 방향을 비교한 근거 중심 인터랙티브 보고서"
+  >
+  <title>Akra TUI Architecture Field Report</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#report">본문으로 이동</a>
+  <header class="topbar">
+    <a class="brand" href="#summary" aria-label="보고서 처음으로">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span>
+        <strong>AKRA</strong>
+        <small>TUI architecture field report</small>
+      </span>
+    </a>
+    <div class="topbar-meta" role="group" aria-label="보고서 메타데이터">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>official-source audit</span>
+      <span class="topbar-date">2026-07-16 KST</span>
+    </div>
+    <button class="icon-button nav-toggle" id="navToggle" type="button" aria-label="목차 열기" aria-controls="sectionNav" aria-expanded="false">
+      <span aria-hidden="true">☰</span>
+    </button>
+  </header>
+
+  <div class="report-shell">
+    <aside class="section-nav" id="sectionNav" aria-label="보고서 목차">
+      <p class="rail-label">REPORT INDEX</p>
+      <nav aria-label="보고서 섹션">
+        <a href="#summary" data-section="summary"><span>01</span>결론</a>
+        <a href="#architecture" data-section="architecture"><span>02</span>아키텍처</a>
+        <a href="#renderers" data-section="renderers"><span>03</span>렌더러</a>
+        <a href="#polish" data-section="polish"><span>04</span>완성도</a>
+        <a href="#undo" data-section="undo"><span>05</span>Undo 분석</a>
+        <a href="#debt" data-section="debt"><span>06</span>버그·부채</a>
+        <a href="#akra" data-section="akra"><span>07</span>Akra 진단</a>
+        <a href="#decisions" data-section="decisions"><span>08</span>실행 결정</a>
+        <a href="#sources" data-section="sources"><span>09</span>근거 원장</a>
+      </nav>
+      <div class="rail-scope">
+        <span>6 products</span>
+        <span>latest pinned</span>
+        <span>no benchmark claims</span>
+      </div>
+    </aside>
+
+    <main id="report">
+      <section class="hero report-section" id="summary" data-observe>
+        <div class="hero-copy">
+          <p class="kicker">CROSS-PRODUCT ARCHITECTURE AUDIT / 2026.07</p>
+          <h1>Coding-agent TUI는<br>어떻게 복잡성을 통제하는가</h1>
+          <p class="hero-lead">
+            GJC, OpenCode, Codex, Claude Code, Pi, jcode의 최신 공식 소스와 릴리스 아티팩트를
+            비교했다. 결론은 “좋은 프레임워크를 고르면 버그가 사라진다”가 아니다. 권위 상태,
+            화면 projection, terminal delivery를 분리하고 실패를 재구성 가능하게 만드는 제품이
+            더 안정적이다.
+          </p>
+          <nav class="hero-actions" aria-label="핵심 보고서 이동">
+            <a class="primary-action" href="#decisions">Akra 실행 결정</a>
+            <a class="secondary-action" href="#undo">Undo 흐름 분석</a>
+          </nav>
+        </div>
+        <div class="hero-schematic" role="img" aria-label="권위 상태에서 화면 projection을 거쳐 terminal delivery로 이어지는 핵심 아키텍처 도식">
+          <div class="schematic-head">
+            <span>CONTROL LOOP</span>
+            <span class="live-indicator">evidence locked</span>
+          </div>
+          <div class="flow-stack">
+            <div class="flow-node authority">
+              <span class="node-index">01</span>
+              <div><strong>Authority</strong><small>session · queue · turn · revision</small></div>
+            </div>
+            <span class="flow-arrow" aria-hidden="true">↓ typed event / ack</span>
+            <div class="flow-node projection">
+              <span class="node-index">02</span>
+              <div><strong>Projection</strong><small>screen model · pending operation</small></div>
+            </div>
+            <span class="flow-arrow" aria-hidden="true">↓ deterministic frame</span>
+            <div class="flow-node terminal">
+              <span class="node-index">03</span>
+              <div><strong>Terminal delivery</strong><small>viewport · scrollback · cursor · flush</small></div>
+            </div>
+          </div>
+          <p class="schematic-verdict"><strong>Akra의 다음 경계:</strong> TUI가 원장을 복사해 운영하지 않게 한다.</p>
+        </div>
+      </section>
+
+      <section class="verdict-band" aria-label="핵심 결론 세 가지">
+        <article>
+          <span class="verdict-no">01</span>
+          <p class="eyebrow">FALSE PREMISE</p>
+          <h2>버그 없는 경쟁 앱은 없다</h2>
+          <p>공식 changelog와 tracker 모두 resize, stale frame, rewind race, queue duplication, CJK 정렬 회귀를 기록한다.</p>
+        </article>
+        <article>
+          <span class="verdict-no">02</span>
+          <p class="eyebrow">REAL LEVER</p>
+          <h2>언어보다 경계가 중요하다</h2>
+          <p>Rust도 거대 mutable App을 만들고, React도 stale projection을 만든다. typed correlation과 단일 mutation gate가 차이를 만든다.</p>
+        </article>
+        <article>
+          <span class="verdict-no">03</span>
+          <p class="eyebrow">AKRA PRIORITY</p>
+          <h2>프레임워크 교체는 P0가 아니다</h2>
+          <p>먼저 authority ack 이후에만 projection을 갱신하고, terminal frame을 semantic state에서 재구성 가능하게 만든다.</p>
+        </article>
+      </section>
+
+      <section class="method-strip" aria-label="근거 분류">
+        <p><strong>근거 분류</strong> 근거 원장과 부채 항목은 아래 등급을 표시한다. 아키텍처 도식·비교표·Akra 결정은 그 원장을 종합한 분석이며 claim별 검증 배지가 아니다.</p>
+        <div class="evidence-legend">
+          <span class="evidence verified">verified</span>
+          <span>pinned source / artifact</span>
+          <span class="evidence documented">documented</span>
+          <span>official docs / changelog</span>
+          <span class="evidence reported">reported</span>
+          <span>official issue, not reproduced</span>
+          <span class="evidence inferred">inferred</span>
+          <span>explicit reasoning</span>
+        </div>
+      </section>
+
+      <section class="report-section" id="architecture" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">02 / AUTHORITY &amp; STATE FLOW</p>
+            <h2>제품별 아키텍처 해부</h2>
+          </div>
+          <p>authority, projection, renderer, extension, 검증 방식을 모든 제품에 같은 축으로 적용했다.</p>
+        </div>
+        <div class="product-tabs" id="architectureTabs" role="tablist" aria-label="제품 선택"></div>
+        <div class="architecture-stage" id="architectureStage" role="tabpanel" tabindex="0" aria-live="polite"></div>
+      </section>
+
+      <section class="report-section" id="renderers" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">03 / RENDERER LEDGER</p>
+            <h2>무엇으로 그리는가</h2>
+          </div>
+          <p>동일한 “TUI”라도 component tree, frame diff, scrollback 소유 방식이 다르다.</p>
+        </div>
+        <div class="table-tools">
+          <label class="search-field">
+            <span aria-hidden="true">⌕</span>
+            <span class="sr-only">렌더러 표 검색</span>
+            <input id="matrixSearch" type="search" placeholder="제품, 프레임워크, 특징 검색" autocomplete="off">
+          </label>
+          <div class="segmented" id="matrixFilters" role="group" aria-label="렌더러 범주 필터">
+            <button type="button" class="active" data-filter="all" aria-pressed="true">전체</button>
+            <button type="button" data-filter="native" aria-pressed="false">Rust/native</button>
+            <button type="button" data-filter="reactive" aria-pressed="false">Reactive</button>
+            <button type="button" data-filter="custom" aria-pressed="false">Custom diff</button>
+            <button type="button" data-filter="artifact" aria-pressed="false">Closed artifact</button>
+          </div>
+        </div>
+        <section class="matrix-wrap" tabindex="0" aria-label="렌더러 비교표, 가로 스크롤 가능">
+          <table>
+            <thead>
+              <tr>
+                <th>제품</th>
+                <th>UI / layout</th>
+                <th>권위 상태</th>
+                <th>frame 전략</th>
+                <th>mouse</th>
+                <th>terminal QA</th>
+                <th>확장 경계</th>
+              </tr>
+            </thead>
+            <tbody id="rendererMatrix"></tbody>
+          </table>
+        </section>
+        <p class="table-note">정성 분류이며 성능 순위가 아니다. “강함”은 공개 근거의 밀도와 해당 경계의 명시성을 뜻한다.</p>
+      </section>
+
+      <section class="report-section" id="polish" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">04 / WHY IT FEELS WEB-LIKE</p>
+            <h2>웹처럼 매끄러운 이유</h2>
+          </div>
+          <p>시각적 완성도는 한 라이브러리가 아니라 여섯 개의 반복 가능한 시스템에서 나온다.</p>
+        </div>
+        <div class="polish-grid" id="polishGrid"></div>
+        <div class="gallery-heading">
+          <div>
+            <h3>공식 시각 자료</h3>
+            <p>표현 수준을 확인하는 자료일 뿐, 성능·정확성·현재 기본 활성화를 증명하지 않는다.</p>
+          </div>
+          <div class="gallery-controls" id="galleryControls" role="tablist" aria-label="공식 이미지 선택"></div>
+        </div>
+        <figure class="product-gallery" id="productGallery" role="tabpanel" tabindex="0"></figure>
+      </section>
+
+      <section class="report-section undo-section" id="undo" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">05 / OPENCODE UNDO, TECHNICALLY</p>
+            <h2>마우스 Undo에서 배울 것</h2>
+          </div>
+          <p>여기서는 대화 rewind를 구현하지 않는다. queue 행의 제거·복구 UX에 적용할 상호작용 경계만 분석한다.</p>
+        </div>
+        <div class="undo-comparison">
+          <article class="undo-column">
+            <div class="column-title">
+              <span class="product-dot opencode"></span>
+              <div><p>OBSERVED</p><h3>OpenCode v1.18.2</h3></div>
+            </div>
+            <ol class="transaction-list" id="openCodeFlow"></ol>
+            <div class="risk-callout">
+              <span>!</span>
+              <p><strong>핵심 위험</strong> dialog와 composer가 server 성공 전에 바뀌는 optimistic fire-and-forget 경로가 공식 issue에서 지적됐다.</p>
+            </div>
+          </article>
+          <article class="undo-column target-column">
+            <div class="column-title">
+              <span class="product-dot akra"></span>
+              <div><p>PROPOSED CONTRACT</p><h3>Akra queue undo</h3></div>
+            </div>
+            <div class="queue-simulator" id="queueSimulator">
+              <div class="simulator-toolbar">
+                <span>queue / ready</span>
+                <span id="simRevision">revision 42</span>
+              </div>
+              <button class="queue-row" id="queueRow" type="button" aria-expanded="false">
+                <span class="queue-rank">01</span>
+                <span class="queue-copy"><strong>live activity rail 범위 확정</strong><small>task-user-207 · ready</small></span>
+                <span class="row-menu" aria-hidden="true">•••</span>
+              </button>
+              <div class="row-actions" id="rowActions" hidden>
+                <button type="button" id="removeQueueItem">queue에서 제거</button>
+                <button type="button" id="cancelQueueMenu">닫기</button>
+              </div>
+              <div class="pending-line" id="pendingLine" hidden>
+                <span class="spinner" aria-hidden="true"></span>
+                <span id="pendingOperation">authority ack 대기</span>
+              </div>
+              <div class="undo-dock" id="undoDock" hidden>
+                <span><strong>queue에서 제거됨</strong><small id="undoDockState">revision 43 · task-user-207</small></span>
+                <button type="button" id="restoreQueueItem">되돌리기</button>
+              </div>
+              <p class="sim-status" id="simStatus" aria-live="polite">No pending operation · authority revision 42</p>
+            </div>
+            <div class="simulation-modes" role="group" aria-label="응답 시뮬레이션 모드">
+              <span>다음 authority 응답</span>
+              <div class="segmented" id="simulationMode">
+                <button type="button" class="active" data-mode="success" aria-pressed="true">success</button>
+                <button type="button" data-mode="stale" aria-pressed="false">stale</button>
+                <button type="button" data-mode="failure" aria-pressed="false">failure</button>
+              </div>
+            </div>
+            <ol class="transaction-list target-flow" id="akraFlow"></ol>
+          </article>
+        </div>
+        <div class="undo-rules" id="undoRules"></div>
+      </section>
+
+      <section class="report-section" id="debt" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">06 / CRITICAL DEBT</p>
+            <h2>프레임워크가 숨기지 못한 문제</h2>
+          </div>
+          <p>검증된 소스 부채, 공식 changelog, 재현하지 않은 공식 issue를 구분해서 본다.</p>
+        </div>
+        <div class="debt-tools">
+          <div class="product-tabs compact" id="debtFilters" role="tablist" aria-label="부채 제품 필터"></div>
+          <label class="toggle-control">
+            <input id="showReported" type="checkbox" checked>
+            <span aria-hidden="true"></span>
+            공식 issue 포함
+          </label>
+        </div>
+        <div class="debt-list" id="debtList" role="tabpanel" tabindex="0"></div>
+      </section>
+
+      <section class="report-section" id="akra" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">07 / AKRA BASELINE</p>
+            <h2>Hexagonal은 맞다. TUI 조합 경계가 과하다</h2>
+          </div>
+          <p>문제는 Core가 상태를 갖는 사실이 아니라, inbound TUI가 authority의 넓은 mutable mirror와 실행 조정을 함께 가진 점이다.</p>
+        </div>
+        <div class="metric-row" role="group" aria-label="Akra 코드 계측">
+          <div><strong>184</strong><span>TUI Rust files</span></div>
+          <div><strong>67,740</strong><span>TUI lines</span></div>
+          <div><strong>6,119</strong><span>Core lines</span></div>
+          <div><strong>8</strong><span>tracked raw-service debts</span></div>
+        </div>
+        <p class="metric-caption">Base commit <code>1607f2cf</code>, Rust 파일을 <code>wc -l</code>로 계측. 테스트 코드 포함.</p>
+
+        <div class="akra-architecture">
+          <div class="current-flow">
+            <div class="flow-label danger-label">CURRENT PRESSURE</div>
+            <div class="layer-box core-box">
+              <span>CORE</span>
+              <strong>AppState / command / effect / snapshot</strong>
+              <small>semantic lifecycle authority</small>
+            </div>
+            <span class="vertical-connector">snapshot + events</span>
+            <div class="layer-box overloaded-box">
+              <span>TUI COORDINATOR</span>
+              <strong>NativeTuiApp + ConversationViewModel</strong>
+              <small>mirror state · turn bookkeeping · planning repair · auto-follow · approval · copy · Line cache</small>
+            </div>
+            <span class="vertical-connector">mixed projection + delivery</span>
+            <div class="layer-box terminal-box">
+              <span>TERMINAL</span>
+              <strong>inline viewport / host scrollback / replay</strong>
+              <small>crossterm + ratatui</small>
+            </div>
+          </div>
+
+          <div class="target-flow-diagram">
+            <div class="flow-label success-label">TARGET OWNERSHIP</div>
+            <div class="target-lane authority-lane">
+              <span>01</span><div><strong>Core / Application authority</strong><small>command acceptance · revision · correlation · durable outcome</small></div>
+            </div>
+            <div class="target-lane screen-lane">
+              <span>02</span><div><strong>Pure ConversationScreenModel</strong><small>snapshot + local UI state → immutable render input</small></div>
+            </div>
+            <div class="target-lane ui-lane">
+              <span>03</span><div><strong>ConversationUiState</strong><small>cursor · focus · modal · selection · scroll intent only</small></div>
+            </div>
+            <div class="target-lane terminal-lane">
+              <span>04</span><div><strong>Terminal delivery transaction</strong><small>frame · viewport · scrollback · cursor · flush · rebuild</small></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="diagnosis-table">
+          <div class="diagnosis-head"><span>영역</span><span>현재 판단</span><span>조치</span></div>
+          <div><strong>Hexagonal outer boundary</strong><span class="state good">건전</span><p>유지. inbound → core/application → domain 방향은 올바르다.</p></div>
+          <div><strong>Core authority model</strong><span class="state good">건전</span><p>확장. command acceptance와 snapshot revision을 UI mutation의 유일한 근거로 만든다.</p></div>
+          <div><strong>TUI coordinator</strong><span class="state risk">과밀</span><p>screen model, UI-only state, execution coordination을 분리한다.</p></div>
+          <div><strong>Terminal delivery</strong><span class="state risk">취약 경계</span><p>semantic transcript에서 resize/redraw/reattach를 재구성하는 계약을 강화한다.</p></div>
+          <div><strong>Rust / Ratatui</strong><span class="state neutral">원인 아님</span><p>교체하지 않는다. 테스트 가능한 state transaction을 먼저 만든다.</p></div>
+        </div>
+      </section>
+
+      <section class="report-section" id="decisions" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">08 / DECISION REGISTER</p>
+            <h2>Akra 실행 우선순위</h2>
+          </div>
+          <p>경쟁 기능 복제가 아니라 Akra의 Codex-first 운영·delivery 강점을 더 안전하게 보이게 하는 순서다.</p>
+        </div>
+        <div class="priority-stack" id="priorityStack"></div>
+        <div class="decision-grid">
+          <article class="decision-list adopt">
+            <p class="eyebrow">ADOPT</p>
+            <h3>가져올 것</h3>
+            <ul>
+              <li>Codex의 pending operation + base thread guard + authoritative ack</li>
+              <li>OpenCode의 row action menu + 좁은 undo dock</li>
+              <li>jcode의 정보 priority / minimum height / 좁은 화면 소멸 규칙</li>
+              <li>Pi·GJC의 virtual terminal, CJK, resize, replay regression</li>
+              <li>Claude fullscreen의 semantic transcript와 visible viewport 분리</li>
+            </ul>
+          </article>
+          <article class="decision-list reject">
+            <p class="eyebrow">REJECT</p>
+            <h3>가져오지 않을 것</h3>
+            <ul>
+              <li>OpenCode식 fire-and-forget mutation과 optimistic composer 변경</li>
+              <li>새 custom TUI framework 또는 React/OpenTUI 전면 migration</li>
+              <li>Pi·GJC식 거대 InteractiveMode coordinator</li>
+              <li>jcode식 local/remote rewind 이중 구현과 pending boolean 보정</li>
+              <li>전체 transcript를 TUI가 별도 authority로 소유하는 구조</li>
+            </ul>
+          </article>
+          <article class="decision-list defer">
+            <p class="eyebrow">DEFER</p>
+            <h3>뒤로 미룰 것</h3>
+            <ul>
+              <li>대화 rewind / code rollback 자체</li>
+              <li>third-party TUI component plugin API</li>
+              <li>custom scrollback 전면 도입</li>
+              <li>desktop/web UI와의 기능 동등성</li>
+              <li>테마 marketplace와 시각 customization</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="report-section" id="sources" data-observe>
+        <div class="section-heading">
+          <div>
+            <p class="kicker">09 / EVIDENCE LEDGER</p>
+            <h2>근거 원장</h2>
+          </div>
+          <p>공식 저장소, 공식 문서, 공식 릴리스 아티팩트만 사용했다. issue는 재현된 현재 버그와 구분한다.</p>
+        </div>
+        <div class="source-tools">
+          <label class="search-field wide">
+            <span aria-hidden="true">⌕</span>
+            <span class="sr-only">근거 검색</span>
+            <input id="sourceSearch" type="search" placeholder="제품, 주제, 버전, 근거 등급 검색" autocomplete="off">
+          </label>
+          <span id="sourceCount" aria-live="polite"></span>
+        </div>
+        <div class="source-list" id="sourceList"></div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div>
+      <strong>AKRA / competitive field report</strong>
+      <span>Evidence pinned 2026-07-16 · Asia/Seoul</span>
+    </div>
+    <p>이 보고서는 기능 로드맵이 아니라 architecture decision input이다. 제품 성능 수치는 직접 재현하지 않았다.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
