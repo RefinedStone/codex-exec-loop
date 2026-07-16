@@ -32,6 +32,13 @@ breadth, tool count, or UI surface count into the product goal.
 
 ## Coverage
 
+Cross-product reports:
+
+- [Coding-Agent TUI Architecture Field Report](reports/tui-architecture/README.md): interactive,
+  official-source comparison of GJC, OpenCode, Codex, Claude Code, Pi, and jcode, including
+  renderer stacks, state authority, mouse undo mechanics, extension surfaces, critical debt, and
+  Akra decisions. Snapshot: 2026-07-16 (Asia/Seoul).
+
 | Product | Snapshot | Status | Primary threat |
 | --- | --- | --- | --- |
 | [Upstream OpenAI Codex](upstream-codex/analysis.md) | v0.144.1, `44918ea10c0f99151c6710411b4322c2f5c96bea` | current as of 2026-07-12 (Asia/Seoul) | runtime authority, typed in-process TUI, protocol truth and release velocity |
@@ -42,7 +49,7 @@ breadth, tool count, or UI surface count into the product goal.
 
 Next research order:
 
-1. Claude Code, Amp, and Pi: terminal interaction, hooks/skills, subagents, and long-horizon control.
+1. Amp: terminal interaction, hooks/skills, subagents, and long-horizon control.
 2. Aider, Cline/Roo, Cursor, and Windsurf: editing, IDE, review, and remote-delivery patterns after
    the initial native/runtime architecture set.
 
