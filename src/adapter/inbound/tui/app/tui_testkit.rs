@@ -550,6 +550,7 @@ pub(super) struct Vt100Backend {
     backend: CrosstermBackend<vt100::Parser>,
     width: u16,
     height: u16,
+    draw_call_count: usize,
 }
 
 impl Vt100Backend {
@@ -565,6 +566,7 @@ impl Vt100Backend {
             )),
             width,
             height,
+            draw_call_count: 0,
         }
     }
     pub(super) fn resize(&mut self, width: u16, height: u16) {
@@ -616,6 +618,13 @@ impl Vt100Backend {
         self.parser_mut().screen_mut().set_scrollback(normal_offset);
         rows.into_iter().collect()
     }
+    pub(super) fn draw_call_count(&self) -> usize {
+        self.draw_call_count
+    }
+    pub(super) fn parser_cursor_position(&self) -> Position {
+        let (row, column) = self.parser().screen().cursor_position();
+        Position::new(column, row)
+    }
     fn rows(&self) -> Vec<String> {
         self.parser().screen().rows(0, self.width).collect()
     }
@@ -639,6 +648,7 @@ impl Backend for Vt100Backend {
     where
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
+        self.draw_call_count = self.draw_call_count.saturating_add(1);
         self.backend.draw(content)
     }
     fn hide_cursor(&mut self) -> io::Result<()> {

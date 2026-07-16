@@ -214,6 +214,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
 ) -> Result<InlineViewportSync, B::Error> {
+    inline_terminal.observe_focus_reacquire(runtime.terminal_focus_reacquire_epoch());
     // Capture render settings before mutating terminal state so one transaction uses
     // a stable compatibility policy snapshot instead of ad hoc env-owned fields.
     let policy = {
@@ -628,6 +629,14 @@ impl InlineTerminalState {
             || self.viewport.last_reconciled_resize_observation_epoch != snapshot.observation_epoch
     }
 
+    fn observe_focus_reacquire(&mut self, focus_reacquire_epoch: u64) {
+        if self.viewport.last_observed_focus_reacquire_epoch == focus_reacquire_epoch {
+            return;
+        }
+        self.viewport.last_observed_focus_reacquire_epoch = focus_reacquire_epoch;
+        self.invalidate_back_buffer();
+    }
+
     fn mark_resize_reconciled(&mut self, snapshot: InlineResizeSnapshot) {
         self.viewport.last_reconciled_resize_event_epoch = snapshot.event_epoch;
         self.viewport.last_reconciled_resize_observation_epoch = snapshot.observation_epoch;
@@ -702,14 +711,15 @@ impl InlineTerminalState {
 }
 
 // A trustworthy back buffer means the visible inline tail exactly matches the
-// last frame we drew. Resize, scrollback insertion, and history-fit changes all
-// invalidate that trust and force a clear before the next draw.
+// last frame we drew. Resize, focus reacquisition, scrollback insertion, and
+// history-fit changes invalidate that trust and force a clear before the next draw.
 struct TerminalViewportState {
     viewport_area: Option<Rect>,
     last_known_screen_size: Option<Size>,
     last_known_cursor_pos: Option<Position>,
     last_reconciled_resize_event_epoch: u64,
     last_reconciled_resize_observation_epoch: u64,
+    last_observed_focus_reacquire_epoch: u64,
     back_buffer_trustworthy: bool,
     insert_mode: HistoryInsertionMode,
 }
@@ -722,6 +732,7 @@ impl Default for TerminalViewportState {
             last_known_cursor_pos: None,
             last_reconciled_resize_event_epoch: 0,
             last_reconciled_resize_observation_epoch: 0,
+            last_observed_focus_reacquire_epoch: 0,
             back_buffer_trustworthy: true,
             insert_mode: HistoryInsertionMode::default(),
         }

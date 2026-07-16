@@ -840,6 +840,208 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
     assert!(cache.should_draw_inline_frame(&app, &viewport, 80, 24));
 }
 
+const FOCUS_REACQUIRE_HISTORY_MARKER: &str = "FOCUS_REACQUIRE_HISTORY_MARKER";
+const FOCUS_REACQUIRE_PROMPT_MARKER: &str = "포커스 복귀 한글";
+
+#[test]
+fn focus_reacquire_repaints_visible_frame_without_replaying_host_scrollback() {
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 100, 30);
+    let app = focus_reacquire_test_app();
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frames = tui_testkit::InlineFrameRecorder::default();
+
+    frames.draw_and_record(
+        "before-focus-loss",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    assert!(runtime.take_redraw_request());
+    let before = frames.frame("before-focus-loss");
+    let expected_screen = before.screen_text.clone();
+    let expected_host_scrollback = before.host_scrollback_text.clone();
+    let expected_cursor = terminal
+        .get_cursor_position()
+        .expect("baseline cursor should be readable");
+    assert!(expected_screen.contains(FOCUS_REACQUIRE_PROMPT_MARKER));
+    assert_eq!(
+        expected_host_scrollback
+            .matches(FOCUS_REACQUIRE_HISTORY_MARKER)
+            .count(),
+        1
+    );
+
+    runtime.handle_terminal_event(Event::FocusLost);
+    let viewport_area = inline_terminal
+        .viewport_area()
+        .expect("initial draw should record the inline viewport");
+    replace_visible_inline_frame(&mut terminal, viewport_area, expected_cursor);
+    assert!(!tui_testkit::screen_text(&terminal).contains(FOCUS_REACQUIRE_PROMPT_MARKER));
+    runtime.handle_terminal_event(Event::FocusGained);
+    assert_eq!(runtime.terminal_focus_reacquire_epoch(), 1);
+    assert!(runtime.take_redraw_request());
+
+    frames.draw_and_record(
+        "after-focus-reacquire",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let after = frames.frame("after-focus-reacquire");
+    assert_eq!(after.screen_text, expected_screen);
+    assert_eq!(after.host_scrollback_text, expected_host_scrollback);
+    assert_eq!(
+        after
+            .host_scrollback_text
+            .matches(FOCUS_REACQUIRE_HISTORY_MARKER)
+            .count(),
+        1
+    );
+    assert_eq!(
+        terminal
+            .get_cursor_position()
+            .expect("restored cursor should be readable"),
+        expected_cursor
+    );
+
+    runtime.handle_terminal_event(Event::FocusGained);
+    assert_eq!(runtime.terminal_focus_reacquire_epoch(), 1);
+    assert!(!runtime.take_redraw_request());
+    assert!(!sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+}
+
+#[test]
+fn vt100_focus_reacquire_repaints_once_across_cjk_resize() {
+    let mut terminal = tui_testkit::inline_history_vt100_terminal(
+        InlineHistoryRenderMode::HostScrollback,
+        100,
+        30,
+    );
+    let mut app = focus_reacquire_test_app();
+    app.history_insert_mode = HistoryInsertionMode::NewlineFallback;
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("initial VT100 frame should draw");
+    assert!(runtime.take_redraw_request());
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 48, 18);
+    runtime.handle_terminal_event(Event::Resize(48, 18));
+    assert!(runtime.take_redraw_request());
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("narrow VT100 frame should draw");
+
+    let expected_screen = tui_testkit::screen_text(&terminal);
+    let expected_host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    let expected_terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+    let expected_cursor = terminal
+        .get_cursor_position()
+        .expect("narrow VT100 cursor should be readable");
+    let draw_calls_before_focus = terminal.backend().inner().draw_call_count();
+    assert!(expected_screen.contains(FOCUS_REACQUIRE_PROMPT_MARKER));
+    assert_eq!(
+        expected_terminal_history
+            .matches(FOCUS_REACQUIRE_HISTORY_MARKER)
+            .count(),
+        1
+    );
+
+    runtime.handle_terminal_event(Event::FocusLost);
+    let viewport_area = inline_terminal
+        .viewport_area()
+        .expect("narrow draw should record the VT100 viewport");
+    replace_visible_inline_frame(&mut terminal, viewport_area, expected_cursor);
+    assert!(!tui_testkit::screen_text(&terminal).contains(FOCUS_REACQUIRE_PROMPT_MARKER));
+    runtime.handle_terminal_event(Event::FocusGained);
+    assert!(runtime.take_redraw_request());
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("focus reacquire should repaint the VT100 frame");
+
+    assert_eq!(
+        terminal.backend().inner().draw_call_count(),
+        draw_calls_before_focus + 1,
+        "one focus transition must produce exactly one terminal draw"
+    );
+    assert_eq!(tui_testkit::screen_text(&terminal), expected_screen);
+    assert_eq!(
+        tui_testkit::inline_vt100_host_scrollback_text(&mut terminal),
+        expected_host_scrollback
+    );
+    assert_eq!(
+        tui_testkit::inline_vt100_scrollback_text(&mut terminal),
+        expected_terminal_history
+    );
+    assert_eq!(
+        terminal.backend().inner().parser_cursor_position(),
+        expected_cursor
+    );
+
+    runtime.handle_terminal_event(Event::FocusGained);
+    assert!(!runtime.take_redraw_request());
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("duplicate focus notification should leave the VT100 frame stable");
+    assert_eq!(
+        terminal.backend().inner().draw_call_count(),
+        draw_calls_before_focus + 1,
+        "duplicate focus notification must not draw another frame"
+    );
+
+    tui_testkit::resize_inline_history_vt100_terminal(&mut terminal, 100, 30);
+    runtime.handle_terminal_event(Event::Resize(100, 30));
+    assert!(runtime.take_redraw_request());
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("restored VT100 frame should draw");
+    let restored_screen = tui_testkit::screen_text(&terminal);
+    let restored_host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    let restored_terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+    assert!(restored_screen.contains(FOCUS_REACQUIRE_PROMPT_MARKER));
+    assert_eq!(
+        restored_terminal_history
+            .matches(FOCUS_REACQUIRE_HISTORY_MARKER)
+            .count(),
+        1
+    );
+    assert_eq!(
+        restored_host_scrollback
+            .matches(FOCUS_REACQUIRE_PROMPT_MARKER)
+            .count(),
+        0
+    );
+}
+
+fn focus_reacquire_test_app() -> NativeTuiApp {
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    append_history_message(&mut app, FOCUS_REACQUIRE_HISTORY_MARKER);
+    for index in 0..40 {
+        append_history_message(&mut app, &format!("focus history filler {index:02}"));
+    }
+    assert!(app.insert_input_text(FOCUS_REACQUIRE_PROMPT_MARKER.to_string()));
+    app
+}
+
+fn replace_visible_inline_frame<B: Backend>(
+    terminal: &mut Terminal<InlineTerminalBackend<B>>,
+    viewport_area: ratatui::layout::Rect,
+    cursor_position: Position,
+) where
+    B::Error: std::fmt::Debug,
+{
+    let backend = terminal.backend_mut().inner_mut();
+    backend
+        .set_cursor_position(viewport_area.as_position())
+        .expect("fixture should position at the live viewport");
+    backend
+        .clear_region(ClearType::AfterCursor)
+        .expect("fixture should simulate a replaced visible frame");
+    backend
+        .set_cursor_position(cursor_position)
+        .expect("fixture should preserve the physical cursor");
+}
+
 #[test]
 fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
     const FIRST_MARKER: &str = "FIRST_AGENT_HANDOFF_MARKER";

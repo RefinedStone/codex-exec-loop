@@ -28,6 +28,7 @@ pub(super) struct ShellRuntime {
     quit_after_redraw: bool,
     frame_scheduler: TuiFrameScheduler,
     terminal_resize_epoch: u64,
+    terminal_focus_reacquire_epoch: u64,
     last_live_activity_pulse: Option<u64>,
     background_drain_limited: bool,
 }
@@ -41,6 +42,7 @@ impl ShellRuntime {
             quit_after_redraw: false,
             frame_scheduler: TuiFrameScheduler::new(now),
             terminal_resize_epoch: 0,
+            terminal_focus_reacquire_epoch: 0,
             last_live_activity_pulse: None,
             background_drain_limited: false,
         }
@@ -57,6 +59,9 @@ impl ShellRuntime {
     }
     pub(super) fn terminal_resize_epoch(&self) -> u64 {
         self.terminal_resize_epoch
+    }
+    pub(super) fn terminal_focus_reacquire_epoch(&self) -> u64 {
+        self.terminal_focus_reacquire_epoch
     }
     #[cfg(test)]
     pub(super) fn take_redraw_request(&mut self) -> bool {
@@ -267,8 +272,21 @@ impl ShellRuntime {
                 self.app.clear_queue_receipt_undo_hit_area();
                 self.request_redraw_at(now);
             }
-            Event::FocusGained => self.frame_scheduler.set_focused(true, now),
-            Event::FocusLost => self.frame_scheduler.set_focused(false, now),
+            Event::FocusGained => {
+                if self.frame_scheduler.set_focused(true, now) {
+                    /*
+                     * Another application may have replaced visible terminal cells
+                     * while Akra was unfocused. Keep this separate from semantic frame
+                     * state so the adapter can rebuild the same frame without replaying
+                     * durable scrollback.
+                     */
+                    self.terminal_focus_reacquire_epoch =
+                        self.terminal_focus_reacquire_epoch.saturating_add(1);
+                }
+            }
+            Event::FocusLost => {
+                self.frame_scheduler.set_focused(false, now);
+            }
         }
     }
 
@@ -511,11 +529,15 @@ impl TuiFrameScheduler {
         };
         default_timeout.min(deadline.saturating_duration_since(now))
     }
-    fn set_focused(&mut self, focused: bool, now: Instant) {
+    fn set_focused(&mut self, focused: bool, now: Instant) -> bool {
+        if self.focused == focused {
+            return false;
+        }
         self.focused = focused;
         if focused {
             self.request_immediate(now);
         }
+        true
     }
     fn coalesce_deadline(&mut self, deadline: Instant) {
         if self
