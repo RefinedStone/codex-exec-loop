@@ -1,5 +1,8 @@
-use super::super::super::{AkraTheme, ConversationState, Line, NativeTuiApp};
+use super::super::super::{AkraTheme, Line};
 use super::{ReviewOverlayView, ReviewsOverlayView};
+use crate::adapter::inbound::tui::app::reviews_overlay_ui::{
+    ReviewsOverlayAuthoritySnapshot, ReviewsOverlayContext, ReviewsOverlayScreenModel,
+};
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
 };
@@ -10,107 +13,142 @@ const REVIEW_ID_DETAIL_LIMIT: usize = 28;
 const REVIEW_SUMMARY_DETAIL_LIMIT: usize = 52;
 const REVIEW_WORKSPACE_DETAIL_LIMIT: usize = 44;
 
-pub(crate) fn build_reviews_overlay_view(app: &NativeTuiApp) -> ReviewsOverlayView {
-    app.build_reviews_overlay_view()
-}
-
-impl NativeTuiApp {
-    pub(in crate::adapter::inbound::tui::app) fn build_reviews_overlay_view(
-        &self,
-    ) -> ReviewsOverlayView {
-        let workspace_directory = self.planning_workspace_directory();
-        let header_lines = vec![
-            AkraTheme::title_line("Review Center", " / shell inspection"),
-            Line::from("Check inbox pressure, active-thread review context, and recent outcomes."),
-        ];
-        let active_thread = match &self.conversation_state {
-            ConversationState::Ready(conversation) if conversation.has_active_thread() => Some((
-                conversation.thread_id.clone(),
-                conversation
-                    .resumed_thread_review_summary()
-                    .map(str::to_string),
-                conversation
-                    .resumed_thread_review_manual_handoff_context()
-                    .map(str::to_string),
-            )),
-            _ => None,
-        };
-        let current_thread_state = match active_thread.as_ref() {
-            Some((thread_id, _, _)) => load_section(
-                self.application
-                    .load_review_center_thread_reviews_for_workspace(
-                        &workspace_directory,
-                        thread_id,
-                    )
-                    .map_err(anyhow::Error::msg)
-                    .map(|reviews| build_thread_review_views(&reviews)),
-            ),
-            None => ReviewSectionState::Loaded {
-                total_count: 0,
-                entries: Vec::new(),
-            },
-        };
-        let inbox_state = load_section(
-            self.application
-                .load_review_center_pending_inbox_for_workspace(&workspace_directory)
-                .map_err(anyhow::Error::msg)
-                .map(|inbox| build_inbox_review_views(&inbox)),
-        );
-        let history_state = load_section(
-            self.application
-                .load_review_center_recent_history_for_workspace(&workspace_directory)
-                .map_err(anyhow::Error::msg)
-                .map(|history| build_history_review_views(&history)),
-        );
-
-        let mut summary_lines = vec![Line::from(format!(
-            "workspace: {}",
-            compact_whitespace_detail(&workspace_directory, REVIEW_WORKSPACE_DETAIL_LIMIT)
-        ))];
-        summary_lines.push(Line::from(format!(
-            "thread: {}  |  inbox: {}  |  history: {}",
-            active_thread
-                .as_ref()
-                .map(|(thread_id, _, _)| compact_whitespace_detail(
-                    thread_id,
-                    REVIEW_ID_DETAIL_LIMIT
-                ))
-                .unwrap_or_else(|| "draft".to_string()),
-            inbox_state.count_label("pending"),
-            history_state.count_label("recent")
-        )));
-        if let Some((_, summary, handoff_context)) = active_thread.as_ref() {
-            if let Some(summary) = summary.as_deref() {
-                summary_lines.push(Line::from(format!(
-                    "active: {}",
-                    compact_whitespace_detail(summary, REVIEW_SUMMARY_DETAIL_LIMIT)
-                )));
-            }
-            if let Some(handoff_context) = handoff_context.as_deref() {
-                summary_lines.push(Line::from(format!(
-                    "handoff: {}",
-                    compact_whitespace_detail(handoff_context, REVIEW_SUMMARY_DETAIL_LIMIT)
-                )));
-            }
+pub(crate) fn build_reviews_overlay_view(
+    screen_model: ReviewsOverlayScreenModel<'_>,
+) -> ReviewsOverlayView {
+    match screen_model {
+        ReviewsOverlayScreenModel::Idle => build_idle_view(),
+        ReviewsOverlayScreenModel::Loading(request) => {
+            let current_thread_state = if request.context.active_thread.is_some() {
+                ReviewSectionState::Pending {
+                    label: "loading",
+                    message: "Loading current-thread reviews...",
+                }
+            } else {
+                ReviewSectionState::Loaded {
+                    total_count: 0,
+                    entries: Vec::new(),
+                }
+            };
+            build_view(
+                &request.context,
+                current_thread_state,
+                ReviewSectionState::Pending {
+                    label: "loading",
+                    message: "Loading pending inbox...",
+                },
+                ReviewSectionState::Pending {
+                    label: "loading",
+                    message: "Loading recent review history...",
+                },
+            )
         }
-
-        ReviewsOverlayView {
-            header_lines,
-            summary_lines,
-            current_thread_reviews: current_thread_state.into_entries(),
-            inbox_reviews: inbox_state.into_entries(),
-            history_reviews: history_state.into_entries(),
-            key_lines: vec![AkraTheme::key_line(
-                "Esc/Ctrl+C: close  |  read-only review status",
-            )],
+        ReviewsOverlayScreenModel::Ready { request, authority } => {
+            build_ready_view(&request.context, authority)
         }
     }
+}
+
+fn build_idle_view() -> ReviewsOverlayView {
+    ReviewsOverlayView {
+        header_lines: header_lines(),
+        summary_lines: vec![
+            Line::from("workspace: unavailable"),
+            Line::from("thread: draft  |  inbox: not loaded  |  history: not loaded"),
+        ],
+        current_thread_reviews: pending_entries("Review data has not been requested."),
+        inbox_reviews: pending_entries("Review data has not been requested."),
+        history_reviews: pending_entries("Review data has not been requested."),
+        key_lines: key_lines(),
+    }
+}
+
+fn build_ready_view(
+    context: &ReviewsOverlayContext,
+    authority: &ReviewsOverlayAuthoritySnapshot,
+) -> ReviewsOverlayView {
+    build_view(
+        context,
+        load_section(&authority.current_thread_reviews, build_thread_review_views),
+        load_section(&authority.pending_inbox, build_inbox_review_views),
+        load_section(&authority.recent_history, build_history_review_views),
+    )
+}
+
+fn build_view(
+    context: &ReviewsOverlayContext,
+    current_thread_state: ReviewSectionState,
+    inbox_state: ReviewSectionState,
+    history_state: ReviewSectionState,
+) -> ReviewsOverlayView {
+    let summary_lines = build_summary_lines(context, &inbox_state, &history_state);
+    ReviewsOverlayView {
+        header_lines: header_lines(),
+        summary_lines,
+        current_thread_reviews: current_thread_state.into_entries(),
+        inbox_reviews: inbox_state.into_entries(),
+        history_reviews: history_state.into_entries(),
+        key_lines: key_lines(),
+    }
+}
+
+fn build_summary_lines(
+    context: &ReviewsOverlayContext,
+    inbox_state: &ReviewSectionState,
+    history_state: &ReviewSectionState,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(format!(
+        "workspace: {}",
+        compact_whitespace_detail(&context.workspace_directory, REVIEW_WORKSPACE_DETAIL_LIMIT)
+    ))];
+    lines.push(Line::from(format!(
+        "thread: {}  |  inbox: {}  |  history: {}",
+        context
+            .active_thread
+            .as_ref()
+            .map(|thread| compact_whitespace_detail(&thread.thread_id, REVIEW_ID_DETAIL_LIMIT))
+            .unwrap_or_else(|| "draft".to_string()),
+        inbox_state.count_label("pending"),
+        history_state.count_label("recent")
+    )));
+    if let Some(active_thread) = context.active_thread.as_ref() {
+        if let Some(summary) = active_thread.review_summary.as_deref() {
+            lines.push(Line::from(format!(
+                "active: {}",
+                compact_whitespace_detail(summary, REVIEW_SUMMARY_DETAIL_LIMIT)
+            )));
+        }
+        if let Some(handoff_context) = active_thread.manual_handoff_context.as_deref() {
+            lines.push(Line::from(format!(
+                "handoff: {}",
+                compact_whitespace_detail(handoff_context, REVIEW_SUMMARY_DETAIL_LIMIT)
+            )));
+        }
+    }
+    lines
+}
+
+fn header_lines() -> Vec<Line<'static>> {
+    vec![
+        AkraTheme::title_line("Review Center", " / shell inspection"),
+        Line::from("Check inbox pressure, active-thread review context, and recent outcomes."),
+    ]
+}
+
+fn key_lines() -> Vec<Line<'static>> {
+    vec![AkraTheme::key_line(
+        "Esc/Ctrl+C: close  |  read-only review status",
+    )]
 }
 
 enum ReviewSectionState {
     Loaded {
         total_count: usize,
         entries: Vec<ReviewOverlayView>,
+    },
+    Pending {
+        label: &'static str,
+        message: &'static str,
     },
     Unavailable(String),
 }
@@ -119,6 +157,7 @@ impl ReviewSectionState {
     fn count_label(&self, noun: &str) -> String {
         match self {
             Self::Loaded { total_count, .. } => format!("{total_count} {noun}"),
+            Self::Pending { label, .. } => (*label).to_string(),
             Self::Unavailable(_) => "unavailable".to_string(),
         }
     }
@@ -126,6 +165,7 @@ impl ReviewSectionState {
     fn into_entries(self) -> Vec<ReviewOverlayView> {
         match self {
             Self::Loaded { entries, .. } => entries,
+            Self::Pending { message, .. } => pending_entries(message),
             Self::Unavailable(message) => vec![ReviewOverlayView {
                 summary_line: Line::from("Review data unavailable"),
                 detail_lines: vec![Line::from(format!(
@@ -137,13 +177,26 @@ impl ReviewSectionState {
     }
 }
 
-fn load_section(result: anyhow::Result<(usize, Vec<ReviewOverlayView>)>) -> ReviewSectionState {
+fn pending_entries(message: &str) -> Vec<ReviewOverlayView> {
+    vec![ReviewOverlayView {
+        summary_line: Line::from(message.to_string()),
+        detail_lines: Vec::new(),
+    }]
+}
+
+fn load_section<T>(
+    result: &Result<Vec<T>, String>,
+    build_entries: fn(&[T]) -> (usize, Vec<ReviewOverlayView>),
+) -> ReviewSectionState {
     match result {
-        Ok((total_count, entries)) => ReviewSectionState::Loaded {
-            total_count,
-            entries,
-        },
-        Err(error) => ReviewSectionState::Unavailable(error.to_string()),
+        Ok(items) => {
+            let (total_count, entries) = build_entries(items);
+            ReviewSectionState::Loaded {
+                total_count,
+                entries,
+            }
+        }
+        Err(error) => ReviewSectionState::Unavailable(error.clone()),
     }
 }
 

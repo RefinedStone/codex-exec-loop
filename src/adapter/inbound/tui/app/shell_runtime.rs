@@ -172,6 +172,13 @@ impl ShellRuntime {
                     self.app
                         .apply_session_rename_completion(request_id, request, result);
                 }
+                BackgroundMessage::ReviewsOverlayLoaded { request, authority } => {
+                    if self.app.apply_reviews_overlay_loaded(request, authority)
+                        == super::reviews_overlay_ui::ReviewsOverlayLoadCompletion::ReloadRequired
+                    {
+                        self.app.start_reviews_overlay_authority_load();
+                    }
+                }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
                 }

@@ -35,6 +35,7 @@ use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
+use super::reviews_overlay_ui::{ReviewsOverlayAuthoritySnapshot, ReviewsOverlayLoadRequest};
 use super::{
     AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
     AutoFollowOverlayUiState, ConversationInputEvent, ConversationIntentEffect,
@@ -82,6 +83,10 @@ pub(super) enum BackgroundMessage {
         request_id: u64,
         request: SessionRenameRequest,
         result: Result<(), String>,
+    },
+    ReviewsOverlayLoaded {
+        request: ReviewsOverlayLoadRequest,
+        authority: ReviewsOverlayAuthoritySnapshot,
     },
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
@@ -1125,32 +1130,11 @@ impl NativeTuiApplicationHandle {
         self.conversations
             .resolve_approval_request(approval_id, decision)
     }
-
-
-    pub(super) fn load_review_center_thread_reviews_for_workspace(
+    pub(super) fn load_reviews_overlay_authority(
         &self,
-        workspace_dir: &str,
-        thread_id: &str,
-    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection>, String>{
-        self.conversations
-            .load_review_center_thread_reviews_for_workspace(workspace_dir, thread_id)
-    }
-
-
-    pub(super) fn load_review_center_pending_inbox_for_workspace(
-        &self,
-        workspace_dir: &str,
-    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterInboxItem>, String>{
-        self.conversations
-            .load_review_center_pending_inbox_for_workspace(workspace_dir)
-    }
-
-    pub(super) fn load_review_center_recent_history_for_workspace(
-        &self,
-        workspace_dir: &str,
-    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterHistoryEntry>, String>{
-        self.conversations
-            .load_review_center_recent_history_for_workspace(workspace_dir)
+        request: &ReviewsOverlayLoadRequest,
+    ) -> ReviewsOverlayAuthoritySnapshot {
+        self.conversations.load_reviews_overlay_authority(request)
     }
 
     pub(super) fn persist_review_center_approval_review_for_workspace(
@@ -1219,35 +1203,32 @@ impl NativeTuiConversationHandle {
             .resolve_approval_request(approval_id, decision)
             .map_err(|error| error.to_string())
     }
-
-
-    pub(super) fn load_review_center_thread_reviews_for_workspace(
+    fn load_reviews_overlay_authority(
         &self,
-        workspace_dir: &str,
-        thread_id: &str,
-    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection>, String>{
-        self.service
-            .load_review_center_thread_reviews_for_workspace(workspace_dir, thread_id)
-            .map_err(|error| error.to_string())
-    }
-
-
-    pub(super) fn load_review_center_pending_inbox_for_workspace(
-        &self,
-        workspace_dir: &str,
-    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterInboxItem>, String>{
-        self.service
-            .load_review_center_pending_inbox_for_workspace(workspace_dir)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(super) fn load_review_center_recent_history_for_workspace(
-        &self,
-        workspace_dir: &str,
-    ) -> Result<Vec<crate::application::port::outbound::review_center_repository_port::ReviewCenterHistoryEntry>, String>{
-        self.service
-            .load_review_center_recent_history_for_workspace(workspace_dir)
-            .map_err(|error| error.to_string())
+        request: &ReviewsOverlayLoadRequest,
+    ) -> ReviewsOverlayAuthoritySnapshot {
+        let workspace_directory = request.context.workspace_directory.as_str();
+        let current_thread_reviews = match request.context.active_thread.as_ref() {
+            Some(active_thread) => self
+                .service
+                .load_review_center_thread_reviews_for_workspace(
+                    workspace_directory,
+                    &active_thread.thread_id,
+                )
+                .map_err(|error| error.to_string()),
+            None => Ok(Vec::new()),
+        };
+        ReviewsOverlayAuthoritySnapshot {
+            current_thread_reviews,
+            pending_inbox: self
+                .service
+                .load_review_center_pending_inbox_for_workspace(workspace_directory)
+                .map_err(|error| error.to_string()),
+            recent_history: self
+                .service
+                .load_review_center_recent_history_for_workspace(workspace_directory)
+                .map_err(|error| error.to_string()),
+        }
     }
 
     pub(super) fn persist_review_center_approval_review_for_workspace(
@@ -1371,6 +1352,7 @@ impl NativeTuiApp {
                 super::ProgressiveActivityOverlayUiState::default(),
             help_scroll_offset: 0,
             queue_overlay_ui_state: super::queue_overlay_ui::QueueOverlayUiState::default(),
+            reviews_overlay_ui_state: super::reviews_overlay_ui::ReviewsOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,
             next_manual_prompt_preparation_request_id: 0,
@@ -1436,8 +1418,13 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_shell_chrome(&mut self, event: ShellChromeEvent) {
+        let previous_overlay = self.shell_overlay;
         let reduction = reduce_shell_chrome(self.take_shell_chrome_state(), event);
         self.apply_shell_chrome_state(reduction.state);
+        if previous_overlay == ShellOverlay::Reviews && self.shell_overlay != ShellOverlay::Reviews
+        {
+            self.reviews_overlay_ui_state.reset();
+        }
         for effect in reduction.effects {
             self.execute_shell_chrome_effect(effect);
         }
