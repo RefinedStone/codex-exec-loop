@@ -21,7 +21,7 @@ Akra baseline: `12bad93d` · Grok Build: `b189869b` · Audit: 2026-07-16
 | Host policy hooks | PreToolUse + allow/deny | fail-closed approvals | **Adopt** | Hooks at planning mutation / delivery gates; audit log |
 | PTY e2e density | Large pty_e2e suite | terminal captures + matrix | **Adopt** | Scenario IDs for resize/paste/flood/reattach |
 | Hunk attribution | agent vs external tracker | changed-file bounds | **Eval** | Attribution metadata in cleanliness/lease checks |
-| Fast worktree | CoW/BTRFS pool | git worktree pool | **Eval** | Latency bench on large repo; no policy change |
+| Fast worktree | CoW/BTRFS pool | git worktree pool | **Eval** | Latency bench on large repo; no policy change. Deep dive: [fast-worktree.md](./fast-worktree.md) / [fast-worktree.html](../reports/grok-build/fast-worktree.html) |
 | Background monitor/loop | tool + /loop | review poller services | **Eval** | Operator-facing monitor only if maps to application service |
 | Tool taxonomy meta | ToolKind envelope | progressive activity kinds | **Eval** | Projection vocabulary only |
 | In-process tools/model | Full tool runtime | app-server tools | **Reject** | — |

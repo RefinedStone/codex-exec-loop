@@ -41,6 +41,8 @@ Cross-product reports:
 - [Grok Build Open-Source Competitive Report](reports/grok-build/index.html): interactive HTML
   audit of SpaceXAI `xai-org/grok-build` — features, differentiators, and Akra adopt/reject matrix.
   Snapshot: 2026-07-16 (Asia/Seoul).
+- [Grok Build Fast Worktree Deep Dive](reports/grok-build/fast-worktree.html): CoW / BTRFS /
+  overlay / pool-sync technical deep dive for `xai-fast-worktree`. Snapshot: 2026-07-16.
 
 | Product | Snapshot | Status | Primary threat |
 | --- | --- | --- | --- |
