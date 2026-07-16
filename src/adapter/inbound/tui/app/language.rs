@@ -10,6 +10,7 @@ use super::planning_overlay_shell_command::parse_planning_overlay_shell_argument
 use super::planning_reset_shell_command::parse_planning_reset_shell_argument;
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
 use super::progressive_activity_overlay_ui::parse_progressive_activity_detail_kind;
+use super::queue_overlay_ui::{QueueMutationAuthorityRefreshError, QueueMutationKind};
 use super::view_selection_overlay_ui::ConversationViewMode;
 use super::{InlineShellCommand, ShellActionAvailability};
 
@@ -125,6 +126,318 @@ impl TuiLanguage {
         match self {
             Self::English => "queue registration is already being prepared; steer was not opened",
             Self::Korean => "큐 등록을 준비 중이므로 현재 턴 전달을 열지 않았습니다.",
+        }
+    }
+
+    pub(super) fn queue_mutation_pending_feedback(self, operation_id: u64) -> String {
+        match self {
+            Self::English => {
+                format!("Queue change op-{operation_id} is waiting for authority acknowledgement.")
+            }
+            Self::Korean => format!("큐 변경 op-{operation_id}의 권한 확인을 기다리는 중입니다."),
+        }
+    }
+
+    pub(super) const fn queue_mutation_refresh_required_feedback(self) -> &'static str {
+        match self {
+            Self::English => {
+                "Queue authority needs refresh; close and reopen the queue before changing it."
+            }
+            Self::Korean => "큐 권한을 새로 확인해야 합니다. 큐를 닫았다가 다시 연 뒤 변경하세요.",
+        }
+    }
+
+    pub(super) fn queue_mutation_authority_refresh_error(
+        self,
+        error: &QueueMutationAuthorityRefreshError,
+    ) -> String {
+        match (self, error) {
+            (Self::English, QueueMutationAuthorityRefreshError::AuthorityUnavailable(detail)) => {
+                format!("Queue authority is unavailable: {detail}")
+            }
+            (Self::Korean, QueueMutationAuthorityRefreshError::AuthorityUnavailable(detail)) => {
+                format!("큐 권한을 사용할 수 없습니다: {detail}")
+            }
+            (
+                Self::English,
+                QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                    projection_revision,
+                    authority_revision,
+                },
+            ) => format!(
+                "Queue authority kept changing while refreshing (projection revision {projection_revision}, authority revision {authority_revision}); reopen the queue."
+            ),
+            (
+                Self::Korean,
+                QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                    projection_revision,
+                    authority_revision,
+                },
+            ) => format!(
+                "새로고침 중 큐 권한이 계속 변경되었습니다 (projection 리비전 {projection_revision}, 권한 리비전 {authority_revision}). 큐를 다시 여세요."
+            ),
+            (Self::English, QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable) => {
+                "Queue runtime projection is unavailable after the authority change; reopen the queue."
+                    .to_string()
+            }
+            (Self::Korean, QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable) => {
+                "권한 변경 후 큐 runtime projection을 사용할 수 없습니다. 큐를 다시 여세요."
+                    .to_string()
+            }
+        }
+    }
+
+    pub(super) const fn queue_mutation_selected_item_changed_feedback(self) -> &'static str {
+        match self {
+            Self::English => "The selected queue item changed; reopen the queue to refresh it.",
+            Self::Korean => "선택한 큐 항목이 변경되었습니다. 큐를 다시 열어 새로 확인하세요.",
+        }
+    }
+
+    pub(super) fn queue_mutation_committed_refresh_failed(
+        self,
+        operation_id: u64,
+        refresh_error: &str,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "Queue change op-{operation_id} committed, but authority refresh failed: {refresh_error}"
+            ),
+            Self::Korean => {
+                format!("큐 변경 op-{operation_id} 커밋 완료 / 권한 새로고침 실패: {refresh_error}")
+            }
+        }
+    }
+
+    pub(super) fn queue_mutation_unresolved_refresh_failed(
+        self,
+        operation_id: u64,
+        mutation_error: &str,
+        refresh_error: &str,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "Queue change op-{operation_id} is unresolved: {mutation_error}; authority refresh failed: {refresh_error}"
+            ),
+            Self::Korean => format!(
+                "큐 변경 op-{operation_id} 미확정: {mutation_error}; 권한 새로고침 실패: {refresh_error}"
+            ),
+        }
+    }
+
+    pub(super) fn queue_mutation_reconcile_failed(self, operation_id: u64, error: &str) -> String {
+        match self {
+            Self::English => format!(
+                "Queue change op-{operation_id} could not reconcile its authority acknowledgement: {error}"
+            ),
+            Self::Korean => {
+                format!("큐 변경 op-{operation_id}의 권한 확인 결과를 반영하지 못했습니다: {error}")
+            }
+        }
+    }
+
+    pub(super) const fn queue_mutation_projection_revision_missing(self) -> &'static str {
+        match self {
+            Self::English => "the refreshed projection has no planning revision",
+            Self::Korean => "새로고침한 projection에 계획 리비전이 없습니다",
+        }
+    }
+
+    pub(super) fn queue_mutation_completion_older_than_planning(
+        self,
+        planning_revision: i64,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "completion revision {planning_revision} is older than the visible planning revision"
+            ),
+            Self::Korean => format!(
+                "완료 리비전 {planning_revision}이 현재 표시된 계획 리비전보다 오래되었습니다"
+            ),
+        }
+    }
+
+    pub(super) fn queue_mutation_completion_older_than_receipt(
+        self,
+        planning_revision: i64,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "completion revision {planning_revision} is older than the visible queue receipt"
+            ),
+            Self::Korean => format!(
+                "완료 리비전 {planning_revision}이 현재 표시된 큐 receipt보다 오래되었습니다"
+            ),
+        }
+    }
+
+    pub(super) fn queue_mutation_projection_authority_revision_mismatch(
+        self,
+        projection_revision: i64,
+        authority_revision: i64,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "projection revision {projection_revision} does not match authority revision {authority_revision}"
+            ),
+            Self::Korean => format!(
+                "projection 리비전 {projection_revision}과 권한 리비전 {authority_revision}이 일치하지 않습니다"
+            ),
+        }
+    }
+
+    pub(super) const fn queue_mutation_rows_mismatch_authority(self) -> &'static str {
+        match self {
+            Self::English => "the refreshed queue rows do not match task authority",
+            Self::Korean => "새로고침한 큐 행이 작업 권한과 일치하지 않습니다",
+        }
+    }
+
+    pub(super) const fn queue_mutation_success_label(
+        self,
+        kind: QueueMutationKind,
+    ) -> &'static str {
+        match (self, kind) {
+            (Self::English, QueueMutationKind::RemoveSelected) => "Removed selected queue item",
+            (Self::English, QueueMutationKind::UndoLatestRegistration) => {
+                "Undid latest queue registration"
+            }
+            (Self::Korean, QueueMutationKind::RemoveSelected) => "선택한 큐 항목 제거",
+            (Self::Korean, QueueMutationKind::UndoLatestRegistration) => "최근 큐 등록 되돌리기",
+        }
+    }
+
+    pub(super) fn queue_mutation_acknowledged(
+        self,
+        operation_id: u64,
+        success_label: &str,
+        task_count: usize,
+        planning_revision: i64,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "op-{operation_id} acknowledged / {success_label}: {task_count} task(s) marked Cancelled / revision {planning_revision}"
+            ),
+            Self::Korean => format!(
+                "op-{operation_id} 확인 완료 / {success_label}: 작업 {task_count}개를 취소로 변경 / 리비전 {planning_revision}"
+            ),
+        }
+    }
+
+    pub(super) fn queue_mutation_acknowledged_without_confirmation(
+        self,
+        operation_id: u64,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "Queue change op-{operation_id} was acknowledged, but the refreshed authority did not confirm every cancellation; review the queue."
+            ),
+            Self::Korean => format!(
+                "큐 변경 op-{operation_id} 확인 완료 / 새 권한에서 모든 취소를 확인할 수 없습니다. 큐를 검토하세요."
+            ),
+        }
+    }
+
+    pub(super) fn queue_mutation_authority_confirmed_after_error(
+        self,
+        operation_id: u64,
+        error: &str,
+    ) -> String {
+        match self {
+            Self::English => format!(
+                "op-{operation_id} authority confirmed cancellation after the worker reported an error: {error}"
+            ),
+            Self::Korean => format!("op-{operation_id} 작업 오류 후 권한에서 취소 확인: {error}"),
+        }
+    }
+
+    pub(super) fn queue_mutation_rejected(self, operation_id: u64, error: &str) -> String {
+        match self {
+            Self::English => {
+                format!("op-{operation_id} rejected / Queue change rejected: {error}")
+            }
+            Self::Korean => format!("op-{operation_id} 거부 / 큐 변경 거부: {error}"),
+        }
+    }
+
+    pub(super) fn queue_mutation_pending_summary(self, operation_id: u64) -> String {
+        match self {
+            Self::English => {
+                format!("op-{operation_id} | authority acknowledgement pending")
+            }
+            Self::Korean => format!("op-{operation_id} | 권한 확인 대기 중"),
+        }
+    }
+
+    pub(super) const fn queue_mutation_refresh_required_summary(self) -> &'static str {
+        match self {
+            Self::English => "queue authority refresh required",
+            Self::Korean => "큐 권한 새로고침 필요",
+        }
+    }
+
+    pub(super) fn queue_mutation_pending_disabled_key_line(self, operation_id: u64) -> String {
+        match self {
+            Self::English => format!("op-{operation_id} pending: remove/undo disabled"),
+            Self::Korean => format!("op-{operation_id} 대기 중: 제거/되돌리기 비활성화"),
+        }
+    }
+
+    pub(super) const fn queue_mutation_refresh_disabled_key_line(self) -> &'static str {
+        match self {
+            Self::English => "remove/undo disabled: close and reopen to refresh",
+            Self::Korean => "제거/되돌리기 비활성화: 닫았다가 다시 열어 새로고침",
+        }
+    }
+
+    pub(super) const fn queue_overlay_select_key_line(self) -> &'static str {
+        match self {
+            Self::English => "Up/Down, j/k: select",
+            Self::Korean => "Up/Down, j/k: 선택",
+        }
+    }
+
+    pub(super) const fn queue_overlay_remove_key_line(self, undo_available: bool) -> &'static str {
+        match (self, undo_available) {
+            (Self::English, false) => "x/Delete: remove",
+            (Self::English, true) => "x/Delete: remove | u: undo added",
+            (Self::Korean, false) => "x/Delete: 제거",
+            (Self::Korean, true) => "x/Delete: 제거 | u: 등록 되돌리기",
+        }
+    }
+
+    pub(super) const fn queue_overlay_close_key_line(self) -> &'static str {
+        match self {
+            Self::English => "Esc/Ctrl+C: close",
+            Self::Korean => "Esc/Ctrl+C: 닫기",
+        }
+    }
+
+    pub(super) fn queue_mutation_tail_pending_label(self, operation_id: u64) -> String {
+        match self {
+            Self::English => format!("queue: op-{operation_id}"),
+            Self::Korean => format!("큐: op-{operation_id}"),
+        }
+    }
+
+    pub(super) const fn queue_mutation_tail_pending_detail(self) -> &'static str {
+        match self {
+            Self::English => "  |  authority acknowledgement pending",
+            Self::Korean => "  |  권한 확인 대기 중",
+        }
+    }
+
+    pub(super) const fn queue_mutation_tail_refresh_label(self) -> &'static str {
+        match self {
+            Self::English => "queue: refresh required",
+            Self::Korean => "큐: 새로고침 필요",
+        }
+    }
+
+    pub(super) const fn queue_mutation_tail_refresh_detail(self) -> &'static str {
+        match self {
+            Self::English => "  |  open :queue before retrying",
+            Self::Korean => "  |  다시 시도하기 전에 :queue 열기",
         }
     }
 
@@ -1099,8 +1412,9 @@ mod tests {
     use crate::domain::recent_sessions::SessionCatalogTier;
 
     use super::{
-        InlineShellCommand, LanguageSelectionOverlayUiState, ShellActionAvailability,
-        TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage, language_option_index,
+        InlineShellCommand, LanguageSelectionOverlayUiState, QueueMutationAuthorityRefreshError,
+        QueueMutationKind, ShellActionAvailability, TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage,
+        language_option_index,
     };
 
     #[test]
@@ -1123,6 +1437,62 @@ mod tests {
         assert_eq!(
             LanguageSelectionOverlayUiState::default().selected_language(),
             TuiLanguage::English
+        );
+    }
+
+    #[test]
+    fn queue_mutation_copy_is_localized_for_feedback_popup_and_tail() {
+        assert_eq!(
+            TuiLanguage::English.queue_mutation_pending_feedback(7),
+            "Queue change op-7 is waiting for authority acknowledgement."
+        );
+        assert_eq!(
+            TuiLanguage::Korean.queue_mutation_pending_feedback(7),
+            "큐 변경 op-7의 권한 확인을 기다리는 중입니다."
+        );
+        assert!(
+            TuiLanguage::Korean
+                .queue_mutation_unresolved_refresh_failed(7, "변이 실패", "조회 실패")
+                .contains("미확정")
+        );
+        assert!(
+            TuiLanguage::Korean
+                .queue_mutation_reconcile_failed(7, "리비전 불일치")
+                .contains("반영하지 못했습니다")
+        );
+        assert_eq!(
+            TuiLanguage::Korean.queue_mutation_success_label(QueueMutationKind::RemoveSelected),
+            "선택한 큐 항목 제거"
+        );
+        assert_eq!(
+            TuiLanguage::English
+                .queue_mutation_success_label(QueueMutationKind::UndoLatestRegistration),
+            "Undid latest queue registration"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.queue_mutation_acknowledged(7, "최근 큐 등록 되돌리기", 2, 11,),
+            "op-7 확인 완료 / 최근 큐 등록 되돌리기: 작업 2개를 취소로 변경 / 리비전 11"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.queue_mutation_pending_summary(7),
+            "op-7 | 권한 확인 대기 중"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.queue_mutation_refresh_required_summary(),
+            "큐 권한 새로고침 필요"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.queue_mutation_tail_refresh_detail(),
+            "  |  다시 시도하기 전에 :queue 열기"
+        );
+        assert_eq!(
+            TuiLanguage::Korean.queue_mutation_authority_refresh_error(
+                &QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                    projection_revision: 8,
+                    authority_revision: 9,
+                }
+            ),
+            "새로고침 중 큐 권한이 계속 변경되었습니다 (projection 리비전 8, 권한 리비전 9). 큐를 다시 여세요."
         );
     }
 

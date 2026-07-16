@@ -1727,9 +1727,10 @@ fn is_tui_test_entrypoint_source(source: &str) -> bool {
 }
 
 fn production_source_before_inline_tests(source: &str) -> String {
-    let test_module_index = source
-        .find("#[cfg(test)]\nmod tests")
-        .or_else(|| source.find("#[cfg(test)]\r\nmod tests"))
+    let test_module_index = ["#[cfg(test)]\nmod ", "#[cfg(test)]\r\nmod "]
+        .into_iter()
+        .filter_map(|marker| source.find(marker))
+        .min()
         .unwrap_or(source.len());
     source[..test_module_index].to_string()
 }

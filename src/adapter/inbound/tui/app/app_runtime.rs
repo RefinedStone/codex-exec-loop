@@ -36,7 +36,8 @@ use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
 use super::queue_overlay_ui::{
-    QueueMutationAuthoritySnapshot, QueueMutationOperation, QueueMutationWorkerResult,
+    QueueMutationAuthorityRefreshError, QueueMutationAuthoritySnapshot, QueueMutationOperation,
+    QueueMutationWorkerResult,
 };
 use super::reviews_overlay_ui::{ReviewsOverlayAuthoritySnapshot, ReviewsOverlayLoadRequest};
 use super::{
@@ -1289,7 +1290,7 @@ impl NativeTuiPlanningHandle {
     fn load_queue_mutation_authority(
         &self,
         workspace_directory: &str,
-    ) -> Result<QueueMutationAuthoritySnapshot, String> {
+    ) -> Result<QueueMutationAuthoritySnapshot, QueueMutationAuthorityRefreshError> {
         let mut last_revision_pair = None;
         for _ in 0..2 {
             let runtime_projection = self
@@ -1301,7 +1302,9 @@ impl NativeTuiPlanningHandle {
             let queue_authority = self
                 .queue()
                 .load_authority_snapshot(workspace_directory)
-                .map_err(|error| format!("Queue authority is unavailable: {error}"))?;
+                .map_err(|error| {
+                    QueueMutationAuthorityRefreshError::AuthorityUnavailable(error.to_string())
+                })?;
             if queue_authority.planning_revision == projection_revision {
                 return Ok(QueueMutationAuthoritySnapshot {
                     runtime_projection,
@@ -1311,13 +1314,13 @@ impl NativeTuiPlanningHandle {
             last_revision_pair = Some((projection_revision, queue_authority.planning_revision));
         }
         match last_revision_pair {
-            Some((projection_revision, authority_revision)) => Err(format!(
-                "Queue authority kept changing while refreshing (projection revision {projection_revision}, authority revision {authority_revision}); reopen the queue."
-            )),
-            None => Err(
-                "Queue runtime projection is unavailable after the authority change; reopen the queue."
-                    .to_string(),
-            ),
+            Some((projection_revision, authority_revision)) => {
+                Err(QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                    projection_revision,
+                    authority_revision,
+                })
+            }
+            None => Err(QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable),
         }
     }
 
