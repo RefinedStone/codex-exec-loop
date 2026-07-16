@@ -55,5 +55,7 @@ explicit gate.
 
 - [artifacts/pr-1926-physical-resize/](artifacts/pr-1926-physical-resize/) contains reviewed
   primitive-sensitive evidence for that exact candidate, not a general release pass.
+- [artifacts/pr-1951-focus-reacquire/](artifacts/pr-1951-focus-reacquire/) contains supplemental
+  macOS tmux evidence for one focus-loss/clobber/reacquire scenario; it is not an E1-E4 approval row.
 - [../../artifacts/terminal-bridge-readiness-2026-04-23/](../../artifacts/terminal-bridge-readiness-2026-04-23/)
   is historical feasibility evidence and cannot satisfy a current required row.
