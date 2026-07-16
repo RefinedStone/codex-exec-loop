@@ -68,6 +68,20 @@ The private SQLite store is authoritative. Planning workspace files are operator
 prompts, staged drafts, exports, and recovery evidence. Accepted changes use revision-aware
 validation and mutation; hidden worker output never writes SQL or protected planning files directly.
 
+TUI queue remove and undo intents open one overlay-independent pending gate. Its adapter correlation
+envelope carries an operation ID, workspace and active-thread identity, plus the cancellation
+request's base planning revision and exact task status/update tokens. The controller does not mutate
+the visible projection optimistically or call the cancellation service on the terminal input path.
+Background work submits the request and reloads runtime and queue authority after both success and
+failure; only the exact pending operation in the same workspace/thread context may reconcile that
+authority into the projection. Closing the Queue overlay resets its local selection and feedback but
+does not discard the pending operation, and duplicate destructive intents remain blocked until its
+completion is consumed.
+
+This is TUI settlement correlation, not store-wide idempotency. Operation IDs are not persisted,
+do not yet carry repository incarnation, and do not promise exactly-once execution across process
+restart; durable revision and task-token validation remains the application/store boundary's guard.
+
 `AKRA_HOME` must resolve to a trusted absolute root. SQLite database and sidecar files are private,
 regular, single-link files. Repository identity is bound to a private incarnation marker so a
 reused checkout path cannot silently adopt an earlier repository's authority.

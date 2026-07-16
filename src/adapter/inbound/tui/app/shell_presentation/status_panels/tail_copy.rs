@@ -151,8 +151,8 @@ pub(super) fn build_inline_tail_lines_with_context(
             if let Some(completion_line) = build_completion_alert_line(conversation) {
                 lines.push(completion_line);
             }
-            if let Some(queue_undo_action_line) = build_queue_receipt_undo_action_line(app) {
-                lines.push(queue_undo_action_line);
+            if let Some(queue_mutation_line) = build_queue_mutation_line(app) {
+                lines.push(queue_mutation_line);
             }
             if let Some(runtime_notice_summary) = runtime_notice_summary {
                 let mut runtime_line = format!("runtime: {runtime_notice_summary}");
@@ -266,6 +266,24 @@ fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<
     }
 
     Line::from(parts.join("  |  "))
+}
+
+fn build_queue_mutation_line(app: &NativeTuiApp) -> Option<Line<'static>> {
+    if let Some(operation_id) = app.pending_queue_mutation_operation_id() {
+        // This status intentionally omits the undo action label so layout cannot bind a stale mouse target.
+        return Some(Line::from(vec![
+            Span::styled(format!("queue: op-{operation_id}"), AkraTheme::warning()),
+            Span::raw("  |  authority acknowledgement pending"),
+        ]));
+    }
+    if app.queue_mutation_requires_authority_refresh() {
+        return Some(Line::from(vec![
+            Span::styled("queue: refresh required", AkraTheme::warning()),
+            Span::raw("  |  open :queue before retrying"),
+        ]));
+    }
+
+    build_queue_receipt_undo_action_line(app)
 }
 
 fn build_queue_receipt_undo_action_line(app: &NativeTuiApp) -> Option<Line<'static>> {
@@ -765,12 +783,18 @@ mod coverage_tests {
     use super::*;
     use crate::adapter::inbound::tui::app::conversation_model::RecordedAutoFollowActivity;
     use crate::adapter::inbound::tui::app::language::TuiLanguage;
+    use crate::adapter::inbound::tui::app::queue_overlay_ui::QueueMutationKind;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
         AutoFollowRuntimePhase, ConversationState, InlineShellCommand,
     };
+    use crate::application::service::planning::PlanningQueueCancellationRequest;
     use crate::core::app::StartupReadySnapshot;
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+    use crate::domain::planning::{
+        PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
+        TaskStatus,
+    };
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     use std::time::Instant;
@@ -1230,6 +1254,51 @@ mod coverage_tests {
         assert!(!tail.contains("warn: none"));
         assert!(!tail.contains("Enter send"));
         assert!(!tail.contains("Enter when ready"));
+    }
+
+    #[test]
+    fn pending_queue_mutation_replaces_undo_action_with_non_clickable_correlation_status() {
+        let mut app = test_native_tui_app();
+        app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
+        let receipt = PlanningQueueMutationReceipt {
+            completed_turn_id: "turn-queue-op".to_string(),
+            planning_revision: 9,
+            entries: vec![PlanningQueueMutationReceiptEntry {
+                task_id: "queued-task".to_string(),
+                task_title: "Undo after authority acknowledgement".to_string(),
+                mutation_kind: PlanningQueueMutationKind::Created,
+                before_status: None,
+                after_status: TaskStatus::Ready,
+                after_updated_at: "2026-07-16T00:00:00Z".to_string(),
+                unchanged_since_mutation: true,
+            }],
+        };
+        let conversation = ready_conversation_mut(&mut app);
+        conversation.thread_id = "thread-queue-op".to_string();
+        conversation.latest_queue_mutation_receipt = Some(receipt.clone());
+        let context = app.current_queue_mutation_context();
+        app.queue_mutation_ui_state
+            .begin(
+                context.clone(),
+                QueueMutationKind::UndoLatestRegistration,
+                PlanningQueueCancellationRequest {
+                    workspace_directory: context.workspace_directory,
+                    expected_planning_revision: 9,
+                    targets: Vec::new(),
+                },
+                Some(receipt),
+            )
+            .expect("queue mutation should enter the pending gate");
+
+        let tail_view = super::super::live_status_layout::build_inline_tail_view(&app, 96);
+        let tail = rendered(tail_view.lines);
+
+        assert!(
+            tail.contains("queue: op-1  |  authority acknowledgement pending"),
+            "{tail}"
+        );
+        assert!(!tail.contains(QUEUE_RECEIPT_UNDO_ACTION_LABEL), "{tail}");
+        assert!(tail_view.queue_receipt_undo_hit_area.is_none());
     }
 
     #[test]

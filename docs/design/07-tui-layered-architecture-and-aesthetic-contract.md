@@ -86,6 +86,14 @@ the fixed Akra theme.
 - Async Review Center results may replace the current screen model only when the request identifier,
   workspace, and active-thread identity (thread ID) still match; workspace or thread identity drift
   must trigger a correlated reload.
+- Queue remove and undo actions must expose their pending operation ID and suppress duplicate
+  destructive keyboard and mouse actions until a matching background completion is consumed.
+- The queue mutation gate must outlive Queue overlay chrome. Closing the overlay may reset local
+  selection, feedback, and hit areas, but must not discard an in-flight mutation or apply an
+  uncorrelated completion.
+- Queue rows and undo receipts must not change optimistically. Both successful and failed mutation
+  results require an authoritative refresh before the exact operation and workspace/thread context
+  may settle visible state.
 - Selected rows must use `AkraTheme::selected()` and `AkraTheme::list_highlight_symbol()` or the
   option-line helpers that wrap them.
 - Key footers must use `AkraTheme::key_line`.

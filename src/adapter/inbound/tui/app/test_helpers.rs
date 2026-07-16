@@ -17,7 +17,9 @@ use crate::application::port::outbound::parallel_agent_worker_port::{
     NoopParallelAgentWorkerPort, ParallelAgentWorkerPort,
 };
 use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
-use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+use crate::application::port::outbound::planning_task_repository_port::{
+    NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
+};
 use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
 use crate::application::port::outbound::review_center_repository_port::ReviewCenterRepositoryPort;
@@ -147,10 +149,20 @@ pub(crate) fn sample_proposal_only_planning_runtime_projection(
 pub(crate) fn test_planning_services(
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
 ) -> PlanningServices {
+    test_planning_services_with_task_repository(
+        planning_workspace_port,
+        Arc::new(NoopPlanningTaskRepositoryPort),
+    )
+}
+
+pub(crate) fn test_planning_services_with_task_repository(
+    planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+    planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort>,
+) -> PlanningServices {
     PlanningServices::from_ports(
         planning_workspace_port,
         Arc::new(NoopPlanningAuthorityPort::default()),
-        Arc::new(NoopPlanningTaskRepositoryPort),
+        planning_task_repository_port,
         Arc::new(NoopPlanningWorkerPort),
     )
 }
@@ -570,13 +582,30 @@ pub(super) fn test_native_tui_app() -> NativeTuiApp {
 pub(super) fn test_native_tui_app_with_review_center_repository(
     review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
 ) -> NativeTuiApp {
+    let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    test_native_tui_app_with_planning_and_review_center_repository(
+        planning,
+        review_center_repository,
+    )
+}
+
+pub(super) fn test_native_tui_app_with_planning(planning: PlanningServices) -> NativeTuiApp {
+    test_native_tui_app_with_planning_and_review_center_repository(
+        planning,
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+    )
+}
+
+fn test_native_tui_app_with_planning_and_review_center_repository(
+    planning: PlanningServices,
+    review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
+) -> NativeTuiApp {
     /*
      * Build the same production-shaped service graph used by TUI fixtures, with app-server IO
      * pinned to deterministic responses. Tests can then seed NativeTuiApp state directly while
      * still exercising reducer and lifecycle wiring through the real constructor.
      */
     let app_server_port = Arc::new(TestAppServerPort);
-    let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
     let parallel_mode_binding = NativeTuiParallelModeBinding::from_composition(
         test_parallel_mode_control_plane_composition(planning),
     );

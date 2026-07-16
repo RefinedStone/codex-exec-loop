@@ -35,6 +35,9 @@ use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
+use super::queue_overlay_ui::{
+    QueueMutationAuthoritySnapshot, QueueMutationOperation, QueueMutationWorkerResult,
+};
 use super::reviews_overlay_ui::{ReviewsOverlayAuthoritySnapshot, ReviewsOverlayLoadRequest};
 use super::{
     AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
@@ -88,6 +91,7 @@ pub(super) enum BackgroundMessage {
         request: ReviewsOverlayLoadRequest,
         authority: ReviewsOverlayAuthoritySnapshot,
     },
+    QueueMutationCompleted(Box<QueueMutationWorkerResult>),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
@@ -1264,6 +1268,59 @@ impl NativeTuiPlanningHandle {
         &self.services.queue
     }
 
+    pub(super) fn execute_queue_mutation(
+        &self,
+        operation: QueueMutationOperation,
+    ) -> QueueMutationWorkerResult {
+        let mutation = self
+            .queue()
+            .cancel_tasks(operation.request.clone())
+            .map_err(|error| error.to_string());
+        // Refresh after both Ok and Err. Releasing the cross-process mutation guard can fail
+        // after the commit, so the error channel alone cannot tell the TUI which authority won.
+        let authority = self.load_queue_mutation_authority(&operation.context.workspace_directory);
+        QueueMutationWorkerResult {
+            operation,
+            mutation,
+            authority,
+        }
+    }
+
+    fn load_queue_mutation_authority(
+        &self,
+        workspace_directory: &str,
+    ) -> Result<QueueMutationAuthoritySnapshot, String> {
+        let mut last_revision_pair = None;
+        for _ in 0..2 {
+            let runtime_projection = self
+                .runtime()
+                .load_runtime_projection_or_invalid(workspace_directory);
+            let Some(projection_revision) = runtime_projection.planning_revision() else {
+                continue;
+            };
+            let queue_authority = self
+                .queue()
+                .load_authority_snapshot(workspace_directory)
+                .map_err(|error| format!("Queue authority is unavailable: {error}"))?;
+            if queue_authority.planning_revision == projection_revision {
+                return Ok(QueueMutationAuthoritySnapshot {
+                    runtime_projection,
+                    queue_authority,
+                });
+            }
+            last_revision_pair = Some((projection_revision, queue_authority.planning_revision));
+        }
+        match last_revision_pair {
+            Some((projection_revision, authority_revision)) => Err(format!(
+                "Queue authority kept changing while refreshing (projection revision {projection_revision}, authority revision {authority_revision}); reopen the queue."
+            )),
+            None => Err(
+                "Queue runtime projection is unavailable after the authority change; reopen the queue."
+                    .to_string(),
+            ),
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn task_tool(&self) -> &PlanningTaskToolUseCases {
         &self.services.task_tool
@@ -1352,6 +1409,7 @@ impl NativeTuiApp {
                 super::ProgressiveActivityOverlayUiState::default(),
             help_scroll_offset: 0,
             queue_overlay_ui_state: super::queue_overlay_ui::QueueOverlayUiState::default(),
+            queue_mutation_ui_state: super::queue_overlay_ui::QueueMutationUiState::default(),
             reviews_overlay_ui_state: super::reviews_overlay_ui::ReviewsOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,
