@@ -942,7 +942,7 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
     assert_eq!(
         production_source.matches("core_runtime.snapshot()").count(),
         1,
-        "ConversationScreenModel must capture exactly one core snapshot per projection"
+        "ConversationProjectionSample must capture core state through one choke point"
     );
     for forbidden in [
         ".application",
@@ -971,6 +971,41 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
             "draw_projected(\n                frame,\n                app,\n                ShellFrontendMode::InlineMainBuffer,\n                frame_projection,"
         ),
         "the transaction must draw the same frame projection used by cache comparison"
+    );
+
+    let syntax =
+        syn::parse_file(&terminal_source).expect("inline terminal adapter source should parse");
+    let transaction = syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "sync_inline_viewport_transaction" => {
+                Some(function)
+            }
+            _ => None,
+        })
+        .expect("inline terminal adapter should expose sync_inline_viewport_transaction");
+    let span = transaction.span();
+    let transaction_source = terminal_source
+        .lines()
+        .skip(span.start().line.saturating_sub(1))
+        .take(
+            span.end()
+                .line
+                .saturating_sub(span.start().line)
+                .saturating_add(1),
+        )
+        .collect::<String>();
+    let transaction_source = transaction_source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert_eq!(
+        transaction_source
+            .matches("ConversationProjectionSample::capture(runtime.app_mut())")
+            .count(),
+        1,
+        "one terminal sync transaction must capture conversation projection facts exactly once"
     );
 }
 

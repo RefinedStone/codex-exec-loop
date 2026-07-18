@@ -1,14 +1,15 @@
 /*
- * ConversationScreenModel is the production projection boundary from
- * NativeTuiApp into the inline conversation tail and live-transcript tree. One
- * instance captures one core revision, one render clock, and the UI-only facts
- * needed by copy, layout, cursor, and frame-cache code.
+ * ConversationProjectionSample captures the conversation shell's core snapshot
+ * and render clocks once per terminal transaction. ConversationScreenModel
+ * combines that owned sample with the UI-only facts needed by copy, layout,
+ * cursor, and frame-cache code at one projection point.
  */
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
 use crate::application::service::planning::PlanningRuntimeProjection;
+use crate::core::app::AppSnapshot;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 
 use super::super::parallel_presentation_bridge::{
@@ -22,6 +23,24 @@ use super::{
 };
 
 const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
+
+pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
+    core_snapshot: AppSnapshot,
+    rendered_at: Instant,
+    animation_elapsed_millis: u128,
+}
+
+impl ConversationProjectionSample {
+    pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
+        Self {
+            core_snapshot: app.core_runtime.snapshot(),
+            rendered_at: Instant::now(),
+            animation_elapsed_millis: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_millis()),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::adapter::inbound::tui::app) enum ShellConversationState<'a> {
@@ -71,8 +90,17 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
 }
 
 impl<'a> ConversationScreenModel<'a> {
+    #[cfg(test)]
     pub(in crate::adapter::inbound::tui::app) fn from_app(app: &'a NativeTuiApp) -> Self {
-        let core_snapshot = app.core_runtime.snapshot();
+        let sample = ConversationProjectionSample::capture(app);
+        Self::from_app_with_sample(app, &sample)
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn from_app_with_sample(
+        app: &'a NativeTuiApp,
+        sample: &ConversationProjectionSample,
+    ) -> Self {
+        let core_snapshot = &sample.core_snapshot;
         let core_revision = core_snapshot.revision;
         let planning_runtime_projection =
             (*core_snapshot.planning_parallel.planning_runtime).clone();
@@ -146,15 +174,11 @@ impl<'a> ConversationScreenModel<'a> {
             } else {
                 QueueMutationTailState::Idle
             };
-        let rendered_at = Instant::now();
-        let animation_elapsed_millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_millis());
 
         Self {
             core_revision,
-            rendered_at,
-            animation_elapsed_millis,
+            rendered_at: sample.rendered_at,
+            animation_elapsed_millis: sample.animation_elapsed_millis,
             startup_state: &app.startup_state,
             shell_action_availability: app.shell_action_availability(),
             recent_session_status_label: recent_session_status_label(app, app.tui_language),

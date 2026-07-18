@@ -38,6 +38,15 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
 - Border 없이 compact하게 유지합니다.
 - Status ribbon, planning/queue summary, runtime notice, prompt, command hint 순서의 안정된
   hierarchy를 유지합니다.
+- Terminal sync transaction 하나는 conversation shell의 core `AppSnapshot`과 render clock을
+  `ConversationProjectionSample`로 한 번만 캡처합니다. Pre-history outer flow layout과 최종
+  tail/live/cache projection은 같은 sample을 사용합니다. Handoff acknowledgement 뒤의
+  UI-local state는 다시 읽을 수 있습니다.
+- Overlay별 document와 내부 live-stream row plan은 owned screen model을 받을 때까지 별도
+  projection 경계이며 conversation sample의 일관성 보장에 포함되지 않습니다.
+- Sample에서 만든 `ConversationScreenModel` 하나가 frame의 UI-local fact를 소유합니다. Tail,
+  live transcript, cursor layout, frame cache는 같은 immutable projection을 사용하며 presentation
+  helper가 `NativeTuiApp`, service, clock을 다시 읽지 않습니다.
 - 장시간 운영에 필요한 밀도를 우선하고 marketing copy를 넣지 않습니다.
 - 한국어와 wide-character prompt가 주변 layout 계약을 깨지 않아야 합니다.
 

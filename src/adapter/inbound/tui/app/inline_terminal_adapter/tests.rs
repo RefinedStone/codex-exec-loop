@@ -8,7 +8,7 @@ use super::{
 use crate::adapter::inbound::tui::app::conversation_input::InputCursorMovement;
 use crate::adapter::inbound::tui::app::ratatui_frontend::prepare_runtime_for_due_draw;
 use crate::adapter::inbound::tui::app::shell_presentation::{
-    ConversationScreenModel, build_inline_live_transcript_lines,
+    ConversationProjectionSample, ConversationScreenModel, build_inline_live_transcript_lines,
 };
 use crate::adapter::inbound::tui::app::{
     ConversationIntentEvent, ConversationMessage, ConversationMessageKind, ConversationState,
@@ -3311,6 +3311,40 @@ fn hidden_inline_tail_skips_redundant_frame_draws() {
         24
     ));
     assert!(inline_state_should_draw(&mut inline_viewport, &app, 96, 24));
+}
+
+#[test]
+fn reused_projection_sample_keeps_core_and_clock_facts_stable() {
+    let mut app = make_test_app();
+    app.set_parallel_mode_enabled_for_test(true);
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
+        vec![inline_runtime_feed_entry(1, "sampled event")],
+    )));
+    let sample = ConversationProjectionSample::capture(&app);
+    let (sampled_revision, sampled_rendered_at, sampled_animation_millis, sampled_supervisor) = {
+        let first = ConversationScreenModel::from_app_with_sample(&app, &sample);
+        (
+            first.core_revision,
+            first.rendered_at,
+            first.animation_elapsed_millis,
+            first.parallel_mode_supervisor.clone(),
+        )
+    };
+
+    app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
+        vec![inline_runtime_feed_entry(2, "new event")],
+    )));
+    {
+        let reused = ConversationScreenModel::from_app_with_sample(&app, &sample);
+        assert_eq!(reused.core_revision, sampled_revision);
+        assert_eq!(reused.rendered_at, sampled_rendered_at);
+        assert_eq!(reused.animation_elapsed_millis, sampled_animation_millis);
+        assert_eq!(reused.parallel_mode_supervisor, sampled_supervisor);
+    }
+
+    let fresh = ConversationScreenModel::from_app(&app);
+    assert!(fresh.core_revision > sampled_revision);
+    assert_ne!(fresh.parallel_mode_supervisor, sampled_supervisor);
 }
 
 #[test]
