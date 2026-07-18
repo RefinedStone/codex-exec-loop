@@ -1,4 +1,7 @@
-use super::super::{Line, NativeTuiApp, ShellCorePresentationContext, startup_ascii_art_lines};
+use super::super::{
+    ConversationState, Line, NativeTuiApp, conversation_startup_screen_is_active,
+    startup_ascii_art_lines,
+};
 
 /*
  * overlay/base.rs sits between shell state projection and concrete overlay rendering. Production
@@ -10,13 +13,17 @@ pub(crate) fn build_startup_banner_lines(
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
     /*
-     * Startup art is gated by ShellCorePresentationContext rather than raw app flags so inline
-     * terminal, popup overlays, and startup inspection all agree on when the banner is transiently
-     * visible. max_height is optional because renderers sometimes ask for the natural logo and
-     * sometimes need a cropped variant for narrow overlay areas.
+     * Startup art uses the same pure predicate as ConversationScreenModel without constructing a
+     * second core snapshot or render clock during history synchronization. max_height is optional
+     * because renderers sometimes ask for the natural logo and sometimes need a cropped variant.
      */
-    let context = ShellCorePresentationContext::from_app(app);
-    if !context.startup_banner_is_active() {
+    let conversation = match &app.conversation_state {
+        ConversationState::Ready(conversation) => Some(conversation.as_ref()),
+        ConversationState::Loading | ConversationState::Failed(_) => None,
+    };
+    if !app.show_startup_ascii_art
+        || !conversation_startup_screen_is_active(app.parallel_mode_enabled(), conversation)
+    {
         return None;
     }
     let max_height = match max_height {

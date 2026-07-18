@@ -4,8 +4,8 @@ use ratatui::text::Line;
 
 use crate::application::service::planning::PlanningRuntimeProjection;
 
+use super::ConversationScreenModel;
 use super::ConversationViewModel;
-use super::NativeTuiApp;
 
 // Activity rail copy owns cross-source priority and width budgeting for the live operator notice.
 #[path = "status_panels/activity_rail.rs"]
@@ -30,14 +30,19 @@ mod tail_shared;
 pub(in super::super) use live_status_layout::InlineTailView;
 
 // Production entrypoint for the inline bottom region: text rows plus cursor/layout metadata.
-pub(crate) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> InlineTailView {
-    live_status_layout::build_inline_tail_view(app, content_width)
+pub(crate) fn build_inline_tail_view(
+    screen_model: &ConversationScreenModel<'_>,
+    content_width: u16,
+) -> InlineTailView {
+    live_status_layout::build_inline_tail_view(screen_model, content_width)
 }
 
 #[cfg(test)]
 // Test adapter for older line-only assertions; production keeps cursor metadata through InlineTailView.
-pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    build_inline_tail_view(app, 0).lines
+pub(super) fn build_inline_tail_lines(
+    screen_model: &ConversationScreenModel<'_>,
+) -> Vec<Line<'static>> {
+    build_inline_tail_view(screen_model, 0).lines
 }
 
 // Shared live-agent projection used by main tail and overlays so streaming/tool activity speaks with one vocabulary.

@@ -54,6 +54,14 @@ the fixed Akra theme.
 - The inline tail must remain borderless and compact.
 - It must keep a stable hierarchy: status ribbon, planning or queue summary, runtime notice,
   prompt, command hint.
+- One `ConversationScreenModel` must capture the core snapshot, render clock, and local UI facts
+  for a frame. Tail copy, live transcript copy, cursor layout, and frame-cache comparison must
+  consume that same immutable projection; presentation helpers must not reread `NativeTuiApp`,
+  call services, or sample their own clocks.
+- Prompt focus has one policy shared by input and presentation. Exit and turn-steer dialogs remove
+  prompt focus and hide the terminal cursor; closing either dialog restores the unchanged draft and
+  its exact cursor position. Supersession may retain prompt focus only while its loading lock is
+  clear.
 - It must reserve display density for long-running operator work, not marketing copy.
 - It must support Korean and wide-character prompt text without changing the surrounding layout
   contract.

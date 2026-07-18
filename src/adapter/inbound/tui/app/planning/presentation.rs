@@ -1,4 +1,3 @@
-use super::super::NativeTuiApp;
 use super::debug_panel_state::PlanningWorkerPanelState;
 use super::status_projection::compact_queue_framing_summary;
 use crate::domain::text::compact_whitespace_detail;
@@ -6,17 +5,6 @@ use crate::domain::text::compact_whitespace_detail;
 // Planning worker debug panel은 runtime worker를 제어하지 않고 마지막 관측 snapshot만 읽는 presentation surface다.
 // 빈 Vec은 "panel을 그리지 않음"이라는 renderer contract라서 visibility gate와 content gate를 여기서 함께 확정한다.
 pub(crate) fn build_planning_worker_panel_lines(
-    app: &NativeTuiApp,
-    max_detail_len: usize,
-) -> Vec<String> {
-    build_planning_worker_panel_lines_for_state(
-        app.planning_worker_shows_debug_details(),
-        &app.planning_worker_panel_state,
-        max_detail_len,
-    )
-}
-
-fn build_planning_worker_panel_lines_for_state(
     show_debug_details: bool,
     planning_worker: &PlanningWorkerPanelState,
     max_detail_len: usize,
@@ -86,7 +74,7 @@ fn build_planning_worker_panel_lines_for_state(
 #[cfg(test)]
 mod tests {
     use super::super::debug_panel_state::{PlanningWorkerPanelState, PlanningWorkerStatus};
-    use super::build_planning_worker_panel_lines_for_state;
+    use super::build_planning_worker_panel_lines;
 
     #[test]
     fn planning_worker_panel_is_hidden_without_debug_visibility() {
@@ -96,18 +84,14 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(build_planning_worker_panel_lines_for_state(false, &state, 40).is_empty());
+        assert!(build_planning_worker_panel_lines(false, &state, 40).is_empty());
     }
 
     #[test]
     fn planning_worker_panel_skips_empty_debug_state() {
         assert!(
-            build_planning_worker_panel_lines_for_state(
-                true,
-                &PlanningWorkerPanelState::default(),
-                40
-            )
-            .is_empty()
+            build_planning_worker_panel_lines(true, &PlanningWorkerPanelState::default(), 40)
+                .is_empty()
         );
     }
 
@@ -124,7 +108,7 @@ mod tests {
             ..Default::default()
         };
 
-        let lines = build_planning_worker_panel_lines_for_state(true, &state, 36);
+        let lines = build_planning_worker_panel_lines(true, &state, 36);
 
         assert_eq!(lines.len(), 5);
         assert!(lines[0].contains("planning worker status: repair failed"));

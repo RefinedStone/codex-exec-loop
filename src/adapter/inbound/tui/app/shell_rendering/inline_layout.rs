@@ -5,9 +5,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::super::{
-    AkraTheme, MAX_INLINE_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, NativeTuiApp, ShellOverlay,
-};
+use super::super::{AkraTheme, MAX_INLINE_TAIL_HEIGHT, MIN_TRANSCRIPT_PANEL_HEIGHT, ShellOverlay};
+use super::InlineConversationFrameProjection;
 
 /*
  * inline_layout.rs는 inline shell mode와 popup overlay가 공유하는 low-level geometry layer다.
@@ -19,7 +18,7 @@ const MAX_INLINE_INSPECTION_TAIL_HEIGHT: u16 = 6;
 const MAX_INLINE_REPLAY_TAIL_HEIGHT: u16 = 12;
 
 pub(super) fn build_inline_terminal_flow_layout(
-    app: &NativeTuiApp,
+    projection: &InlineConversationFrameProjection,
     area: Rect,
     tail_lines: &[Line<'_>],
 ) -> Rc<[Rect]> {
@@ -28,8 +27,8 @@ pub(super) fn build_inline_terminal_flow_layout(
      * hidden-overlay mode에서는 tail이 primary interaction surface라 더 많은 공간을 준다.
      * inspection/confirmation mode에서는 작은 terminal에서도 overlay content가 밀려나지 않도록 tail을 작게 제한한다.
      */
-    let tail_max_height = if app.shell_overlay == ShellOverlay::Hidden {
-        if app
+    let tail_max_height = if projection.shell_overlay == ShellOverlay::Hidden {
+        if projection
             .inline_history_render_mode
             .mirrors_recent_transcript_in_tail()
         {
@@ -41,10 +40,10 @@ pub(super) fn build_inline_terminal_flow_layout(
         MAX_INLINE_INSPECTION_TAIL_HEIGHT
     };
     let tail_height = inline_body_height(tail_lines, area.width, tail_max_height);
-    let inspection_constraint = if app.shell_overlay == ShellOverlay::Hidden {
+    let inspection_constraint = if projection.shell_overlay == ShellOverlay::Hidden {
         // The prompt tail owns short viewports; transcript receives every remaining row.
         Constraint::Min(0)
-    } else if app.shell_overlay == ShellOverlay::Activity && area.width <= 48 {
+    } else if projection.shell_overlay == ShellOverlay::Activity && area.width <= 48 {
         Constraint::Length(area.height.saturating_sub(tail_height))
     } else {
         Constraint::Min(MIN_TRANSCRIPT_PANEL_HEIGHT.saturating_sub(2).max(6))

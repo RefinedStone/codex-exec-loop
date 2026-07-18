@@ -220,12 +220,6 @@ impl NativeTuiApp {
         ParallelPanelStateController::activity_pulse_visible(&self.parallel_panel_ui_state())
     }
 
-    pub(crate) fn parallel_mode_loading_prompt_indicator_visible(&self) -> bool {
-        ParallelPanelStateController::loading_prompt_indicator_visible(
-            &self.parallel_panel_ui_state(),
-        )
-    }
-
     pub(crate) fn parallel_mode_prompt_input_locked(&self) -> bool {
         ParallelPanelStateController::prompt_input_locked(&self.parallel_panel_ui_state())
     }

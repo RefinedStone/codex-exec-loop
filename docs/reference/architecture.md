@@ -144,6 +144,13 @@ rendering/layout, and terminal-adapter responsibilities separate. Visual tokens 
 `AkraTheme`; append-only rows split across host scrollback and live viewport cannot insert panel
 chrome into the stream.
 
+The inline conversation tail path projects one core `AppSnapshot` plus adapter-local UI state into
+an immutable `ConversationScreenModel`. A single owned tail projection derived from it is compared
+by the redraw cache and then painted by the terminal transaction. Tail status, planning, parallel,
+queue, GitHub, transcript, layout, animation, and prompt-focus helpers do not receive
+`NativeTuiApp` or application service handles. Conversation semantic state stores messages, not
+cached Ratatui `Line` values.
+
 The detailed, test-guarded contract is
 [TUI Layered Architecture](../design/07-tui-layered-architecture-and-aesthetic-contract.md).
 

@@ -1643,7 +1643,6 @@ fn inline_parallel_home_replaces_single_mode_transcript_when_overlay_hidden() {
         Some("final_answer".to_string()),
         None,
     ));
-    conversation.refresh_conversation_lines();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))

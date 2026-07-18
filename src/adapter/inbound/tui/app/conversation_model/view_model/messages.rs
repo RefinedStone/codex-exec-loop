@@ -1,10 +1,8 @@
 /*
  * ConversationViewModel의 message mutation 경계다. domain message log는 `messages`가
- * 보관하고, shell renderer가 바로 소비하는 줄 단위 projection은
- * `cached_conversation_lines`가 보관한다. transcript를 바꾸는 함수는 이 파일 안에서
- * cache refresh까지 끝내야 shell footer, snapshot replay, scroll 계산이 같은 원본을 본다.
+ * 보관하고, transcript를 바꾸는 함수는 이 파일 안에서 retention과 handoff bookkeeping을
+ * 함께 끝내 shell footer, snapshot replay, scroll 계산이 같은 원본을 보게 한다.
  */
-use crate::adapter::inbound::tui::app::shell_presentation::format_conversation_lines;
 use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 use crate::domain::planning::{
     PlanningQueueMutationKind, PlanningQueueMutationReceipt, TaskStatus,
@@ -38,27 +36,16 @@ const VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX: &str = "conversation is busy; w
  * 노출한다.
  */
 impl ConversationViewModel {
-    /*
-     * Renderer는 매 frame마다 markdown/line formatting을 다시 계산하지 않고 cached
-     * lines를 읽는다. transcript를 수정한 뒤 이 함수를 호출하는 규칙이 깨지면
-     * message source와 vt100 화면 projection이 서로 다른 시점을 가리킨다.
-     */
-    pub(crate) fn refresh_conversation_lines(&mut self) {
-        self.cached_conversation_lines = format_conversation_lines(&self.messages);
-    }
-
-    // 단일 append의 canonical path다. transcript와 render cache의 갱신 시점을 하나로 묶는다.
+    // 단일 append의 canonical path다. transcript와 retention 갱신 시점을 하나로 묶는다.
     pub(super) fn push_message(&mut self, mut message: ConversationMessage) {
         bound_conversation_message(&mut message);
         self.messages.push(message);
         self.enforce_transcript_retention();
-        self.refresh_conversation_lines();
     }
 
     /*
-     * Batch append는 refresh를 한 번으로 합친다. session load나 buffered tool flush처럼
-     * 이미 순서가 정해진 message 묶음을 transcript에 붙일 때 formatting 반복을 줄이고,
-     * 빈 iterator는 기존 화면 projection을 그대로 둔다.
+     * Batch append는 session load나 buffered tool flush처럼 이미 순서가 정해진 message
+     * 묶음을 transcript에 붙인다. 빈 iterator는 transcript를 그대로 둔다.
      */
     pub(super) fn push_messages<I>(&mut self, messages: I)
     where
@@ -73,7 +60,6 @@ impl ConversationViewModel {
 
         if changed {
             self.enforce_transcript_retention();
-            self.refresh_conversation_lines();
         }
     }
 
@@ -247,8 +233,8 @@ impl ConversationViewModel {
 
     /*
      * Buffered tool messages의 commit point다. `take`로 buffer를 비워 flush 재호출이
-     * 같은 notice를 중복 append하지 않게 하고, cache refresh는 `push_messages`의
-     * batch 규칙에 맡긴다.
+     * 같은 notice를 중복 append하지 않게 하고, retention은 `push_messages`의 batch
+     * 규칙에 맡긴다.
      */
     pub(crate) fn flush_buffered_tool_messages(&mut self) -> bool {
         if self.buffered_tool_messages.is_empty() {
@@ -362,7 +348,6 @@ impl ConversationViewModel {
             message.phase = phase;
             bound_conversation_message(message);
             self.enforce_transcript_retention();
-            self.refresh_conversation_lines();
             return true;
         }
 

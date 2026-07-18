@@ -1,7 +1,7 @@
-use super::super::{ConversationViewModel, NativeTuiApp};
+use super::super::ConversationViewModel;
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection, PlanningRuntimeRepairAttempt,
-    PlanningRuntimeSummaryLineRequest,
+    PlanningRuntimeSummaryLineRequest, build_planning_runtime_summary_line,
 };
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::text::Line;
@@ -42,23 +42,21 @@ struct PartialQueueFramingDetails {
 }
 
 pub(crate) fn build_planning_status_surface_projection(
-    app: &NativeTuiApp,
+    runtime_projection: &PlanningRuntimeProjection,
     conversation: &ConversationViewModel,
     summary_detail_len: usize,
     supplemental_detail_len: usize,
     always_show: bool,
 ) -> PlanningStatusSurfaceProjection {
-    let runtime_projection = app.planning_runtime_projection_snapshot();
     let queue_framing_details =
-        build_queue_framing_details_from_projection(&runtime_projection, supplemental_detail_len);
+        build_queue_framing_details_from_projection(runtime_projection, supplemental_detail_len);
     let queue_framing_lines = queue_framing_details
         .as_ref()
         .map(queue_framing_lines_from_details)
         .unwrap_or_default();
     let mut summary_line = build_planning_summary_line(
-        app,
         conversation,
-        &runtime_projection,
+        runtime_projection,
         summary_detail_len,
         always_show,
     );
@@ -136,41 +134,37 @@ fn append_resumed_status_detail(status_text: &mut String, label: &str, detail: O
     ));
 }
 
-// Summary generation stays delegated to the planning service so the TUI does
-// not duplicate readiness/repair wording. The adapter only contributes shell
-// context that the service cannot know: whether a turn is running, whether a
-// repair is in flight, and whether a separate notice line already exists.
+// Summary generation stays delegated to the pure planning policy so the TUI
+// does not duplicate readiness/repair wording. The adapter only contributes
+// shell context: whether a turn is running, whether a repair is in flight,
+// and whether a separate notice line already exists.
 pub(crate) fn build_planning_summary_line(
-    app: &NativeTuiApp,
     conversation: &ConversationViewModel,
     runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
     always_show: bool,
 ) -> Option<String> {
-    app.application
-        .planning()
-        .runtime()
-        .build_summary_line(PlanningRuntimeSummaryLineRequest {
-            projection: runtime_projection,
-            has_running_turn: conversation.has_running_turn(),
-            is_repairing: conversation.planning_repair_state.is_some(),
-            repair_failure_summary: conversation
-                .planning_repair_state
-                .as_ref()
-                .map(|state| state.latest_request.failure_summary.as_str()),
-            repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
-                PlanningRuntimeRepairAttempt {
-                    attempts_used: state.attempts_used,
-                    max_attempts: state.max_attempts,
-                }
-            }),
-            has_notice: conversation
-                .planning_notice_summary(max_detail_len)
-                .is_some(),
-            max_detail_len,
-            always_show,
-        })
-        .and_then(remove_legacy_valid_planning_summary_prefix)
+    build_planning_runtime_summary_line(PlanningRuntimeSummaryLineRequest {
+        projection: runtime_projection,
+        has_running_turn: conversation.has_running_turn(),
+        is_repairing: conversation.planning_repair_state.is_some(),
+        repair_failure_summary: conversation
+            .planning_repair_state
+            .as_ref()
+            .map(|state| state.latest_request.failure_summary.as_str()),
+        repair_attempt: conversation.planning_repair_state.as_ref().map(|state| {
+            PlanningRuntimeRepairAttempt {
+                attempts_used: state.attempts_used,
+                max_attempts: state.max_attempts,
+            }
+        }),
+        has_notice: conversation
+            .planning_notice_summary(max_detail_len)
+            .is_some(),
+        max_detail_len,
+        always_show,
+    })
+    .and_then(remove_legacy_valid_planning_summary_prefix)
 }
 
 fn remove_legacy_valid_planning_summary_prefix(summary_line: String) -> Option<String> {
@@ -727,11 +721,18 @@ mod tests {
             )
             .with_workspace_present(true),
         );
+        let runtime_projection = app.planning_runtime_projection_snapshot();
         let ConversationState::Ready(conversation) = &app.conversation_state else {
             panic!("test app should keep a ready conversation");
         };
 
-        let surface = build_planning_status_surface_projection(&app, conversation, 96, 96, true);
+        let surface = build_planning_status_surface_projection(
+            &runtime_projection,
+            conversation,
+            96,
+            96,
+            true,
+        );
 
         assert!(surface.queue_framing_lines.is_empty());
         assert!(
@@ -753,11 +754,18 @@ mod tests {
             )
             .with_workspace_present(true),
         );
+        let runtime_projection = app.planning_runtime_projection_snapshot();
         let ConversationState::Ready(conversation) = &app.conversation_state else {
             panic!("test app should keep a ready conversation");
         };
 
-        let surface = build_planning_status_surface_projection(&app, conversation, 96, 96, true);
+        let surface = build_planning_status_surface_projection(
+            &runtime_projection,
+            conversation,
+            96,
+            96,
+            true,
+        );
         let framing = surface
             .queue_framing_lines
             .iter()
@@ -793,11 +801,18 @@ mod tests {
                 },
             ),
         );
+        let runtime_projection = app.planning_runtime_projection_snapshot();
         let ConversationState::Ready(conversation) = &app.conversation_state else {
             panic!("test app should keep a ready conversation");
         };
 
-        let surface = build_planning_status_surface_projection(&app, conversation, 96, 96, true);
+        let surface = build_planning_status_surface_projection(
+            &runtime_projection,
+            conversation,
+            96,
+            96,
+            true,
+        );
         let framing = surface
             .queue_framing_lines
             .iter()

@@ -17,6 +17,7 @@ pub(super) fn compact_inline_detail(text: &str, max_len: usize) -> String {
 pub(super) fn build_working_line(
     conversation: &ConversationViewModel,
     max_detail_len: usize,
+    rendered_at: Instant,
 ) -> Option<Line<'static>> {
     // auto-follow activity가 있으면 manual turn보다 우선해 표시한다. 자동 후속 작업은
     // 내부적으로 turn을 만들기 전 평가/큐 단계도 있으므로 별도 시작 시각을 사용한다.
@@ -39,7 +40,7 @@ pub(super) fn build_working_line(
     // status line은 terminal 폭을 가장 먼저 잃는 영역이라 detail을 whitespace 단위로
     // 접어 두고, elapsed는 monotonic Instant 기준으로만 계산한다.
     let detail = compact_inline_detail(&detail, max_detail_len);
-    let elapsed = format_elapsed(Instant::now().saturating_duration_since(started_at));
+    let elapsed = format_elapsed(rendered_at.saturating_duration_since(started_at));
 
     Some(Line::from(vec![
         Span::styled(

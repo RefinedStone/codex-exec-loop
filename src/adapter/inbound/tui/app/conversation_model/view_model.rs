@@ -1,14 +1,12 @@
 use std::time::Instant;
 
-use ratatui::text::Line;
 use unicode_segmentation::UnicodeSegmentation;
 
 /*
  * This file owns the mutable TUI projection of a conversation. The domain
  * snapshot gives persisted transcript facts; the view model layers on transient
- * rendering caches, input affordances, active-turn bookkeeping, planning runtime
- * state, and auto-follow status that only exist while the operator is in the
- * native client.
+ * input affordances, active-turn bookkeeping, planning runtime state, and
+ * auto-follow status that only exist while the operator is in the native client.
  */
 #[path = "view_model/messages.rs"]
 mod messages;
@@ -122,8 +120,6 @@ pub(crate) struct ConversationViewModel {
      */
     pub(crate) draft_workspace_directory: String,
     pub(crate) messages: Vec<ConversationMessage>,
-    // Rendered transcript cache is invalidated by message helpers in messages.rs.
-    pub(crate) cached_conversation_lines: Vec<Line<'static>>,
     // Streaming assistant text is separate until completion to avoid duplicating partial deltas.
     pub(crate) live_agent_message: Option<ConversationMessage>,
     // Tool output may arrive before the assistant delta it should visually follow.
@@ -195,7 +191,6 @@ impl ConversationViewModel {
             cwd: cwd.clone(),
             draft_workspace_directory: cwd,
             messages: Vec::new(),
-            cached_conversation_lines: Vec::new(),
             live_agent_message: None,
             buffered_tool_messages: Vec::new(),
             base_warnings: Vec::new(),
@@ -239,7 +234,6 @@ impl ConversationViewModel {
         view_model.warnings = view_model.base_warnings.clone();
         retain_bounded_string_history(&mut view_model.runtime_notices, MAX_RUNTIME_NOTICES);
         view_model.set_status_with_warnings(base_status);
-        view_model.refresh_conversation_lines();
         view_model
     }
     #[cfg(test)]
@@ -278,7 +272,6 @@ impl ConversationViewModel {
             cwd: conversation_cwd,
             draft_workspace_directory,
             messages: snapshot.messages,
-            cached_conversation_lines: Vec::new(),
             live_agent_message: None,
             buffered_tool_messages: Vec::new(),
             base_warnings,
@@ -321,7 +314,6 @@ impl ConversationViewModel {
         view_model.warnings = view_model.base_warnings.clone();
         retain_bounded_string_history(&mut view_model.runtime_notices, MAX_RUNTIME_NOTICES);
         view_model.set_status_with_warnings(base_status);
-        view_model.refresh_conversation_lines();
         view_model
     }
     pub(crate) fn turn_control_truth(&self) -> ConversationRuntimeControlTruth {

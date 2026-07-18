@@ -8,13 +8,10 @@ use ratatui::text::Line;
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::history_insertion::HistoryInsertionMode;
-use super::shell_presentation::{
-    build_inline_live_transcript_lines, build_inline_tail_view, build_startup_banner_lines,
-    format_conversation_scrollback_lines,
-};
+use super::shell_presentation::{build_startup_banner_lines, format_conversation_scrollback_lines};
 use super::shell_rendering::{
-    draw, inline_parallel_event_stream_visible_rows, prepare_render_state,
-    renders_viewport_transcript_handoff,
+    InlineConversationFrameProjection, draw_projected, inline_parallel_event_stream_visible_rows,
+    prepare_projected_render_state,
 };
 use super::shell_runtime::ShellRuntime;
 use super::{
@@ -57,10 +54,12 @@ struct InlineTerminalSyncPolicy {
     parallel_mode_enabled: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InlineViewportSync {
     Deferred,
-    Stable { redraw_required: bool },
+    Stable {
+        redraw_required: bool,
+        frame_projection: InlineConversationFrameProjection,
+    },
 }
 
 impl InlineTerminalSyncPolicy {
@@ -109,12 +108,15 @@ pub(super) fn draw_inline_transaction<B: InlineResizeBackend>(
      * only if the visible tail may differ. This keeps every terminal tick cheap
      * when no stream text, history insertion, overlay, or resize changed state.
      */
-    let InlineViewportSync::Stable { redraw_required } =
-        sync_inline_viewport_transaction(terminal, runtime, inline_terminal)?
+    let InlineViewportSync::Stable {
+        redraw_required,
+        frame_projection,
+    } = sync_inline_viewport_transaction(terminal, runtime, inline_terminal)?
     else {
         return Ok(false);
     };
-    if redraw_required && !draw_inline_frame(terminal, runtime, inline_terminal)? {
+    if redraw_required && !draw_inline_frame(terminal, runtime, inline_terminal, frame_projection)?
+    {
         return Ok(false);
     }
     Ok(true)
@@ -124,9 +126,10 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     terminal: &mut Terminal<B>,
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
+    frame_projection: InlineConversationFrameProjection,
 ) -> Result<bool, B::Error> {
     let acknowledge_viewport_handoff_after_draw =
-        renders_viewport_transcript_handoff(runtime.app_mut());
+        frame_projection.renders_viewport_transcript_handoff;
     if !inline_terminal.viewport.back_buffer_trustworthy {
         /*
          * Inline viewport content is not a full-screen alternate buffer. Once
@@ -142,13 +145,27 @@ fn draw_inline_frame<B: InlineResizeBackend>(
         .backend_mut()
         .set_resize_append_lines_suppressed(true);
     let mut drawn_viewport_area = Rect::default();
+    let mut frame_projection = Some(frame_projection);
     let result = terminal
         .draw(|frame| {
             let frame_area = frame.area();
             drawn_viewport_area = frame_area;
             let app = runtime.app_mut();
-            prepare_render_state(app, ShellFrontendMode::InlineMainBuffer, frame_area);
-            draw(frame, app, ShellFrontendMode::InlineMainBuffer);
+            let frame_projection = frame_projection
+                .take()
+                .expect("inline frame projection is consumed by one draw");
+            prepare_projected_render_state(
+                app,
+                ShellFrontendMode::InlineMainBuffer,
+                frame_area,
+                &frame_projection,
+            );
+            draw_projected(
+                frame,
+                app,
+                ShellFrontendMode::InlineMainBuffer,
+                frame_projection,
+            );
         })
         .map(|completed_frame| completed_frame.area.as_size());
     terminal
@@ -205,7 +222,9 @@ fn sync_inline_viewport<B: InlineResizeBackend>(
 ) -> Result<bool, B::Error> {
     match sync_inline_viewport_transaction(terminal, runtime, inline_terminal)? {
         InlineViewportSync::Deferred => Ok(false),
-        InlineViewportSync::Stable { redraw_required } => Ok(redraw_required),
+        InlineViewportSync::Stable {
+            redraw_required, ..
+        } => Ok(redraw_required),
     }
 }
 
@@ -287,13 +306,16 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         }
         inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
         inline_terminal.mark_resize_reconciled(resize_snapshot);
+        let frame_projection =
+            InlineConversationFrameProjection::from_app(runtime.app_mut(), viewport_area.width);
         let tail_frame_changed = inline_terminal.should_draw_inline_frame(
-            runtime.app_mut(),
+            &frame_projection,
             viewport_area.width,
             viewport_area.height,
         );
         return Ok(InlineViewportSync::Stable {
             redraw_required: tail_frame_changed,
+            frame_projection,
         });
     };
     let parallel_history_pending = policy.parallel_mode_enabled
@@ -469,13 +491,16 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     inline_terminal.viewport.insert_mode = insert_mode;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
     inline_terminal.mark_resize_reconciled(resize_snapshot);
+    let frame_projection =
+        InlineConversationFrameProjection::from_app(runtime.app_mut(), viewport_area.width);
     let tail_frame_changed = inline_terminal.should_draw_inline_frame(
-        runtime.app_mut(),
+        &frame_projection,
         viewport_area.width,
         viewport_area.height,
     );
     Ok(InlineViewportSync::Stable {
         redraw_required: visible_history_adjusted || history_inserted || tail_frame_changed,
+        frame_projection,
     })
 }
 
@@ -677,12 +702,12 @@ impl InlineTerminalState {
 
     fn should_draw_inline_frame(
         &mut self,
-        app: &NativeTuiApp,
+        frame_projection: &InlineConversationFrameProjection,
         terminal_width: u16,
         terminal_height: u16,
     ) -> bool {
         self.frame_cache.should_draw_inline_frame(
-            app,
+            frame_projection,
             &self.viewport,
             terminal_width,
             terminal_height,
@@ -779,12 +804,15 @@ struct FrameCacheState {
 impl FrameCacheState {
     fn should_draw_inline_frame(
         &mut self,
-        app: &NativeTuiApp,
+        frame_projection: &InlineConversationFrameProjection,
         viewport: &TerminalViewportState,
         terminal_width: u16,
         terminal_height: u16,
     ) -> bool {
-        if app.shell_overlay != ShellOverlay::Hidden || app.is_exit_confirmation_visible() {
+        if frame_projection.shell_overlay != ShellOverlay::Hidden
+            || frame_projection.exit_confirmation_visible
+            || frame_projection.turn_steer_confirmation_visible
+        {
             // Overlay frames are modal and can overwrite the tail; drop the cache so
             // returning to the main shell redraws from a fresh signature.
             self.last_tail_frame = None;
@@ -797,15 +825,13 @@ impl FrameCacheState {
          * wrapping, planning status projection, and terminal-width decisions.
          */
         let next_signature = InlineTailFrameSignature {
+            core_revision: frame_projection.core_revision,
             terminal_width,
             terminal_height,
-            lines: build_inline_tail_view(app, terminal_width).lines,
-            live_transcript_lines: build_inline_live_transcript_lines(app),
-            parallel_supervisor_events: if app.parallel_mode_enabled() {
-                app.parallel_supervisor_event_lines()
-            } else {
-                Vec::new()
-            },
+            lines: frame_projection.tail_view.lines.clone(),
+            prompt_cursor_offset: frame_projection.tail_view.prompt_cursor_offset,
+            live_transcript_lines: frame_projection.live_transcript_lines.clone(),
+            parallel_supervisor_events: frame_projection.parallel_supervisor_event_lines.clone(),
         };
         let should_draw = !viewport.back_buffer_trustworthy
             || self.last_tail_frame.as_ref() != Some(&next_signature);
@@ -816,9 +842,11 @@ impl FrameCacheState {
 
 #[derive(Clone, PartialEq, Eq)]
 struct InlineTailFrameSignature {
+    core_revision: u64,
     terminal_width: u16,
     terminal_height: u16,
     lines: Vec<Line<'static>>,
+    prompt_cursor_offset: Option<(u16, u16)>,
     live_transcript_lines: Vec<Line<'static>>,
     parallel_supervisor_events: Vec<Line<'static>>,
 }
