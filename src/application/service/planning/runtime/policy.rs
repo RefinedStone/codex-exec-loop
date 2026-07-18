@@ -81,6 +81,12 @@ pub struct PlanningRuntimeSummaryLineRequest<'a> {
     pub always_show: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningRuntimeSummaryLine {
+    pub text: String,
+    pub workspace_state: PlanningWorkspaceState,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanningRuntimeStatusProjectionRequest<'a> {
     pub projection: &'a PlanningRuntimeProjection,
@@ -102,8 +108,8 @@ pub struct PlanningRuntimeStatusProjection {
 
 pub fn build_planning_runtime_summary_line(
     request: PlanningRuntimeSummaryLineRequest<'_>,
-) -> Option<String> {
-    PlanningRuntimePolicyService::new().build_summary_line(request)
+) -> Option<PlanningRuntimeSummaryLine> {
+    PlanningRuntimePolicyService::new().build_summary_line_projection(request)
 }
 
 impl PlanningRuntimePolicyService {
@@ -221,6 +227,14 @@ impl PlanningRuntimePolicyService {
         &self,
         request: PlanningRuntimeSummaryLineRequest<'_>,
     ) -> Option<String> {
+        self.build_summary_line_projection(request)
+            .map(|summary| summary.text)
+    }
+
+    fn build_summary_line_projection(
+        &self,
+        request: PlanningRuntimeSummaryLineRequest<'_>,
+    ) -> Option<PlanningRuntimeSummaryLine> {
         /*
          * footer line은 의도적으로 sparse하다. uninitialized planning은 notice나 explicit display request가 없으면
          * 숨기고, active/repair state는 다음 turn이 생성되거나 생성되지 않는 이유를 설명할 만큼의 queue/proposal/failure
@@ -299,7 +313,10 @@ impl PlanningRuntimePolicyService {
             PlanningWorkspaceState::Uninitialized => {}
         }
 
-        Some(segments.join("  |  "))
+        Some(PlanningRuntimeSummaryLine {
+            text: segments.join("  |  "),
+            workspace_state: summary.workspace_state,
+        })
     }
 
     pub fn build_status_projection(
