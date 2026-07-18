@@ -125,6 +125,10 @@ TUI 변경은 state/reducer, controller/effect, projection/copy, theme/chrome, r
 terminal-adapter 책임을 분리합니다. 시각 token은 `AkraTheme` 뒤에 두고 host scrollback과 live
 viewport에 나뉘는 append-only row 사이에 panel chrome을 삽입하지 않습니다.
 
+Planning worker 진단은 post-turn execution부터 screen model까지 domain
+`PlanningWorkerPanelState`를 그대로 보관합니다. TUI presentation은 adapter 소유 status DTO나
+왕복 mapper 없이 label과 content visibility만 파생합니다.
+
 상세한 test-guarded 계약은 [TUI 계층 아키텍처](tui-contract.md)를 참고하세요.
 
 ## 금지 방향과 gate

@@ -3,8 +3,7 @@ use crate::application::service::planning::{
     PlanningTurnExecutionSnapshotCapture,
 };
 use crate::application::service::post_turn_evaluation::{
-    PlanningWorkerPanelState as ApplicationPlanningWorkerPanelState,
-    PlanningWorkerStatus as ApplicationPlanningWorkerStatus, PostTurnAutoFollowSkipReason,
+    PostTurnAutoFollowSkipReason,
     PostTurnContinuationAction as ApplicationPostTurnContinuationAction, PostTurnEvaluationContext,
     PostTurnEvaluationExecution, PostTurnEvaluationOutcome as ApplicationPostTurnEvaluationOutcome,
     PostTurnEvaluationProvenance as ApplicationPostTurnEvaluationProvenance,
@@ -48,7 +47,7 @@ impl NativeTuiApp {
         let request = application_post_turn_request(
             request,
             context,
-            application_planning_worker_panel_state(&self.planning_worker_panel_state),
+            self.planning_worker_panel_state.clone(),
             self.post_turn_continuation_gate.capture(),
         );
         self.dispatch_core_command(AppCommand::EvaluatePostTurn(Box::new(request)));
@@ -81,9 +80,7 @@ impl NativeTuiApp {
     ) {
         self.apply_post_turn_evaluation_completion_payload(PostTurnEvaluationCompletionPayload {
             evaluation: Box::new(tui_post_turn_evaluation_outcome(execution.evaluation)),
-            planning_worker_panel_state: tui_planning_worker_panel_state(
-                execution.planning_worker_panel_state,
-            ),
+            planning_worker_panel_state: execution.planning_worker_panel_state,
         });
     }
 }
@@ -91,7 +88,7 @@ impl NativeTuiApp {
 fn application_post_turn_request(
     request: PostTurnEvaluationRequest,
     context: PostTurnEvaluationContext,
-    planning_worker_panel_state: ApplicationPlanningWorkerPanelState,
+    planning_worker_panel_state: PlanningWorkerPanelState,
     continuation_permit: crate::domain::planning::PostTurnContinuationPermit,
 ) -> crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
     crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
@@ -179,64 +176,6 @@ fn apply_post_turn_start_state(
         crate::application::service::planning::PlanningPostTurnWorkerPanelStartState::RefreshRunning => {
             state.status = PlanningWorkerStatus::RefreshRunning;
         }
-    }
-}
-
-fn application_planning_worker_panel_state(
-    state: &PlanningWorkerPanelState,
-) -> ApplicationPlanningWorkerPanelState {
-    ApplicationPlanningWorkerPanelState {
-        status: application_planning_worker_status(state.status),
-        last_operation_label: state.last_operation_label.clone(),
-        last_summary: state.last_summary.clone(),
-        last_rejected_summary: state.last_rejected_summary.clone(),
-        last_queue_summary: state.last_queue_summary.clone(),
-        last_notice_detail: state.last_notice_detail.clone(),
-        last_prompt: state.last_prompt.clone(),
-        last_response: state.last_response.clone(),
-        last_host_detail: state.last_host_detail.clone(),
-    }
-}
-
-fn application_planning_worker_status(
-    status: PlanningWorkerStatus,
-) -> ApplicationPlanningWorkerStatus {
-    match status {
-        PlanningWorkerStatus::Idle => ApplicationPlanningWorkerStatus::Idle,
-        PlanningWorkerStatus::RefreshRunning => ApplicationPlanningWorkerStatus::RefreshRunning,
-        PlanningWorkerStatus::RefreshSucceeded => ApplicationPlanningWorkerStatus::RefreshSucceeded,
-        PlanningWorkerStatus::RefreshFailed => ApplicationPlanningWorkerStatus::RefreshFailed,
-        PlanningWorkerStatus::RepairRunning => ApplicationPlanningWorkerStatus::RepairRunning,
-        PlanningWorkerStatus::RepairSucceeded => ApplicationPlanningWorkerStatus::RepairSucceeded,
-        PlanningWorkerStatus::RepairFailed => ApplicationPlanningWorkerStatus::RepairFailed,
-    }
-}
-
-fn tui_planning_worker_panel_state(
-    state: ApplicationPlanningWorkerPanelState,
-) -> PlanningWorkerPanelState {
-    PlanningWorkerPanelState {
-        status: tui_planning_worker_status(state.status),
-        last_operation_label: state.last_operation_label,
-        last_summary: state.last_summary,
-        last_rejected_summary: state.last_rejected_summary,
-        last_queue_summary: state.last_queue_summary,
-        last_notice_detail: state.last_notice_detail,
-        last_prompt: state.last_prompt,
-        last_response: state.last_response,
-        last_host_detail: state.last_host_detail,
-    }
-}
-
-fn tui_planning_worker_status(status: ApplicationPlanningWorkerStatus) -> PlanningWorkerStatus {
-    match status {
-        ApplicationPlanningWorkerStatus::Idle => PlanningWorkerStatus::Idle,
-        ApplicationPlanningWorkerStatus::RefreshRunning => PlanningWorkerStatus::RefreshRunning,
-        ApplicationPlanningWorkerStatus::RefreshSucceeded => PlanningWorkerStatus::RefreshSucceeded,
-        ApplicationPlanningWorkerStatus::RefreshFailed => PlanningWorkerStatus::RefreshFailed,
-        ApplicationPlanningWorkerStatus::RepairRunning => PlanningWorkerStatus::RepairRunning,
-        ApplicationPlanningWorkerStatus::RepairSucceeded => PlanningWorkerStatus::RepairSucceeded,
-        ApplicationPlanningWorkerStatus::RepairFailed => PlanningWorkerStatus::RepairFailed,
     }
 }
 

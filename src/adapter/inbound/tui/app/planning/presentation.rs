@@ -1,5 +1,5 @@
-use super::debug_panel_state::PlanningWorkerPanelState;
 use super::status_projection::compact_queue_framing_summary;
+use crate::domain::planning::{PlanningWorkerPanelState, PlanningWorkerStatus};
 use crate::domain::text::compact_whitespace_detail;
 
 // Planning worker debug panel은 runtime worker를 제어하지 않고 마지막 관측 snapshot만 읽는 presentation surface다.
@@ -17,12 +17,15 @@ pub(crate) fn build_planning_worker_panel_lines(
 
     // toggle이 켜져 있어도 관측된 내용이 없으면 placeholder panel을 만들지 않는다.
     // debug area height가 빈 diagnostic 때문에 흔들리는 일을 피한다.
-    if !planning_worker.has_content() {
+    if !planning_worker_has_content(planning_worker) {
         return Vec::new();
     }
 
     // 첫 줄은 status를 anchor로 두고, queue framing이 있으면 같은 line에 붙여 worker state와 queue context를 함께 읽게 한다.
-    let mut first_line = format!("planning worker status: {}", planning_worker.status.label());
+    let mut first_line = format!(
+        "planning worker status: {}",
+        planning_worker_status_label(planning_worker.status)
+    );
     if let Some(operation_label) = planning_worker.last_operation_label.as_deref() {
         first_line.push_str(&format!(
             "  |  planning worker operation: {}",
@@ -71,10 +74,28 @@ pub(crate) fn build_planning_worker_panel_lines(
     lines
 }
 
+pub(in crate::adapter::inbound::tui::app) fn planning_worker_status_label(
+    status: PlanningWorkerStatus,
+) -> &'static str {
+    match status {
+        PlanningWorkerStatus::Idle => "idle",
+        PlanningWorkerStatus::RefreshRunning => "refresh running",
+        PlanningWorkerStatus::RefreshSucceeded => "refresh ok",
+        PlanningWorkerStatus::RefreshFailed => "refresh failed",
+        PlanningWorkerStatus::RepairRunning => "repair running",
+        PlanningWorkerStatus::RepairSucceeded => "repair ok",
+        PlanningWorkerStatus::RepairFailed => "repair failed",
+    }
+}
+
+fn planning_worker_has_content(state: &PlanningWorkerPanelState) -> bool {
+    state != &PlanningWorkerPanelState::default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::debug_panel_state::{PlanningWorkerPanelState, PlanningWorkerStatus};
     use super::build_planning_worker_panel_lines;
+    use crate::domain::planning::{PlanningWorkerPanelState, PlanningWorkerStatus};
 
     #[test]
     fn planning_worker_panel_is_hidden_without_debug_visibility() {
@@ -93,6 +114,20 @@ mod tests {
             build_planning_worker_panel_lines(true, &PlanningWorkerPanelState::default(), 40)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn planning_worker_panel_shows_domain_content_with_idle_status() {
+        let state = PlanningWorkerPanelState {
+            last_summary: Some("worker detail".to_string()),
+            ..Default::default()
+        };
+
+        let lines = build_planning_worker_panel_lines(true, &state, 40);
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("planning worker status: idle"));
+        assert!(lines[1].contains("planning worker detail: worker detail"));
     }
 
     #[test]

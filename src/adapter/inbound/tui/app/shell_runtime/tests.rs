@@ -672,9 +672,7 @@ fn post_turn_evaluation_completed_message(
             thread_id: thread_id.into(),
             completed_turn_id: completed_turn_id.into(),
             evaluation: application_post_turn_evaluation_outcome(runtime_projection, evaluation),
-            planning_worker_panel_state: application_planning_worker_panel_state(
-                planning_worker_panel_state,
-            ),
+            planning_worker_panel_state,
         },
     ))
 }
@@ -811,48 +809,6 @@ fn application_post_turn_skip_reason(
         }
         AutoFollowSkipReason::PostTurnEvaluationTimedOut => {
             application_post_turn::PostTurnAutoFollowSkipReason::PostTurnEvaluationTimedOut
-        }
-    }
-}
-
-fn application_planning_worker_panel_state(
-    state: PlanningWorkerPanelState,
-) -> application_post_turn::PlanningWorkerPanelState {
-    application_post_turn::PlanningWorkerPanelState {
-        status: application_planning_worker_status(state.status),
-        last_operation_label: state.last_operation_label,
-        last_summary: state.last_summary,
-        last_rejected_summary: state.last_rejected_summary,
-        last_queue_summary: state.last_queue_summary,
-        last_notice_detail: state.last_notice_detail,
-        last_prompt: state.last_prompt,
-        last_response: state.last_response,
-        last_host_detail: state.last_host_detail,
-    }
-}
-
-fn application_planning_worker_status(
-    status: PlanningWorkerStatus,
-) -> application_post_turn::PlanningWorkerStatus {
-    match status {
-        PlanningWorkerStatus::Idle => application_post_turn::PlanningWorkerStatus::Idle,
-        PlanningWorkerStatus::RefreshRunning => {
-            application_post_turn::PlanningWorkerStatus::RefreshRunning
-        }
-        PlanningWorkerStatus::RefreshSucceeded => {
-            application_post_turn::PlanningWorkerStatus::RefreshSucceeded
-        }
-        PlanningWorkerStatus::RefreshFailed => {
-            application_post_turn::PlanningWorkerStatus::RefreshFailed
-        }
-        PlanningWorkerStatus::RepairRunning => {
-            application_post_turn::PlanningWorkerStatus::RepairRunning
-        }
-        PlanningWorkerStatus::RepairSucceeded => {
-            application_post_turn::PlanningWorkerStatus::RepairSucceeded
-        }
-        PlanningWorkerStatus::RepairFailed => {
-            application_post_turn::PlanningWorkerStatus::RepairFailed
         }
     }
 }
@@ -1329,6 +1285,56 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
             .is_none()
     );
 }
+
+#[test]
+fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
+    let mut runtime = make_test_runtime();
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-1".to_string();
+    conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
+    mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
+    let expected_worker_state = PlanningWorkerPanelState {
+        status: PlanningWorkerStatus::RepairFailed,
+        last_operation_label: Some("repair projection".to_string()),
+        last_summary: Some("accepted summary".to_string()),
+        last_rejected_summary: Some("rejected candidate".to_string()),
+        last_queue_summary: Some("queue head: task-1".to_string()),
+        last_notice_detail: Some("one blocker remains".to_string()),
+        last_prompt: Some("worker prompt".to_string()),
+        last_response: Some("worker response".to_string()),
+        last_host_detail: Some("host detail".to_string()),
+    };
+
+    runtime
+        .app
+        .tx
+        .send(post_turn_evaluation_completed_message(
+            "thread-1",
+            "turn-1",
+            PlanningRuntimeProjection::invalid("blocking projection".to_string()),
+            PostTurnEvaluationOutcome {
+                provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
+                planning_repair_state: None,
+                runtime_notices: Vec::new(),
+                action: PostTurnContinuationAction::SkipAutoFollow {
+                    reason: AutoFollowSkipReason::PlanningBlocked,
+                },
+                operator_alerts: Vec::new(),
+            },
+            expected_worker_state.clone(),
+        ))
+        .expect("background message should enqueue");
+
+    runtime.poll_background_messages();
+
+    assert_eq!(
+        runtime.app().planning_worker_panel_state,
+        expected_worker_state
+    );
+}
+
 #[test]
 fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     let mut runtime = make_test_runtime();

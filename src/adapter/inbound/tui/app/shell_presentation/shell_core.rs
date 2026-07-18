@@ -11,11 +11,11 @@ use ratatui::text::Line;
 use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::AppSnapshot;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
+use crate::domain::planning::PlanningWorkerPanelState;
 
 use super::super::parallel_presentation_bridge::{
     ParallelModePresentationLoadingStage, pending_parallel_mode_supervisor_snapshot,
 };
-use super::super::planning::PlanningWorkerPanelState;
 use super::capability_projection::recent_session_status_label;
 use super::{
     ConversationState, ConversationViewModel, InlineHistoryRenderMode, NativeTuiApp,

@@ -3,41 +3,6 @@
 const PLANNING_WORKER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNING_WORKER_VISIBILITY";
 const LEGACY_PLANNING_WORKER_VISIBILITY_ENV_VAR: &str = "CODEX_EXEC_LOOP_PLANNER_VISIBILITY";
 
-// UI-facing lifecycle for the post-turn planning worker.
-// It intentionally combines refresh and repair outcomes because footer/debug panels need one compact status lane.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(in crate::adapter::inbound::tui::app) enum PlanningWorkerStatus {
-    // No observable worker interaction for the current draft/session.
-    #[default]
-    Idle,
-    // Refresh recomputes queue head/proposal state after a turn.
-    RefreshRunning,
-    RefreshSucceeded,
-    // Covers worker failure, repair request, repeated queue head, or invalid projection after refresh.
-    RefreshFailed,
-    // Repair attempts to bring invalid or changed planning files back to a usable runtime projection.
-    RepairRunning,
-    // Repair restored the runtime projection enough for follow-up decisions to resume.
-    RepairSucceeded,
-    // Repair failed or left a blocking reason that still requires operator attention.
-    RepairFailed,
-}
-
-impl PlanningWorkerStatus {
-    // Short operator copy shared by footer, debug preview, and planning worker panel rendering.
-    pub(in crate::adapter::inbound::tui::app) fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::RefreshRunning => "refresh running",
-            Self::RefreshSucceeded => "refresh ok",
-            Self::RefreshFailed => "refresh failed",
-            Self::RepairRunning => "repair running",
-            Self::RepairSucceeded => "repair ok",
-            Self::RepairFailed => "repair failed",
-        }
-    }
-}
-
 // Visibility policy for planning worker internals.
 // Normal keeps repeated TUI usage compact; Debug exposes raw prompt/response and host-side details for diagnosis.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -76,42 +41,5 @@ impl PlanningWorkerVisibility {
     // Presentation asks for the capability instead of matching variants, keeping future visibility tiers local.
     pub(in crate::adapter::inbound::tui::app) fn shows_debug_details(self) -> bool {
         matches!(self, Self::Debug)
-    }
-}
-
-// Last observed planning worker interaction, cached for status panels after post-turn execution finishes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::adapter::inbound::tui::app) struct PlanningWorkerPanelState {
-    // Status drives high-level label and success/failure styling.
-    pub(in crate::adapter::inbound::tui::app) status: PlanningWorkerStatus,
-    // Operation label names the worker action, usually refresh or repair.
-    pub(in crate::adapter::inbound::tui::app) last_operation_label: Option<String>,
-    // Compact accepted result or failure summary shown in normal mode.
-    pub(in crate::adapter::inbound::tui::app) last_summary: Option<String>,
-    // Candidate or decision the host rejected, kept separate from the accepted summary.
-    pub(in crate::adapter::inbound::tui::app) last_rejected_summary: Option<String>,
-    // Queue state after worker application, not merely what the worker predicted.
-    pub(in crate::adapter::inbound::tui::app) last_queue_summary: Option<String>,
-    // Extra notices such as repair/block reasons after summary text has been trimmed.
-    pub(in crate::adapter::inbound::tui::app) last_notice_detail: Option<String>,
-    // Raw worker IO is stored for Debug visibility and omitted from normal compact surfaces.
-    pub(in crate::adapter::inbound::tui::app) last_prompt: Option<String>,
-    pub(in crate::adapter::inbound::tui::app) last_response: Option<String>,
-    // Host-side postprocessing decisions are tracked apart from worker text for diagnosis of orchestration behavior.
-    pub(in crate::adapter::inbound::tui::app) last_host_detail: Option<String>,
-}
-
-impl PlanningWorkerPanelState {
-    // One predicate controls whether planning worker panels render at all, including debug-only fields.
-    pub(in crate::adapter::inbound::tui::app) fn has_content(&self) -> bool {
-        !matches!(self.status, PlanningWorkerStatus::Idle)
-            || self.last_operation_label.is_some()
-            || self.last_summary.is_some()
-            || self.last_rejected_summary.is_some()
-            || self.last_queue_summary.is_some()
-            || self.last_notice_detail.is_some()
-            || self.last_prompt.is_some()
-            || self.last_response.is_some()
-            || self.last_host_detail.is_some()
     }
 }
