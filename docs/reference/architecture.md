@@ -42,6 +42,9 @@ and post-turn evaluation use this flow. Parallel mutation remains application-ow
 through `ParallelModeControlPlaneHandle`; core may copy the projection but must not own a second
 parallel runtime.
 
+An accepted post-turn completion updates the core planning-runtime projection in the same
+correlated dispatch. TUI conversation state does not retain a second planning-runtime copy.
+
 ## State Authority
 
 | State | Authority |

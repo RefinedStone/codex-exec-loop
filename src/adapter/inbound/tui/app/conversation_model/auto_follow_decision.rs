@@ -1,26 +1,10 @@
 /*
- * Auto-follow decision은 post-turn 평가 결과를 TUI conversation model의 실행 언어로
- * 낮추는 경계다. Planning runtime은 queue head와 handoff prompt를 계산하지만,
- * TUI는 그 결과를 "다음 prompt를 큐에 넣기" 또는 "이유를 남기고 멈추기"로만
- * 소비하므로 이 enum들이 adapter 내부 protocol 역할을 한다.
+ * Auto-follow skip reason은 application post-turn 평가 결과를 TUI conversation
+ * model의 상태·문구 언어로 낮추는 adapter 내부 protocol이다.
  */
-#[cfg(test)]
-use crate::application::service::planning::PlanningRuntimeQueuedAutoFollowPrompt;
 
 use super::super::turn_activity::TurnActivityState;
 use super::AutoFollowState;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg(test)]
-/*
- * AutoFollowDecision은 view model이 post-turn runtime에 돌려주는 실행 계획이다.
- * `QueuePrompt`는 application service가 만든 queue-aware prompt를 그대로 운반하고,
- * `Skip`은 status line, activity notice, runtime action이 같은 stop reason을 보게 한다.
- */
-pub(crate) enum AutoFollowDecision {
-    QueuePrompt(PlanningRuntimeQueuedAutoFollowPrompt),
-    Skip(AutoFollowSkipReason),
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /*

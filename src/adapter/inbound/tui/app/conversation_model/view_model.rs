@@ -5,7 +5,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /*
  * This file owns the mutable TUI projection of a conversation. The domain
  * snapshot gives persisted transcript facts; the view model layers on transient
- * input affordances, active-turn bookkeeping, planning runtime state, and
+ * input affordances, active-turn bookkeeping, planning handoff status, and
  * auto-follow status that only exist while the operator is in the native client.
  */
 #[path = "view_model/messages.rs"]
@@ -13,14 +13,9 @@ mod messages;
 #[path = "view_model/status.rs"]
 mod status;
 
-#[cfg(test)]
-use crate::application::service::planning::{
-    PlanningAutoFollowBlockReason, PlanningRuntimeAutoFollowDecision,
-    PlanningRuntimeAutoFollowRequest, PlanningRuntimeUseCases,
-};
 use crate::core::app::conversation::ConversationThreadReviewSnapshot;
 
-use crate::application::service::planning::{PlanningRuntimeProjection, PlanningTaskHandoff};
+use crate::application::service::planning::PlanningTaskHandoff;
 use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalReview,
     ConversationMessage, ConversationMessageKind, ConversationRuntimeControlTruth,
@@ -31,8 +26,6 @@ use crate::domain::planning::{PlanningQueueMutationReceipt, PlanningRepairReques
 
 use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
 use super::activity_rail::ActivityRailTerminalState;
-#[cfg(test)]
-use super::auto_follow::AutoFollowDecision;
 use super::auto_follow::{AutoFollowSkipReason, AutoFollowState};
 use super::progressive_activity::ProgressiveActivityState;
 use super::progressive_activity_detail::ProgressiveActivityDetailState;
@@ -155,9 +148,6 @@ pub(crate) struct ConversationViewModel {
     viewport_transcript_handoff_start: Option<usize>,
     viewport_transcript_handoff_release_pending: bool,
     viewport_transcript_handoff_status_restore: Option<String>,
-    // Transitional service snapshot used only by reducer/event synchronization.
-    // Rendering and post-turn worker context must read the core snapshot instead.
-    reducer_event_projection_cache: PlanningRuntimeProjection,
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) progressive_activity: ProgressiveActivityState,
     pub(crate) progressive_activity_detail: ProgressiveActivityDetailState,
@@ -212,7 +202,6 @@ impl ConversationViewModel {
             viewport_transcript_handoff_start: None,
             viewport_transcript_handoff_release_pending: false,
             viewport_transcript_handoff_status_restore: None,
-            reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
             progressive_activity_detail: ProgressiveActivityDetailState::default(),
@@ -293,7 +282,6 @@ impl ConversationViewModel {
             viewport_transcript_handoff_start: None,
             viewport_transcript_handoff_release_pending: false,
             viewport_transcript_handoff_status_restore: None,
-            reducer_event_projection_cache: PlanningRuntimeProjection::uninitialized(),
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
             progressive_activity_detail: ProgressiveActivityDetailState::default(),
@@ -328,16 +316,6 @@ impl ConversationViewModel {
         self.hydrated_thread_review_status_projection
             .manual_handoff_context
             .as_deref()
-    }
-    pub(crate) fn reducer_event_projection_cache(&self) -> &PlanningRuntimeProjection {
-        &self.reducer_event_projection_cache
-    }
-    pub(crate) fn replace_reducer_event_projection_cache(
-        &mut self,
-        reducer_event_projection_cache: PlanningRuntimeProjection,
-    ) {
-        // The app polls planning state outside the conversation stream; reducers keep this compatibility copy.
-        self.reducer_event_projection_cache = reducer_event_projection_cache;
     }
     pub(crate) fn sync_inline_shell_command_palette(&mut self) {
         let preferred_selection = self.inline_shell_command_palette_state.selected_command();
@@ -832,71 +810,6 @@ impl ConversationViewModel {
     }
     pub(crate) fn last_planning_task_handoff(&self) -> Option<&PlanningTaskHandoff> {
         self.last_planning_task_handoff.as_ref()
-    }
-    #[cfg(test)]
-    pub(crate) fn decide_auto_follow(
-        &self,
-        planning_runtime: &PlanningRuntimeUseCases,
-    ) -> AutoFollowDecision {
-        self.decide_auto_follow_with_snapshot(
-            planning_runtime,
-            &self.reducer_event_projection_cache,
-        )
-    }
-    #[cfg(test)]
-    pub(crate) fn decide_auto_follow_with_snapshot(
-        &self,
-        planning_runtime: &PlanningRuntimeUseCases,
-        planning_runtime_projection: &PlanningRuntimeProjection,
-    ) -> AutoFollowDecision {
-        // Local conversation guards run before asking the planning service to compose a prompt.
-        if self.auto_follow_state.post_turn_continuation_paused() {
-            return AutoFollowDecision::Skip(AutoFollowSkipReason::PostTurnContinuationPaused);
-        }
-        if !self.auto_follow_state.can_queue_next() {
-            return AutoFollowDecision::Skip(AutoFollowSkipReason::LimitReached);
-        }
-        let Some(last_message) = self.latest_agent_message_text() else {
-            return AutoFollowDecision::Skip(AutoFollowSkipReason::NoAgentReply);
-        };
-        if self
-            .auto_follow_state
-            .stop_rules
-            .stop_keyword
-            .matches(last_message)
-        {
-            return AutoFollowDecision::Skip(AutoFollowSkipReason::StopKeywordMatched);
-        }
-        if self
-            .auto_follow_state
-            .stop_rules
-            .should_stop_on_no_file_changes(self.turn_activity.last_completed_file_change_count())
-        {
-            return AutoFollowDecision::Skip(AutoFollowSkipReason::NoFileChanges);
-        }
-        // Service block reasons are mapped back to conversation-facing skip copy here.
-        match planning_runtime.decide_auto_follow(PlanningRuntimeAutoFollowRequest {
-            stop_keyword: self.auto_follow_state.stop_keyword_value(),
-            last_message: last_message.trim(),
-            projection: planning_runtime_projection,
-        }) {
-            PlanningRuntimeAutoFollowDecision::QueuePrompt(prompt) => {
-                AutoFollowDecision::QueuePrompt(prompt)
-            }
-            PlanningRuntimeAutoFollowDecision::Blocked(block_reason) => {
-                AutoFollowDecision::Skip(match block_reason {
-                    PlanningAutoFollowBlockReason::InvalidWorkspace => {
-                        AutoFollowSkipReason::PlanningBlocked
-                    }
-                    PlanningAutoFollowBlockReason::ActionableQueueRequired => {
-                        AutoFollowSkipReason::PlanningQueueHeadRequired
-                    }
-                    PlanningAutoFollowBlockReason::RepeatedQueueHead => {
-                        AutoFollowSkipReason::PlanningRepeatedQueueHead
-                    }
-                })
-            }
-        }
     }
 }
 

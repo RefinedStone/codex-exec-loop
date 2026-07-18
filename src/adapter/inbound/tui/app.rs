@@ -182,9 +182,6 @@ use conversation_lifecycle::{
     reduce_conversation_lifecycle,
 };
 #[allow(unused_imports)]
-#[cfg(test)]
-pub(super) use conversation_model::AutoFollowDecision;
-#[allow(unused_imports)]
 pub(super) use conversation_model::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationInputState,
     ConversationState, ConversationViewModel, ProgressiveActivityDetailKind, StopKeywordRule,
