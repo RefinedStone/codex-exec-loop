@@ -864,12 +864,11 @@ impl NativeTuiApp {
                     if let Some(card_index) = filtered.get(
                         self.progressive_activity_overlay_ui_state
                             .selected_card_index(),
-                    ) {
-                        if let Some(card) = cards.get(*card_index) {
-                            self.progressive_activity_overlay_ui_state
-                                .expand_state_mut()
-                                .expand_card(card.key);
-                        }
+                    ) && let Some(card) = cards.get(*card_index)
+                    {
+                        self.progressive_activity_overlay_ui_state
+                            .expand_state_mut()
+                            .expand_card(card.key);
                     }
                 }
                 self.progressive_activity_overlay_ui_state.focus_detail();

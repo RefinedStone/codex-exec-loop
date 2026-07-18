@@ -99,23 +99,10 @@ pub(crate) fn build_activity_overlay_list_view(
     };
 
     header_lines.extend(build_document_status_lines(&document));
-    let detail_kind = cards
-        .get(selected_card_index)
-        .map_or(selected_kind, |card| match card.key.kind {
-            ProgressiveActivityCardKind::Diff | ProgressiveActivityCardKind::Patch => {
-                ProgressiveActivityDetailKind::Diff
-            }
-            ProgressiveActivityCardKind::Command
-            | ProgressiveActivityCardKind::Mcp
-            | ProgressiveActivityCardKind::Plan
-            | ProgressiveActivityCardKind::Reason
-            | ProgressiveActivityCardKind::Agent
-            | ProgressiveActivityCardKind::Terminal
-            | ProgressiveActivityCardKind::Token
-            | ProgressiveActivityCardKind::Moderation
-            | ProgressiveActivityCardKind::Guardian
-            | ProgressiveActivityCardKind::Unknown => ProgressiveActivityDetailKind::Output,
-        });
+    let detail_kind = activity_document_detail_kind(
+        cards.get(selected_card_index).map(|card| card.key.kind),
+        selected_kind,
+    );
     let page = match detail_kind {
         ProgressiveActivityDetailKind::Diff => {
             let page = build_bounded_diff_page(
@@ -163,6 +150,19 @@ pub(crate) fn build_activity_overlay_list_view(
         key_lines: build_activity_overlay_key_lines(viewport_width),
         current_page_cursor: page.current_cursor,
         next_page_cursor: page.next_cursor,
+    }
+}
+
+fn activity_document_detail_kind(
+    card_kind: Option<ProgressiveActivityCardKind>,
+    fallback: ProgressiveActivityDetailKind,
+) -> ProgressiveActivityDetailKind {
+    match card_kind {
+        Some(ProgressiveActivityCardKind::Diff | ProgressiveActivityCardKind::Patch) => {
+            ProgressiveActivityDetailKind::Diff
+        }
+        Some(_) => ProgressiveActivityDetailKind::Output,
+        None => fallback,
     }
 }
 
@@ -514,8 +514,9 @@ fn clamped_char_boundary(text: &str, requested: usize) -> usize {
 mod tests {
     use super::{
         ActivityOverlayDocument, BoundedDocumentPage, PAGE_OUTPUT_BYTES_PER_CELL,
-        PAGE_SCAN_BYTES_PER_CELL, ProgressiveActivityDetailKind, ProgressiveActivityPageCursor,
-        build_activity_overlay_view, build_bounded_document_page,
+        PAGE_SCAN_BYTES_PER_CELL, ProgressiveActivityCardKind, ProgressiveActivityDetailKind,
+        ProgressiveActivityPageCursor, activity_document_detail_kind, build_activity_overlay_view,
+        build_bounded_document_page,
     };
 
     fn rendered_text(page: &BoundedDocumentPage) -> String {
@@ -567,6 +568,31 @@ mod tests {
 
         assert_eq!(rendered_text(&page), "?\n?");
         assert!(page.lines.iter().all(|line| line.width() <= 1));
+    }
+
+    #[test]
+    fn card_kind_selects_semantic_diff_paging_only_for_diff_content() {
+        assert_eq!(
+            activity_document_detail_kind(
+                Some(ProgressiveActivityCardKind::Diff),
+                ProgressiveActivityDetailKind::Output,
+            ),
+            ProgressiveActivityDetailKind::Diff
+        );
+        assert_eq!(
+            activity_document_detail_kind(
+                Some(ProgressiveActivityCardKind::Patch),
+                ProgressiveActivityDetailKind::Output,
+            ),
+            ProgressiveActivityDetailKind::Diff
+        );
+        assert_eq!(
+            activity_document_detail_kind(
+                Some(ProgressiveActivityCardKind::Command),
+                ProgressiveActivityDetailKind::Diff,
+            ),
+            ProgressiveActivityDetailKind::Output
+        );
     }
 
     #[test]
@@ -623,7 +649,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(view.header_lines.len() >= 1);
+        assert!(!view.header_lines.is_empty());
         assert!(!header.contains("truncated:0"));
         assert!(!header.contains("history:complete"));
         assert_eq!(view.key_lines.len(), 3);

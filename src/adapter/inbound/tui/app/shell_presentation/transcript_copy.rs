@@ -136,8 +136,9 @@ fn format_tool_card_lines(
     let digest = tool_message_digest(&message.text);
     // Detail view expands multi-line tool cards by default; Medium keeps them collapsed
     // unless the operator toggled the card. Single-line tools stay header-only.
-    let expanded = expandable && expand_state.is_some_and(|state| state.is_tool_expanded(digest))
-        || expandable && matches!(view_mode, ConversationViewMode::Detail);
+    let expanded = expandable
+        && (expand_state.is_some_and(|state| state.is_tool_expanded(digest))
+            || matches!(view_mode, ConversationViewMode::Detail));
 
     let indicator = if !expandable {
         AkraTheme::non_expandable_indicator()
