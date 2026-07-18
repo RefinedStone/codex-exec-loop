@@ -45,6 +45,12 @@ editor를 지우거나 transcript history를 추가하지 않고, core가 accept
 로컬 projection을 확정합니다. 활성 submission이 있으면 core는 명시적 rejection event를 내보내고
 worker effect를 만들지 않으므로 adapter와 core가 가짜 `starting turn` 상태로 갈라지지 않습니다.
 
+활성 turn steer도 같은 권한 경계를 사용합니다. Core는 정확히 일치하는 활성
+submission/thread/turn identity만 승인하고, 해당 submission에 귀속된 correlation을 발급해 provider
+worker 하나만 시작하며 stale completion을 버립니다. TUI에는 confirmation modal과 성공 시 변경되지
+않은 draft만 지우기 위한 editor revision만 남습니다. 이미 승인된 steer는 turn terminal event만으로
+무효화하지 않지만 conversation identity가 바뀌면 무효화합니다.
+
 Session rename도 core-correlated single-flight 작업입니다. Provider의 성공 응답을 core가 수락하면
 일치하는 catalog row, 불러온 conversation title, stream identity를 함께 갱신합니다. 충돌하는
 catalog load와 같은 thread의 conversation load는 버리지 않고 rename 완료 뒤로 지연하므로 예전

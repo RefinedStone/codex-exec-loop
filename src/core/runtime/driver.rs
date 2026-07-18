@@ -103,9 +103,11 @@ mod tests {
     use crate::core::app::{
         AppEvent, CoreEffectCompletion, CorePromptOrigin, StartupAttachmentSnapshot,
         StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
-        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
+        TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission,
+        TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
+    use crate::domain::conversation::ConversationTurnSteerRequest;
 
     #[test]
     fn core_input_channel_applies_backpressure_and_reports_disconnect() {
@@ -257,6 +259,109 @@ mod tests {
                 },
                 CoreEffect::SubmitTurn {
                     correlation: crate::core::app::TurnSubmissionCorrelation::new(2),
+                    request,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn steer_turn_admission_runs_exactly_one_worker_until_completion() {
+        let (_tx, rx) = core_input_channel();
+        let effects = RecordingEffectExecutor::default();
+        let mut runtime = CoreRuntime::new(effects.clone(), rx);
+        let submission_request = TurnSubmissionRequest {
+            workspace_directory: "/tmp/workspace".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            prompt: "ship it".to_string(),
+            prompt_origin: CorePromptOrigin::Manual,
+            turn_options: Default::default(),
+            slot_lease_handoff: None,
+        };
+        let turn_submission = crate::core::app::TurnSubmissionCorrelation::new(1);
+        runtime.dispatch_command(AppCommand::SubmitTurn(submission_request));
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        });
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-1".to_string(),
+            expected_turn_id: "turn-1".to_string(),
+            prompt: "focus the active work".to_string(),
+        };
+
+        let accepted = runtime.dispatch_command(AppCommand::SteerTurn(request.clone()));
+        let rejected = runtime.dispatch_command(AppCommand::SteerTurn(request.clone()));
+        let correlation = TurnSteerCorrelation::new(1, turn_submission);
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::Accepted { correlation },
+            )]
+        );
+        assert_eq!(
+            rejected.events,
+            vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::RejectedActive {
+                    active_correlation: correlation,
+                },
+            )]
+        );
+        assert_eq!(
+            effects
+                .recorded_effects()
+                .into_iter()
+                .filter(|effect| matches!(effect, CoreEffect::SteerTurn { .. }))
+                .collect::<Vec<_>>(),
+            vec![CoreEffect::SteerTurn {
+                correlation,
+                request: request.clone(),
+            }]
+        );
+
+        runtime.dispatch_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::TurnSteered {
+                correlation,
+                result: Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                    turn_id: "turn-1".to_string(),
+                }),
+            },
+        ));
+        let retried = runtime.dispatch_command(AppCommand::SteerTurn(request.clone()));
+        let retry_correlation = TurnSteerCorrelation::new(2, turn_submission);
+        assert_eq!(
+            retried.events,
+            vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::Accepted {
+                    correlation: retry_correlation,
+                },
+            )]
+        );
+        assert_eq!(
+            effects
+                .recorded_effects()
+                .into_iter()
+                .filter(|effect| matches!(effect, CoreEffect::SteerTurn { .. }))
+                .collect::<Vec<_>>(),
+            vec![
+                CoreEffect::SteerTurn {
+                    correlation,
+                    request: request.clone(),
+                },
+                CoreEffect::SteerTurn {
+                    correlation: retry_correlation,
                     request,
                 },
             ]

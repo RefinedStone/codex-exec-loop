@@ -47,6 +47,12 @@ clearing the editor or appending transcript history, then commits that local pro
 core emits an accepted admission. An active submission produces an explicit rejection event and no
 worker effect, so adapter and core state cannot diverge into a phantom "starting turn".
 
+Active-turn steering uses the same authority boundary. Core admits only an exact active
+submission/thread/turn identity, assigns a correlation rooted in that submission, starts one
+provider worker, and drops stale completions. The TUI owns only the confirmation modal and the
+editor revision needed to clear an unchanged draft after success. A terminal turn event does not
+invalidate an already accepted steer, but a conversation identity transition does.
+
 An accepted post-turn completion updates the core planning-runtime projection in the same
 correlated dispatch. TUI conversation state does not retain a second planning-runtime copy.
 

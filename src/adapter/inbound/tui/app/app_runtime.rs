@@ -75,10 +75,6 @@ pub(super) enum BackgroundMessage {
         event: ConversationStreamEvent,
     },
     ConversationRuntimeNotice(String),
-    TurnSteerCompleted {
-        request_id: u64,
-        result: Result<crate::domain::conversation::ConversationTurnSteerReceipt, String>,
-    },
     ReviewsOverlayLoaded {
         request: ReviewsOverlayLoadRequest,
         authority: ReviewsOverlayAuthoritySnapshot,
@@ -1107,13 +1103,6 @@ impl NativeTuiApplicationHandle {
         self.conversations.request_stop_all_sessions()
     }
 
-    pub(super) fn steer_turn(
-        &self,
-        request: crate::domain::conversation::ConversationTurnSteerRequest,
-    ) -> Result<crate::domain::conversation::ConversationTurnSteerReceipt, String> {
-        self.conversations.steer_turn(request)
-    }
-
     pub(super) fn resolve_approval_request(
         &self,
         approval_id: &str,
@@ -1157,15 +1146,6 @@ impl NativeTuiConversationHandle {
     pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
         self.service
             .request_stop_all_sessions()
-            .map_err(|error| error.to_string())
-    }
-
-    pub(super) fn steer_turn(
-        &self,
-        request: crate::domain::conversation::ConversationTurnSteerRequest,
-    ) -> Result<crate::domain::conversation::ConversationTurnSteerReceipt, String> {
-        self.service
-            .steer_turn(request)
             .map_err(|error| error.to_string())
     }
 
@@ -1327,7 +1307,6 @@ impl NativeTuiApp {
             pending_manual_prompt_preparation: None,
             next_manual_prompt_preparation_request_id: 0,
             manual_prompt_preparation_generation: 0,
-            next_turn_steer_request_id: 0,
             prompt_input_revision: 0,
             turn_steer_confirmation: None,
             pending_turn_steer: None,
@@ -1461,6 +1440,11 @@ impl NativeTuiApp {
                 self.apply_parallel_peek_conversation_load(request_id, thread_id, result);
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
+            AppEvent::TurnSteerAdmissionResolved(_) => {}
+            AppEvent::TurnSteerCompleted {
+                correlation,
+                result,
+            } => self.apply_turn_steer_completion(correlation, result),
             AppEvent::TurnStreamSnapshotChanged(stream_snapshot) => {
                 self.dispatch_conversation_runtime(
                     ConversationRuntimeEvent::StreamSnapshotApplied(stream_snapshot),

@@ -166,9 +166,6 @@ impl ShellRuntime {
                     self.app
                         .dispatch_core_input(CoreInput::ConversationRuntimeNotice(notice));
                 }
-                BackgroundMessage::TurnSteerCompleted { request_id, result } => {
-                    self.app.apply_turn_steer_completion(request_id, result);
-                }
                 BackgroundMessage::ReviewsOverlayLoaded { request, authority } => {
                     if self.app.apply_reviews_overlay_loaded(request, authority)
                         == super::reviews_overlay_ui::ReviewsOverlayLoadCompletion::ReloadRequired

@@ -7,7 +7,9 @@ use crate::application::service::github_review_poller_service::GithubReviewPolle
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::composition::core_effect_runner::CoreEffectRunner;
-use crate::core::app::{ConversationLoadCorrelation, StartupCheckCorrelation};
+use crate::core::app::{
+    ConversationLoadCorrelation, StartupCheckCorrelation, TurnSteerCorrelation,
+};
 use crate::core::runtime::CoreRuntime;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
@@ -270,10 +272,15 @@ enum ManualPromptDelivery {
 
 #[derive(Debug, Clone)]
 struct TurnSteerUiIntent {
-    request_id: u64,
     input_revision: u64,
     source_input_buffer: String,
     request: ConversationTurnSteerRequest,
+}
+
+#[derive(Debug, Clone)]
+struct PendingTurnSteerUiIntent {
+    correlation: TurnSteerCorrelation,
+    intent: TurnSteerUiIntent,
 }
 
 // Prompt origin is captured at submission time so later stream handling can
@@ -348,10 +355,9 @@ struct NativeTuiApp {
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
     next_manual_prompt_preparation_request_id: u64,
     manual_prompt_preparation_generation: u64,
-    next_turn_steer_request_id: u64,
     prompt_input_revision: u64,
     turn_steer_confirmation: Option<TurnSteerUiIntent>,
-    pending_turn_steer: Option<TurnSteerUiIntent>,
+    pending_turn_steer: Option<PendingTurnSteerUiIntent>,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     conversation_state: ConversationState,
