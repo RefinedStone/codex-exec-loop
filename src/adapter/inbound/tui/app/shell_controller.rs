@@ -227,20 +227,25 @@ impl NativeTuiApp {
         self.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
     }
     fn handle_activity_shell_command(&mut self, argument: Option<&str>) {
-        let selected_kind = match argument {
-            None => ProgressiveActivityDetailKind::Diff,
-            Some(argument) => {
-                let Some(selected_kind) = parse_progressive_activity_detail_kind(argument) else {
-                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                        status_text: "activity unchanged; supported values: diff, output"
-                            .to_string(),
-                    });
-                    return;
-                };
-                selected_kind
+        match argument {
+            None => {
+                self.show_progressive_activity_overlay_all();
             }
-        };
-        self.show_progressive_activity_overlay(selected_kind);
+            Some(argument) => {
+                if let Some(selected_kind) = parse_progressive_activity_detail_kind(argument) {
+                    self.show_progressive_activity_overlay(selected_kind);
+                    return;
+                }
+                if let Some(card_filter) = parse_progressive_activity_card_filter(argument) {
+                    self.show_progressive_activity_overlay_filter(card_filter);
+                    return;
+                }
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: "activity unchanged; supported values: all, diff, output, command, patch, mcp, plan, reason, agent, terminal, token, guardian, moderation, unknown"
+                        .to_string(),
+                });
+            }
+        }
     }
     pub(super) fn show_progressive_activity_overlay(
         &mut self,
@@ -251,6 +256,21 @@ impl NativeTuiApp {
         }
         self.progressive_activity_overlay_ui_state
             .reset_for_kind(selected_kind);
+        self.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
+        true
+    }
+    pub(super) fn show_progressive_activity_overlay_all(&mut self) -> bool {
+        self.show_progressive_activity_overlay_filter(None)
+    }
+    pub(super) fn show_progressive_activity_overlay_filter(
+        &mut self,
+        card_filter: Option<super::ProgressiveActivityCardKind>,
+    ) -> bool {
+        if self.approval_overlay_active() {
+            return false;
+        }
+        self.progressive_activity_overlay_ui_state
+            .reset_for_card_filter(card_filter);
         self.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
         true
     }
@@ -802,18 +822,60 @@ impl NativeTuiApp {
     }
 
     fn handle_progressive_activity_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        let filtered_len = match &self.conversation_state {
+            ConversationState::Ready(conversation) => {
+                let cards = conversation.progressive_activity_detail.cards();
+                super::filter_cards_by_kind(
+                    &cards,
+                    self.progressive_activity_overlay_ui_state.card_filter(),
+                )
+                .len()
+            }
+            ConversationState::Loading | ConversationState::Failed(_) => 0,
+        };
         match (key.code, key.modifiers) {
             (
                 KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right,
                 KeyModifiers::NONE | KeyModifiers::SHIFT,
             ) => self.progressive_activity_overlay_ui_state.cycle_kind(),
-            (KeyCode::Up | KeyCode::PageUp, KeyModifiers::NONE) => {
+            (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                self.progressive_activity_overlay_ui_state
+                    .move_card_selection(-1, filtered_len);
+            }
+            (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                self.progressive_activity_overlay_ui_state
+                    .move_card_selection(1, filtered_len);
+            }
+            (KeyCode::PageUp, KeyModifiers::NONE) => {
                 self.progressive_activity_overlay_ui_state
                     .move_to_previous_page();
             }
-            (KeyCode::Down | KeyCode::PageDown, KeyModifiers::NONE) => {
+            (KeyCode::PageDown, KeyModifiers::NONE) => {
                 self.progressive_activity_overlay_ui_state
                     .move_to_next_page();
+            }
+            (KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('l'), KeyModifiers::NONE) => {
+                if let ConversationState::Ready(conversation) = &self.conversation_state {
+                    let cards = conversation.progressive_activity_detail.cards();
+                    let filtered = super::filter_cards_by_kind(
+                        &cards,
+                        self.progressive_activity_overlay_ui_state.card_filter(),
+                    );
+                    if let Some(card_index) = filtered.get(
+                        self.progressive_activity_overlay_ui_state
+                            .selected_card_index(),
+                    ) {
+                        if let Some(card) = cards.get(*card_index) {
+                            self.progressive_activity_overlay_ui_state
+                                .expand_state_mut()
+                                .expand_card(card.key);
+                        }
+                    }
+                }
+                self.progressive_activity_overlay_ui_state.focus_detail();
+            }
+            (KeyCode::Char('h'), KeyModifiers::NONE) => {
+                self.progressive_activity_overlay_ui_state.focus_list();
             }
             (KeyCode::Home, KeyModifiers::NONE) => self
                 .progressive_activity_overlay_ui_state
@@ -1612,8 +1674,8 @@ mod tests {
         app.execute_inline_shell_command_input(command(":activity"));
         assert_eq!(app.shell_overlay, ShellOverlay::Activity);
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.selected_kind(),
-            ProgressiveActivityDetailKind::Diff
+            app.progressive_activity_overlay_ui_state.card_filter(),
+            None
         );
 
         app.close_shell_overlay();
@@ -1623,14 +1685,23 @@ mod tests {
             app.progressive_activity_overlay_ui_state.selected_kind(),
             ProgressiveActivityDetailKind::Output
         );
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state.card_filter(),
+            Some(super::ProgressiveActivityCardKind::Command)
+        );
 
         app.close_shell_overlay();
         app.execute_inline_shell_command_input(command(":activity all"));
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(app.shell_overlay, ShellOverlay::Activity);
         assert_eq!(
-            status_text(&app),
-            "activity unchanged; supported values: diff, output"
+            app.progressive_activity_overlay_ui_state.card_filter(),
+            None
         );
+
+        app.close_shell_overlay();
+        app.execute_inline_shell_command_input(command(":activity nope"));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert!(status_text(&app).contains("activity unchanged; supported values:"));
 
         app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
         assert!(!app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
@@ -1646,7 +1717,16 @@ mod tests {
         app.progressive_activity_overlay_ui_state
             .set_page_window(0, Some(10));
 
+        // Up/Down select cards; with an empty card list the index stays at 0 and page is reset.
         assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state
+                .selected_card_index(),
+            0
+        );
+        app.progressive_activity_overlay_ui_state
+            .set_page_window(0, Some(10));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
         assert_eq!(
             app.progressive_activity_overlay_ui_state
                 .current_page_start(),
@@ -1661,16 +1741,12 @@ mod tests {
             20
         );
         assert!(app.handle_shell_overlay_key(key(KeyCode::PageUp)));
-        assert!(app.handle_shell_overlay_key(key(KeyCode::Up)));
         assert_eq!(
             app.progressive_activity_overlay_ui_state
                 .current_page_start(),
-            0
+            10
         );
 
-        app.progressive_activity_overlay_ui_state
-            .set_page_window(0, Some(10));
-        assert!(app.handle_shell_overlay_key(key(KeyCode::PageDown)));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Home)));
         assert_eq!(
             app.progressive_activity_overlay_ui_state.selected_kind(),
@@ -1689,30 +1765,32 @@ mod tests {
 
         app.progressive_activity_overlay_ui_state
             .select_document(1, Some(8));
+        // Output/Command filter cycles next to Patch in the shared filter wheel.
         assert!(app.handle_shell_overlay_key(key(KeyCode::Tab)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.selected_kind(),
-            ProgressiveActivityDetailKind::Diff
+            app.progressive_activity_overlay_ui_state.card_filter(),
+            Some(super::ProgressiveActivityCardKind::Patch)
         );
         assert_eq!(
             app.progressive_activity_overlay_ui_state
                 .current_document_sequence(),
             None
         );
+        // Filter keys always advance the shared cycle (including BackTab/Left).
         assert!(app.handle_shell_overlay_key(modified_key(KeyCode::BackTab, KeyModifiers::SHIFT)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.selected_kind(),
-            ProgressiveActivityDetailKind::Output
+            app.progressive_activity_overlay_ui_state.card_filter(),
+            Some(super::ProgressiveActivityCardKind::Diff)
         );
         assert!(app.handle_shell_overlay_key(key(KeyCode::Left)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.selected_kind(),
-            ProgressiveActivityDetailKind::Diff
+            app.progressive_activity_overlay_ui_state.card_filter(),
+            Some(super::ProgressiveActivityCardKind::Mcp)
         );
         assert!(app.handle_shell_overlay_key(key(KeyCode::Right)));
         assert_eq!(
-            app.progressive_activity_overlay_ui_state.selected_kind(),
-            ProgressiveActivityDetailKind::Output
+            app.progressive_activity_overlay_ui_state.card_filter(),
+            Some(super::ProgressiveActivityCardKind::Plan)
         );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));

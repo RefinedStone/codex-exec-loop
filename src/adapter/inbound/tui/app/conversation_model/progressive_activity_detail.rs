@@ -1,6 +1,9 @@
 use std::fmt;
 use std::sync::{Arc, Weak};
 
+use super::progressive_activity_cards::{
+    ProgressiveActivityCard, card_detail_text, project_activity_cards,
+};
 use crate::domain::conversation_progressive_activity::{
     ConversationProgressiveActivityPayload, ConversationProgressiveActivityProjectionSnapshot,
 };
@@ -20,10 +23,14 @@ pub(crate) struct ProgressiveActivityDocument {
     pub(crate) history_incomplete: bool,
     snapshot: Arc<ConversationProgressiveActivityProjectionSnapshot>,
     record_index: usize,
+    owned_text: Option<String>,
 }
 
 impl ProgressiveActivityDocument {
     pub(crate) fn text(&self) -> &str {
+        if let Some(owned_text) = self.owned_text.as_deref() {
+            return owned_text;
+        }
         detail_payload(
             &self.snapshot.records[self.record_index]
                 .observation()
@@ -96,6 +103,39 @@ impl ProgressiveActivityDetailState {
             history_incomplete,
             snapshot,
             record_index,
+            owned_text: None,
+        })
+    }
+
+    pub(crate) fn cards(&self) -> Vec<ProgressiveActivityCard> {
+        let Some(snapshot) = self.snapshot.upgrade() else {
+            return Vec::new();
+        };
+        project_activity_cards(&snapshot)
+    }
+
+    pub(crate) fn card_document(
+        &self,
+        card: &ProgressiveActivityCard,
+    ) -> Option<ProgressiveActivityDocument> {
+        let snapshot = self.snapshot.upgrade()?;
+        if card.record_index >= snapshot.records.len() {
+            return None;
+        }
+        let detail = card_detail_text(&snapshot, card.record_index)?;
+        let history_incomplete = snapshot.history_incomplete();
+        // Card documents synthesize detail for every progressive kind. Diff/Output
+        // kind is only a legacy tab label; card body text lives in owned_text.
+        Some(ProgressiveActivityDocument {
+            kind: ProgressiveActivityDetailKind::Output,
+            sequence: card.key.sequence,
+            source_bytes: card.source_bytes,
+            retained_bytes: card.retained_bytes,
+            truncated_bytes: card.truncated_bytes,
+            history_incomplete,
+            snapshot,
+            record_index: card.record_index,
+            owned_text: Some(detail),
         })
     }
 

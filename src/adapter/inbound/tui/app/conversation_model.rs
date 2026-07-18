@@ -16,6 +16,8 @@ mod activity_rail;
 mod auto_follow;
 #[path = "conversation_model/progressive_activity.rs"]
 mod progressive_activity;
+#[path = "conversation_model/progressive_activity_cards.rs"]
+mod progressive_activity_cards;
 #[path = "conversation_model/progressive_activity_detail.rs"]
 mod progressive_activity_detail;
 #[path = "conversation_model/turn_activity.rs"]
@@ -32,6 +34,11 @@ pub(crate) use auto_follow::{
 pub(crate) use progressive_activity::ProgressiveActivityItemKind;
 #[cfg(test)]
 pub(crate) use progressive_activity::ProgressiveActivityState;
+pub(crate) use progressive_activity_cards::{
+    ProgressiveActivityCard, ProgressiveActivityCardKind, ProgressiveActivityExpandState,
+    filter_cards_by_kind, tool_message_digest, tool_message_fact, tool_message_is_expandable,
+    tool_message_title,
+};
 pub(crate) use progressive_activity_detail::ProgressiveActivityDetailKind;
 // shell은 conversation state, input state, planning-repair state를 이 surface에서
 // 가져오고, 실제 mapping logic은 `view_model.rs` 안에 남긴다.

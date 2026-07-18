@@ -56,7 +56,7 @@ pub(super) use overlays::{
     HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
     ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
     QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    ViewSelectionOverlayView, build_activity_overlay_view,
+    ViewSelectionOverlayView, build_activity_overlay_list_view,
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
@@ -77,7 +77,9 @@ pub(super) use status_panels::InlineTailView;
 pub(super) use transcript_copy::format_conversation_lines_for_view;
 #[cfg(test)]
 pub(super) use transcript_copy::format_conversation_lines_with_debug;
-pub(super) use transcript_copy::{format_conversation_lines, format_conversation_scrollback_lines};
+pub(super) use transcript_copy::{
+    format_conversation_lines, format_conversation_scrollback_lines_with_expand,
+};
 
 #[cfg(test)]
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

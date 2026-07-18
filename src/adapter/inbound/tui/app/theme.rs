@@ -72,6 +72,39 @@ impl AkraTheme {
         Style::default().fg(Color::Magenta)
     }
 
+    // Expandable progressive-activity / tool cards share Grok-like fold chrome.
+    pub(super) fn expandable_indicator() -> Style {
+        Self::accent().add_modifier(Modifier::BOLD)
+    }
+
+    pub(super) fn tool_card_bullet() -> Style {
+        Self::tool().add_modifier(Modifier::BOLD)
+    }
+
+    pub(super) fn tool_card_header() -> Style {
+        Self::tool()
+    }
+
+    pub(super) fn tool_card_body() -> Style {
+        Self::muted()
+    }
+
+    pub(super) fn collapsed_indicator() -> &'static str {
+        "› "
+    }
+
+    pub(super) fn expanded_indicator() -> &'static str {
+        "▼ "
+    }
+
+    pub(super) fn non_expandable_indicator() -> &'static str {
+        "  "
+    }
+
+    pub(super) fn tool_card_bullet_glyph() -> &'static str {
+        "◆ "
+    }
+
     pub(super) fn markdown_heading() -> Style {
         Self::brand()
     }

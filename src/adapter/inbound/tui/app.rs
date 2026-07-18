@@ -184,7 +184,9 @@ use conversation_lifecycle::{
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationInputState,
-    ConversationState, ConversationViewModel, ProgressiveActivityDetailKind, StopKeywordRule,
+    ConversationState, ConversationViewModel, ProgressiveActivityCard, ProgressiveActivityCardKind,
+    ProgressiveActivityDetailKind, ProgressiveActivityExpandState, StopKeywordRule,
+    filter_cards_by_kind,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,
@@ -214,7 +216,8 @@ use planning_init_overlay_ui::{
     PlanningInitOverlayUiState,
 };
 use progressive_activity_overlay_ui::{
-    ProgressiveActivityOverlayUiState, parse_progressive_activity_detail_kind,
+    ProgressiveActivityOverlayUiState, parse_progressive_activity_card_filter,
+    parse_progressive_activity_detail_kind,
 };
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;

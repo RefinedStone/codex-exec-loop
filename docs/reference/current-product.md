@@ -22,7 +22,7 @@ an explicitly proposed document, not here.
 | Diagnostics | `Ctrl+d`, `:diag` | inspect startup readiness and blockers |
 | Sessions | `Ctrl+o`, `:sessions` | search, rename, resume, or start a blank draft |
 | Reviews | `:reviews` | inspect the bounded review center projection |
-| Activity | `:activity [diff\|output]`, `:act` | inspect retained typed diff or output detail for the active turn |
+| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | inspect retained progressive activity cards; expand selected detail (live/overlay only; host scrollback stays static) |
 | Queue | `:queue`, `:q`, `akra queue` | inspect accepted head, proposals, skip framing, and receipts |
 | Planning | `:planning`, `:planning-init` | stage, validate, and promote planning changes |
 | Directions | `:directions` | maintain directions and queue-idle supporting artifacts |
@@ -42,7 +42,7 @@ The source registry is `src/adapter/inbound/tui/app/inline_shell_commands.rs`.
 :diag
 :parallel [off]
 :peek
-:activity [diff|output]
+:activity [all|diff|output|command|patch|mcp|plan|reason|agent|terminal|token|guardian|moderation|unknown]
 :sessions
 :reviews
 :queue

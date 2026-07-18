@@ -3,7 +3,7 @@ use super::super::shell_presentation::{
     HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
     ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
     QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    ViewSelectionOverlayView, build_activity_overlay_view,
+    ViewSelectionOverlayView, build_activity_overlay_list_view,
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
@@ -97,10 +97,21 @@ pub(super) fn draw_inline_shell_inspection(
 
 fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
     let selected_kind = app.progressive_activity_overlay_ui_state.selected_kind();
-    let (lifecycle_epoch, diff_available, output_available, document) =
+    let card_filter = app.progressive_activity_overlay_ui_state.card_filter();
+    let requested_card_index = app
+        .progressive_activity_overlay_ui_state
+        .selected_card_index();
+    let (lifecycle_epoch, diff_available, output_available, cards, document) =
         match &app.conversation_state {
             super::ConversationState::Ready(conversation) => {
                 let detail = &conversation.progressive_activity_detail;
+                let cards = detail.cards();
+                let filtered_indices = super::filter_cards_by_kind(&cards, card_filter);
+                let selected_document = filtered_indices
+                    .get(requested_card_index)
+                    .and_then(|card_index| cards.get(*card_index))
+                    .and_then(|card| detail.card_document(card))
+                    .or_else(|| detail.document(selected_kind));
                 (
                     detail.lifecycle_epoch(),
                     detail
@@ -109,13 +120,24 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
                     detail
                         .document(super::ProgressiveActivityDetailKind::Output)
                         .is_some(),
-                    detail.document(selected_kind),
+                    cards,
+                    selected_document,
                 )
             }
             super::ConversationState::Loading | super::ConversationState::Failed(_) => {
-                (0, false, false, None)
+                (0, false, false, Vec::new(), None)
             }
         };
+    let filtered_indices = super::filter_cards_by_kind(&cards, card_filter);
+    app.progressive_activity_overlay_ui_state
+        .clamp_selected_card(filtered_indices.len());
+    let selected_card_index = app
+        .progressive_activity_overlay_ui_state
+        .selected_card_index();
+    let filtered_cards: Vec<_> = filtered_indices
+        .iter()
+        .filter_map(|index| cards.get(*index).cloned())
+        .collect();
     app.progressive_activity_overlay_ui_state.select_document(
         lifecycle_epoch,
         document.as_ref().map(|document| document.sequence),
@@ -130,7 +152,11 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
 
     // Header copy is bounded independently of the retained document. Build it
     // with a zero-row body first so the real document is scanned only once.
-    let header_view = build_activity_overlay_view(
+    let header_view = build_activity_overlay_list_view(
+        card_filter,
+        &filtered_cards,
+        selected_card_index,
+        app.progressive_activity_overlay_ui_state.list_focus(),
         selected_kind,
         diff_available,
         output_available,
@@ -167,7 +193,11 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
         key_lines,
         current_page_start,
         next_page_start,
-    } = build_activity_overlay_view(
+    } = build_activity_overlay_list_view(
+        card_filter,
+        &filtered_cards,
+        selected_card_index,
+        app.progressive_activity_overlay_ui_state.list_focus(),
         selected_kind,
         diff_available,
         output_available,

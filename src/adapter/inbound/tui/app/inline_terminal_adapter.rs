@@ -9,7 +9,8 @@ use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::history_insertion::HistoryInsertionMode;
 use super::shell_presentation::{
-    ConversationProjectionSample, build_startup_banner_lines, format_conversation_scrollback_lines,
+    ConversationProjectionSample, build_startup_banner_lines,
+    format_conversation_scrollback_lines_with_expand,
 };
 use super::shell_rendering::{
     InlineConversationFrameProjection, draw_projected, inline_parallel_event_stream_visible_rows,
@@ -535,11 +536,12 @@ fn parallel_conversation_handoff_projection(app: &NativeTuiApp) -> Option<Vec<Li
         return None;
     };
     conversation.viewport_transcript_handoff_release_messages()?;
-    Some(format_conversation_scrollback_lines(
+    Some(format_conversation_scrollback_lines_with_expand(
         conversation.host_scrollback_messages(),
         app.conversation_view_mode,
         app.conversation_view_mode.shows_debug_details()
             || app.planning_worker_shows_debug_details(),
+        Some(app.progressive_activity_overlay_ui_state.expand_state()),
     ))
 }
 
@@ -631,11 +633,12 @@ fn current_inline_history_lines_for_viewport(
             {
                 return Vec::new();
             }
-            format_conversation_scrollback_lines(
+            format_conversation_scrollback_lines_with_expand(
                 messages,
                 app.conversation_view_mode,
                 app.conversation_view_mode.shows_debug_details()
                     || app.planning_worker_shows_debug_details(),
+                Some(app.progressive_activity_overlay_ui_state.expand_state()),
             )
         }
         ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),

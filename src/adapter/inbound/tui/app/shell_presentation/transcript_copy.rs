@@ -1,3 +1,7 @@
+use crate::adapter::inbound::tui::app::conversation_model::{
+    ProgressiveActivityExpandState, tool_message_digest, tool_message_fact,
+    tool_message_is_expandable, tool_message_title,
+};
 use crate::adapter::inbound::tui::conversation_text::conversation_message_label;
 
 use super::{
@@ -17,7 +21,7 @@ pub(in super::super) fn format_conversation_lines_for_view(
     view_mode: ConversationViewMode,
     show_debug_details: bool,
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_capped(messages, view_mode, show_debug_details)
+    format_conversation_lines_capped(messages, view_mode, show_debug_details, None)
 }
 
 #[cfg(test)]
@@ -31,23 +35,26 @@ pub(in super::super) fn format_conversation_lines_with_debug(
     } else {
         ConversationViewMode::Medium
     };
-    format_conversation_lines_capped(messages, view_mode, show_debug_details)
+    format_conversation_lines_capped(messages, view_mode, show_debug_details, None)
 }
 
-pub(in super::super) fn format_conversation_scrollback_lines(
+pub(in super::super) fn format_conversation_scrollback_lines_with_expand(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
+    expand_state: Option<&ProgressiveActivityExpandState>,
 ) -> Vec<Line<'static>> {
-    format_conversation_lines_uncapped(messages, view_mode, show_debug_details)
+    format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state)
 }
 
 fn format_conversation_lines_capped(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
+    expand_state: Option<&ProgressiveActivityExpandState>,
 ) -> Vec<Line<'static>> {
-    let mut lines = format_conversation_lines_uncapped(messages, view_mode, show_debug_details);
+    let mut lines =
+        format_conversation_lines_uncapped(messages, view_mode, show_debug_details, expand_state);
 
     // Keep recent terminal history bounded; rendering and inline tail logic operate on this capped line buffer.
     if lines.len() > MAX_CONVERSATION_HISTORY_LINES {
@@ -63,6 +70,7 @@ fn format_conversation_lines_uncapped(
     messages: &[ConversationMessage],
     view_mode: ConversationViewMode,
     show_debug_details: bool,
+    expand_state: Option<&ProgressiveActivityExpandState>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -70,6 +78,13 @@ fn format_conversation_lines_uncapped(
         if !view_mode.includes_message(message) {
             continue;
         }
+
+        if message.kind == ConversationMessageKind::Tool {
+            lines.extend(format_tool_card_lines(message, view_mode, expand_state));
+            lines.push(Line::from(""));
+            continue;
+        }
+
         // Labels use the shared conversation_text helper so transcript, approval, and other surfaces name speakers alike.
         let label = conversation_message_label(message);
         lines.push(Line::from(Span::styled(
@@ -108,6 +123,70 @@ fn format_conversation_lines_uncapped(
             format!("No messages visible in {} view.", view_mode.label())
         };
         lines.push(Line::from(empty_message));
+    }
+
+    lines
+}
+
+fn format_tool_card_lines(
+    message: &ConversationMessage,
+    view_mode: ConversationViewMode,
+    expand_state: Option<&ProgressiveActivityExpandState>,
+) -> Vec<Line<'static>> {
+    let expandable = tool_message_is_expandable(&message.text);
+    let digest = tool_message_digest(&message.text);
+    // Detail view expands multi-line tool cards by default; Medium keeps them collapsed
+    // unless the operator toggled the card. Single-line tools stay header-only.
+    let expanded = expandable && expand_state.is_some_and(|state| state.is_tool_expanded(digest))
+        || expandable && matches!(view_mode, ConversationViewMode::Detail);
+
+    let indicator = if !expandable {
+        AkraTheme::non_expandable_indicator()
+    } else if expanded {
+        AkraTheme::expanded_indicator()
+    } else {
+        AkraTheme::collapsed_indicator()
+    };
+    let title = tool_message_title(&message.text);
+    let fact = tool_message_fact(&message.text);
+    let label = message
+        .display_label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+        .unwrap_or("tool");
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            indicator.to_string(),
+            if expandable {
+                AkraTheme::expandable_indicator()
+            } else {
+                AkraTheme::subtle()
+            },
+        ),
+        Span::styled(
+            AkraTheme::tool_card_bullet_glyph().to_string(),
+            AkraTheme::tool_card_bullet(),
+        ),
+        Span::styled(format!("{label:<9} "), AkraTheme::tool_card_header()),
+        Span::styled(title, AkraTheme::tool_card_header()),
+        if fact.is_empty() {
+            Span::raw(String::new())
+        } else {
+            Span::styled(format!("  {fact}"), AkraTheme::muted())
+        },
+    ])];
+
+    if expanded {
+        let mut in_markdown_code_fence = false;
+        for text_line in message.text.lines() {
+            let mut body = format_markdown_body_line(text_line, &mut in_markdown_code_fence);
+            // Dim tool body slightly so expanded detail stays secondary to agent prose.
+            if let Some(last) = body.spans.last_mut() {
+                last.style = last.style.patch(AkraTheme::tool_card_body());
+            }
+            lines.push(body);
+        }
     }
 
     lines
@@ -318,6 +397,32 @@ fn label_style(kind: ConversationMessageKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_messages_collapse_to_one_line_headers_in_medium_view() {
+        let messages = vec![ConversationMessage::new(
+            ConversationMessageKind::Tool,
+            "cargo test\nline two\nline three",
+            None,
+            Some("tool-1".to_string()),
+        )];
+
+        let medium =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
+        let medium_text = medium.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(medium_text.contains("› "));
+        assert!(medium_text.contains("◆ "));
+        assert!(medium_text.contains("cargo test"));
+        assert!(medium_text.contains("3 lines"));
+        assert!(!medium_text.contains("line two"));
+
+        let detail =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Detail, false);
+        let detail_text = detail.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(detail_text.contains("▼ "));
+        assert!(detail_text.contains("line two"));
+        assert!(detail_text.contains("line three"));
+    }
 
     #[test]
     fn transcript_body_renders_basic_markdown_markers() {
