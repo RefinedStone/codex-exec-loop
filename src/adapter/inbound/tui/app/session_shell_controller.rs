@@ -413,7 +413,7 @@ impl NativeTuiApp {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex, mpsc};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use anyhow::Result;
 
@@ -584,16 +584,18 @@ mod tests {
     }
 
     fn poll_until(app: &mut NativeTuiApp, complete: impl Fn(&NativeTuiApp) -> bool) {
-        // Full CI suites can schedule the rename worker behind other work; 200ms was
-        // flaky under load even when the rename path itself was healthy.
-        for _ in 0..2_000 {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
             app.poll_core_runtime_inputs(8);
             if complete(app) {
                 return;
             }
+            assert!(
+                Instant::now() < deadline,
+                "core runtime did not settle within 30 seconds"
+            );
             std::thread::sleep(Duration::from_millis(1));
         }
-        panic!("core runtime did not settle");
     }
 
     fn load_recording_catalog(app: &mut NativeTuiApp) {
