@@ -578,7 +578,7 @@ fn display_source_chunk(text: &str, start: usize, end: usize, width: usize) -> (
             .next()
             .expect("source cursor must remain on a character boundary");
         let token = display_token(character);
-        let token_width = Line::from(token.as_str()).width().max(1);
+        let token_width = display_token_width(character, &token);
         if output_width.saturating_add(token_width) > width {
             if output.is_empty() {
                 output.push('?');
@@ -599,10 +599,23 @@ fn display_token(character: char) -> String {
         '\r' => "\\r".to_string(),
         '\u{1b}' => "\\x1b".to_string(),
         other if other.is_control() => format!("\\u{{{:x}}}", u32::from(other)),
-        other if Line::from(other.to_string()).width() == 0 => {
-            format!("\\u{{{:x}}}", u32::from(other))
+        other if other.is_ascii() => other.to_string(),
+        other => {
+            let token = other.to_string();
+            if Line::from(token.as_str()).width() == 0 {
+                format!("\\u{{{:x}}}", u32::from(other))
+            } else {
+                token
+            }
         }
-        other => other.to_string(),
+    }
+}
+
+fn display_token_width(character: char, token: &str) -> usize {
+    if character.is_ascii() {
+        token.len()
+    } else {
+        Line::from(token).width().max(1)
     }
 }
 
@@ -622,7 +635,7 @@ fn safe_generated_line(text: &str, width: usize) -> String {
     let mut output_width = 0usize;
     for character in text.chars() {
         let token = display_token(character);
-        let token_width = Line::from(token.as_str()).width().max(1);
+        let token_width = display_token_width(character, &token);
         if output_width.saturating_add(token_width) > width {
             if width > 0 {
                 while Line::from(output.as_str()).width().saturating_add(1) > width {
