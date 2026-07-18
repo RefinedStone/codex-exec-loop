@@ -65,6 +65,10 @@ the fixed Akra theme.
 - It must reserve display density for long-running operator work, not marketing copy.
 - It must support Korean and wide-character prompt text without changing the surrounding layout
   contract.
+- Row-limited tail compaction must consume semantic priority assigned with each projected line; it
+  must not infer priority by parsing localized rendered copy. Queue mutation pending, refresh, and
+  undo truth remains pinned across language and modal row budgets, while planning marks only
+  projected rows containing an actionable blocker as warnings.
 
 ### Append-only Stream Surfaces
 

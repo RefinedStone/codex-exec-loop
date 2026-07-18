@@ -82,12 +82,32 @@ pub(super) fn parallel_mode_alert_line(
         .map(|alert| format!("parallel alert: {alert}"))
 }
 
-pub(super) fn build_operator_notice_line(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OperatorNoticeKind {
+    RequiredAction,
+    TerminalActivity,
+    Activity,
+    Detail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct OperatorNotice {
+    pub(super) text: String,
+    pub(super) kind: OperatorNoticeKind,
+}
+
+impl OperatorNotice {
+    fn new(kind: OperatorNoticeKind, text: String) -> Self {
+        Self { text, kind }
+    }
+}
+
+pub(super) fn build_operator_notice(
     github_review_recent_changes_summary: Option<&str>,
     conversation: &ConversationViewModel,
     max_detail_len: usize,
     max_progressive_notice_len: usize,
-) -> Option<String> {
+) -> Option<OperatorNotice> {
     /*
      * operator notice는 제한된 tail/footer 공간에서 "지금 사람이 봐야 할 것"을 하나만 고른다.
      * pending approval은 operator action이 필요한 control boundary라 모든 activity보다 먼저 보인다.
@@ -95,26 +115,34 @@ pub(super) fn build_operator_notice_line(
      * transient copy를 고른다.
      */
     if conversation.pending_approval_request.is_some() {
-        return Some(if conversation.pending_approval_decision().is_some() {
-            "approval: decision submitted".to_string()
-        } else {
-            "approval: decision required".to_string()
-        });
+        return Some(OperatorNotice::new(
+            OperatorNoticeKind::RequiredAction,
+            if conversation.pending_approval_decision().is_some() {
+                "approval: decision submitted".to_string()
+            } else {
+                "approval: decision required".to_string()
+            },
+        ));
     }
 
     let activity_rail_line =
         build_activity_rail_notice_line(conversation, max_progressive_notice_len);
-    if conversation.activity_rail_terminal_state.is_some()
-        || conversation.progressive_activity.has_primary_fact()
-        || conversation.has_running_turn()
-    {
-        return activity_rail_line;
+    if conversation.activity_rail_terminal_state.is_some() {
+        return activity_rail_line
+            .map(|line| OperatorNotice::new(OperatorNoticeKind::TerminalActivity, line));
+    }
+    if conversation.progressive_activity.has_primary_fact() || conversation.has_running_turn() {
+        return activity_rail_line
+            .map(|line| OperatorNotice::new(OperatorNoticeKind::Activity, line));
     }
 
     if let Some(github_review_summary) = github_review_recent_changes_summary {
-        return Some(format!(
-            "gh update: {}",
-            compact_inline_detail(github_review_summary, max_detail_len)
+        return Some(OperatorNotice::new(
+            OperatorNoticeKind::Detail,
+            format!(
+                "gh update: {}",
+                compact_inline_detail(github_review_summary, max_detail_len)
+            ),
         ));
     }
 
@@ -131,7 +159,10 @@ pub(super) fn build_operator_notice_line(
     // Context pressure and bounded-history markers are passive diagnostics. They
     // remain visible when no live tool summary exists, but never replace active work.
     if let Some(activity_line) = activity_rail_line {
-        return Some(activity_line);
+        return Some(OperatorNotice::new(
+            OperatorNoticeKind::Activity,
+            activity_line,
+        ));
     }
 
     if let Some(activity) = conversation.last_auto_follow_activity.as_ref() {
@@ -139,10 +170,13 @@ pub(super) fn build_operator_notice_line(
          * auto-follow 결과는 turn 종료 직후 operator가 다음 자동 동작이 왜 이어졌거나 멈췄는지 보는 copy다.
          * running tool activity가 없을 때만 보여 주어 현재 실행 상황을 가리지 않는다.
          */
-        return Some(format!(
-            "auto: {}  |  detail: {}",
-            activity.summary,
-            compact_inline_detail(&activity.detail, max_detail_len)
+        return Some(OperatorNotice::new(
+            OperatorNoticeKind::Detail,
+            format!(
+                "auto: {}  |  detail: {}",
+                activity.summary,
+                compact_inline_detail(&activity.detail, max_detail_len)
+            ),
         ));
     }
 
@@ -171,7 +205,10 @@ pub(super) fn build_operator_notice_line(
                 compact_inline_detail(approval_summary, max_detail_len)
             ));
         }
-        return Some(parts.join("  |  "));
+        return Some(OperatorNotice::new(
+            OperatorNoticeKind::Detail,
+            parts.join("  |  "),
+        ));
     }
 
     /*
@@ -179,9 +216,12 @@ pub(super) fn build_operator_notice_line(
      * approval은 중요하지만 stale하게 오래 남을 수 있어 더 높은 우선순위의 활동에는 자리를 양보한다.
      */
     conversation.approval_summary().map(|approval_summary| {
-        format!(
-            "approval: {}",
-            compact_inline_detail(&approval_summary, max_detail_len)
+        OperatorNotice::new(
+            OperatorNoticeKind::Detail,
+            format!(
+                "approval: {}",
+                compact_inline_detail(&approval_summary, max_detail_len)
+            ),
         )
     })
 }
@@ -236,7 +276,7 @@ pub(super) fn inline_thread_label(conversation: &ConversationViewModel) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use super::build_operator_notice_line;
+    use super::{OperatorNotice, OperatorNoticeKind, build_operator_notice};
     use crate::adapter::inbound::tui::app::conversation_model::{
         ActivityRailTerminalState, ConversationViewModel,
     };
@@ -259,12 +299,18 @@ mod tests {
             details: vec![SECRET.to_string()],
         });
 
-        let notice = build_operator_notice_line(Some("review changed"), &conversation, 160, 160)
+        let notice = build_operator_notice(Some("review changed"), &conversation, 160, 160)
             .expect("pending approval notice");
 
-        assert_eq!(notice, "approval: decision required");
-        assert!(!notice.contains("terminal:"));
-        assert!(!notice.contains(SECRET));
+        assert_eq!(
+            notice,
+            OperatorNotice {
+                text: "approval: decision required".to_string(),
+                kind: OperatorNoticeKind::RequiredAction,
+            }
+        );
+        assert!(!notice.text.contains("terminal:"));
+        assert!(!notice.text.contains(SECRET));
     }
 
     #[test]
@@ -273,10 +319,16 @@ mod tests {
         conversation.activity_rail_terminal_state =
             Some(ActivityRailTerminalState::RecoveryPending);
 
-        let notice = build_operator_notice_line(Some("review changed"), &conversation, 160, 160)
+        let notice = build_operator_notice(Some("review changed"), &conversation, 160, 160)
             .expect("terminal activity notice");
 
-        assert_eq!(notice, "activity: terminal:recovery-pending");
+        assert_eq!(
+            notice,
+            OperatorNotice {
+                text: "activity: terminal:recovery-pending".to_string(),
+                kind: OperatorNoticeKind::TerminalActivity,
+            }
+        );
     }
 
     #[test]
@@ -285,8 +337,11 @@ mod tests {
         conversation.activity_rail_terminal_state = Some(ActivityRailTerminalState::RuntimeFailed);
 
         assert_eq!(
-            build_operator_notice_line(Some("review changed"), &conversation, 160, 12),
-            Some("runtime-fail".to_string())
+            build_operator_notice(Some("review changed"), &conversation, 160, 12),
+            Some(OperatorNotice {
+                text: "runtime-fail".to_string(),
+                kind: OperatorNoticeKind::TerminalActivity,
+            })
         );
     }
 
@@ -305,7 +360,7 @@ mod tests {
         conversation.mark_turn_submitting("/tmp/root".to_string());
 
         assert_eq!(
-            build_operator_notice_line(Some("review changed"), &conversation, 160, 160),
+            build_operator_notice(Some("review changed"), &conversation, 160, 160),
             None
         );
     }
@@ -314,10 +369,35 @@ mod tests {
     fn responsive_rail_budget_does_not_expand_existing_notice_detail_limit() {
         let conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
         let notice =
-            build_operator_notice_line(Some(&"review detail ".repeat(20)), &conversation, 40, 72)
+            build_operator_notice(Some(&"review detail ".repeat(20)), &conversation, 40, 72)
                 .expect("GitHub notice");
 
-        assert!(notice.len() <= 72, "{notice:?}");
-        assert!(notice.starts_with("gh update: "));
+        assert!(notice.text.len() <= 72, "{notice:?}");
+        assert!(notice.text.starts_with("gh update: "));
+        assert_eq!(notice.kind, OperatorNoticeKind::Detail);
+    }
+
+    #[test]
+    fn passive_activity_is_typed_only_when_it_wins_notice_selection() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        conversation.progressive_activity.apply_projection_update(
+            &Default::default(),
+            None,
+            None,
+            1,
+            0,
+            0,
+            0,
+        );
+
+        let passive = build_operator_notice(None, &conversation, 160, 160)
+            .expect("bounded-history notice should remain visible");
+        assert_eq!(passive.text, "activity: history:bounded");
+        assert_eq!(passive.kind, OperatorNoticeKind::Activity);
+
+        let review = build_operator_notice(Some("review changed"), &conversation, 160, 160)
+            .expect("GitHub review should precede passive activity");
+        assert_eq!(review.text, "gh update: review changed");
+        assert_eq!(review.kind, OperatorNoticeKind::Detail);
     }
 }

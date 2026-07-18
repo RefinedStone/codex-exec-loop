@@ -4,7 +4,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use super::super::prompt_composer::{build_prompt_cursor_offset, wrapped_row_count};
 use super::super::{ConversationScreenModel, Line, ShellConversationState, ShellOverlay};
 use super::tail_copy::{
-    QUEUE_RECEIPT_UNDO_ACTION_LABEL, build_inline_tail_lines_with_context,
+    InlineTailLine, QUEUE_RECEIPT_UNDO_ACTION_LABEL, build_inline_tail_content_with_context,
     build_inline_tail_prompt_lines_with_context,
 };
 
@@ -34,12 +34,12 @@ pub(crate) fn build_inline_tail_view(
     let notice_detail_limit = usize::from(content_width)
         .saturating_sub(INLINE_TAIL_NOTICE_PREFIX_WIDTH)
         .min(INLINE_TAIL_MAX_NOTICE_DETAIL_LIMIT);
-    let mut lines = build_inline_tail_lines_with_context(
+    let tail_content = build_inline_tail_content_with_context(
         screen_model,
         screen_model.github_review_recent_changes_summary.clone(),
         notice_detail_limit,
     );
-    lines = compact_inspection_tail_lines(screen_model, content_width, lines);
+    let lines = compact_inspection_tail_lines(screen_model, content_width, tail_content);
 
     let queue_receipt_undo_hit_area =
         find_inline_action_hit_area(&lines, content_width, QUEUE_RECEIPT_UNDO_ACTION_LABEL);
@@ -97,7 +97,7 @@ fn find_inline_action_hit_area(
 fn compact_inspection_tail_lines(
     screen_model: &ConversationScreenModel<'_>,
     content_width: u16,
-    lines: Vec<Line<'static>>,
+    lines: Vec<InlineTailLine>,
 ) -> Vec<Line<'static>> {
     const MAX_INSPECTION_TAIL_ROWS: usize = 6;
     const MAX_ACTIVITY_TAIL_ROWS: usize = 4;
@@ -105,12 +105,12 @@ fn compact_inspection_tail_lines(
         || screen_model.shell_overlay == ShellOverlay::Hidden
         || screen_model.startup_screen_is_active()
     {
-        return lines;
+        return lines.into_iter().map(|entry| entry.line).collect();
     }
 
     let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
     if prompt_lines.is_empty() || lines.len() <= prompt_lines.len() {
-        return lines;
+        return lines.into_iter().map(|entry| entry.line).collect();
     }
 
     let prompt_start_index = lines.len().saturating_sub(prompt_lines.len());
@@ -144,65 +144,24 @@ fn compact_inspection_tail_lines(
 
     let prefix_row_budget = max_tail_rows - prompt_rows;
     let mut priority_lines = prefix_lines.iter().enumerate().collect::<Vec<_>>();
-    priority_lines.sort_by_key(|(_, line)| compact_tail_priority(line));
+    priority_lines.sort_by_key(|(_, entry)| entry.priority);
     let mut selected_lines = Vec::new();
     let mut used_prefix_rows = 0usize;
-    for (index, line) in priority_lines {
-        let line_rows = wrapped_row_count(line.width(), content_width);
+    for (index, entry) in priority_lines {
+        let line_rows = wrapped_row_count(entry.line.width(), content_width);
         if used_prefix_rows.saturating_add(line_rows) > prefix_row_budget {
             continue;
         }
-        selected_lines.push((index, line));
+        selected_lines.push((index, entry));
         used_prefix_rows = used_prefix_rows.saturating_add(line_rows);
     }
     selected_lines.sort_by_key(|(index, _)| *index);
     let mut compacted = selected_lines
         .into_iter()
-        .map(|(_, line)| line.clone())
+        .map(|(_, entry)| entry.line.clone())
         .collect::<Vec<_>>();
     compacted.extend(prompt_lines);
     compacted
-}
-
-fn compact_tail_priority(line: &Line<'_>) -> u8 {
-    let text = line.to_string();
-    if text.starts_with(QUEUE_RECEIPT_UNDO_ACTION_LABEL)
-        || text.starts_with("COMPLETE")
-        || text.contains("approval: decision")
-    {
-        return 0;
-    }
-    if text.starts_with("notice: activity: terminal:")
-        || text.starts_with("notice: activity: term:")
-        || matches!(
-            text.strip_prefix("notice: "),
-            Some("recover" | "interrupt" | "failed" | "unknown" | "runtime-fail")
-        )
-    {
-        return 1;
-    }
-    if text.starts_with("runtime:")
-        || text.starts_with("warn:")
-        || text.starts_with("startup:")
-        || text.starts_with("parallel alert:")
-        || text.starts_with("planning notice:")
-        || text.starts_with("planning: unavailable")
-        || text.starts_with("planning: invalid")
-        || text.starts_with("planning: stale")
-        || text.contains("blocked:") && !text.contains("blocked: none")
-    {
-        return 2;
-    }
-    if text.starts_with('◦') {
-        return 3;
-    }
-    if text.starts_with("notice: activity:") {
-        return 4;
-    }
-    if text.starts_with("Akra") {
-        return 5;
-    }
-    6
 }
 
 fn rendered_rows(lines: &[Line<'static>], content_width: u16) -> usize {
@@ -247,12 +206,19 @@ fn build_inline_prompt_cursor_offset_for_lines(
 
 #[cfg(test)]
 mod tests {
+    use super::super::tail_copy::InlineTailPriority;
     use super::*;
+    use crate::adapter::inbound::tui::app::queue_overlay_ui::QueueMutationKind;
     use crate::adapter::inbound::tui::app::shell_presentation::{
         ConversationScreenModel, build_inline_live_transcript_lines,
     };
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
-    use crate::adapter::inbound::tui::app::{ConversationState, TuiLanguage};
+    use crate::adapter::inbound::tui::app::{
+        ConversationInputState, ConversationState, ShellActionAvailability, TuiLanguage,
+    };
+    use crate::application::service::planning::{
+        PlanningQueueCancellationRequest, PlanningRuntimeProjection,
+    };
 
     #[test]
     fn one_screen_model_produces_stable_cjk_copy_layout_and_live_lines() {
@@ -282,5 +248,127 @@ mod tests {
             screen_model.core_revision,
             app.core_runtime.snapshot().revision
         );
+    }
+
+    #[test]
+    fn korean_pending_queue_keeps_semantic_priority_in_modal_tail() {
+        const WIDTH: u16 = 80;
+        const LOW_DETAIL: &str = "낮은상세표시";
+        let mut app = test_native_tui_app();
+        app.tui_language = TuiLanguage::Korean;
+        app.shell_overlay = ShellOverlay::Queue;
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.record_thread_prepared(
+            "thread-tail".to_string(),
+            "Semantic tail".to_string(),
+            "/tmp/root".to_string(),
+        );
+        conversation.input_state = ConversationInputState::ReadyToContinue;
+        conversation.status_text = LOW_DETAIL.to_string();
+        conversation.base_warnings = vec!["긴한글경고상세".repeat(20)];
+        conversation.runtime_notices = vec!["긴한글복구상세".repeat(20)];
+
+        let context = app.current_queue_mutation_context();
+        app.queue_mutation_ui_state
+            .begin(
+                context.clone(),
+                QueueMutationKind::RemoveSelected,
+                PlanningQueueCancellationRequest {
+                    workspace_directory: context.workspace_directory,
+                    expected_planning_revision: 1,
+                    targets: Vec::new(),
+                },
+                None,
+            )
+            .expect("queue mutation should enter the pending gate");
+
+        let mut screen_model = ConversationScreenModel::from_app(&app);
+        screen_model.shell_action_availability = ShellActionAvailability::Ready;
+        let raw = build_inline_tail_content_with_context(&screen_model, None, 72);
+        let cjk_warning = raw
+            .iter()
+            .map(|entry| &entry.line)
+            .find(|line| line.to_string().starts_with("runtime:"))
+            .expect("runtime warning should remain in the raw semantic tail");
+        assert_eq!(wrapped_row_count(cjk_warning.width(), WIDTH), 2);
+
+        let tail_view = build_inline_tail_view(&screen_model, WIDTH);
+        let rendered = tail_view
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains("큐: op-1  |  권한 확인 대기 중"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("prompt: session ready  |  Enter send"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("runtime:"), "{rendered}");
+        assert!(!rendered.contains(LOW_DETAIL), "{rendered}");
+        let accounted_rows = tail_view
+            .lines
+            .iter()
+            .map(|line| wrapped_row_count(line.width(), WIDTH))
+            .sum::<usize>();
+        assert_eq!(accounted_rows, 6);
+        assert_eq!(rendered_rows(&tail_view.lines, WIDTH), 6);
+        assert!(tail_view.prompt_cursor_offset.is_none());
+        assert!(tail_view.queue_receipt_undo_hit_area.is_none());
+    }
+
+    #[test]
+    fn running_stale_planning_keeps_warning_priority_in_modal_tail() {
+        const WIDTH: u16 = 80;
+        let mut app = test_native_tui_app();
+        app.shell_overlay = ShellOverlay::Queue;
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.record_thread_prepared(
+            "thread-stale-tail".to_string(),
+            "Stale planning tail".to_string(),
+            "/tmp/root".to_string(),
+        );
+        conversation.record_turn_started("turn-stale-tail".to_string());
+        conversation.base_warnings = vec!["긴한글경고상세".repeat(20)];
+        conversation.runtime_notices = vec!["긴한글복구상세".repeat(20)];
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_details(
+                "Planning Context".to_string(),
+                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+                None,
+                None,
+            )
+            .with_workspace_present(true),
+        );
+
+        let mut screen_model = ConversationScreenModel::from_app(&app);
+        screen_model.shell_action_availability = ShellActionAvailability::Ready;
+        let raw = build_inline_tail_content_with_context(&screen_model, None, 72);
+        let stale = raw
+            .iter()
+            .find(|entry| entry.line.to_string() == "planning: stale")
+            .expect("running turn should project stale planning");
+        assert_eq!(stale.priority, InlineTailPriority::Warning);
+
+        let tail_view = build_inline_tail_view(&screen_model, WIDTH);
+        let rendered = tail_view
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("runtime:"), "{rendered}");
+        assert!(rendered.contains("planning: stale"), "{rendered}");
+        assert!(!rendered.contains("Akra"), "{rendered}");
+        assert_eq!(rendered_rows(&tail_view.lines, WIDTH), 6);
     }
 }

@@ -19,8 +19,9 @@ use super::super::{
 };
 use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
-    build_operator_notice_line, compact_auto_follow_status_summary, compact_inline_summary_label,
-    inline_thread_label, parallel_mode_alert_line, parallel_mode_summary_line,
+    OperatorNoticeKind, build_operator_notice, compact_auto_follow_status_summary,
+    compact_inline_summary_label, inline_thread_label, parallel_mode_alert_line,
+    parallel_mode_summary_line,
 };
 
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
@@ -28,17 +29,56 @@ use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 
 pub(super) const QUEUE_RECEIPT_UNDO_ACTION_LABEL: &str = "[ Undo queue ]";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum InlineTailPriority {
+    Pinned,
+    Terminal,
+    Warning,
+    LiveActivity,
+    RecentActivity,
+    Identity,
+    Detail,
+}
+
+#[derive(Clone)]
+pub(super) struct InlineTailLine {
+    pub(super) line: Line<'static>,
+    pub(super) priority: InlineTailPriority,
+}
+
+impl InlineTailLine {
+    fn new(priority: InlineTailPriority, line: Line<'static>) -> Self {
+        Self { line, priority }
+    }
+}
+
 /* The inline tail is the compact operational dashboard below the transcript. It
  * keeps high-priority state visible in this order: startup readiness, conversation
  * turn state, parallel/planning health, recent transcript context, then prompt
  * affordances. The order matters because this view is scanned repeatedly while a
  * turn is streaming or while startup checks are blocking submission.
  */
+#[cfg(test)]
 pub(super) fn build_inline_tail_lines_with_context(
     screen_model: &ConversationScreenModel<'_>,
     github_review_recent_changes_summary: Option<String>,
     notice_detail_limit: usize,
 ) -> Vec<Line<'static>> {
+    build_inline_tail_content_with_context(
+        screen_model,
+        github_review_recent_changes_summary,
+        notice_detail_limit,
+    )
+    .into_iter()
+    .map(|entry| entry.line)
+    .collect()
+}
+
+pub(super) fn build_inline_tail_content_with_context(
+    screen_model: &ConversationScreenModel<'_>,
+    github_review_recent_changes_summary: Option<String>,
+    notice_detail_limit: usize,
+) -> Vec<InlineTailLine> {
     /*
     Planning projection is computed before state branching because both the ready
     tail and prompt affordance lines need the same compact limits. Keeping this
@@ -67,13 +107,20 @@ pub(super) fn build_inline_tail_lines_with_context(
         // The full startup masthead is useful only before the operator starts typing.
         // Once an overlay or buffered prompt exists, keep the tail compact so the
         // prompt remains close to its status line.
-        let mut lines = if screen_model.shell_overlay == ShellOverlay::Hidden && !has_buffered_input
-        {
-            build_inline_startup_screen_lines_with_context(screen_model)
-        } else {
-            build_inline_startup_overlay_tail_lines_with_context(screen_model)
-        };
-        lines.extend(build_inline_tail_prompt_lines_with_context(screen_model));
+        let mut lines =
+            if screen_model.shell_overlay == ShellOverlay::Hidden && !has_buffered_input {
+                build_inline_startup_screen_lines_with_context(screen_model)
+            } else {
+                build_inline_startup_overlay_tail_lines_with_context(screen_model)
+            }
+            .into_iter()
+            .map(|line| InlineTailLine::new(InlineTailPriority::Detail, line))
+            .collect::<Vec<_>>();
+        lines.extend(
+            build_inline_tail_prompt_lines_with_context(screen_model)
+                .into_iter()
+                .map(|line| InlineTailLine::new(InlineTailPriority::Pinned, line)),
+        );
         return lines;
     }
     let mut lines = Vec::new();
@@ -84,11 +131,14 @@ pub(super) fn build_inline_tail_lines_with_context(
             terminal layout needs stable prompt/status rows even before a thread
             snapshot exists. These branches avoid conversation-only helpers.
             */
-            lines.push(Line::from(format!(
-                "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
-                screen_model.shell_action_availability.status_text(),
-                screen_model.recent_session_status_label.as_str(),
-            )));
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Identity,
+                Line::from(format!(
+                    "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
+                    screen_model.shell_action_availability.status_text(),
+                    screen_model.recent_session_status_label.as_str(),
+                )),
+            ));
             let github_status =
                 (screen_model.github_review_polling_status_label != "off").then(|| {
                     format!(
@@ -96,21 +146,27 @@ pub(super) fn build_inline_tail_lines_with_context(
                         screen_model.github_review_polling_status_label.as_str()
                     )
                 });
-            lines.push(Line::from(format!(
-                "runtime: loading thread history{}  |  flow: terminal main buffer",
-                github_status.unwrap_or_default(),
-            )));
-            lines.push(Line::from(format!(
-                "status: {}",
-                thread_history_loading_status_line()
-            )));
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Warning,
+                Line::from(format!(
+                    "runtime: loading thread history{}  |  flow: terminal main buffer",
+                    github_status.unwrap_or_default(),
+                )),
+            ));
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Detail,
+                Line::from(format!("status: {}", thread_history_loading_status_line())),
+            ));
         }
         ShellConversationState::Failed(message) => {
-            lines.push(Line::from(format!(
-                "Akra  |  thread: unavailable  |  startup: {}  |  sessions: {}",
-                screen_model.shell_action_availability.status_text(),
-                screen_model.recent_session_status_label.as_str(),
-            )));
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Identity,
+                Line::from(format!(
+                    "Akra  |  thread: unavailable  |  startup: {}  |  sessions: {}",
+                    screen_model.shell_action_availability.status_text(),
+                    screen_model.recent_session_status_label.as_str(),
+                )),
+            ));
             let github_status =
                 (screen_model.github_review_polling_status_label != "off").then(|| {
                     format!(
@@ -118,11 +174,17 @@ pub(super) fn build_inline_tail_lines_with_context(
                         screen_model.github_review_polling_status_label.as_str()
                     )
                 });
-            lines.push(Line::from(format!(
-                "runtime: unavailable{}  |  flow: terminal main buffer",
-                github_status.unwrap_or_default(),
-            )));
-            lines.push(Line::from(format!("status: {message}")));
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Warning,
+                Line::from(format!(
+                    "runtime: unavailable{}  |  flow: terminal main buffer",
+                    github_status.unwrap_or_default(),
+                )),
+            ));
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Detail,
+                Line::from(format!("status: {message}")),
+            ));
         }
         ShellConversationState::Ready(conversation) => {
             /*
@@ -138,90 +200,173 @@ pub(super) fn build_inline_tail_lines_with_context(
                 .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
                 .map(|summary| compact_inline_summary_label(&summary));
 
-            lines.push(build_ready_status_ribbon_line(conversation));
+            lines.push(InlineTailLine::new(
+                InlineTailPriority::Identity,
+                build_ready_status_ribbon_line(conversation),
+            ));
             if let Some(status_detail_line) =
                 build_ready_status_detail_line(conversation, screen_model)
             {
-                lines.push(status_detail_line);
+                let priority =
+                    if screen_model.shell_action_availability == ShellActionAvailability::Ready {
+                        InlineTailPriority::Detail
+                    } else {
+                        InlineTailPriority::Warning
+                    };
+                lines.push(InlineTailLine::new(priority, status_detail_line));
             }
             if let Some(completion_line) = build_completion_alert_line(conversation) {
-                lines.push(completion_line);
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Pinned,
+                    completion_line,
+                ));
             }
             if let Some(queue_mutation_line) = build_queue_mutation_line(
                 screen_model.queue_mutation_tail_state,
                 screen_model.tui_language,
             ) {
-                lines.push(queue_mutation_line);
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Pinned,
+                    queue_mutation_line,
+                ));
             }
             if let Some(runtime_notice_summary) = runtime_notice_summary {
                 let mut runtime_line = format!("runtime: {runtime_notice_summary}");
                 if warning_summary_has_signal(&warning_summary) {
                     runtime_line.push_str(&format!("  |  {warning_summary}"));
                 }
-                lines.push(Line::from(runtime_line));
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Warning,
+                    Line::from(runtime_line),
+                ));
             } else if warning_summary_has_signal(&warning_summary) {
-                lines.push(Line::from(warning_summary));
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Warning,
+                    Line::from(warning_summary),
+                ));
             }
             if let Some(turn_options_summary) = screen_model.turn_options_summary.as_deref() {
-                lines.push(Line::from(format!("turn options: {turn_options_summary}")));
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Detail,
+                    Line::from(format!("turn options: {turn_options_summary}")),
+                ));
             }
             if let Some(parallel_summary_line) = parallel_mode_summary_line(screen_model) {
-                lines.push(Line::from(parallel_summary_line));
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Detail,
+                    Line::from(parallel_summary_line),
+                ));
             }
 
             if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(screen_model) {
-                lines.push(Line::from(parallel_mode_alert_line));
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Warning,
+                    Line::from(parallel_mode_alert_line),
+                ));
             }
             let working_detail_limit =
                 INLINE_TAIL_STATUS_DETAIL_LIMIT.min(notice_detail_limit.saturating_sub(9));
             if let Some(working_line) =
                 build_working_line(conversation, working_detail_limit, screen_model.rendered_at)
             {
-                lines.push(working_line);
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::LiveActivity,
+                    working_line,
+                ));
             }
             if let Some(planning_projection) = planning_status_projection.as_ref() {
                 if let Some(planning_line) = planning_projection.summary_line.as_deref() {
-                    lines.push(Line::from(planning_line.to_string()));
+                    let priority = if planning_projection.summary_is_warning {
+                        InlineTailPriority::Warning
+                    } else {
+                        InlineTailPriority::Detail
+                    };
+                    lines.push(InlineTailLine::new(
+                        priority,
+                        Line::from(planning_line.to_string()),
+                    ));
                 }
-                lines.extend(planning_projection.queue_framing_lines.iter().cloned());
+                lines.extend(planning_projection.queue_framing_lines.iter().cloned().map(
+                    |entry| {
+                        let priority = if entry.has_blocker {
+                            InlineTailPriority::Warning
+                        } else {
+                            InlineTailPriority::Detail
+                        };
+                        InlineTailLine::new(priority, entry.line)
+                    },
+                ));
                 if let Some(planning_notice_line) = planning_projection.notice_line.as_deref() {
-                    lines.push(Line::from(planning_notice_line.to_string()));
+                    lines.push(InlineTailLine::new(
+                        InlineTailPriority::Warning,
+                        Line::from(planning_notice_line.to_string()),
+                    ));
                 }
             } else {
-                lines.push(Line::from(format!(
-                    "planning: unavailable  |  startup: {}",
-                    screen_model.shell_action_availability.status_text()
-                )));
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::Warning,
+                    Line::from(format!(
+                        "planning: unavailable  |  startup: {}",
+                        screen_model.shell_action_availability.status_text()
+                    )),
+                ));
             }
             if let Some(parallel_working_line) = build_parallel_slot_working_line(screen_model) {
-                lines.push(parallel_working_line);
+                lines.push(InlineTailLine::new(
+                    InlineTailPriority::LiveActivity,
+                    parallel_working_line,
+                ));
             }
 
-            lines.extend(planning_worker_panel_lines.into_iter().map(Line::from));
+            lines.extend(
+                planning_worker_panel_lines
+                    .into_iter()
+                    .map(|line| InlineTailLine::new(InlineTailPriority::Detail, Line::from(line))),
+            );
             let renders_viewport_handoff = matches!(
                 screen_model.inline_history_render_mode,
                 InlineHistoryRenderMode::ViewportReplay
             ) && conversation
                 .has_pending_viewport_transcript_handoff();
             if !renders_viewport_handoff {
-                lines.extend(build_recent_transcript_summary_lines(
-                    screen_model.inline_history_render_mode,
-                    conversation,
-                ));
+                lines.extend(
+                    build_recent_transcript_summary_lines(
+                        screen_model.inline_history_render_mode,
+                        conversation,
+                    )
+                    .into_iter()
+                    .map(|line| InlineTailLine::new(InlineTailPriority::Detail, line)),
+                );
             }
-            if let Some(notice_line) = build_operator_notice_line(
+            if let Some(notice) = build_operator_notice(
                 github_review_recent_changes_summary.as_deref(),
                 conversation,
                 INLINE_TAIL_NOTICE_DETAIL_LIMIT,
                 notice_detail_limit,
             ) {
-                lines.push(Line::from(format!("notice: {notice_line}")));
+                lines.push(InlineTailLine::new(
+                    operator_notice_priority(notice.kind),
+                    Line::from(format!("notice: {}", notice.text)),
+                ));
             }
         }
     }
 
-    lines.extend(build_inline_tail_prompt_lines_with_context(screen_model));
+    lines.extend(
+        build_inline_tail_prompt_lines_with_context(screen_model)
+            .into_iter()
+            .map(|line| InlineTailLine::new(InlineTailPriority::Pinned, line)),
+    );
     lines
+}
+
+fn operator_notice_priority(kind: OperatorNoticeKind) -> InlineTailPriority {
+    match kind {
+        OperatorNoticeKind::RequiredAction => InlineTailPriority::Pinned,
+        OperatorNoticeKind::TerminalActivity => InlineTailPriority::Terminal,
+        OperatorNoticeKind::Activity => InlineTailPriority::RecentActivity,
+        OperatorNoticeKind::Detail => InlineTailPriority::Detail,
+    }
 }
 fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<'static> {
     /*

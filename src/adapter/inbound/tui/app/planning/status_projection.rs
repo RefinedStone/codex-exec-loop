@@ -1,8 +1,10 @@
 use super::super::ConversationViewModel;
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningRuntimeProjection, PlanningRuntimeRepairAttempt,
-    PlanningRuntimeSummaryLineRequest, build_planning_runtime_summary_line,
+    PlanningRuntimeSummaryLine, PlanningRuntimeSummaryLineRequest,
+    build_planning_runtime_summary_line,
 };
+use crate::domain::planning::PlanningWorkspaceState;
 use crate::domain::text::compact_whitespace_detail;
 use ratatui::text::Line;
 
@@ -19,8 +21,15 @@ const STATUS_SEGMENT_SEPARATOR: &str = "  |  ";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlanningStatusSurfaceProjection {
     pub(crate) summary_line: Option<String>,
+    pub(crate) summary_is_warning: bool,
     pub(crate) notice_line: Option<String>,
-    pub(crate) queue_framing_lines: Vec<Line<'static>>,
+    pub(crate) queue_framing_lines: Vec<PlanningQueueFramingSurfaceLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlanningQueueFramingSurfaceLine {
+    pub(crate) line: Line<'static>,
+    pub(crate) has_blocker: bool,
 }
 
 // Queue framing normalizes multiple planning sources into the four labels the
@@ -54,19 +63,28 @@ pub(crate) fn build_planning_status_surface_projection(
         .as_ref()
         .map(queue_framing_lines_from_details)
         .unwrap_or_default();
-    let mut summary_line = build_planning_summary_line(
+    let summary_projection = build_planning_summary_line(
         conversation,
         runtime_projection,
         summary_detail_len,
         always_show,
     );
+    let mut summary_is_warning = summary_projection.as_ref().is_some_and(|summary| {
+        matches!(
+            summary.workspace_state,
+            PlanningWorkspaceState::Executing | PlanningWorkspaceState::BlockedInvalid
+        )
+    });
+    let mut summary_line = summary_projection.map(|summary| summary.text);
     if queue_framing_details.is_some()
         && let Some(summary) = summary_line.take()
     {
         summary_line = remove_duplicate_queue_framing_segments(summary);
     }
+    summary_is_warning &= summary_line.is_some();
     PlanningStatusSurfaceProjection {
         summary_line,
+        summary_is_warning,
         notice_line: build_planning_notice_line(conversation, supplemental_detail_len),
         queue_framing_lines,
     }
@@ -100,7 +118,7 @@ pub(crate) fn build_resumed_session_status_text(
         .map(|lines| {
             lines
                 .into_iter()
-                .map(|line| line.to_string())
+                .map(|entry| entry.line.to_string())
                 .collect::<Vec<_>>()
                 .join(STATUS_SEGMENT_SEPARATOR)
         })
@@ -143,7 +161,7 @@ pub(crate) fn build_planning_summary_line(
     runtime_projection: &PlanningRuntimeProjection,
     max_detail_len: usize,
     always_show: bool,
-) -> Option<String> {
+) -> Option<PlanningRuntimeSummaryLine> {
     build_planning_runtime_summary_line(PlanningRuntimeSummaryLineRequest {
         projection: runtime_projection,
         has_running_turn: conversation.has_running_turn(),
@@ -164,7 +182,10 @@ pub(crate) fn build_planning_summary_line(
         max_detail_len,
         always_show,
     })
-    .and_then(remove_legacy_valid_planning_summary_prefix)
+    .and_then(|mut summary| {
+        summary.text = remove_legacy_valid_planning_summary_prefix(summary.text)?;
+        Some(summary)
+    })
 }
 
 fn remove_legacy_valid_planning_summary_prefix(summary_line: String) -> Option<String> {
@@ -207,7 +228,12 @@ pub(crate) fn build_queue_framing_lines_from_projection(
     max_detail_len: usize,
 ) -> Vec<Line<'static>> {
     build_queue_framing_details_from_projection(runtime_projection, max_detail_len)
-        .map(|details| queue_framing_lines_from_details(&details))
+        .map(|details| {
+            queue_framing_lines_from_details(&details)
+                .into_iter()
+                .map(|entry| entry.line)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -451,7 +477,9 @@ fn compact_proposal_summary_detail(summary: &str, max_detail_len: usize) -> Stri
     compact_whitespace_detail(summary, max_detail_len)
 }
 
-fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'static>> {
+fn queue_framing_lines_from_details(
+    details: &QueueFramingDetails,
+) -> Vec<PlanningQueueFramingSurfaceLine> {
     let mut lines = Vec::new();
     let current = [
         ("now", details.now_detail.as_str()),
@@ -462,8 +490,12 @@ fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'
     .map(|(label, detail)| format!("{label}: {detail}"))
     .collect::<Vec<_>>();
     if !current.is_empty() {
-        lines.push(Line::from(current.join(STATUS_SEGMENT_SEPARATOR)));
+        lines.push(PlanningQueueFramingSurfaceLine {
+            line: Line::from(current.join(STATUS_SEGMENT_SEPARATOR)),
+            has_blocker: false,
+        });
     }
+    let has_blocker = detail_has_signal(&details.blocked_detail);
     let follow_up = [
         ("proposed", details.proposed_detail.as_str()),
         ("blocked", details.blocked_detail.as_str()),
@@ -473,7 +505,10 @@ fn queue_framing_lines_from_details(details: &QueueFramingDetails) -> Vec<Line<'
     .map(|(label, detail)| format!("{label}: {detail}"))
     .collect::<Vec<_>>();
     if !follow_up.is_empty() {
-        lines.push(Line::from(follow_up.join(STATUS_SEGMENT_SEPARATOR)));
+        lines.push(PlanningQueueFramingSurfaceLine {
+            line: Line::from(follow_up.join(STATUS_SEGMENT_SEPARATOR)),
+            has_blocker,
+        });
     }
     lines
 }
@@ -505,9 +540,10 @@ fn queue_framing_summary_from_parts(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_planning_status_surface_projection, build_queue_framing_lines_from_projection,
-        build_queue_framing_summary_from_projection, build_resumed_session_status_text,
-        compact_queue_framing_summary, remove_duplicate_queue_framing_segments,
+        QueueFramingDetails, build_planning_status_surface_projection,
+        build_queue_framing_lines_from_projection, build_queue_framing_summary_from_projection,
+        build_resumed_session_status_text, compact_queue_framing_summary,
+        queue_framing_lines_from_details, remove_duplicate_queue_framing_segments,
         remove_legacy_valid_planning_summary_prefix,
     };
     use crate::adapter::inbound::tui::app::ConversationState;
@@ -710,6 +746,28 @@ mod tests {
     }
 
     #[test]
+    fn queue_framing_tags_only_rows_with_actionable_blockers() {
+        let proposed = queue_framing_lines_from_details(&QueueFramingDetails {
+            now_detail: "none".to_string(),
+            next_detail: "none".to_string(),
+            proposed_detail: "Follow-up".to_string(),
+            blocked_detail: "none".to_string(),
+        });
+        assert_eq!(proposed.len(), 1);
+        assert!(!proposed[0].has_blocker);
+
+        let blocked = queue_framing_lines_from_details(&QueueFramingDetails {
+            now_detail: "Current".to_string(),
+            next_detail: "none".to_string(),
+            proposed_detail: "Follow-up".to_string(),
+            blocked_detail: "Dependency open".to_string(),
+        });
+        assert_eq!(blocked.len(), 2);
+        assert!(!blocked[0].has_blocker);
+        assert!(blocked[1].has_blocker);
+    }
+
+    #[test]
     fn planning_surface_hides_none_only_queue_summary_segments() {
         let mut app = test_native_tui_app();
         app.sync_ready_conversation_planning_runtime_projection(
@@ -743,6 +801,44 @@ mod tests {
     }
 
     #[test]
+    fn planning_surface_marks_running_turn_stale_summary_as_warning() {
+        let mut app = test_native_tui_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.record_thread_prepared(
+            "thread-stale".to_string(),
+            "Stale planning".to_string(),
+            "/tmp/root".to_string(),
+        );
+        conversation.record_turn_started("turn-stale".to_string());
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::ready_with_details(
+                "Planning Context".to_string(),
+                "now: none  |  next: none  |  proposed: none  |  blocked: none".to_string(),
+                None,
+                None,
+            )
+            .with_workspace_present(true),
+        );
+        let runtime_projection = app.planning_runtime_projection_snapshot();
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+
+        let surface = build_planning_status_surface_projection(
+            &runtime_projection,
+            conversation,
+            96,
+            96,
+            true,
+        );
+
+        assert_eq!(surface.summary_line.as_deref(), Some("planning: stale"));
+        assert!(surface.summary_is_warning);
+    }
+
+    #[test]
     fn planning_surface_preserves_unstructured_queue_status_in_framing() {
         let mut app = test_native_tui_app();
         app.sync_ready_conversation_planning_runtime_projection(
@@ -769,7 +865,7 @@ mod tests {
         let framing = surface
             .queue_framing_lines
             .iter()
-            .map(ToString::to_string)
+            .map(|entry| entry.line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -816,12 +912,18 @@ mod tests {
         let framing = surface
             .queue_framing_lines
             .iter()
-            .map(ToString::to_string)
+            .map(|entry| entry.line.to_string())
             .collect::<Vec<_>>();
 
         assert_eq!(
             framing,
             vec!["now: queue idle: no executable planning task"]
+        );
+        assert!(
+            surface
+                .queue_framing_lines
+                .iter()
+                .all(|entry| !entry.has_blocker)
         );
         assert!(
             surface

@@ -975,6 +975,65 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
 }
 
 #[test]
+fn tui_tail_compaction_uses_typed_priority_without_parsing_localized_copy() {
+    let source = fs::read_to_string(repo_root().join(
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs",
+    ))
+    .expect("live-status layout source should load");
+    let syntax = syn::parse_file(&source).expect("live-status layout source should parse");
+    let function = syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "compact_inspection_tail_lines" => {
+                Some(function)
+            }
+            _ => None,
+        })
+        .expect("live-status layout should expose compact_inspection_tail_lines");
+    let span = function.span();
+    let compaction = source
+        .lines()
+        .skip(span.start().line.saturating_sub(1))
+        .take(
+            span.end()
+                .line
+                .saturating_sub(span.start().line)
+                .saturating_add(1),
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for required in ["Vec<InlineTailLine>", ".priority"] {
+        assert!(
+            compaction.contains(required),
+            "tail compaction must consume typed semantic priority: {required}"
+        );
+    }
+    let production = production_lines(&source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !production.contains("fn compact_tail_priority("),
+        "live-status layout must not restore rendered-copy priority parsing"
+    );
+    for forbidden in [
+        ".to_string()",
+        ".starts_with(",
+        ".strip_prefix(",
+        ".contains(",
+        ".eq_ignore_ascii_case(",
+    ] {
+        assert!(
+            !compaction.contains(forbidden),
+            "tail compaction must not infer priority from rendered/localized copy: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn conversation_state_model_has_no_ratatui_projection_cache() {
     assert_no_forbidden_references_in_paths(
         "conversation semantic state must not depend on shell presentation or cache ratatui lines",

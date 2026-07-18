@@ -110,7 +110,7 @@ pub use self::runtime::manual_intake::{
 };
 // runtime policy의 순수 summary 함수와 auto-follow block reason을 adapter가 service graph 없이 재사용하게 공개한다.
 pub use self::runtime::policy::{
-    PlanningAutoFollowBlockReason, build_planning_runtime_summary_line,
+    PlanningAutoFollowBlockReason, PlanningRuntimeSummaryLine, build_planning_runtime_summary_line,
 };
 // runtime projection/status는 현재 planning workspace가 실행 가능한지, task가 있는지, invalid인지 판단하는 핵심 projection이다.
 pub use self::runtime::prompt::{PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus};
