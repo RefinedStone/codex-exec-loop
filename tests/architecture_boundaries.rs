@@ -232,6 +232,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/planning",
             "src/adapter/inbound/tui/app/planning_",
             "src/adapter/inbound/tui/app/progressive_activity_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/queue_overlay_controller.rs",
             "src/adapter/inbound/tui/app/queue_overlay_ui.rs",
             "src/adapter/inbound/tui/app/reviews_overlay_ui.rs",
             "src/adapter/inbound/tui/app/session_overlay_ui.rs",
@@ -250,6 +251,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/planning/controller.rs",
             "src/adapter/inbound/tui/app/progressive_activity_overlay_ui.rs",
             "src/adapter/inbound/tui/app/queue_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/shell_controller.rs",
             "src/adapter/inbound/tui/app/reviews_overlay_ui.rs",
             "src/adapter/inbound/tui/app/session_overlay_ui.rs",
             "src/adapter/inbound/tui/app/model_selection_overlay_ui.rs",
@@ -754,6 +756,108 @@ fn tui_review_presentation_reads_screen_model_without_effects() {
             "std::fs",
             "std::thread",
             "std::sync",
+        ],
+    );
+}
+
+#[test]
+fn tui_queue_presentation_reads_screen_model_without_effects() {
+    // Queue authority loading and mutation belong to controller/effect paths. Presentation must
+    // remain a pure projection of the request-correlated immutable screen model.
+    assert_no_forbidden_references_in_paths(
+        "TUI queue presentation must consume its screen model without service or I/O effects",
+        &["src/adapter/inbound/tui/app/shell_presentation/overlays/popup/queue.rs"],
+        &[
+            "NativeTuiApp",
+            "NativeTuiApplicationHandle",
+            "NativeTuiPlanningHandle",
+            ".application",
+            ".planning()",
+            ".queue()",
+            "execute_queue_mutation",
+            "load_authority_snapshot",
+            "load_queue_authority",
+            "refresh_queue_",
+            "std::fs",
+            "std::thread",
+            "std::sync",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "TUI queue presentation facade must only project app state into the pure screen model",
+        &["src/adapter/inbound/tui/app/shell_presentation.rs"],
+        &[
+            ".application",
+            ".planning()",
+            ".queue()",
+            "execute_queue_mutation",
+            "load_authority_snapshot",
+            "load_queue_authority",
+            "refresh_queue_",
+            "std::fs",
+            "std::thread",
+            "std::sync",
+        ],
+    );
+    let facade =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_presentation.rs"))
+            .expect("queue presentation facade source should load");
+    let syntax = syn::parse_file(&facade).expect("queue presentation facade should parse");
+    let function = syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "build_queue_overlay_view" => {
+                Some(function)
+            }
+            _ => None,
+        })
+        .expect("queue presentation facade should expose build_queue_overlay_view");
+    assert!(
+        matches!(
+            function.block.stmts.as_slice(),
+            [syn::Stmt::Expr(syn::Expr::Call(call), None)]
+                if matches!(
+                    call.func.as_ref(),
+                    syn::Expr::Path(path)
+                        if path.path.is_ident("build_queue_overlay_view_from_screen_model")
+                )
+                    && matches!(
+                        call.args.iter().collect::<Vec<_>>().as_slice(),
+                        [syn::Expr::MethodCall(method)]
+                            if method.method == "queue_overlay_screen_model"
+                                && method.args.is_empty()
+                                && matches!(
+                                    method.receiver.as_ref(),
+                                    syn::Expr::Path(receiver)
+                                        if receiver.path.is_ident("app")
+                                )
+                    )
+        ),
+        "queue presentation facade must be one pure screen-model delegation"
+    );
+}
+
+#[test]
+fn tui_generic_shell_controller_does_not_own_queue_mutation_effects() {
+    assert_no_forbidden_references_in_paths(
+        "TUI generic shell controller must delegate queue mutation effects",
+        &["src/adapter/inbound/tui/app/shell_controller.rs"],
+        &[
+            "execute_queue_mutation",
+            "load_authority_snapshot",
+            "load_queue_authority",
+            ".planning()",
+            ".queue()",
+            ".cancel_tasks(",
+            "PlanningQueueCancellationRequest",
+            "PlanningQueueCancellationTarget",
+            "QueueMutationOperation",
+            "QueueOverlayAuthorityLoad",
+            "QueueMutationWorkerResult",
+            "cancel_selected_queue_task",
+            "start_queue_cancellation",
+            "apply_queue_mutation_completion",
         ],
     );
 }

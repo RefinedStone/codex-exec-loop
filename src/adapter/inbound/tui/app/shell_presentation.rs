@@ -50,6 +50,7 @@ mod terminal_text;
 #[path = "shell_presentation/transcript_copy.rs"]
 mod transcript_copy;
 
+use overlays::build_queue_overlay_view_from_screen_model;
 pub(super) use overlays::{
     ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceOverlayView,
     HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
@@ -59,9 +60,9 @@ pub(super) use overlays::{
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_reviews_overlay_view,
-    build_session_overlay_view, build_startup_banner_lines, build_startup_overlay_view,
-    build_supersession_overlay_view, build_view_selection_overlay_view,
+    build_planning_init_overlay_view, build_reviews_overlay_view, build_session_overlay_view,
+    build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
+    build_view_selection_overlay_view,
 };
 use runtime_status_copy::{
     auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
@@ -98,6 +99,10 @@ pub(super) fn build_inline_live_transcript_lines(app: &NativeTuiApp) -> Vec<Line
             || conversation.has_pending_viewport_transcript_handoff(),
     )
     .unwrap_or_default()
+}
+
+pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
+    build_queue_overlay_view_from_screen_model(app.queue_overlay_screen_model())
 }
 
 fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

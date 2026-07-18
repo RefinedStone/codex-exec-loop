@@ -10,7 +10,9 @@ use super::planning_overlay_shell_command::parse_planning_overlay_shell_argument
 use super::planning_reset_shell_command::parse_planning_reset_shell_argument;
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
 use super::progressive_activity_overlay_ui::parse_progressive_activity_detail_kind;
-use super::queue_overlay_ui::{QueueMutationAuthorityRefreshError, QueueMutationKind};
+use super::queue_overlay_ui::{
+    QueueActionBlockReason, QueueMutationAuthorityRefreshError, QueueMutationKind,
+};
 use super::view_selection_overlay_ui::ConversationViewMode;
 use super::{InlineShellCommand, ShellActionAvailability};
 
@@ -144,6 +146,58 @@ impl TuiLanguage {
                 "Queue authority needs refresh; close and reopen the queue before changing it."
             }
             Self::Korean => "큐 권한을 새로 확인해야 합니다. 큐를 닫았다가 다시 연 뒤 변경하세요.",
+        }
+    }
+
+    pub(super) fn queue_overlay_authority_loading_summary(self, request_id: u64) -> String {
+        match self {
+            Self::English => {
+                format!("queue authority load-{request_id} in progress; rows remain read-only")
+            }
+            Self::Korean => {
+                format!("큐 권한 load-{request_id} 확인 중; 행은 읽기 전용으로 유지됩니다")
+            }
+        }
+    }
+
+    pub(super) const fn queue_overlay_authority_pending_summary(self) -> &'static str {
+        match self {
+            Self::English => "queue authority load is preparing; rows remain read-only",
+            Self::Korean => "큐 권한 확인 준비 중; 행은 읽기 전용으로 유지됩니다",
+        }
+    }
+
+    pub(super) fn queue_overlay_authority_failed_summary(
+        self,
+        request_id: u64,
+        error: &str,
+    ) -> String {
+        match self {
+            Self::English => {
+                format!("queue authority load-{request_id} failed: {error}")
+            }
+            Self::Korean => format!("큐 권한 load-{request_id} 실패: {error}"),
+        }
+    }
+
+    pub(super) const fn queue_overlay_authority_loading_feedback(self) -> &'static str {
+        match self {
+            Self::English => "Queue authority is still loading; remove and undo remain disabled.",
+            Self::Korean => "큐 권한을 확인 중입니다. 제거와 되돌리기는 계속 비활성화됩니다.",
+        }
+    }
+
+    pub(super) const fn queue_overlay_authority_loading_disabled_key_line(self) -> &'static str {
+        match self {
+            Self::English => "authority loading: remove/undo disabled",
+            Self::Korean => "권한 확인 중: 제거/되돌리기 비활성화",
+        }
+    }
+
+    pub(super) const fn queue_overlay_authority_failed_disabled_key_line(self) -> &'static str {
+        match self {
+            Self::English => "authority unavailable: close and reopen to retry",
+            Self::Korean => "권한 확인 실패: 닫았다가 다시 열어 재시도",
         }
     }
 
@@ -403,6 +457,90 @@ impl TuiLanguage {
             (Self::English, true) => "x/Delete: remove | u: undo added",
             (Self::Korean, false) => "x/Delete: 제거",
             (Self::Korean, true) => "x/Delete: 제거 | u: 등록 되돌리기",
+        }
+    }
+
+    pub(super) const fn queue_overlay_undo_only_key_line(self) -> &'static str {
+        match self {
+            Self::English => "u: undo added",
+            Self::Korean => "u: 등록 되돌리기",
+        }
+    }
+
+    pub(super) const fn queue_action_block_reason(
+        self,
+        reason: QueueActionBlockReason,
+    ) -> &'static str {
+        match (self, reason) {
+            (Self::English, QueueActionBlockReason::ParallelModeOwnsTaskLeases) => {
+                "queue changes are disabled while parallel mode owns task leases"
+            }
+            (Self::English, QueueActionBlockReason::PostTurnPlanningInFlight) => {
+                "wait for post-turn planning to finish"
+            }
+            (Self::English, QueueActionBlockReason::ActiveTurnInFlight) => {
+                "wait for the active turn to finish"
+            }
+            (Self::English, QueueActionBlockReason::ConversationNotReady) => {
+                "queue changes require a ready conversation"
+            }
+            (Self::English, QueueActionBlockReason::AuthoritySnapshotChanged) => {
+                "queue authority changed; wait for refresh"
+            }
+            (Self::English, QueueActionBlockReason::SelectedItemUnavailable) => {
+                "select an actionable queue item"
+            }
+            (Self::Korean, QueueActionBlockReason::ParallelModeOwnsTaskLeases) => {
+                "병렬 모드가 작업 임대를 소유하는 동안 큐를 변경할 수 없습니다"
+            }
+            (Self::Korean, QueueActionBlockReason::PostTurnPlanningInFlight) => {
+                "턴 이후 계획 처리가 끝날 때까지 기다리세요"
+            }
+            (Self::Korean, QueueActionBlockReason::ActiveTurnInFlight) => {
+                "진행 중인 턴이 끝날 때까지 기다리세요"
+            }
+            (Self::Korean, QueueActionBlockReason::ConversationNotReady) => {
+                "준비된 대화에서만 큐를 변경할 수 있습니다"
+            }
+            (Self::Korean, QueueActionBlockReason::AuthoritySnapshotChanged) => {
+                "큐 권한이 변경되었습니다. 새로고침을 기다리세요"
+            }
+            (Self::Korean, QueueActionBlockReason::SelectedItemUnavailable) => {
+                "변경할 수 있는 큐 항목을 선택하세요"
+            }
+        }
+    }
+
+    pub(super) fn queue_overlay_remove_blocked_key_line(
+        self,
+        reason: QueueActionBlockReason,
+    ) -> String {
+        let reason = self.queue_action_block_reason(reason);
+        match self {
+            Self::English => format!("remove disabled: {reason}"),
+            Self::Korean => format!("제거 비활성화: {reason}"),
+        }
+    }
+
+    pub(super) fn queue_overlay_actions_blocked_key_line(
+        self,
+        reason: QueueActionBlockReason,
+    ) -> String {
+        let reason = self.queue_action_block_reason(reason);
+        match self {
+            Self::English => format!("remove/undo disabled: {reason}"),
+            Self::Korean => format!("제거/되돌리기 비활성화: {reason}"),
+        }
+    }
+
+    pub(super) fn queue_overlay_undo_blocked_key_line(
+        self,
+        reason: QueueActionBlockReason,
+    ) -> String {
+        let reason = self.queue_action_block_reason(reason);
+        match self {
+            Self::English => format!("undo disabled: {reason}"),
+            Self::Korean => format!("되돌리기 비활성화: {reason}"),
         }
     }
 

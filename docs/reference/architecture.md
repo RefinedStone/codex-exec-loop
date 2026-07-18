@@ -68,6 +68,14 @@ The private SQLite store is authoritative. Planning workspace files are operator
 prompts, staged drafts, exports, and recovery evidence. Accepted changes use revision-aware
 validation and mutation; hidden worker output never writes SQL or protected planning files directly.
 
+Opening the TUI Queue overlay first applies shell chrome, then a Queue-specific controller loads the
+paired runtime projection and queue authority on a background thread. The result carries a request
+ID plus workspace and active-thread identity. Presentation reads only the resulting immutable screen
+model: loading and failed states remain read-only, while a ready state binds visible rows, selection,
+revision, and destructive-action tokens to one snapshot. A stale request or workspace, thread, or
+visible-revision drift is ignored and starts a new correlated load; redraw and resize paths perform
+no authority I/O.
+
 TUI queue remove and undo intents open one overlay-independent pending gate. Its adapter correlation
 envelope carries an operation ID, workspace and active-thread identity, plus the cancellation
 request's base planning revision and exact task status/update tokens. The controller does not mutate

@@ -16,7 +16,7 @@ the fixed Akra theme.
 | Layer | Owns | Primary files | Must not own |
 | --- | --- | --- | --- |
 | State and reducers | User intent, mode transitions, selected indices, editing state | `shell_chrome.rs`, `conversation_*`, `*_ui_state.rs`, planning state modules | Ratatui widgets, operator-facing visual hierarchy, raw styles |
-| Controllers and effects | Service calls, command dispatch, runtime side effects | `shell_controller.rs`, `app_runtime.rs`, planning controllers | Status copy, panel titles, layout dimensions |
+| Controllers and effects | Service calls, command dispatch, runtime side effects | `shell_controller.rs`, `queue_overlay_controller.rs`, `app_runtime.rs`, planning controllers | Status copy, panel titles, layout dimensions |
 | Projection and copy | View models, `Line` content, labels, status wording, key footer text | `shell_presentation.rs`, `shell_presentation/**`, `planning/presentation.rs` | `Frame`, `Layout`, terminal side effects, raw color decisions |
 | Theme and chrome | Semantic styles, Akra brand tokens, panel frame helpers, selection markers | `theme.rs` | Feature state, controller behavior, surface-specific wording |
 | Rendering and layout | `Rect`, `Layout`, `Frame`, `Paragraph`, `List`, popup and inline section placement | `shell_rendering/**`, `inline_layout.rs`, `popup_frame.rs`, `popup_helpers.rs` | New keybinding claims, new product copy, raw color or border policy |
@@ -86,6 +86,14 @@ the fixed Akra theme.
 - Async Review Center results may replace the current screen model only when the request identifier,
   workspace, and active-thread identity (thread ID) still match; workspace or thread identity drift
   must trigger a correlated reload.
+- Opening the Queue overlay must dispatch its chrome before starting controller-owned asynchronous
+  authority loading. The terminal input path must not read planning services, repositories,
+  filesystems, or databases.
+- Queue projection and rendering must consume a request-correlated immutable screen model. Loading
+  and failed authority states are read-only and must not advertise remove or undo shortcuts.
+- A ready Queue screen model must bind its visible runtime rows, selection, planning revision, and
+  destructive-action tokens to the same authority snapshot. Request, workspace, active-thread, or
+  visible planning-revision drift must invalidate that snapshot and trigger a correlated reload.
 - Queue remove and undo actions must expose their pending operation ID and suppress duplicate
   destructive keyboard and mouse actions until a matching background completion is consumed.
 - The queue mutation gate must outlive Queue overlay chrome. Closing the overlay may reset local

@@ -4,6 +4,10 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationRuntimeEffect, PostTurnContinuationAction, PostTurnEvaluationOutcome,
     PostTurnEvaluationProvenance,
 };
+use crate::adapter::inbound::tui::app::queue_overlay_ui::{
+    QueueMutationAuthorityRefreshError, QueueOverlayAuthorityLoadResult,
+    QueueOverlayAuthorityScreenModel,
+};
 use crate::adapter::inbound::tui::app::{
     ConversationInputState, ConversationState, InlineShellCommand, NativeTuiParallelModeBinding,
     PlanningWorkerPanelState, PlanningWorkerStatus, test_helpers,
@@ -252,61 +256,73 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
      */
     const APP_RS: &str = include_str!("../../app.rs");
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
-    const CONTROLLER_RS: &str = include_str!("../shell_controller.rs");
+    const SHELL_CONTROLLER_RS: &str = include_str!("../shell_controller.rs");
+    const QUEUE_CONTROLLER_RS: &str = include_str!("../queue_overlay_controller.rs");
     const QUEUE_UI_RS: &str = include_str!("../queue_overlay_ui.rs");
     const SHELL_RUNTIME_RS: &str = include_str!("../shell_runtime.rs");
 
-    let controller_input_path = CONTROLLER_RS
+    let queue_controller_input_path = QUEUE_CONTROLLER_RS
         .split("#[cfg(test)]\nmod tests")
         .next()
-        .expect("controller production source must exist");
+        .expect("queue controller production source must exist");
     let queue_ui_input_path = QUEUE_UI_RS
         .split("#[cfg(test)]\nmod tests")
         .next()
         .expect("queue UI production source must exist");
-    for input_path in [controller_input_path, queue_ui_input_path, SHELL_RUNTIME_RS] {
+    for input_path in [
+        queue_controller_input_path,
+        queue_ui_input_path,
+        SHELL_RUNTIME_RS,
+    ] {
         assert!(!input_path.contains(".cancel_tasks("));
     }
-    assert!(CONTROLLER_RS.contains("std::thread::spawn"));
-    assert!(CONTROLLER_RS.contains("BackgroundMessage::QueueMutationCompleted"));
+    assert!(QUEUE_CONTROLLER_RS.contains("std::thread::spawn"));
+    assert!(QUEUE_CONTROLLER_RS.contains("BackgroundMessage::QueueMutationCompleted"));
+    assert!(QUEUE_CONTROLLER_RS.contains("BackgroundMessage::QueueOverlayAuthorityLoaded"));
     assert!(SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueMutationCompleted(result)"));
     assert!(SHELL_RUNTIME_RS.contains("apply_queue_mutation_completion(*result)"));
+    assert!(SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueOverlayAuthorityLoaded(result)"));
+    assert!(SHELL_RUNTIME_RS.contains("apply_queue_overlay_authority_loaded(*result)"));
 
     assert!(QUEUE_UI_RS.contains("operation_id: u64"));
     assert!(QUEUE_UI_RS.contains("workspace_directory: String"));
     assert!(QUEUE_UI_RS.contains("active_thread_id: Option<String>"));
     assert!(QUEUE_UI_RS.contains("request: PlanningQueueCancellationRequest"));
     assert!(QUEUE_UI_RS.contains("if self.pending.as_ref() != Some(completed)"));
-    assert!(CONTROLLER_RS.contains("expected_planning_revision: planning_revision"));
-    assert!(CONTROLLER_RS.contains("expected_status: status"));
-    assert!(CONTROLLER_RS.contains("expected_updated_at: updated_at"));
-    assert!(CONTROLLER_RS.contains("expected_planning_revision: receipt.planning_revision"));
-    assert!(CONTROLLER_RS.contains("expected_status: entry.after_status"));
-    assert!(CONTROLLER_RS.contains("expected_updated_at: entry.after_updated_at.clone()"));
-    assert!(CONTROLLER_RS.contains("let current_context = self.current_queue_mutation_context()"));
-    assert!(CONTROLLER_RS.contains("current_context != operation.context"));
-    let show_queue = CONTROLLER_RS
+    assert!(QUEUE_CONTROLLER_RS.contains("expected_planning_revision: planning_revision"));
+    assert!(QUEUE_CONTROLLER_RS.contains("expected_status: status"));
+    assert!(QUEUE_CONTROLLER_RS.contains("expected_updated_at: updated_at"));
+    assert!(QUEUE_CONTROLLER_RS.contains("expected_planning_revision: receipt.planning_revision"));
+    assert!(QUEUE_CONTROLLER_RS.contains("expected_status: entry.after_status"));
+    assert!(QUEUE_CONTROLLER_RS.contains("expected_updated_at: entry.after_updated_at.clone()"));
+    assert!(
+        QUEUE_CONTROLLER_RS.contains("let current_context = self.current_queue_mutation_context()")
+    );
+    assert!(QUEUE_CONTROLLER_RS.contains("current_context != operation.context"));
+    let show_queue = QUEUE_CONTROLLER_RS
         .split("pub(super) fn show_queue_overlay")
         .nth(1)
         .expect("queue overlay opener must exist")
-        .split("pub(super) fn show_reviews_overlay")
+        .split("pub(super) fn start_queue_overlay_authority_load")
         .next()
         .expect("queue overlay opener must stay bounded");
-    assert!(show_queue.contains("self.pending_queue_mutation_operation_id().is_none()"));
-    assert!(show_queue.contains("self.refresh_queue_overlay_authority_binding()"));
+    assert!(show_queue.contains("self.dispatch_shell_chrome"));
+    assert!(show_queue.contains("self.start_queue_overlay_authority_load()"));
+    assert!(!show_queue.contains(".application"));
+    assert!(!show_queue.contains(".load_"));
 
     let executor = APP_RUNTIME_RS
         .split("pub(super) fn execute_queue_mutation")
         .nth(1)
         .expect("queue mutation executor must exist")
-        .split("fn load_queue_mutation_authority")
+        .split("pub(super) fn load_queue_authority")
         .next()
         .expect("queue authority refresh helper must follow the executor");
     let mutation_index = executor
         .find("let mutation = self")
         .expect("executor must retain the mutation result without returning early");
     let refresh_index = executor
-        .find("let authority = self.load_queue_mutation_authority")
+        .find("let authority = self.load_queue_authority")
         .expect("executor must refresh authority after either mutation outcome");
     assert!(mutation_index < refresh_index);
     assert!(executor.contains("QueueMutationWorkerResult"));
@@ -315,15 +331,11 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
 
     assert!(APP_RS.contains("queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState"));
     assert!(APP_RS.contains("queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState"));
-    let close_overlay = CONTROLLER_RS
-        .split("pub(super) fn close_shell_overlay")
-        .nth(1)
-        .expect("overlay close handler must exist")
-        .split("pub(super) fn open_new_conversation_shell")
-        .next()
-        .expect("overlay close handler must remain bounded");
-    assert!(close_overlay.contains("self.queue_overlay_ui_state.reset()"));
-    assert!(!close_overlay.contains("queue_mutation_ui_state"));
+    assert!(APP_RUNTIME_RS.contains(
+        "if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue"
+    ));
+    assert!(APP_RUNTIME_RS.contains("self.queue_overlay_ui_state.reset()"));
+    assert!(!SHELL_CONTROLLER_RS.contains("refresh_queue_overlay_authority_binding"));
 }
 
 #[test]
@@ -1137,6 +1149,44 @@ fn startup_background_message_updates_app_state() {
         other => panic!("expected ready startup state, got {other:?}"),
     }
 }
+
+#[test]
+fn stale_queue_authority_completion_reloads_for_the_current_thread_context() {
+    let mut runtime = make_test_runtime();
+    runtime
+        .app_mut()
+        .dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
+    let stale_request = runtime.app_mut().begin_queue_overlay_authority_load();
+    let stale_request_id = stale_request.request_id;
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-after-load-started".to_string();
+
+    runtime
+        .app
+        .tx
+        .send(BackgroundMessage::QueueOverlayAuthorityLoaded(Box::new(
+            QueueOverlayAuthorityLoadResult {
+                request: stale_request,
+                authority: Err(QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable),
+            },
+        )))
+        .expect("stale queue authority result should enqueue");
+
+    runtime.poll_background_messages();
+
+    assert!(matches!(
+        runtime
+            .app()
+            .queue_overlay_ui_state
+            .authority_screen_model(),
+        QueueOverlayAuthorityScreenModel::Loading { request_id }
+            if request_id > stale_request_id
+    ));
+    assert!(!runtime.app().queue_overlay_authority_load_required());
+}
+
 #[test]
 fn conversation_stream_background_message_is_routed_through_runtime_reducer() {
     /*
