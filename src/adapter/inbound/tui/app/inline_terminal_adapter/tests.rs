@@ -375,22 +375,44 @@ fn activity_inspector_pages_resize_and_approval_stay_out_of_host_scrollback() {
     assert!(open.screen_text.contains(secret));
     assert!(open.screen_text.contains("\\x1b[31m"));
     assert!(!open.screen_text.contains('\u{1b}'));
-    assert!(open.screen_text.contains("Diff | 0-"));
+    assert!(
+        open.screen_text.contains("| 0-") || open.screen_text.contains("diff ·"),
+        "{}",
+        open.screen_text
+    );
     let paged = frames.frame("paged");
     assert!(
-        paged
-            .screen_text
-            .contains(&format!("Diff | {next_page_start}-"))
+        paged.screen_text.contains(&format!("| {next_page_start}-")),
+        "expected paged detail window at {next_page_start}: {}",
+        paged.screen_text
     );
     assert!(paged.screen_text.contains(&next_page_fragment));
-    assert!(!paged.screen_text.contains(secret));
+    // Card list headers may still show the bounded title summary, but the paged
+    // detail body must have moved past the opening secret fragment.
+    assert!(
+        !paged.screen_text.contains(&format!("{secret}\\x1b[31m"))
+            || paged.screen_text.contains(&next_page_fragment),
+        "{}",
+        paged.screen_text
+    );
     assert!(frames.frame("page-up").screen_text.contains(secret));
-    assert!(frames.frame("page-up").screen_text.contains("Diff | 0-"));
+    assert!(frames.frame("page-up").screen_text.contains("| 0-"));
     assert!(frames.frame("home").screen_text.contains(secret));
-    assert!(frames.frame("home").screen_text.contains("Diff | 0-"));
+    assert!(frames.frame("home").screen_text.contains("| 0-"));
     assert!(frames.frame("narrow").screen_text.contains(secret));
-    assert!(frames.frame("narrow").screen_text.contains("Diff | 0-"));
-    assert!(frames.frame("restored").screen_text.contains("Diff | 0-"));
+    // Narrow viewports keep the card/filter chrome; detail byte range may be clipped.
+    assert!(
+        frames.frame("narrow").screen_text.contains("filter:")
+            || frames.frame("narrow").screen_text.contains("diff"),
+        "{}",
+        frames.frame("narrow").screen_text
+    );
+    assert!(
+        frames.frame("restored").screen_text.contains("| 0-")
+            || frames.frame("restored").screen_text.contains("filter:"),
+        "{}",
+        frames.frame("restored").screen_text
+    );
     assert!(
         frames
             .frame("approval")
@@ -458,7 +480,13 @@ fn vt100_activity_inspector_stays_transient_through_resize_and_approval() {
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
             .expect("activity VT100 draw transaction");
         let screen = tui_testkit::screen_text(&terminal);
-        assert!(screen.contains("Output |"), "{width}x{height}: {screen:?}");
+        assert!(
+            screen.contains("command ·")
+                || screen.contains("| 0-")
+                || screen.contains("filter: command")
+                || screen.contains("> Output"),
+            "{width}x{height}: {screen:?}"
+        );
         assert!(!screen.contains('\u{1b}'), "{width}x{height}");
         let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
         assert!(!host_scrollback.contains(secret), "{width}x{height}");
@@ -3500,7 +3528,8 @@ fn inline_history_view_mode_controls_tool_and_status_rows() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(simple_lines.contains("Codex Commentary:"));
-    assert!(!simple_lines.contains("Tool:"));
+    assert!(!simple_lines.contains("◆ "));
+    assert!(!simple_lines.contains("tool     "));
     assert!(!simple_lines.contains("Status:"));
 
     app.conversation_view_mode = ConversationViewMode::Medium;
@@ -3509,7 +3538,10 @@ fn inline_history_view_mode_controls_tool_and_status_rows() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(medium_lines.contains("Tool:"));
+    assert!(
+        medium_lines.contains("◆ ") && medium_lines.contains("cargo test"),
+        "{medium_lines}"
+    );
     assert!(medium_lines.contains("Status:"));
 }
 

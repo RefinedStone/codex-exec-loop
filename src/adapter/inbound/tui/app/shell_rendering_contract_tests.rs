@@ -132,7 +132,7 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(default.contains("Tool:"));
+    assert!(default.contains("◆ ") && default.contains("tool"));
     assert!(default.contains("Status:"));
 
     let simple = format_conversation_lines_for_view(&messages, ConversationViewMode::Simple, false)
@@ -143,7 +143,7 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
     assert!(simple.contains("You:"));
     assert!(simple.contains("Codex Commentary:"));
     assert!(simple.contains("Codex:"));
-    assert!(!simple.contains("Tool:"));
+    assert!(!simple.contains("◆ "));
     assert!(!simple.contains("Status:"));
 
     let medium = format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false)
@@ -151,7 +151,7 @@ fn transcript_view_modes_filter_tool_and_status_rows() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(medium.contains("Tool:"));
+    assert!(medium.contains("◆ ") && medium.contains("tool"));
     assert!(medium.contains("Status:"));
 
     let only_hidden_messages = messages[3..].to_vec();
