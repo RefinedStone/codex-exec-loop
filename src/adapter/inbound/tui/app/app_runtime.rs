@@ -1333,7 +1333,7 @@ impl NativeTuiApp {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
         let turn_control_truth = application.runtime_control_truth();
-        let mut initial_conversation = ConversationViewModel::new_draft_with_truth(
+        let initial_conversation = ConversationViewModel::new_draft_with_truth(
             workspace_directory.clone(),
             turn_control_truth,
         );
@@ -1341,8 +1341,6 @@ impl NativeTuiApp {
             .planning()
             .runtime()
             .load_runtime_projection_or_invalid(&workspace_directory);
-        initial_conversation
-            .replace_reducer_event_projection_cache(initial_planning_runtime_projection.clone());
         let mut app = Self {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
@@ -1758,12 +1756,7 @@ impl NativeTuiApp {
             return false;
         };
 
-        let previous_planning_runtime_projection =
-            conversation.reducer_event_projection_cache().clone();
         let reduction = reduce_conversation_runtime(conversation, event);
-        let next_planning_runtime_projection = (previous_planning_runtime_projection
-            != *reduction.state.reducer_event_projection_cache())
-        .then(|| reduction.state.reducer_event_projection_cache().clone());
         let mut effects = reduction.effects;
         let started_stream = effects
             .iter()
@@ -1771,9 +1764,6 @@ impl NativeTuiApp {
         self.conversation_state = ConversationState::ready(reduction.state);
         if !self.conversation_has_running_turn() {
             self.turn_steer_confirmation = None;
-        }
-        if let Some(runtime_projection) = next_planning_runtime_projection {
-            self.sync_core_planning_runtime_projection(runtime_projection);
         }
         self.route_post_turn_continuation_effects(post_turn_context, &mut effects);
         for effect in effects {

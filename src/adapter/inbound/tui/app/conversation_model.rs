@@ -6,7 +6,7 @@ pub(super) use super::{
 // 테스트 fixture는 domain message를 직접 만들어 shell runtime을 띄우지 않고도
 // view model mapping 회귀를 좁게 확인한다.
 #[cfg(test)]
-pub(super) use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+pub(super) use crate::domain::conversation::ConversationMessageKind;
 
 // 이 index는 conversation UI 상태를 하나의 module boundary 뒤에 묶고, 구현은
 // follow-up 정책, 현재 turn activity, renderer-facing view model로 나눠 둔다.
@@ -26,8 +26,6 @@ mod view_model;
 // auto-follow 상태는 shell input handling과 테스트가 함께 쓰므로, 호출부는
 // policy 파일 배치가 아니라 conversation model surface에만 의존한다.
 pub(crate) use activity_rail::ActivityRailTerminalState;
-#[cfg(test)]
-pub(crate) use auto_follow::AutoFollowDecision;
 pub(crate) use auto_follow::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, StopKeywordRule,
 };

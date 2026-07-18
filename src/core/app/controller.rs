@@ -263,14 +263,20 @@ impl CoreController {
             CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
                 execution,
             )) => {
-                let events = self
+                if self.in_flight_conversation_load.is_some() {
+                    return self.unchanged_outcome();
+                }
+                let accepted = self
                     .turn_stream_state
-                    .accept_post_turn_evaluation_completion(execution.as_ref())
-                    .then_some(AppEvent::PostTurnEvaluationCompleted(execution))
-                    .into_iter()
-                    .collect();
+                    .accept_post_turn_evaluation_completion(execution.as_ref());
+                if !accepted {
+                    return self.unchanged_outcome();
+                }
+                self.state.apply_planning_runtime_projection(Box::new(
+                    execution.evaluation.runtime_projection.clone(),
+                ));
                 CoreDispatchOutcome {
-                    events,
+                    events: vec![AppEvent::PostTurnEvaluationCompleted(execution)],
                     effects: Vec::new(),
                     snapshot: self.snapshot(),
                 }
@@ -1642,7 +1648,7 @@ mod tests {
     }
 
     #[test]
-    fn post_turn_evaluation_completion_passes_through_core_without_state_revision() {
+    fn accepted_post_turn_evaluation_updates_core_planning_projection() {
         let mut controller = CoreController::new();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let execution = Box::new(sample_post_turn_execution());
@@ -1651,7 +1657,11 @@ mod tests {
             CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            *outcome.snapshot.planning_parallel.planning_runtime,
+            PlanningRuntimeProjection::invalid("planning blocked")
+        );
         assert_eq!(
             outcome.events,
             vec![AppEvent::PostTurnEvaluationCompleted(execution)]
@@ -1660,9 +1670,88 @@ mod tests {
     }
 
     #[test]
+    fn matching_post_turn_projection_keeps_revision_and_delivers_completion() {
+        let mut controller = CoreController::new();
+        let projection = PlanningRuntimeProjection::invalid("planning blocked");
+        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+            projection.clone(),
+        )));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let execution = Box::new(sample_post_turn_execution());
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
+        ));
+
+        assert_eq!(outcome.snapshot.revision, 1);
+        assert_eq!(
+            *outcome.snapshot.planning_parallel.planning_runtime,
+            projection
+        );
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn post_turn_completion_is_dropped_during_conversation_load() {
+        let mut controller = CoreController::new();
+        let current_projection = PlanningRuntimeProjection::ready(
+            "current prompt".to_string(),
+            "current summary".to_string(),
+            None,
+        );
+        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+            current_projection.clone(),
+        )));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let load = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        let [CoreEffect::LoadConversation { correlation, .. }] = load.effects.as_slice() else {
+            panic!("conversation load should emit one correlated effect");
+        };
+        let correlation = correlation.clone();
+        let snapshot_before_completion = controller.snapshot();
+
+        let dropped = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(
+                sample_post_turn_execution(),
+            )),
+        ));
+
+        assert_eq!(dropped.snapshot, snapshot_before_completion);
+        assert!(dropped.events.is_empty());
+        assert!(dropped.effects.is_empty());
+
+        let failed_load = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation,
+                result: Err("load failed".to_string()),
+            },
+        ));
+        assert_eq!(
+            *failed_load.snapshot.planning_parallel.planning_runtime,
+            current_projection
+        );
+    }
+
+    #[test]
     fn stale_post_turn_evaluation_completion_is_dropped_in_core() {
         let mut controller = CoreController::new();
+        let existing_projection = PlanningRuntimeProjection::ready(
+            "existing prompt".to_string(),
+            "existing summary".to_string(),
+            None,
+        );
+        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+            existing_projection,
+        )));
         apply_completed_turn(&mut controller, "thread-1", "turn-2");
+        let snapshot_before_stale_completion = controller.snapshot();
         let mut execution = sample_post_turn_execution();
         execution.completed_turn_id = "turn-1".to_string();
         execution.evaluation.provenance =
@@ -1674,7 +1763,7 @@ mod tests {
             CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(execution)),
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(outcome.snapshot, snapshot_before_stale_completion);
         assert!(outcome.events.is_empty());
         assert!(outcome.effects.is_empty());
     }
@@ -1684,15 +1773,22 @@ mod tests {
         let mut controller = CoreController::new();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let execution = Box::new(sample_post_turn_execution());
+        let mut duplicate_execution = (*execution).clone();
+        duplicate_execution.evaluation.runtime_projection = PlanningRuntimeProjection::ready(
+            "duplicate prompt".to_string(),
+            "duplicate summary".to_string(),
+            None,
+        );
 
         let first = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
+            CoreEffectCompletion::PostTurnEvaluationCompleted(execution),
         ));
         let duplicate = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(execution),
+            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(duplicate_execution)),
         ));
 
         assert_eq!(first.events.len(), 1);
+        assert_eq!(duplicate.snapshot, first.snapshot);
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
     }

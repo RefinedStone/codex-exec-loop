@@ -438,12 +438,12 @@ impl NativeFlowHarness {
             .send(post_turn_evaluation_completed_message(
                 "thread-1",
                 turn_id,
+                planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
                         .with_parallel_queue_signal(Some(
                             ParallelModePostTurnQueueSignal::AutoFollowQueued,
                         )),
-                    runtime_projection: planning_projection,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
@@ -486,12 +486,12 @@ impl NativeFlowHarness {
             .send(post_turn_evaluation_completed_message(
                 "thread-1",
                 turn_id,
+                planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
                         .with_parallel_queue_signal(Some(
                             ParallelModePostTurnQueueSignal::ParallelCompletionFinalized,
                         )),
-                    runtime_projection: planning_projection,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {
@@ -525,9 +525,9 @@ impl NativeFlowHarness {
             .send(post_turn_evaluation_completed_message(
                 "thread-1",
                 turn_id,
+                planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
-                    runtime_projection: planning_projection,
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {

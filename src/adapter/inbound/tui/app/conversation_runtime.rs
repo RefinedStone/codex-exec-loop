@@ -17,7 +17,7 @@ use crate::adapter::inbound::tui::conversation_text::{
     approval_review_manual_client_action_notice, attachment_runtime_notice,
 };
 use crate::application::service::planning::{
-    PlanningRuntimeProjection, PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
+    PlanningTaskHandoff, PlanningTurnExecutionSnapshotCapture,
 };
 use crate::core::app::{TurnStreamProgressiveActivityUpdate, TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
@@ -113,9 +113,6 @@ pub(super) struct PostTurnEvaluationOutcome {
     // Provenance binds every post-turn decision to the completed turn and
     // optional handoff signals that downstream continuation routing may consume.
     pub provenance: PostTurnEvaluationProvenance,
-    // Fresh planning projection after the just-finished turn. It replaces the
-    // embedded conversation snapshot before auto-follow copy is derived.
-    pub runtime_projection: PlanningRuntimeProjection,
     // Repair state is presentation state, but it is decided by post-turn
     // execution where planning files and runtime diagnostics are inspected.
     pub planning_repair_state: Option<PlanningRepairState>,
@@ -656,16 +653,12 @@ pub(super) fn reduce_conversation_runtime(
         ConversationRuntimeEvent::PostTurnEvaluationCompleted { evaluation } => {
             let PostTurnEvaluationOutcome {
                 provenance,
-                runtime_projection,
                 planning_repair_state,
                 runtime_notices,
                 action,
                 operator_alerts,
             } = *evaluation;
             state.complete_post_turn_settlement(&provenance.completed_turn_id);
-            // Apply the new planning view before acting on the decision; queued
-            // or skipped auto-follow copy should describe the latest queue state.
-            state.replace_reducer_event_projection_cache(runtime_projection);
             state.planning_repair_state = planning_repair_state;
             state.extend_runtime_notices(runtime_notices);
             state.record_queue_mutation_receipt(provenance.queue_mutation_receipt.clone());
@@ -2021,7 +2014,6 @@ mod tests {
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {
@@ -2110,12 +2102,6 @@ mod tests {
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-root".to_string()),
-                    runtime_projection: PlanningRuntimeProjection::ready_with_details(
-                        "Planning Context".to_string(),
-                        "queue idle: no executable planning task".to_string(),
-                        None,
-                        None,
-                    ),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {
@@ -2174,12 +2160,6 @@ mod tests {
                         "turn-from-provenance".to_string(),
                     )
                     .with_handoff_task(Some(handoff_task.clone())),
-                    runtime_projection: PlanningRuntimeProjection::ready_with_details(
-                        "Planning Context".to_string(),
-                        "queue has a ready task".to_string(),
-                        None,
-                        None,
-                    ),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
@@ -2281,12 +2261,6 @@ mod tests {
                 ConversationRuntimeEvent::PostTurnEvaluationCompleted {
                     evaluation: Box::new(PostTurnEvaluationOutcome {
                         provenance: PostTurnEvaluationProvenance::new("turn-stale".to_string()),
-                        runtime_projection: PlanningRuntimeProjection::ready_with_details(
-                            "Planning Context".to_string(),
-                            "queue has a ready task".to_string(),
-                            None,
-                            None,
-                        ),
                         planning_repair_state: None,
                         runtime_notices: Vec::new(),
                         action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(
@@ -2323,12 +2297,6 @@ mod tests {
                 .with_parallel_queue_signal(Some(
                     ParallelModePostTurnQueueSignal::AutoFollowQueued,
                 )),
-            runtime_projection: PlanningRuntimeProjection::ready_with_details(
-                "Planning Context".to_string(),
-                "queue has a ready task".to_string(),
-                None,
-                None,
-            ),
             planning_repair_state: None,
             runtime_notices: Vec::new(),
             action: PostTurnContinuationAction::QueueAutoPrompt(Box::new(PostTurnQueuedPrompt {
@@ -2411,7 +2379,6 @@ mod tests {
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-off".to_string()),
-                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {
@@ -2447,7 +2414,6 @@ mod tests {
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-receipt".to_string())
                         .with_queue_mutation_receipt(Some(receipt.clone())),
-                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {
@@ -2483,7 +2449,6 @@ mod tests {
             ConversationRuntimeEvent::PostTurnEvaluationCompleted {
                 evaluation: Box::new(PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new("turn-before-rearm".to_string()),
-                    runtime_projection: PlanningRuntimeProjection::uninitialized(),
                     planning_repair_state: None,
                     runtime_notices: Vec::new(),
                     action: PostTurnContinuationAction::SkipAutoFollow {

@@ -65,7 +65,7 @@ impl NativeTuiApp {
         *snapshot.planning_parallel.planning_runtime
     }
 
-    // active conversation이 현재 주장하는 workspace에 맞춰 reducer/event cache와 core projection을 갱신한다.
+    // active conversation이 현재 주장하는 workspace에 맞춰 core projection을 갱신한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_projection(&mut self) {
         // state replacement 중 self를 계속 빌리지 않도록 선택된 path를 먼저 소유한다.
         let workspace_directory = self.planning_workspace_directory();
@@ -74,31 +74,25 @@ impl NativeTuiApp {
         );
     }
 
-    // caller가 고른 workspace에 대해 Ready conversation reducer/event cache와 core projection을 함께 갱신한다.
+    // caller가 고른 workspace에 대해 Ready conversation의 core projection을 갱신한다.
     pub(crate) fn refresh_ready_conversation_planning_runtime_projection_for_workspace(
         &mut self,
         workspace_directory: &str,
     ) {
-        // reducers still need a compatibility cache, while rendering reads core projection.
         let planning_runtime_projection =
             self.load_planning_runtime_projection(workspace_directory);
         self.sync_ready_conversation_planning_runtime_projection(planning_runtime_projection);
     }
 
-    // Keep the transitional reducer/event cache and core render projection aligned.
-    // Some callers arrive after a core effect already updated the snapshot; repeated
-    // projection input is idempotent, so this remains safe while render paths move
-    // away from the conversation cache.
+    // Loading/failed conversation state must not replace the active core planning view.
     pub(crate) fn sync_ready_conversation_planning_runtime_projection(
         &mut self,
-        reducer_event_projection_cache: PlanningRuntimeProjection,
+        planning_runtime_projection: PlanningRuntimeProjection,
     ) {
-        let Some(mut conversation) = self.take_ready_conversation_state() else {
+        if !matches!(self.conversation_state, ConversationState::Ready(_)) {
             return;
-        };
-        conversation.replace_reducer_event_projection_cache(reducer_event_projection_cache.clone());
-        self.conversation_state = ConversationState::ready(conversation);
-        self.sync_core_planning_runtime_projection(reducer_event_projection_cache);
+        }
+        self.sync_core_planning_runtime_projection(planning_runtime_projection);
     }
 
     // saved thread를 연 직후 planning context를 status에 올려 workspace mismatch가 즉시 보이게 한다.

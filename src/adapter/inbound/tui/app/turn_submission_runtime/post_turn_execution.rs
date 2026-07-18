@@ -245,7 +245,6 @@ fn tui_post_turn_evaluation_outcome(
 ) -> PostTurnEvaluationOutcome {
     PostTurnEvaluationOutcome {
         provenance: tui_post_turn_evaluation_provenance(outcome.provenance),
-        runtime_projection: outcome.runtime_projection,
         planning_repair_state: outcome
             .planning_repair_state
             .map(|state| PlanningRepairState {
@@ -436,6 +435,59 @@ mod tests {
                 .post_turn_continuation_paused()
         );
         assert!(!conversation.auto_follow_state.can_queue_next());
+    }
+
+    #[test]
+    fn post_turn_context_projects_keyword_and_file_change_stop_rules() {
+        use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+
+        let request = request();
+        let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "work complete.\nAUTO_STOP!",
+            None,
+            None,
+        ));
+        conversation
+            .auto_follow_state
+            .stop_rules
+            .stop_on_no_file_changes = true;
+
+        let default_keyword = post_turn_context_from_conversation(
+            &conversation,
+            &request,
+            PlanningRuntimeProjection::uninitialized(),
+            false,
+            None,
+        );
+
+        assert_eq!(default_keyword.stop_keyword, "AUTO_STOP");
+        assert!(default_keyword.stop_keyword_matched);
+        assert!(default_keyword.no_file_changes_stop_matched);
+
+        conversation.auto_follow_state.stop_rules.stop_keyword.value = "DONE".to_string();
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "done!",
+            None,
+            None,
+        ));
+        conversation
+            .turn_activity
+            .last_completed_turn_file_change_count = 2;
+
+        let custom_keyword = post_turn_context_from_conversation(
+            &conversation,
+            &request,
+            PlanningRuntimeProjection::uninitialized(),
+            false,
+            None,
+        );
+
+        assert_eq!(custom_keyword.stop_keyword, "DONE");
+        assert!(custom_keyword.stop_keyword_matched);
+        assert!(!custom_keyword.no_file_changes_stop_matched);
     }
 
     #[test]

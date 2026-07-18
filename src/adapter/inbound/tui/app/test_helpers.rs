@@ -112,40 +112,6 @@ pub(crate) fn sample_planning_runtime_projection(
     )
 }
 
-pub(crate) fn sample_proposal_only_planning_runtime_projection(
-    prompt_fragment: &str,
-    queue_summary: &str,
-    proposal_summary: &str,
-) -> PlanningRuntimeProjection {
-    /*
-     * Proposal-only state is distinct from an empty queue: the planning worker has candidate work, but no
-     * actionable head. Rendering tests use this to ensure proposal copy does not masquerade as a
-     * runnable task and that planning notices still surface without active work.
-     */
-    PlanningRuntimeProjection::ready_with_queue_projection(
-        prompt_fragment.to_string(),
-        queue_summary.to_string(),
-        Some(proposal_summary.to_string()),
-        None,
-        PriorityQueueProjection {
-            next_task: None,
-            active_tasks: Vec::new(),
-            proposed_tasks: vec![PriorityQueueTask {
-                rank: 1,
-                task_id: "proposal-1".to_string(),
-                direction_id: "general-workstream".to_string(),
-                direction_title: "General workstream".to_string(),
-                task_title: "Draft a queue inspection overlay".to_string(),
-                status: TaskStatus::Proposed,
-                combined_priority: 7,
-                updated_at: "2026-04-10T02:00:00Z".to_string(),
-                rank_reasons: vec!["combined_priority=7".to_string()],
-            }],
-            skipped_tasks: Vec::new(),
-        },
-    )
-}
-
 pub(crate) fn test_planning_services(
     planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
 ) -> PlanningServices {

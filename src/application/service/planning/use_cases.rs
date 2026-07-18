@@ -2663,6 +2663,10 @@ mod tests {
             Some("task-1")
         );
         assert!(prompt.prompt.contains("Queue head"));
+        assert_eq!(
+            prompt.transcript_text,
+            crate::application::service::planning::QUEUED_TASK_TRANSCRIPT_TEXT
+        );
     }
 
     #[test]

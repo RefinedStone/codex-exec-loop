@@ -454,9 +454,9 @@ fn tui_task_command_surface_is_removed() {
 #[test]
 fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
     /*
-     * Parallel rendering must read core AppSnapshot projections directly. This
-     * keeps future surfaces from recreating NativeTuiApp cache fields as
-     * projection authority.
+     * Planning and parallel rendering must read core AppSnapshot projections
+     * directly. This keeps future surfaces from recreating conversation or
+     * NativeTuiApp cache fields as projection authority.
      */
     const APP_RS: &str = include_str!("../../app.rs");
     const CONVERSATION_VIEW_MODEL_RS: &str = include_str!("../conversation_model/view_model.rs");
@@ -476,7 +476,7 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
     assert!(PARALLEL_MODE_RS.contains(".planning_parallel"));
     assert!(!APP_RS.contains("parallel_mode_readiness_snapshot:"));
     assert!(!APP_RS.contains("parallel_mode_supervisor_snapshot:"));
-    assert!(CONVERSATION_VIEW_MODEL_RS.contains("fn reducer_event_projection_cache"));
+    assert!(!CONVERSATION_VIEW_MODEL_RS.contains("reducer_event_projection_cache"));
     assert!(!CONVERSATION_VIEW_MODEL_RS.contains("pub(crate) planning_runtime_projection"));
     assert!(
         !PARALLEL_MODE_RS.contains("self.parallel_mode_supervisor_snapshot.clone().map(Box::new)")
@@ -500,7 +500,7 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
 }
 
 #[test]
-fn reducer_event_projection_cache_stays_out_of_production_read_paths() {
+fn conversation_projection_cache_stays_out_of_production_state() {
     fn collect_rust_sources(root: &Path, sources: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(root).expect("source directory should be readable") {
             let path = entry.expect("source entry should be readable").path();
@@ -522,19 +522,11 @@ fn reducer_event_projection_cache_stays_out_of_production_read_paths() {
                 .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
     }
 
-    const ALLOWED_PRODUCTION_CACHE_FILES: &[&str] = &[
-        "app_runtime.rs",
-        "conversation/controller.rs",
-        "conversation_model/view_model.rs",
-        "conversation_runtime.rs",
-    ];
-
     let app_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapter/inbound/tui/app");
     let mut sources = Vec::new();
     collect_rust_sources(&app_dir, &mut sources);
 
-    let mut unexpected_cache_mentions = Vec::new();
-    let mut legacy_cache_mentions = Vec::new();
+    let mut cache_mentions = Vec::new();
     for path in sources {
         let relative_path = path
             .strip_prefix(&app_dir)
@@ -544,27 +536,17 @@ fn reducer_event_projection_cache_stays_out_of_production_read_paths() {
         }
         let relative_name = relative_path.to_string_lossy().replace('\\', "/");
         let source = fs::read_to_string(&path).expect("source file should be readable");
-        if source.contains("cached_planning_runtime_projection")
+        if source.contains("reducer_event_projection_cache")
+            || source.contains("cached_planning_runtime_projection")
             || source.contains("replace_cached_planning_runtime_projection")
         {
-            legacy_cache_mentions.push(relative_name.clone());
-        }
-        if source.contains("reducer_event_projection_cache")
-            && !ALLOWED_PRODUCTION_CACHE_FILES
-                .iter()
-                .any(|allowed| *allowed == relative_name)
-        {
-            unexpected_cache_mentions.push(relative_name);
+            cache_mentions.push(relative_name);
         }
     }
 
     assert!(
-        legacy_cache_mentions.is_empty(),
-        "legacy ready-conversation planning cache names remain in production sources: {legacy_cache_mentions:?}"
-    );
-    assert!(
-        unexpected_cache_mentions.is_empty(),
-        "reducer/event planning cache leaked outside reducer synchronization files: {unexpected_cache_mentions:?}"
+        cache_mentions.is_empty(),
+        "conversation-local planning projection caches remain in production sources: {cache_mentions:?}"
     );
 }
 
@@ -681,6 +663,7 @@ fn create_temp_git_repo(prefix: &str) -> String {
 fn post_turn_evaluation_completed_message(
     thread_id: impl Into<String>,
     completed_turn_id: impl Into<String>,
+    runtime_projection: PlanningRuntimeProjection,
     evaluation: PostTurnEvaluationOutcome,
     planning_worker_panel_state: PlanningWorkerPanelState,
 ) -> BackgroundMessage {
@@ -688,7 +671,7 @@ fn post_turn_evaluation_completed_message(
         application_post_turn::PostTurnEvaluationExecution {
             thread_id: thread_id.into(),
             completed_turn_id: completed_turn_id.into(),
-            evaluation: application_post_turn_evaluation_outcome(evaluation),
+            evaluation: application_post_turn_evaluation_outcome(runtime_projection, evaluation),
             planning_worker_panel_state: application_planning_worker_panel_state(
                 planning_worker_panel_state,
             ),
@@ -745,6 +728,7 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
 }
 
 fn application_post_turn_evaluation_outcome(
+    runtime_projection: PlanningRuntimeProjection,
     outcome: PostTurnEvaluationOutcome,
 ) -> application_post_turn::PostTurnEvaluationOutcome {
     application_post_turn::PostTurnEvaluationOutcome {
@@ -753,7 +737,7 @@ fn application_post_turn_evaluation_outcome(
         )
         .with_handoff_task(outcome.provenance.handoff_task)
         .with_parallel_queue_signal(outcome.provenance.parallel_queue_signal),
-        runtime_projection: outcome.runtime_projection,
+        runtime_projection,
         planning_repair_state: outcome.planning_repair_state.map(|state| {
             application_post_turn::PostTurnPlanningRepairState {
                 attempts_used: state.attempts_used,
@@ -1050,13 +1034,8 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
 }
 
 #[test]
-fn resumed_session_status_reads_core_projection_before_reducer_cache() {
+fn resumed_session_status_reads_core_projection() {
     let mut runtime = make_test_runtime();
-    runtime
-        .app_mut()
-        .sync_ready_conversation_planning_runtime_projection(PlanningRuntimeProjection::invalid(
-            "stale reducer cache detail",
-        ));
     runtime
         .app_mut()
         .sync_core_planning_runtime_projection(PlanningRuntimeProjection::ready(
@@ -1075,23 +1054,11 @@ fn resumed_session_status_reads_core_projection_before_reducer_cache() {
         "status should use core projection: {}",
         conversation.status_text
     );
-    assert!(
-        !conversation
-            .status_text
-            .contains("planning status: blocked"),
-        "status should not use reducer cache: {}",
-        conversation.status_text
-    );
 }
 
 #[test]
-fn post_turn_evaluation_start_state_reads_core_projection_before_reducer_cache() {
+fn post_turn_evaluation_start_state_reads_core_projection() {
     let mut runtime = make_test_runtime();
-    runtime
-        .app_mut()
-        .sync_ready_conversation_planning_runtime_projection(PlanningRuntimeProjection::invalid(
-            "stale reducer cache detail",
-        ));
     runtime
         .app_mut()
         .sync_core_planning_runtime_projection(PlanningRuntimeProjection::ready(
@@ -1112,7 +1079,32 @@ fn post_turn_evaluation_start_state_reads_core_projection_before_reducer_cache()
     assert_eq!(
         runtime.app().planning_worker_panel_state.status,
         PlanningWorkerStatus::Idle,
-        "ready/no-task core projection should preserve the panel instead of using stale reducer cache"
+        "ready/no-task core projection should preserve the panel"
+    );
+}
+
+#[test]
+fn ready_planning_projection_sync_is_ignored_without_a_ready_conversation() {
+    let mut runtime = make_test_runtime();
+    let expected_projection = PlanningRuntimeProjection::ready(
+        "active prompt".to_string(),
+        "active summary".to_string(),
+        None,
+    );
+    runtime
+        .app_mut()
+        .sync_core_planning_runtime_projection(expected_projection.clone());
+    runtime.app_mut().conversation_state = ConversationState::Loading;
+
+    runtime
+        .app_mut()
+        .sync_ready_conversation_planning_runtime_projection(PlanningRuntimeProjection::invalid(
+            "loading projection must not replace active state",
+        ));
+
+    assert_eq!(
+        runtime.app().planning_runtime_projection_snapshot(),
+        expected_projection
     );
 }
 
@@ -1267,8 +1259,8 @@ fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
     assert!(runtime.take_due_draw_request(now + Duration::from_millis(250)));
 }
 // Post-turn evaluation messages are keyed by the completed turn. Stale or
-// duplicate worker results must not overwrite the current transcript status,
-// runtime notices, or planning worker panel.
+// duplicate worker results must not overwrite the core planning projection,
+// current transcript status, runtime notices, or planning worker panel.
 #[test]
 fn stale_post_turn_evaluation_background_message_is_ignored() {
     let mut runtime = make_test_runtime();
@@ -1280,6 +1272,14 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     conversation.status_text = "session ready".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-2".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-2");
+    let expected_projection = PlanningRuntimeProjection::ready(
+        "current prompt".to_string(),
+        "current summary".to_string(),
+        None,
+    );
+    runtime
+        .app_mut()
+        .sync_core_planning_runtime_projection(expected_projection.clone());
 
     runtime
         .app
@@ -1287,11 +1287,9 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
         .send(post_turn_evaluation_completed_message(
             "thread-1",
             "turn-1",
+            PlanningRuntimeProjection::invalid("stale projection".to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-                runtime_projection: PlanningRuntimeProjection::invalid(
-                    "stale projection".to_string(),
-                ),
                 planning_repair_state: None,
                 runtime_notices: vec!["stale notice".to_string()],
                 action: PostTurnContinuationAction::SkipAutoFollow {
@@ -1319,6 +1317,10 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     };
     assert_eq!(conversation.status_text, "session ready");
     assert!(conversation.runtime_notices.is_empty());
+    assert_eq!(
+        runtime.app().planning_runtime_projection_snapshot(),
+        expected_projection
+    );
     assert!(
         runtime
             .app()
@@ -1341,9 +1343,9 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
         post_turn_evaluation_completed_message(
             "thread-1",
             "turn-1",
+            PlanningRuntimeProjection::invalid(notice.to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
-                runtime_projection: PlanningRuntimeProjection::invalid(notice.to_string()),
                 planning_repair_state: None,
                 runtime_notices: vec![notice.to_string()],
                 action: PostTurnContinuationAction::SkipAutoFollow {
@@ -1397,6 +1399,10 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
             .last_summary
             .as_deref(),
         Some("first evaluation")
+    );
+    assert_eq!(
+        runtime.app().planning_runtime_projection_snapshot(),
+        PlanningRuntimeProjection::invalid("first evaluation")
     );
 }
 // Resize is a rendering concern only: it should request a redraw without

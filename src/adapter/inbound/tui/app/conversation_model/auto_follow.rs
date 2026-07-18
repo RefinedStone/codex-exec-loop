@@ -10,8 +10,6 @@ const AUTO_FOLLOW_MODE_LABEL: &str = "planning queue";
 
 #[path = "auto_follow_decision.rs"]
 mod decision;
-#[cfg(test)]
-pub(crate) use decision::AutoFollowDecision;
 pub(crate) use decision::AutoFollowSkipReason;
 
 /*
@@ -273,11 +271,6 @@ impl AutoFollowState {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_stop_keyword_value(&mut self, value: String) {
-        self.stop_rules.stop_keyword.set_value(value);
-    }
-
     /*
      * The overlay editor accepts free text while typing, then commits through
      * this parser so UI validation and runtime budget semantics stay identical.
@@ -369,11 +362,6 @@ impl StopKeywordRule {
                     })
                     .eq_ignore_ascii_case(&self.value)
             })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_value(&mut self, value: String) {
-        self.value = value;
     }
 
     pub(crate) fn value(&self) -> &str {

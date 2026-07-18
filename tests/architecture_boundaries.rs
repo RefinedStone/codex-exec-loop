@@ -1069,18 +1069,23 @@ fn tui_tail_compaction_uses_typed_priority_without_parsing_localized_copy() {
 }
 
 #[test]
-fn conversation_state_model_has_no_ratatui_projection_cache() {
+fn conversation_state_model_has_no_presentation_or_planning_projection_cache() {
     assert_no_forbidden_references_in_paths(
-        "conversation semantic state must not depend on shell presentation or cache ratatui lines",
+        "conversation semantic state must not own shell presentation or planning runtime projections",
         &[
-            "src/adapter/inbound/tui/app/conversation_model/view_model.rs",
-            "src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs",
+            "src/adapter/inbound/tui/app/conversation_model.rs",
+            "src/adapter/inbound/tui/app/conversation_model",
         ],
         &[
             "ratatui",
             "shell_presentation",
             "cached_conversation_lines",
             "refresh_conversation_lines",
+            "PlanningRuntimeProjection",
+            "RuntimeProjection",
+            "planning_runtime_projection",
+            "projection_cache",
+            "reducer_event_projection_cache",
         ],
     );
 }
