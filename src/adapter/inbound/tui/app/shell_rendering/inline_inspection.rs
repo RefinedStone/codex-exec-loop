@@ -13,7 +13,7 @@ use super::super::shell_presentation::{
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, ParallelPeekOverlayStep,
-    PlanningInitOverlayStep, ShellOverlay,
+    PlanningInitOverlayStep, ProgressiveActivityPageCursor, ShellOverlay,
 };
 use super::inline_layout::{
     InlineAppendOnlyStream, InlineAppendOnlyStreamTitle, InlineScrolledPanel, InlineTitledPanel,
@@ -163,7 +163,7 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
         diff_available,
         output_available,
         document_view,
-        0,
+        ProgressiveActivityPageCursor::at(0),
         area.width,
         0,
     );
@@ -185,16 +185,16 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
     let body_height = layout[1].height.saturating_sub(1);
     app.progressive_activity_overlay_ui_state
         .sync_viewport(layout[1].width, body_height);
-    let requested_page_start = app
+    let requested_page_cursor = app
         .progressive_activity_overlay_ui_state
-        .current_page_start();
+        .current_page_cursor();
     let ActivityOverlayView {
         header_lines,
         detail_title,
         detail_lines,
         key_lines,
-        current_page_start,
-        next_page_start,
+        current_page_cursor,
+        next_page_cursor,
     } = build_activity_overlay_list_view(
         card_filter,
         &filtered_cards,
@@ -204,12 +204,12 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
         diff_available,
         output_available,
         document_view,
-        requested_page_start,
+        requested_page_cursor,
         layout[1].width,
         body_height,
     );
     app.progressive_activity_overlay_ui_state
-        .set_page_window(current_page_start, next_page_start);
+        .set_page_cursor_window(current_page_cursor, next_page_cursor);
 
     render_inline_titled_panel(
         frame,

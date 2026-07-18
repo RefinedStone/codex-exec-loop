@@ -832,7 +832,9 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
     assert!(wide.contains("> Diff") || wide.contains("diff"));
     assert!(wide.contains("◆"));
     assert!(wide.contains("history:incomplete"));
+    assert!(wide.contains("1 -old value"), "{wide}");
     assert!(wide.contains(&format!("{secret}\\x1b[31m")), "{wide}");
+    assert!(!wide.contains("@@ -1 +1 @@"), "{wide}");
     assert!(!wide.contains('\u{1b}'));
     assert!(wide.contains("prompt:"));
     assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
@@ -1018,9 +1020,8 @@ fn vt100_viewport_replay_streaming_matches_snapshot() {
 #[test]
 fn vt100_markdown_code_block_shell_matches_snapshot() {
     /*
-     * Markdown code fence는 syntax-ish text이지만 terminal renderer는 내용을 잃지 말아야 한다.
-     * fence 두 개와 code line이 ANSI output 뒤에도 남는지 확인해 markdown line projection과 wrapping이
-     * code block structure를 지우지 않게 한다.
+     * Markdown code fence와 info string은 렌더링 문법이므로 숨기고 code line만 보여야 한다.
+     * VT100 output에서도 fence가 다시 노출되지 않는지 확인해 transcript projection 계약을 고정한다.
      */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
@@ -1030,7 +1031,8 @@ fn vt100_markdown_code_block_shell_matches_snapshot() {
 
     assert_snapshot!("vt100_markdown_code_block_shell", rendered);
     assert!(rendered.contains("let ok = true;"));
-    assert_eq!(rendered.matches("```").count(), 2);
+    assert!(!rendered.contains("```"));
+    assert!(!rendered.contains("rust"));
 }
 
 #[test]

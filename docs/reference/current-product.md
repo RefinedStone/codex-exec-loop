@@ -10,6 +10,8 @@ an explicitly proposed document, not here.
 - Akra is a native-first Rust client over official `codex app-server` interfaces.
 - The inline main-buffer TUI is the primary surface; completed output is committed to host terminal
   scrollback while the live viewport owns the prompt, stream tail, overlays, and compact notices.
+- Agent text stays raw Markdown in app-server state and is rendered at the TUI projection boundary;
+  fenced-code delimiters and language labels are not shown as conversation text.
 - `src/core` coordinates headless app commands, effects, completions, events, and snapshots.
 - CLI, Admin, Telegram, and automation adapters reuse application services instead of owning
   separate planning or parallel policy.
@@ -22,7 +24,7 @@ an explicitly proposed document, not here.
 | Diagnostics | `Ctrl+d`, `:diag` | inspect startup readiness and blockers |
 | Sessions | `Ctrl+o`, `:sessions` | search, rename, resume, or start a blank draft |
 | Reviews | `:reviews` | inspect the bounded review center projection |
-| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | inspect retained progressive activity cards; expand selected detail (live/overlay only; host scrollback stays static) |
+| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | inspect retained progressive activity cards and selected detail; diff detail uses a line-numbered unified-diff view (live/overlay only; host scrollback stays static) |
 | Queue | `:queue`, `:q`, `akra queue` | inspect accepted head, proposals, skip framing, and receipts |
 | Planning | `:planning`, `:planning-init` | stage, validate, and promote planning changes |
 | Directions | `:directions` | maintain directions and queue-idle supporting artifacts |

@@ -6,6 +6,9 @@ mod base;
 #[path = "overlays/activity.rs"]
 mod activity;
 
+#[path = "overlays/activity_diff.rs"]
+mod activity_diff;
+
 #[path = "overlays/directions.rs"]
 mod directions;
 

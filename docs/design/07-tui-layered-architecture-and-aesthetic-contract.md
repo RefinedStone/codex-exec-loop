@@ -77,6 +77,25 @@ the fixed Akra theme.
   undo truth remains pinned across language and modal row budgets, while planning marks only
   projected rows containing an actionable blocker as warnings.
 
+### Conversation Markdown And Diff Detail
+
+- App-server agent text is raw Markdown. The transcript projection must interpret its presentation
+  syntax consistently for live deltas, completed history, and viewport replay.
+- Fenced code delimiters and their info strings are parser syntax, not transcript content. Hide
+  matching opening and closing fences, retain incomplete streaming code, and style only the code
+  body through `AkraTheme`.
+- The Activity Diff document must interpret unified-diff file headers and hunk ranges. Each code row
+  uses one right-aligned line-number gutter: deletions show the old line number, while additions and
+  context show the new line number.
+- Diff additions, deletions, gutters, metadata, and hunk separators use semantic theme styles.
+  Wrapped continuation rows keep an empty gutter and sign column instead of repeating a source line
+  number.
+- Diff pagination owns a semantic parser cursor with old/new counters and wrapped-line continuation
+  state. Previous and next pages must restore that cursor instead of rescanning the retained
+  document or guessing line numbers from rendered text.
+- Malformed, binary, combined, or retention-truncated diff fragments remain safely visible as muted
+  metadata; control characters must never reach the terminal as executable escape sequences.
+
 ### Append-only Stream Surfaces
 
 - A stream surface is not a titled panel once its rows can be split across durable host scrollback

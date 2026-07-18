@@ -93,12 +93,11 @@ fn format_conversation_lines_uncapped(
         )));
 
         // Preserve author line breaks but indent body rows under the label; tabs are normalized for stable TUI width.
-        let mut in_markdown_code_fence = false;
+        let mut markdown_code_fence = None;
         for text_line in message.text.lines() {
-            lines.push(format_markdown_body_line(
-                text_line,
-                &mut in_markdown_code_fence,
-            ));
+            if let Some(line) = format_markdown_body_line(text_line, &mut markdown_code_fence) {
+                lines.push(line);
+            }
         }
 
         // Debug rows follow the body in the same block, but muted style keeps them visually secondary.
@@ -178,9 +177,12 @@ fn format_tool_card_lines(
     ])];
 
     if expanded {
-        let mut in_markdown_code_fence = false;
+        let mut markdown_code_fence = None;
         for text_line in message.text.lines() {
-            let mut body = format_markdown_body_line(text_line, &mut in_markdown_code_fence);
+            let Some(mut body) = format_markdown_body_line(text_line, &mut markdown_code_fence)
+            else {
+                continue;
+            };
             // Dim every non-indent span so multi-span markdown tool bodies stay consistent.
             for span in body.spans.iter_mut().skip(1) {
                 span.style = span.style.patch(AkraTheme::tool_card_body());
@@ -197,27 +199,88 @@ fn expand_tui_tabs(text: &str) -> String {
     text.replace('\t', "    ")
 }
 
-fn format_markdown_body_line(text: &str, in_markdown_code_fence: &mut bool) -> Line<'static> {
+#[derive(Clone, Copy)]
+struct MarkdownCodeFence {
+    delimiter: char,
+    minimum_len: usize,
+    indent: usize,
+}
+
+fn format_markdown_body_line(
+    text: &str,
+    markdown_code_fence: &mut Option<MarkdownCodeFence>,
+) -> Option<Line<'static>> {
     let expanded = expand_tui_tabs(text);
     let mut spans = vec![Span::raw("  ")];
-    if is_markdown_code_fence(&expanded) {
-        *in_markdown_code_fence = !*in_markdown_code_fence;
-        spans.push(Span::styled(expanded, AkraTheme::markdown_fence()));
-        return Line::from(spans);
+    if let Some(open_fence) = *markdown_code_fence {
+        if is_markdown_code_fence_close(&expanded, open_fence) {
+            *markdown_code_fence = None;
+            return None;
+        }
+        let removable_indent = expanded
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == b' ')
+            .count()
+            .min(open_fence.indent);
+        spans.push(Span::styled(
+            expanded[removable_indent..].to_string(),
+            AkraTheme::markdown_code_block(),
+        ));
+        return Some(Line::from(spans));
     }
-    if *in_markdown_code_fence {
-        spans.push(Span::styled(expanded, AkraTheme::markdown_code_block()));
-        return Line::from(spans);
+    if let Some(open_fence) = markdown_code_fence_open(&expanded) {
+        *markdown_code_fence = Some(open_fence);
+        return None;
     }
     let block = markdown_block_line(&expanded);
     spans.extend(block.prefix_spans);
     spans.extend(format_markdown_inline_spans(block.body, block.body_style));
-    Line::from(spans)
+    Some(Line::from(spans))
 }
 
-fn is_markdown_code_fence(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+fn markdown_code_fence_open(text: &str) -> Option<MarkdownCodeFence> {
+    let (indent, candidate) = markdown_fence_candidate(text)?;
+    let delimiter = candidate.chars().next()?;
+    if !matches!(delimiter, '`' | '~') {
+        return None;
+    }
+    let minimum_len = candidate.chars().take_while(|ch| *ch == delimiter).count();
+    if minimum_len < 3 {
+        return None;
+    }
+    let info = &candidate[minimum_len..];
+    if delimiter == '`' && info.contains('`') {
+        return None;
+    }
+    Some(MarkdownCodeFence {
+        delimiter,
+        minimum_len,
+        indent,
+    })
+}
+
+fn is_markdown_code_fence_close(text: &str, open_fence: MarkdownCodeFence) -> bool {
+    let Some((_, candidate)) = markdown_fence_candidate(text) else {
+        return false;
+    };
+    let delimiter_len = candidate
+        .chars()
+        .take_while(|ch| *ch == open_fence.delimiter)
+        .count();
+    delimiter_len >= open_fence.minimum_len
+        && candidate[delimiter_len..]
+            .chars()
+            .all(|character| character == ' ')
+}
+
+fn markdown_fence_candidate(text: &str) -> Option<(usize, &str)> {
+    let indent = text
+        .as_bytes()
+        .iter()
+        .take_while(|byte| **byte == b' ')
+        .count();
+    (indent <= 3).then(|| (indent, &text[indent..]))
 }
 
 fn markdown_heading_body(text: &str) -> Option<&str> {
@@ -472,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn transcript_body_preserves_markdown_inside_code_fences() {
+    fn transcript_body_hides_code_fences_and_preserves_code_style() {
         let messages = vec![ConversationMessage::new(
             ConversationMessageKind::Agent,
             "```rust\nlet literal = \"**keep markers**\";\n```",
@@ -483,15 +546,81 @@ mod tests {
         let lines =
             format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
 
-        assert_eq!(line_text(&lines[1]), "  ```rust");
-        assert_eq!(lines[1].spans[1].style, AkraTheme::markdown_fence());
         assert_eq!(
-            line_text(&lines[2]),
+            line_text(&lines[1]),
             "  let literal = \"**keep markers**\";"
         );
-        assert_eq!(lines[2].spans[1].style, AkraTheme::markdown_code_block());
-        assert_eq!(line_text(&lines[3]), "  ```");
-        assert_eq!(lines[3].spans[1].style, AkraTheme::markdown_fence());
+        assert_eq!(lines[1].spans[1].style, AkraTheme::markdown_code_block());
+        assert_eq!(line_text(&lines[2]), "");
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line_text(line).contains("```rust"))
+        );
+    }
+
+    #[test]
+    fn transcript_body_closes_only_matching_code_fences() {
+        let messages = vec![ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "````rust\none\n```\n~~~\ntwo\n`````\nafter",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        )];
+
+        let lines =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
+
+        assert_eq!(line_text(&lines[1]), "  one");
+        assert_eq!(line_text(&lines[2]), "  ```");
+        assert_eq!(line_text(&lines[3]), "  ~~~");
+        assert_eq!(line_text(&lines[4]), "  two");
+        for line in &lines[1..=4] {
+            assert_eq!(line.spans[1].style, AkraTheme::markdown_code_block());
+        }
+        assert_eq!(line_text(&lines[5]), "  after");
+        assert_eq!(lines[5].spans[1].style, Style::default());
+    }
+
+    #[test]
+    fn transcript_body_renders_unclosed_streaming_code_fence() {
+        let messages = vec![ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "~~~rust\nfn streaming() {}",
+            Some("agent_message".to_string()),
+            Some("agent-1".to_string()),
+        )];
+
+        let lines =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
+
+        assert_eq!(line_text(&lines[1]), "  fn streaming() {}");
+        assert_eq!(lines[1].spans[1].style, AkraTheme::markdown_code_block());
+        assert_eq!(line_text(&lines[2]), "");
+    }
+
+    #[test]
+    fn transcript_body_applies_commonmark_fence_indentation() {
+        let messages = vec![ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            "  ```rust\n  fn main() {}\n  ```",
+            Some("final_answer".to_string()),
+            Some("agent-1".to_string()),
+        )];
+
+        let lines =
+            format_conversation_lines_for_view(&messages, ConversationViewMode::Medium, false);
+
+        assert_eq!(line_text(&lines[1]), "  fn main() {}");
+        assert!(markdown_code_fence_open("    ```rust").is_none());
+        assert!(!is_markdown_code_fence_close(
+            "    ```",
+            MarkdownCodeFence {
+                delimiter: '`',
+                minimum_len: 3,
+                indent: 0,
+            }
+        ));
     }
 
     fn line_text(line: &Line<'_>) -> String {

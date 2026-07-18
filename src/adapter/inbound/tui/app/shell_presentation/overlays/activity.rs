@@ -2,7 +2,9 @@ use ratatui::text::{Line, Span};
 
 use super::super::super::{
     AkraTheme, ProgressiveActivityCard, ProgressiveActivityCardKind, ProgressiveActivityDetailKind,
+    ProgressiveActivityPageCursor,
 };
+use super::activity_diff::build_bounded_diff_page;
 
 const PAGE_SCAN_BYTES_PER_CELL: usize = 8;
 const PAGE_OUTPUT_BYTES_PER_CELL: usize = 8;
@@ -22,8 +24,8 @@ pub(crate) struct ActivityOverlayView {
     pub(crate) detail_title: Line<'static>,
     pub(crate) detail_lines: Vec<Line<'static>>,
     pub(crate) key_lines: Vec<Line<'static>>,
-    pub(crate) current_page_start: usize,
-    pub(crate) next_page_start: Option<usize>,
+    pub(crate) current_page_cursor: ProgressiveActivityPageCursor,
+    pub(crate) next_page_cursor: Option<ProgressiveActivityPageCursor>,
 }
 
 #[cfg(test)]
@@ -32,7 +34,7 @@ pub(crate) fn build_activity_overlay_view(
     diff_available: bool,
     output_available: bool,
     document: Option<ActivityOverlayDocument<'_>>,
-    requested_page_start: usize,
+    requested_page_cursor: ProgressiveActivityPageCursor,
     viewport_width: u16,
     viewport_height: u16,
 ) -> ActivityOverlayView {
@@ -45,7 +47,7 @@ pub(crate) fn build_activity_overlay_view(
         diff_available,
         output_available,
         document,
-        requested_page_start,
+        requested_page_cursor,
         viewport_width,
         viewport_height,
     )
@@ -61,7 +63,7 @@ pub(crate) fn build_activity_overlay_list_view(
     diff_available: bool,
     output_available: bool,
     document: Option<ActivityOverlayDocument<'_>>,
-    requested_page_start: usize,
+    requested_page_cursor: ProgressiveActivityPageCursor,
     viewport_width: u16,
     viewport_height: u16,
 ) -> ActivityOverlayView {
@@ -91,18 +93,61 @@ pub(crate) fn build_activity_overlay_list_view(
                 "No retained detail is available for the selected activity card.".to_string(),
             )],
             key_lines: build_activity_overlay_key_lines(viewport_width),
-            current_page_start: 0,
-            next_page_start: None,
+            current_page_cursor: ProgressiveActivityPageCursor::at(0),
+            next_page_cursor: None,
         };
     };
 
     header_lines.extend(build_document_status_lines(&document));
-    let page = build_bounded_document_page(
-        document.text,
-        requested_page_start,
-        viewport_width,
-        viewport_height,
-    );
+    let detail_kind = cards
+        .get(selected_card_index)
+        .map_or(selected_kind, |card| match card.key.kind {
+            ProgressiveActivityCardKind::Diff | ProgressiveActivityCardKind::Patch => {
+                ProgressiveActivityDetailKind::Diff
+            }
+            ProgressiveActivityCardKind::Command
+            | ProgressiveActivityCardKind::Mcp
+            | ProgressiveActivityCardKind::Plan
+            | ProgressiveActivityCardKind::Reason
+            | ProgressiveActivityCardKind::Agent
+            | ProgressiveActivityCardKind::Terminal
+            | ProgressiveActivityCardKind::Token
+            | ProgressiveActivityCardKind::Moderation
+            | ProgressiveActivityCardKind::Guardian
+            | ProgressiveActivityCardKind::Unknown => ProgressiveActivityDetailKind::Output,
+        });
+    let page = match detail_kind {
+        ProgressiveActivityDetailKind::Diff => {
+            let page = build_bounded_diff_page(
+                document.text,
+                requested_page_cursor,
+                viewport_width,
+                viewport_height,
+            );
+            ActivityDocumentPage {
+                lines: page.lines,
+                start_byte: page.current_cursor.byte_offset,
+                end_byte: page.end_byte,
+                current_cursor: page.current_cursor,
+                next_cursor: page.next_cursor,
+            }
+        }
+        ProgressiveActivityDetailKind::Output => {
+            let page = build_bounded_document_page(
+                document.text,
+                requested_page_cursor.byte_offset,
+                viewport_width,
+                viewport_height,
+            );
+            ActivityDocumentPage {
+                lines: page.lines,
+                start_byte: page.start_byte,
+                end_byte: page.end_byte,
+                current_cursor: ProgressiveActivityPageCursor::at(page.start_byte),
+                next_cursor: page.next_page_start.map(ProgressiveActivityPageCursor::at),
+            }
+        }
+    };
     let detail_title = Line::from(format!(
         "{} | {}-{} / {} B",
         selected_card_detail_title(cards, selected_card_index),
@@ -116,9 +161,17 @@ pub(crate) fn build_activity_overlay_list_view(
         detail_title,
         detail_lines: page.lines,
         key_lines: build_activity_overlay_key_lines(viewport_width),
-        current_page_start: page.start_byte,
-        next_page_start: page.next_page_start,
+        current_page_cursor: page.current_cursor,
+        next_page_cursor: page.next_cursor,
     }
+}
+
+struct ActivityDocumentPage {
+    lines: Vec<Line<'static>>,
+    start_byte: usize,
+    end_byte: usize,
+    current_cursor: ProgressiveActivityPageCursor,
+    next_cursor: Option<ProgressiveActivityPageCursor>,
 }
 
 fn build_filter_line(
@@ -461,8 +514,8 @@ fn clamped_char_boundary(text: &str, requested: usize) -> usize {
 mod tests {
     use super::{
         ActivityOverlayDocument, BoundedDocumentPage, PAGE_OUTPUT_BYTES_PER_CELL,
-        PAGE_SCAN_BYTES_PER_CELL, ProgressiveActivityDetailKind, build_activity_overlay_view,
-        build_bounded_document_page,
+        PAGE_SCAN_BYTES_PER_CELL, ProgressiveActivityDetailKind, ProgressiveActivityPageCursor,
+        build_activity_overlay_view, build_bounded_document_page,
     };
 
     fn rendered_text(page: &BoundedDocumentPage) -> String {
@@ -529,7 +582,7 @@ mod tests {
                 truncated_bytes: 76,
                 history_incomplete: true,
             }),
-            0,
+            ProgressiveActivityPageCursor::at(0),
             80,
             8,
         );
@@ -559,7 +612,7 @@ mod tests {
                 truncated_bytes: 0,
                 history_incomplete: false,
             }),
-            0,
+            ProgressiveActivityPageCursor::at(0),
             48,
             4,
         );
@@ -613,13 +666,13 @@ mod tests {
             false,
             false,
             None,
-            usize::MAX,
+            ProgressiveActivityPageCursor::at(usize::MAX),
             48,
             4,
         );
 
-        assert_eq!(view.current_page_start, 0);
-        assert_eq!(view.next_page_start, None);
+        assert_eq!(view.current_page_cursor.byte_offset, 0);
+        assert_eq!(view.next_page_cursor, None);
         assert!(
             view.detail_lines[0]
                 .to_string()

@@ -20,6 +20,51 @@ const CARD_FILTER_CYCLE: &[Option<ProgressiveActivityCardKind>] = &[
     Some(ProgressiveActivityCardKind::Unknown),
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProgressiveActivityDiffLineKind {
+    Insert,
+    Delete,
+    Context,
+    Metadata,
+    Note,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProgressiveActivityDiffContinuation {
+    pub(super) kind: ProgressiveActivityDiffLineKind,
+    pub(super) line_number: Option<usize>,
+    pub(super) line_end: usize,
+    pub(super) line_complete: bool,
+    pub(super) hidden: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProgressiveActivityDiffCursor {
+    pub(super) old_line: usize,
+    pub(super) new_line: usize,
+    pub(super) old_remaining: usize,
+    pub(super) new_remaining: usize,
+    pub(super) in_hunk: bool,
+    pub(super) seen_hunk: bool,
+    pub(super) gutter_width: usize,
+    pub(super) continuation: Option<ProgressiveActivityDiffContinuation>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct ProgressiveActivityPageCursor {
+    pub(super) byte_offset: usize,
+    pub(super) diff: Option<ProgressiveActivityDiffCursor>,
+}
+
+impl ProgressiveActivityPageCursor {
+    pub(super) const fn at(byte_offset: usize) -> Self {
+        Self {
+            byte_offset,
+            diff: None,
+        }
+    }
+}
+
 pub(super) fn parse_progressive_activity_detail_kind(
     argument: &str,
 ) -> Option<ProgressiveActivityDetailKind> {
@@ -62,9 +107,9 @@ pub(super) struct ProgressiveActivityOverlayUiState {
     current_lifecycle_epoch: Option<u64>,
     current_document_sequence: Option<u64>,
     viewport: Option<(u16, u16)>,
-    current_page_start: usize,
-    previous_page_stack: Vec<usize>,
-    next_page_start: Option<usize>,
+    current_page_cursor: ProgressiveActivityPageCursor,
+    previous_page_stack: Vec<ProgressiveActivityPageCursor>,
+    next_page_cursor: Option<ProgressiveActivityPageCursor>,
     expand_state: ProgressiveActivityExpandState,
 }
 
@@ -78,9 +123,9 @@ impl Default for ProgressiveActivityOverlayUiState {
             current_lifecycle_epoch: None,
             current_document_sequence: None,
             viewport: None,
-            current_page_start: 0,
+            current_page_cursor: ProgressiveActivityPageCursor::at(0),
             previous_page_stack: Vec::new(),
-            next_page_start: None,
+            next_page_cursor: None,
             expand_state: ProgressiveActivityExpandState::default(),
         }
     }
@@ -121,8 +166,13 @@ impl ProgressiveActivityOverlayUiState {
         self.current_lifecycle_epoch
     }
 
+    #[cfg(test)]
     pub(super) const fn current_page_start(&self) -> usize {
-        self.current_page_start
+        self.current_page_cursor.byte_offset
+    }
+
+    pub(super) const fn current_page_cursor(&self) -> ProgressiveActivityPageCursor {
+        self.current_page_cursor
     }
 
     #[cfg(test)]
@@ -131,13 +181,16 @@ impl ProgressiveActivityOverlayUiState {
     }
 
     #[cfg(test)]
-    pub(super) fn previous_page_stack(&self) -> &[usize] {
-        &self.previous_page_stack
+    pub(super) fn previous_page_stack(&self) -> Vec<usize> {
+        self.previous_page_stack
+            .iter()
+            .map(|cursor| cursor.byte_offset)
+            .collect()
     }
 
     #[cfg(test)]
-    pub(super) const fn next_page_start(&self) -> Option<usize> {
-        self.next_page_start
+    pub(super) fn next_page_start(&self) -> Option<usize> {
+        self.next_page_cursor.map(|cursor| cursor.byte_offset)
     }
 
     pub(super) fn reset(&mut self) {
@@ -250,35 +303,48 @@ impl ProgressiveActivityOverlayUiState {
         self.reset_page_navigation();
     }
 
+    #[cfg(test)]
     pub(super) fn set_page_window(
         &mut self,
         current_page_start: usize,
         next_page_start: Option<usize>,
     ) {
-        self.current_page_start = current_page_start;
-        self.next_page_start = next_page_start.filter(|next| *next > current_page_start);
+        self.set_page_cursor_window(
+            ProgressiveActivityPageCursor::at(current_page_start),
+            next_page_start.map(ProgressiveActivityPageCursor::at),
+        );
+    }
+
+    pub(super) fn set_page_cursor_window(
+        &mut self,
+        current_page_cursor: ProgressiveActivityPageCursor,
+        next_page_cursor: Option<ProgressiveActivityPageCursor>,
+    ) {
+        self.current_page_cursor = current_page_cursor;
+        self.next_page_cursor =
+            next_page_cursor.filter(|next| next.byte_offset > current_page_cursor.byte_offset);
     }
 
     pub(super) fn move_to_next_page(&mut self) -> bool {
-        let Some(next_page_start) = self.next_page_start else {
+        let Some(next_page_cursor) = self.next_page_cursor else {
             return false;
         };
         if self.previous_page_stack.len() == MAX_PROGRESSIVE_ACTIVITY_PAGE_HISTORY {
             self.previous_page_stack.remove(0);
         }
-        self.previous_page_stack.push(self.current_page_start);
-        self.current_page_start = next_page_start;
-        self.next_page_start = None;
+        self.previous_page_stack.push(self.current_page_cursor);
+        self.current_page_cursor = next_page_cursor;
+        self.next_page_cursor = None;
         self.list_focus = false;
         true
     }
 
     pub(super) fn move_to_previous_page(&mut self) -> bool {
-        let Some(previous_page_start) = self.previous_page_stack.pop() else {
+        let Some(previous_page_cursor) = self.previous_page_stack.pop() else {
             return false;
         };
-        self.next_page_start = Some(self.current_page_start);
-        self.current_page_start = previous_page_start;
+        self.next_page_cursor = Some(self.current_page_cursor);
+        self.current_page_cursor = previous_page_cursor;
         self.list_focus = false;
         true
     }
@@ -290,9 +356,9 @@ impl ProgressiveActivityOverlayUiState {
     }
 
     fn reset_page_navigation(&mut self) {
-        self.current_page_start = 0;
+        self.current_page_cursor = ProgressiveActivityPageCursor::at(0);
         self.previous_page_stack.clear();
-        self.next_page_start = None;
+        self.next_page_cursor = None;
     }
 }
 
@@ -300,7 +366,9 @@ impl ProgressiveActivityOverlayUiState {
 mod tests {
     use super::{
         MAX_PROGRESSIVE_ACTIVITY_PAGE_HISTORY, ProgressiveActivityCardKind,
-        ProgressiveActivityDetailKind, ProgressiveActivityOverlayUiState,
+        ProgressiveActivityDetailKind, ProgressiveActivityDiffContinuation,
+        ProgressiveActivityDiffCursor, ProgressiveActivityDiffLineKind,
+        ProgressiveActivityOverlayUiState, ProgressiveActivityPageCursor,
         parse_progressive_activity_card_filter, parse_progressive_activity_detail_kind,
     };
 
@@ -422,6 +490,49 @@ mod tests {
             state.previous_page_stack().len(),
             MAX_PROGRESSIVE_ACTIVITY_PAGE_HISTORY
         );
+    }
+
+    #[test]
+    fn page_navigation_preserves_diff_parser_and_continuation_cursor() {
+        let mut state = ProgressiveActivityOverlayUiState::default();
+        let current = ProgressiveActivityPageCursor {
+            byte_offset: 40,
+            diff: Some(ProgressiveActivityDiffCursor {
+                old_line: 12,
+                new_line: 14,
+                old_remaining: 2,
+                new_remaining: 3,
+                in_hunk: true,
+                seen_hunk: true,
+                gutter_width: 3,
+                continuation: None,
+            }),
+        };
+        let next = ProgressiveActivityPageCursor {
+            byte_offset: 64,
+            diff: Some(ProgressiveActivityDiffCursor {
+                old_line: 13,
+                new_line: 15,
+                old_remaining: 1,
+                new_remaining: 2,
+                in_hunk: true,
+                seen_hunk: true,
+                gutter_width: 3,
+                continuation: Some(ProgressiveActivityDiffContinuation {
+                    kind: ProgressiveActivityDiffLineKind::Insert,
+                    line_number: Some(14),
+                    line_end: 80,
+                    line_complete: false,
+                    hidden: false,
+                }),
+            }),
+        };
+        state.set_page_cursor_window(current, Some(next));
+
+        assert!(state.move_to_next_page());
+        assert_eq!(state.current_page_cursor(), next);
+        assert!(state.move_to_previous_page());
+        assert_eq!(state.current_page_cursor(), current);
     }
 
     #[test]

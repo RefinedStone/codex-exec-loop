@@ -9,10 +9,10 @@ expression: rendered
 
 
 
+
+
 Codex:
-  ```rust
   let ok = true;
-  ```
 
 Akra  |  thread: new draft
 ◦ Working (0s • turn running / interrupt runtime-native)

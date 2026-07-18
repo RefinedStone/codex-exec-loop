@@ -133,6 +133,26 @@ impl AkraTheme {
         Self::muted().add_modifier(Modifier::ITALIC)
     }
 
+    pub(super) fn diff_addition() -> Style {
+        Self::success()
+    }
+
+    pub(super) fn diff_deletion() -> Style {
+        Self::danger()
+    }
+
+    pub(super) fn diff_gutter() -> Style {
+        Self::muted()
+    }
+
+    pub(super) fn diff_metadata() -> Style {
+        Self::subtle()
+    }
+
+    pub(super) fn diff_hunk() -> Style {
+        Self::accent()
+    }
+
     // selection은 fg/bg를 모두 지정한다. terminal 기본 palette가 focus row를 애매하게 만들지 못하게 한다.
     pub(super) fn selected() -> Style {
         Style::default()

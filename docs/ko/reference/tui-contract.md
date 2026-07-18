@@ -50,6 +50,24 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
 - 장시간 운영에 필요한 밀도를 우선하고 marketing copy를 넣지 않습니다.
 - 한국어와 wide-character prompt가 주변 layout 계약을 깨지 않아야 합니다.
 
+### 대화 Markdown과 diff 상세
+
+- App-server의 agent text는 raw Markdown입니다. Transcript projection이 live delta, 완료 history,
+  viewport replay에서 같은 규칙으로 표시 문법을 해석합니다.
+- Fenced code의 delimiter와 info string은 transcript 내용이 아닌 parser 문법입니다. 서로 맞는
+  opening/closing fence는 숨기고, 아직 닫히지 않은 streaming code의 본문은 유지하며,
+  `AkraTheme`을 통해 code body만 스타일링합니다.
+- Activity의 Diff 문서는 unified diff의 file header와 hunk range를 해석합니다. 각 code row는
+  오른쪽 정렬된 line-number gutter 하나를 사용하며, 삭제는 old line, 추가와 context는 new line
+  번호를 표시합니다.
+- 추가, 삭제, gutter, metadata, hunk separator는 semantic theme style을 사용합니다. Wrap된
+  continuation row는 source line 번호를 반복하지 않고 빈 gutter와 sign column을 유지합니다.
+- Diff pagination은 old/new counter와 wrapped-line continuation을 포함한 semantic parser cursor를
+  소유합니다. 이전/다음 page는 retained document를 다시 scan하거나 rendered text에서 번호를
+  추측하지 않고 그 cursor를 복원합니다.
+- Malformed, binary, combined, retention-truncated diff fragment는 muted metadata로 안전하게
+  표시하며 control character가 실행 가능한 terminal escape로 전달되지 않게 합니다.
+
 ### Append-only stream
 
 - Host scrollback과 live viewport로 row가 나뉠 수 있는 stream은 더 이상 titled panel이 아닙니다.

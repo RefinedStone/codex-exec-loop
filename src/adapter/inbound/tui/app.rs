@@ -216,7 +216,9 @@ use planning_init_overlay_ui::{
     PlanningInitOverlayUiState,
 };
 use progressive_activity_overlay_ui::{
-    ProgressiveActivityOverlayUiState, parse_progressive_activity_card_filter,
+    ProgressiveActivityDiffContinuation, ProgressiveActivityDiffCursor,
+    ProgressiveActivityDiffLineKind, ProgressiveActivityOverlayUiState,
+    ProgressiveActivityPageCursor, parse_progressive_activity_card_filter,
     parse_progressive_activity_detail_kind,
 };
 use session_overlay_ui::SessionOverlayUiState;

@@ -10,6 +10,8 @@
 - Akra는 공식 `codex app-server` interface 위에 만든 native-first Rust client입니다.
 - Inline main-buffer TUI가 기본 화면입니다. 완료된 출력은 host terminal scrollback으로 보내고,
   live viewport는 prompt, stream tail, overlay, compact notice를 담당합니다.
+- Agent text는 app-server state에서 raw Markdown으로 유지하고 TUI projection 경계에서 렌더링합니다.
+  fenced code delimiter와 language label은 대화 본문으로 표시하지 않습니다.
 - `src/core`가 headless app command, effect, completion, event, snapshot을 조정합니다.
 - CLI, Admin, Telegram, automation adapter는 planning이나 parallel 정책을 별도로 구현하지 않고
   application service를 공유합니다.
@@ -22,7 +24,7 @@
 | Diagnostics | `Ctrl+d`, `:diag` | 시작 준비 상태와 blocker 확인 |
 | Sessions | `Ctrl+o`, `:sessions` | 세션 검색·이름 변경·재개 또는 새 draft 시작 |
 | Reviews | `:reviews` | 제한된 review center projection 확인 |
-| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | 보존된 progressive activity 카드 목록·선택 상세 확인 (라이브/오버레이 펼침; host scrollback은 정적) |
+| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | 보존된 progressive activity 카드 목록·선택 상세 확인; diff 상세는 줄 번호 unified diff로 표시 (라이브/오버레이 펼침; host scrollback은 정적) |
 | Queue | `:queue`, `:q`, `akra queue` | 승인된 head, proposal, skip, receipt 확인 |
 | Planning | `:planning`, `:planning-init` | planning 변경 staging·검증·승격 |
 | Directions | `:directions` | direction과 queue-idle 지원 자료 관리 |
