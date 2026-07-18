@@ -110,6 +110,10 @@ the fixed Akra theme.
 - Queue rows and undo receipts must not change optimistically. Both successful and failed mutation
   results require an authoritative refresh before the exact operation and workspace/thread context
   may settle visible state.
+- `PlanningQueueUseCases` must own the cancellation transaction: submit the cancellation, then
+  perform coherent runtime and queue-authority readback after either success or failure. The TUI
+  Queue controller owns background scheduling plus operation/context correlation and settlement; it
+  must not compose the cancellation and readback service calls.
 - Selected rows must use `AkraTheme::selected()` and `AkraTheme::list_highlight_symbol()` or the
   option-line helpers that wrap them.
 - Key footers must use `AkraTheme::key_line`.

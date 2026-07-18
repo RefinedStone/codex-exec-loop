@@ -6,6 +6,7 @@ use ratatui::layout::{Position, Rect};
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
+    PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
     PlanningQueueAuthoritySnapshot, PlanningQueueCancellationRequest, PlanningRuntimeProjection,
     PlanningTaskMutationCommitResult,
 };
@@ -48,21 +49,8 @@ pub(super) struct QueueMutationOperation {
     pub(super) receipt_at_start: Option<PlanningQueueMutationReceipt>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct QueueMutationAuthoritySnapshot {
-    pub(super) runtime_projection: PlanningRuntimeProjection,
-    pub(super) queue_authority: PlanningQueueAuthoritySnapshot,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum QueueMutationAuthorityRefreshError {
-    AuthorityUnavailable(String),
-    RevisionsKeptChanging {
-        projection_revision: i64,
-        authority_revision: i64,
-    },
-    RuntimeProjectionUnavailable,
-}
+pub(super) type QueueMutationAuthoritySnapshot = PlanningQueueAuthorityProjection;
+pub(super) type QueueMutationAuthorityRefreshError = PlanningQueueAuthorityRefreshError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueMutationWorkerResult {

@@ -65,20 +65,45 @@ pub const OFFICIAL_COMPLETION_REFRESH_FAILURE_BLOCK_REASON: &str =
     "official completion refresh failed; the leased slot stays reserved until planning is repaired";
 pub const DEFAULT_POST_TURN_REPAIR_ATTEMPT_LIMIT: usize = 2;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningQueueAuthorityProjection {
+    pub runtime_projection: PlanningRuntimeProjection,
+    pub queue_authority: PlanningQueueAuthoritySnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningQueueAuthorityRefreshError {
+    AuthorityUnavailable(String),
+    RevisionsKeptChanging {
+        projection_revision: i64,
+        authority_revision: i64,
+    },
+    RuntimeProjectionUnavailable,
+}
+
+#[derive(Debug)]
+pub struct PlanningQueueCancellationTransactionResult {
+    pub mutation: anyhow::Result<PlanningTaskMutationCommitResult>,
+    pub authority: Result<PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError>,
+}
+
 #[derive(Clone)]
 pub struct PlanningQueueUseCases {
     task_mutation: PlanningTaskMutationService,
     authority: Arc<dyn PlanningAuthorityPort>,
+    runtime_facade: PlanningRuntimeFacadeService,
 }
 
 impl PlanningQueueUseCases {
     pub(crate) fn new(
         task_mutation: PlanningTaskMutationService,
         authority: Arc<dyn PlanningAuthorityPort>,
+        runtime_facade: PlanningRuntimeFacadeService,
     ) -> Self {
         Self {
             task_mutation,
             authority,
+            runtime_facade,
         }
     }
 
@@ -120,6 +145,56 @@ impl PlanningQueueUseCases {
             &task_ids,
             || self.task_mutation.cancel_queue_tasks(request),
         )
+    }
+
+    pub fn load_coherent_authority(
+        &self,
+        workspace_directory: &str,
+    ) -> Result<PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError> {
+        let mut last_revision_pair = None;
+        for _ in 0..2 {
+            let runtime_projection = self
+                .runtime_facade
+                .load_runtime_projection_or_invalid(workspace_directory);
+            let Some(projection_revision) = runtime_projection.planning_revision() else {
+                last_revision_pair = None;
+                continue;
+            };
+            let queue_authority =
+                self.load_authority_snapshot(workspace_directory)
+                    .map_err(|error| {
+                        PlanningQueueAuthorityRefreshError::AuthorityUnavailable(error.to_string())
+                    })?;
+            if queue_authority.planning_revision == projection_revision {
+                return Ok(PlanningQueueAuthorityProjection {
+                    runtime_projection,
+                    queue_authority,
+                });
+            }
+            last_revision_pair = Some((projection_revision, queue_authority.planning_revision));
+        }
+        match last_revision_pair {
+            Some((projection_revision, authority_revision)) => {
+                Err(PlanningQueueAuthorityRefreshError::RevisionsKeptChanging {
+                    projection_revision,
+                    authority_revision,
+                })
+            }
+            None => Err(PlanningQueueAuthorityRefreshError::RuntimeProjectionUnavailable),
+        }
+    }
+
+    pub fn execute_cancellation_transaction(
+        &self,
+        request: PlanningQueueCancellationRequest,
+    ) -> PlanningQueueCancellationTransactionResult {
+        let workspace_directory = request.workspace_directory.clone();
+        let mutation = self.cancel_tasks(request);
+        let authority = self.load_coherent_authority(&workspace_directory);
+        PlanningQueueCancellationTransactionResult {
+            mutation,
+            authority,
+        }
     }
 }
 
@@ -1542,9 +1617,11 @@ mod tests {
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
-    use crate::application::service::planning::PlanningServices;
     use crate::application::service::planning::shared::contract::RESULT_OUTPUT_FILE_PATH;
     use crate::application::service::planning::task_tool::PlanningTaskToolListRequest;
+    use crate::application::service::planning::{
+        PlanningQueueCancellationTarget, PlanningServices,
+    };
     use crate::domain::planning::{
         DirectionCatalogDocument, DirectionDefinition, DirectionState, OriginSessionKind,
         PlanningOfficialCompletionRefreshPayload, PriorityQueueService, PriorityQueueTask,
@@ -1950,6 +2027,152 @@ mod tests {
             .reset_workspace(workspace.path_str(), PlanningResetTarget::Queue)
             .expect("queue reset should delegate through workspace facade");
         assert_eq!(reset.target, PlanningResetTarget::Queue);
+    }
+
+    #[test]
+    fn queue_cancellation_transaction_always_returns_authoritative_readback() {
+        let workspace = TempPlanningWorkspace::new("planning-queue-cancellation-transaction");
+        let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+        let queue_head = sample_queue_head();
+        seed_runtime_authority(repository.as_ref(), workspace.path_str(), &queue_head);
+        let planning = planning_services_with_repository(
+            Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
+                "queue transaction fixture",
+            )),
+            repository,
+        );
+        let initial = planning
+            .queue
+            .load_coherent_authority(workspace.path_str())
+            .expect("seeded runtime and queue authority should be coherent");
+        let task = initial
+            .queue_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == queue_head.task_id)
+            .expect("seeded queue task should be present");
+        let target = PlanningQueueCancellationTarget {
+            task_id: task.id.clone(),
+            expected_status: task.status,
+            expected_updated_at: task.updated_at.clone(),
+        };
+
+        let rejected =
+            planning
+                .queue
+                .execute_cancellation_transaction(PlanningQueueCancellationRequest {
+                    workspace_directory: workspace.path_str().to_string(),
+                    expected_planning_revision: initial.queue_authority.planning_revision + 1,
+                    targets: vec![target.clone()],
+                });
+        assert!(rejected.mutation.is_err());
+        assert_eq!(
+            rejected
+                .authority
+                .expect("failed mutation should still reload authority")
+                .queue_authority
+                .planning_revision,
+            initial.queue_authority.planning_revision
+        );
+
+        let committed =
+            planning
+                .queue
+                .execute_cancellation_transaction(PlanningQueueCancellationRequest {
+                    workspace_directory: workspace.path_str().to_string(),
+                    expected_planning_revision: initial.queue_authority.planning_revision,
+                    targets: vec![target],
+                });
+        let mutation = committed
+            .mutation
+            .expect("matching revision and task token should commit");
+        let authority = committed
+            .authority
+            .expect("committed mutation should reload coherent authority");
+        assert_eq!(
+            authority.runtime_projection.planning_revision(),
+            Some(mutation.committed_planning_revision)
+        );
+        assert_eq!(
+            authority.queue_authority.planning_revision,
+            mutation.committed_planning_revision
+        );
+        assert!(
+            authority.queue_authority.tasks.iter().any(|task| {
+                task.id == queue_head.task_id && task.status == TaskStatus::Cancelled
+            })
+        );
+    }
+
+    #[test]
+    fn queue_cancellation_transaction_keeps_commit_when_authority_readback_fails() {
+        let workspace = TempPlanningWorkspace::new("planning-queue-cancellation-readback-failure");
+        let repository = Arc::new(NoopPlanningTaskRepositoryPort);
+        let queue_head = sample_queue_head();
+        seed_runtime_authority(repository.as_ref(), workspace.path_str(), &queue_head);
+        let planning = planning_services_with_repository(
+            Arc::new(ScriptedPlanningWorkspacePort::failing_load(
+                "planning runtime unavailable",
+            )),
+            repository,
+        );
+        let initial = planning
+            .queue
+            .load_authority_snapshot(workspace.path_str())
+            .expect("seeded queue authority should load without the runtime projection");
+        let task = initial
+            .tasks
+            .iter()
+            .find(|task| task.id == queue_head.task_id)
+            .expect("seeded queue task should be present");
+
+        let result =
+            planning
+                .queue
+                .execute_cancellation_transaction(PlanningQueueCancellationRequest {
+                    workspace_directory: workspace.path_str().to_string(),
+                    expected_planning_revision: initial.planning_revision,
+                    targets: vec![PlanningQueueCancellationTarget {
+                        task_id: task.id.clone(),
+                        expected_status: task.status,
+                        expected_updated_at: task.updated_at.clone(),
+                    }],
+                });
+
+        let mutation = result
+            .mutation
+            .expect("cancellation commit should not depend on runtime readback");
+        assert_eq!(
+            result.authority,
+            Err(PlanningQueueAuthorityRefreshError::RuntimeProjectionUnavailable)
+        );
+        let committed = planning
+            .queue
+            .load_authority_snapshot(workspace.path_str())
+            .expect("committed queue authority should remain readable");
+        assert_eq!(
+            committed.planning_revision,
+            mutation.committed_planning_revision
+        );
+        assert!(
+            committed.tasks.iter().any(|task| {
+                task.id == queue_head.task_id && task.status == TaskStatus::Cancelled
+            })
+        );
+    }
+
+    #[test]
+    fn coherent_queue_authority_requires_a_runtime_revision() {
+        let planning = planning_services(Arc::new(ScriptedPlanningWorkspacePort::failing_load(
+            "planning runtime unavailable",
+        )));
+
+        assert_eq!(
+            planning
+                .queue
+                .load_coherent_authority("/tmp/planning-queue-without-runtime-revision"),
+            Err(PlanningQueueAuthorityRefreshError::RuntimeProjectionUnavailable)
+        );
     }
 
     #[test]

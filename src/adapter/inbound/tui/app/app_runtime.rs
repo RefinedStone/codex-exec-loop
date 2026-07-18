@@ -35,10 +35,7 @@ use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
-use super::queue_overlay_ui::{
-    QueueMutationAuthorityRefreshError, QueueMutationAuthoritySnapshot, QueueMutationOperation,
-    QueueMutationWorkerResult, QueueOverlayAuthorityLoadResult,
-};
+use super::queue_overlay_ui::{QueueMutationWorkerResult, QueueOverlayAuthorityLoadResult};
 use super::reviews_overlay_ui::{ReviewsOverlayAuthoritySnapshot, ReviewsOverlayLoadRequest};
 use super::{
     AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
@@ -1268,61 +1265,6 @@ impl NativeTuiPlanningHandle {
 
     pub(super) fn queue(&self) -> &crate::application::service::planning::PlanningQueueUseCases {
         &self.services.queue
-    }
-
-    pub(super) fn execute_queue_mutation(
-        &self,
-        operation: QueueMutationOperation,
-    ) -> QueueMutationWorkerResult {
-        let mutation = self
-            .queue()
-            .cancel_tasks(operation.request.clone())
-            .map_err(|error| error.to_string());
-        // Refresh after both Ok and Err. Releasing the cross-process mutation guard can fail
-        // after the commit, so the error channel alone cannot tell the TUI which authority won.
-        let authority = self.load_queue_authority(&operation.context.workspace_directory);
-        QueueMutationWorkerResult {
-            operation,
-            mutation,
-            authority,
-        }
-    }
-
-    pub(super) fn load_queue_authority(
-        &self,
-        workspace_directory: &str,
-    ) -> Result<QueueMutationAuthoritySnapshot, QueueMutationAuthorityRefreshError> {
-        let mut last_revision_pair = None;
-        for _ in 0..2 {
-            let runtime_projection = self
-                .runtime()
-                .load_runtime_projection_or_invalid(workspace_directory);
-            let Some(projection_revision) = runtime_projection.planning_revision() else {
-                continue;
-            };
-            let queue_authority = self
-                .queue()
-                .load_authority_snapshot(workspace_directory)
-                .map_err(|error| {
-                    QueueMutationAuthorityRefreshError::AuthorityUnavailable(error.to_string())
-                })?;
-            if queue_authority.planning_revision == projection_revision {
-                return Ok(QueueMutationAuthoritySnapshot {
-                    runtime_projection,
-                    queue_authority,
-                });
-            }
-            last_revision_pair = Some((projection_revision, queue_authority.planning_revision));
-        }
-        match last_revision_pair {
-            Some((projection_revision, authority_revision)) => {
-                Err(QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
-                    projection_revision,
-                    authority_revision,
-                })
-            }
-            None => Err(QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable),
-        }
     }
 
     #[cfg(test)]

@@ -80,11 +80,13 @@ TUI queue remove and undo intents open one overlay-independent pending gate. Its
 envelope carries an operation ID, workspace and active-thread identity, plus the cancellation
 request's base planning revision and exact task status/update tokens. The controller does not mutate
 the visible projection optimistically or call the cancellation service on the terminal input path.
-Background work submits the request and reloads runtime and queue authority after both success and
-failure; only the exact pending operation in the same workspace/thread context may reconcile that
-authority into the projection. Closing the Queue overlay resets its local selection and feedback but
-does not discard the pending operation, and duplicate destructive intents remain blocked until its
-completion is consumed.
+`PlanningQueueUseCases` owns the cancellation transaction: it submits the request, then performs a
+coherent runtime and queue-authority readback after both success and failure. The TUI controller owns
+background scheduling plus operation/context correlation and settlement; only the exact pending
+operation in the same workspace/thread context may reconcile the returned authority into the
+projection. Closing the Queue overlay resets its local selection and feedback but does not discard
+the pending operation, and duplicate destructive intents remain blocked until its completion is
+consumed.
 
 This is TUI settlement correlation, not store-wide idempotency. Operation IDs are not persisted,
 do not yet carry repository incarnation, and do not promise exactly-once execution across process

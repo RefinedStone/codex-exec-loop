@@ -250,7 +250,7 @@ fn native_tui_app_keeps_parallel_control_plane_behind_application_handle() {
 fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     /*
      * Queue remove/undo input may only open the adapter correlation gate. The
-     * application handle performs the blocking cancellation and refresh, then
+     * planning queue use case performs the blocking cancellation and refresh, then
      * ShellRuntime settles the exact pending operation from a background
      * completion. Queue chrome is disposable; the pending gate is not.
      */
@@ -311,23 +311,10 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     assert!(!show_queue.contains(".application"));
     assert!(!show_queue.contains(".load_"));
 
-    let executor = APP_RUNTIME_RS
-        .split("pub(super) fn execute_queue_mutation")
-        .nth(1)
-        .expect("queue mutation executor must exist")
-        .split("pub(super) fn load_queue_authority")
-        .next()
-        .expect("queue authority refresh helper must follow the executor");
-    let mutation_index = executor
-        .find("let mutation = self")
-        .expect("executor must retain the mutation result without returning early");
-    let refresh_index = executor
-        .find("let authority = self.load_queue_authority")
-        .expect("executor must refresh authority after either mutation outcome");
-    assert!(mutation_index < refresh_index);
-    assert!(executor.contains("QueueMutationWorkerResult"));
-    assert!(executor.contains("mutation,"));
-    assert!(executor.contains("authority,"));
+    assert!(!APP_RUNTIME_RS.contains("execute_queue_mutation"));
+    assert!(!APP_RUNTIME_RS.contains("load_queue_authority"));
+    assert!(QUEUE_CONTROLLER_RS.contains(".execute_cancellation_transaction("));
+    assert!(QUEUE_CONTROLLER_RS.contains(".load_coherent_authority("));
 
     assert!(APP_RS.contains("queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState"));
     assert!(APP_RS.contains("queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState"));

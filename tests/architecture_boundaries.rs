@@ -863,6 +863,48 @@ fn tui_generic_shell_controller_does_not_own_queue_mutation_effects() {
 }
 
 #[test]
+fn tui_queue_adapter_does_not_own_cancellation_authority_transaction() {
+    assert_no_forbidden_references_in_paths(
+        "TUI queue controller must schedule the application-owned cancellation and authority transaction",
+        &["src/adapter/inbound/tui/app/queue_overlay_controller.rs"],
+        &[
+            ".cancel_tasks(",
+            ".load_authority_snapshot(",
+            ".load_runtime_projection_or_invalid(",
+            "RevisionsKeptChanging",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "TUI planning handle must not rebuild the queue cancellation and authority transaction",
+        &["src/adapter/inbound/tui/app/app_runtime.rs"],
+        &[
+            "fn execute_queue_mutation",
+            "fn load_queue_authority",
+            "QueueMutationAuthorityRefreshError",
+            "QueueMutationAuthoritySnapshot",
+        ],
+    );
+
+    let use_cases =
+        fs::read_to_string(repo_root().join("src/application/service/planning/use_cases.rs"))
+            .expect("planning use-case source should load");
+    let production_source = production_lines(&use_cases)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for required_method in [
+        "pub fn execute_cancellation_transaction(",
+        "pub fn load_coherent_authority(",
+    ] {
+        assert!(
+            production_source.contains(required_method),
+            "PlanningQueueUseCases must own queue cancellation and coherent authority readback through {required_method}"
+        );
+    }
+}
+
+#[test]
 fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
     assert_no_forbidden_references_in_paths(
         "TUI conversation tail must consume ConversationScreenModel without app, service, I/O, or clock access",
