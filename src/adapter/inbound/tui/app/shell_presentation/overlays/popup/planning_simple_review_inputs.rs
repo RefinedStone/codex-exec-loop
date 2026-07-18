@@ -32,13 +32,8 @@ pub(super) fn build_simple_review_copy(app: &NativeTuiApp) -> PlanningSimpleRevi
         // auto-turn budget은 planning init 자체의 산출물은 아니지만, promote 직후 이어질
         // 자동 실행량을 같은 decision surface에서 조정하게 해 주는 adjacent control이다.
         max_auto_turns_label: app.current_max_auto_turns_label(),
-        is_turn_budget_editing: app.is_max_auto_turns_editing(),
-        // label은 committed budget이고 buffer는 editing mode의 raw draft input이다. 둘을
-        // 함께 넘겨 status/key copy가 review controls와 text-input controls를 정확히 전환한다.
-        turn_budget_buffer: app
-            .auto_follow_overlay_ui_state
-            .max_auto_turns_editor
-            .buffer
-            .clone(),
+        // None이면 committed label이 유일한 표시 값이고, Some이면 같은 값이 editor
+        // 활성 여부와 raw draft를 함께 표현해 bool/string 불일치를 만들지 않는다.
+        turn_budget_edit_buffer: app.max_auto_turns_edit_buffer().map(str::to_string),
     }
 }

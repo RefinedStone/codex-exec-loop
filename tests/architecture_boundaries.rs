@@ -1091,6 +1091,95 @@ fn conversation_state_model_has_no_presentation_or_planning_projection_cache() {
 }
 
 #[test]
+fn auto_follow_overlay_keeps_only_an_active_turn_budget_draft() {
+    assert_no_forbidden_references_in_paths(
+        "closed auto-follow presentation must read the canonical conversation policy without mirroring it",
+        &[
+            "src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/app_runtime.rs",
+            "src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_copy.rs",
+            "src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_simple_review_inputs.rs",
+        ],
+        &[
+            "ContentReset",
+            "MaxAutoTurnsValueSynced",
+            "MaxAutoTurnsEditCommitted",
+            "MaxAutoTurnsEditCanceled",
+            "max_auto_turns_editor.",
+            "max_auto_turns_editor:",
+            "is_turn_budget_editing",
+            "turn_budget_buffer",
+        ],
+    );
+
+    let overlay_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs"),
+    )
+    .expect("auto-follow overlay source should load");
+    let overlay_syntax =
+        syn::parse_file(&overlay_source).expect("auto-follow overlay source should parse");
+    let overlay_fields = named_struct_fields(&overlay_syntax, "AutoFollowOverlayUiState");
+    assert!(
+        overlay_fields
+            .iter()
+            .map(|field| field
+                .ident
+                .as_ref()
+                .expect("field should be named")
+                .to_string())
+            .eq(["max_auto_turns_edit_buffer".to_string()]),
+        "auto-follow overlay must own exactly one editor-local field"
+    );
+    assert!(
+        is_option_string_type(&overlay_fields[0].ty),
+        "auto-follow editor ownership and its raw draft must be represented by one Option<String>"
+    );
+
+    let copy_source = fs::read_to_string(
+        repo_root()
+            .join("src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_copy.rs"),
+    )
+    .expect("planning copy source should load");
+    let copy_syntax = syn::parse_file(&copy_source).expect("planning copy source should parse");
+    let copy_fields = named_struct_fields(&copy_syntax, "PlanningSimpleReviewCopy");
+    let copy_field_names = copy_fields
+        .iter()
+        .map(|field| {
+            field
+                .ident
+                .as_ref()
+                .expect("field should be named")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        copy_field_names,
+        [
+            "draft_name",
+            "staged_file_count",
+            "validation_ok",
+            "first_error",
+            "max_auto_turns_label",
+            "turn_budget_edit_buffer",
+        ],
+        "simple-review copy must not add a second editing flag or budget mirror"
+    );
+    let edit_buffer = copy_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "turn_budget_edit_buffer")
+        })
+        .expect("simple-review copy should expose its active edit draft");
+    assert!(
+        is_option_string_type(&edit_buffer.ty),
+        "simple-review presentation must project editor ownership and its raw draft atomically"
+    );
+}
+
+#[test]
 fn tui_conversation_loads_enter_through_core_runtime() {
     // Static guard for the conversation lifecycle migration: TUI may keep presentation
     // state and reducers, but snapshot loading must enter CoreRuntime/CoreEffectRunner.
@@ -2710,6 +2799,41 @@ fn collect_public_fields_in_struct(
     }
 
     debts
+}
+
+fn named_struct_fields<'a>(syntax: &'a syn::File, struct_name: &str) -> Vec<&'a syn::Field> {
+    let item = syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == struct_name => Some(item),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("source should define named struct {struct_name}"));
+    let syn::Fields::Named(fields) = &item.fields else {
+        panic!("{struct_name} should use named fields");
+    };
+    fields.named.iter().collect()
+}
+
+fn is_option_string_type(ty: &syn::Type) -> bool {
+    let syn::Type::Path(outer) = ty else {
+        return false;
+    };
+    if outer.qself.is_some() || outer.path.segments.len() != 1 {
+        return false;
+    }
+    let outer_segment = outer.path.segments.first().expect("one outer segment");
+    if outer_segment.ident != "Option" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &outer_segment.arguments else {
+        return false;
+    };
+    let Some(syn::GenericArgument::Type(syn::Type::Path(inner))) = arguments.args.first() else {
+        return false;
+    };
+    arguments.args.len() == 1 && inner.qself.is_none() && inner.path.is_ident("String")
 }
 
 fn format_violations(violations: &[BoundaryViolation]) -> String {

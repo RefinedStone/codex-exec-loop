@@ -3,8 +3,8 @@ use super::{AutoFollowState, ConversationViewModel};
 /*
  * Auto-follow controls는 overlay의 임시 입력 상태가 아니라 ConversationViewModel 안의
  * 실제 auto-follow 정책을 바꾸는 reducer다. app_runtime은 controller에서 올라온 이벤트를
- * 이 함수에 넣고, 반환된 effect를 다시 `auto_follow_overlay_ui` reducer로 보내 화면 buffer를
- * 동기화한다. 이 분리 덕분에 "값을 편집하는 UI"와 "auto-follow 실행 정책"이 서로 섞이지 않는다.
+ * 이 함수에 넣는다. reducer는 context 전환이나 유효한 저장이 active editor draft를 닫아야
+ * 하는지만 알리고, canonical budget 문자열은 ConversationViewModel에만 남긴다.
  */
 #[derive(Debug, Clone)]
 pub(super) enum AutoFollowControlEvent {
@@ -25,20 +25,6 @@ pub(super) enum AutoFollowControlEvent {
     MaxAutoTurnsUpdated { value: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum AutoFollowControlEffect {
-    /*
-     * OverlayUi는 conversation state 변경을 overlay 입력 상태에도 다시 반영하라는 신호다.
-     * 예를 들어 draft workspace가 바뀌면 overlay의 표시 값도 새 conversation context로 reset된다.
-     */
-    OverlayUi,
-    /*
-     * MaxAutoTurnsEditor는 정책 변경이 성공했을 때 editor buffer를 canonical label로 닫고 맞춘다.
-     * `infinite`, 숫자 trim/normalization 결과를 화면에 다시 돌려주는 단일 경로다.
-     */
-    MaxAutoTurnsEditor { value: String },
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct AutoFollowControlReduction {
     /*
@@ -46,22 +32,15 @@ pub(super) struct AutoFollowControlReduction {
      * ConversationState::Ready에 넣어 runtime, footer, prompt composer가 같은 값을 보게 한다.
      */
     pub state: ConversationViewModel,
-    /*
-     * effects는 conversation model 밖의 UI state를 맞추기 위한 후속 작업이다.
-     * reducer가 직접 overlay state를 만지지 않아 app_runtime이 두 reducer 사이의 연결 지점으로 남는다.
-     */
-    pub effects: Vec<AutoFollowControlEffect>,
+    // Invalid budget input preserves the draft; accepted input and context changes close it.
+    pub close_max_auto_turns_editor: bool,
 }
 
 pub(super) fn reduce_auto_follow_controls(
     mut state: ConversationViewModel,
     event: AutoFollowControlEvent,
 ) -> AutoFollowControlReduction {
-    /*
-     * 이 reducer는 순수하게 새 conversation state와 후속 effect 목록을 만든다.
-     * 외부 I/O나 terminal drawing은 하지 않으므로 tests가 state transition만 검증할 수 있다.
-     */
-    let mut effects = Vec::new();
+    let mut close_max_auto_turns_editor = false;
 
     match event {
         AutoFollowControlEvent::DraftWorkspaceSynced {
@@ -69,10 +48,10 @@ pub(super) fn reduce_auto_follow_controls(
         } => {
             /*
              * sync_draft_workspace는 cwd 변경뿐 아니라 draft workspace 기준 status와 skip state를 함께 정리한다.
-             * 실제 변화가 있었을 때만 overlay reset effect를 내보내 불필요한 UI buffer 갱신을 피한다.
+             * 실제 변화가 있었을 때만 이전 context에서 시작한 editor draft를 닫는다.
              */
             if state.sync_draft_workspace(workspace_directory) {
-                effects.push(AutoFollowControlEffect::OverlayUi);
+                close_max_auto_turns_editor = true;
             }
         }
         AutoFollowControlEvent::AutoFollowPaused => {
@@ -96,7 +75,10 @@ pub(super) fn reduce_auto_follow_controls(
                 state.status_text =
                     "auto-follow unchanged / use a positive whole number, infinite, off, or 0"
                         .to_string();
-                return AutoFollowControlReduction { state, effects };
+                return AutoFollowControlReduction {
+                    state,
+                    close_max_auto_turns_editor,
+                };
             };
 
             /*
@@ -113,13 +95,14 @@ pub(super) fn reduce_auto_follow_controls(
             } else {
                 "auto-follow disabled / use :turns <positive|infinite> to enable".to_string()
             };
-            effects.push(AutoFollowControlEffect::MaxAutoTurnsEditor {
-                value: state.auto_follow_state.max_auto_turns_label(),
-            });
+            close_max_auto_turns_editor = true;
         }
     }
 
-    AutoFollowControlReduction { state, effects }
+    AutoFollowControlReduction {
+        state,
+        close_max_auto_turns_editor,
+    }
 }
 
 #[cfg(test)]
@@ -128,11 +111,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::AutoFollowSkipReason;
 
     #[test]
-    fn draft_workspace_sync_updates_blank_draft_and_emits_ui_sync() {
-        /*
-         * 새 draft가 workspace를 바꾸면 conversation cwd와 overlay buffer가 함께 따라가야 한다.
-         * OverlayUi effect가 없으면 app_runtime이 `auto_follow_overlay_ui`의 content reset을 호출하지 않는다.
-         */
+    fn draft_workspace_sync_updates_blank_draft_and_closes_editor() {
         let draft = ConversationViewModel::new_draft("/tmp/root".to_string());
 
         let reduced = reduce_auto_follow_controls(
@@ -144,7 +123,7 @@ mod tests {
 
         assert_eq!(reduced.state.cwd, "/tmp/alt");
         assert!(reduced.state.status_text.contains("draft workspace synced"));
-        assert_eq!(reduced.effects, vec![AutoFollowControlEffect::OverlayUi]);
+        assert!(reduced.close_max_auto_turns_editor);
     }
 
     #[test]
@@ -167,10 +146,10 @@ mod tests {
     }
 
     #[test]
-    fn updating_max_auto_turns_clears_skip_and_emits_editor_sync() {
+    fn updating_max_auto_turns_clears_skip_and_closes_editor() {
         /*
          * turn budget 변경은 auto-follow를 다시 시도하려는 operator action이다.
-         * 정책 값, stale skip reason 제거, editor canonical value sync가 한 reducer 결과에 같이 담긴다.
+         * 정책 값과 stale skip reason을 갱신한 뒤 active draft만 닫는다.
          */
         let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.record_auto_follow_skip(AutoFollowSkipReason::NoAgentReply);
@@ -184,19 +163,14 @@ mod tests {
 
         assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 5);
         assert!(reduced.state.last_auto_follow_activity.is_none());
-        assert_eq!(
-            reduced.effects,
-            vec![AutoFollowControlEffect::MaxAutoTurnsEditor {
-                value: "5".to_string()
-            }]
-        );
+        assert!(reduced.close_max_auto_turns_editor);
     }
 
     #[test]
-    fn disabling_auto_follow_accepts_zero_and_emits_canonical_off_label() {
+    fn disabling_auto_follow_accepts_zero_and_closes_editor() {
         /*
          * Both `0` and `off` are explicit disable operations. The policy keeps a
-         * prior :stop sticky and returns one canonical label to every editor.
+         * prior :stop sticky while closed presentation reads its canonical label.
          */
         let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
         state.auto_follow_state.set_max_auto_turns(5);
@@ -217,12 +191,7 @@ mod tests {
                 .auto_follow_state
                 .post_turn_continuation_paused()
         );
-        assert_eq!(
-            reduced.effects,
-            vec![AutoFollowControlEffect::MaxAutoTurnsEditor {
-                value: "off".to_string()
-            }]
-        );
+        assert!(reduced.close_max_auto_turns_editor);
         assert!(reduced.state.status_text.contains("auto-follow disabled"));
     }
 
@@ -238,7 +207,7 @@ mod tests {
         );
 
         assert_eq!(reduced.state.auto_follow_state.max_auto_turns_value(), 0);
-        assert!(reduced.effects.is_empty());
+        assert!(!reduced.close_max_auto_turns_editor);
         assert!(reduced.state.status_text.contains("auto-follow unchanged"));
     }
 

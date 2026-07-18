@@ -38,9 +38,9 @@ pub(super) fn build_simple_review_status_lines(
     );
     // turn budget을 편집 중이면 Enter/Esc 중심의 입력 안내가 필요하고, 평상시에는 promote/detail/close action
     // 안내가 필요하다.
-    if copy.is_turn_budget_editing {
+    if let Some(turn_budget_edit_buffer) = copy.turn_budget_edit_buffer.as_deref() {
         status_lines.extend(editing::build_simple_review_editing_status_lines(
-            copy.turn_budget_buffer.as_str(),
+            turn_budget_edit_buffer,
         ));
     } else {
         status_lines.extend(non_editing::build_simple_review_non_editing_status_lines());

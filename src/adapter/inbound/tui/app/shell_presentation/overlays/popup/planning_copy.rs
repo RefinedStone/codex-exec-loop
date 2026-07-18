@@ -29,10 +29,8 @@ pub(super) struct PlanningSimpleReviewCopy {
     pub(super) first_error: Option<String>,
     // Committed auto-follow budget label shown when the numeric editor is not active.
     pub(super) max_auto_turns_label: String,
-    // Switches review copy from committed budget label to raw input buffer display.
-    pub(super) is_turn_budget_editing: bool,
-    // Raw unparsed budget input preserves partially typed values for the text-control mode.
-    pub(super) turn_budget_buffer: String,
+    // The raw unparsed draft exists only while the text-control mode owns input.
+    pub(super) turn_budget_edit_buffer: Option<String>,
 }
 
 // Draft editor status only needs the representative validation issue, not the full report object.

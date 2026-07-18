@@ -86,14 +86,12 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn is_max_auto_turns_editing(&self) -> bool {
-        /*
-         * Editing ownership is screen-local state. The conversation may hold
-         * a valid max_auto_turns value while the operator is temporarily
-         * typing an empty string, `inf`, or another not-yet-valid candidate.
-         */
+        self.max_auto_turns_edit_buffer().is_some()
+    }
+
+    pub(crate) fn max_auto_turns_edit_buffer(&self) -> Option<&str> {
         self.auto_follow_overlay_ui_state
-            .max_auto_turns_editor
-            .is_editing
+            .max_auto_turns_edit_buffer()
     }
 
     pub(crate) fn start_max_auto_turns_edit(&mut self) {
@@ -123,7 +121,7 @@ impl NativeTuiApp {
          * overlay buffer. From this point until commit/cancel, the buffer is
          * allowed to diverge from the conversation policy.
          */
-        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::MaxAutoTurnsEditStarted {
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: self.current_max_auto_turns_label(),
         });
     }
@@ -134,33 +132,24 @@ impl NativeTuiApp {
          * method is callable from key routing and shell-level flows, so the
          * local guard keeps accidental commits idempotent.
          */
-        if !self.is_max_auto_turns_editing() {
+        let Some(value) = self.max_auto_turns_edit_buffer().map(str::to_string) else {
             return;
-        }
+        };
 
         /*
          * Commit sends the raw buffer to the control reducer. That reducer
-         * centralizes normalization and validation, then emits a UI effect
+         * centralizes normalization and validation, then closes the draft
          * only when the policy accepted a canonical value.
          */
-        self.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
-            value: self
-                .auto_follow_overlay_ui_state
-                .max_auto_turns_editor
-                .buffer
-                .clone(),
-        });
+        self.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated { value });
     }
 
     pub(crate) fn cancel_max_auto_turns_edit(&mut self) {
         /*
-         * Cancel is purely presentational: close the editor and restore the
-         * visible buffer from the current policy label. It intentionally does
-         * not dispatch a control event because no policy decision changed.
+         * Cancel is purely presentational: drop the active draft. Closed
+         * presentation reads the current policy label directly.
          */
-        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::MaxAutoTurnsEditCanceled {
-            current_value: self.current_max_auto_turns_label(),
-        });
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
     }
 
     pub(crate) fn push_max_auto_turns_character(&mut self, character: char) {
@@ -169,9 +158,9 @@ impl NativeTuiApp {
          * save gives this terminal control normal text-editor behavior rather
          * than rejecting intermediate input one key at a time.
          */
-        self.dispatch_auto_follow_overlay_ui(
-            AutoFollowOverlayUiEvent::MaxAutoTurnsCharacterTyped { character },
-        );
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::CharacterTyped {
+            character,
+        });
     }
 
     pub(crate) fn pop_max_auto_turns_character(&mut self) {
@@ -179,9 +168,7 @@ impl NativeTuiApp {
          * Backspace edits the same overlay buffer and leaves the canonical
          * auto-follow limit untouched until a later successful save.
          */
-        self.dispatch_auto_follow_overlay_ui(
-            AutoFollowOverlayUiEvent::MaxAutoTurnsBackspacePressed,
-        );
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::BackspacePressed);
     }
 
     pub(crate) fn handle_max_auto_turns_editor_key(&mut self, key: event::KeyEvent) -> bool {

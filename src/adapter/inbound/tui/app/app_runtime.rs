@@ -38,14 +38,14 @@ use crate::domain::recent_sessions::SessionRenameRequest;
 use super::queue_overlay_ui::{QueueMutationWorkerResult, QueueOverlayAuthorityLoadResult};
 use super::reviews_overlay_ui::{ReviewsOverlayAuthoritySnapshot, ReviewsOverlayLoadRequest};
 use super::{
-    AutoFollowControlEffect, AutoFollowControlEvent, AutoFollowOverlayUiEvent,
-    AutoFollowOverlayUiState, ConversationInputEvent, ConversationIntentEffect,
-    ConversationIntentEvent, ConversationIntentMode, ConversationIntentState,
-    ConversationLifecycleEffect, ConversationLifecycleEvent, ConversationLifecycleState,
-    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
-    ExitConfirmationState, NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE,
-    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
-    ShellOverlay, StartupState, reduce_auto_follow_controls, reduce_auto_follow_overlay_ui,
+    AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowOverlayUiState,
+    ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
+    ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
+    ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
+    ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
+    NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState,
+    SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay,
+    StartupState, reduce_auto_follow_controls, reduce_auto_follow_overlay_ui,
     reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
     reduce_conversation_runtime, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
@@ -768,6 +768,38 @@ mod tests {
     }
 
     #[test]
+    fn turn_budget_draft_closes_only_after_acceptance_or_context_change() {
+        let mut app = test_helpers::test_native_tui_app();
+        app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
+            current_value: "off".to_string(),
+        });
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
+            workspace_directory: "/tmp/root".to_string(),
+        });
+        assert_eq!(app.max_auto_turns_edit_buffer(), Some("off"));
+
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
+            value: "invalid".to_string(),
+        });
+        assert_eq!(app.max_auto_turns_edit_buffer(), Some("off"));
+        assert_eq!(app.current_max_auto_turns_label(), "off");
+
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::MaxAutoTurnsUpdated {
+            value: "5".to_string(),
+        });
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+        assert_eq!(app.current_max_auto_turns_label(), "5");
+
+        app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
+            current_value: "5".to_string(),
+        });
+        app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
+            workspace_directory: "/tmp/other".to_string(),
+        });
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+    }
+
+    #[test]
     fn workspace_and_conversation_supersession_invalidate_continuation_permits() {
         let mut app = test_helpers::test_native_tui_app();
 
@@ -786,6 +818,9 @@ mod tests {
         let new_draft_generation =
             arm_pending_manual_prompt_for_identity_test(&mut app, "new draft prompt");
         app.pending_conversation_load = Some(ConversationLoadCorrelation::new(9, "thread-stale"));
+        app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
+            current_value: "off".to_string(),
+        });
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
             workspace_directory: "/tmp/root".to_string(),
         });
@@ -798,10 +833,14 @@ mod tests {
             ConversationState::Ready(conversation) if conversation.cwd == "/tmp/root"
         ));
         assert!(app.active_session.is_none());
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
 
         let session_permit = app.post_turn_continuation_gate.capture();
         let session_generation =
             arm_pending_manual_prompt_for_identity_test(&mut app, "session prompt");
+        app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
+            current_value: "off".to_string(),
+        });
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
             session: SessionSummary {
                 id: "thread-2".to_string(),
@@ -827,6 +866,7 @@ mod tests {
                 .map(|session| session.id.as_str()),
             Some("thread-2")
         );
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
         assert_eq!(
             app.pending_conversation_load
                 .as_ref()
@@ -1430,6 +1470,11 @@ impl NativeTuiApp {
         if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue {
             self.queue_overlay_ui_state.reset();
         }
+        if previous_overlay == ShellOverlay::PlanningInit
+            && self.shell_overlay != ShellOverlay::PlanningInit
+        {
+            self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
+        }
         for effect in reduction.effects {
             self.execute_shell_chrome_effect(effect);
         }
@@ -1629,9 +1674,7 @@ impl NativeTuiApp {
         }
         // A loaded conversation resets follow-up copy because auto-turn affordances
         // belong to the active thread, not the previous shell contents.
-        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::ContentReset {
-            max_auto_turns: self.current_max_auto_turns_label(),
-        });
+        self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
     }
 
     fn execute_shell_chrome_effect(&mut self, effect: ShellChromeEffect) {
@@ -1713,6 +1756,7 @@ impl NativeTuiApp {
             self.post_turn_continuation_gate.advance();
             self.cancel_manual_prompt_preparation_for_identity_transition();
             self.dispatch_core_command(AppCommand::InvalidateConversationLoad);
+            self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
         }
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
@@ -1850,9 +1894,6 @@ impl NativeTuiApp {
                     workspace_directory: workspace_directory.clone(),
                 });
                 self.refresh_ready_conversation_planning_runtime_projection();
-                self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::ContentReset {
-                    max_auto_turns: self.current_max_auto_turns_label(),
-                });
             }
             ConversationIntentEffect::OpenSession { session } => {
                 // Session selection is a lifecycle transition, not just a transcript swap.
@@ -1904,32 +1945,8 @@ impl NativeTuiApp {
         };
         let reduction = reduce_auto_follow_controls(conversation, event);
         self.conversation_state = ConversationState::ready(reduction.state);
-        if !self.is_max_auto_turns_editing() {
-            self.dispatch_auto_follow_overlay_ui(
-                AutoFollowOverlayUiEvent::MaxAutoTurnsValueSynced {
-                    value: self.current_max_auto_turns_label(),
-                },
-            );
-        }
-        for effect in reduction.effects {
-            self.execute_auto_follow_control_effect(effect);
-        }
-    }
-
-    fn execute_auto_follow_control_effect(&mut self, effect: AutoFollowControlEffect) {
-        match effect {
-            AutoFollowControlEffect::OverlayUi => {
-                self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::ContentReset {
-                    max_auto_turns: self.current_max_auto_turns_label(),
-                });
-            }
-            AutoFollowControlEffect::MaxAutoTurnsEditor { value } => {
-                self.dispatch_auto_follow_overlay_ui(
-                    AutoFollowOverlayUiEvent::MaxAutoTurnsEditCommitted {
-                        current_value: value,
-                    },
-                );
-            }
+        if reduction.close_max_auto_turns_editor {
+            self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
         }
     }
 

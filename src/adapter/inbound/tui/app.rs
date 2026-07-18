@@ -166,9 +166,7 @@ mod view_selection_overlay_ui;
 use app_runtime::NativeTuiApplicationHandle;
 pub(super) use app_runtime::NativeTuiParallelModeBinding;
 use app_runtime::{BackgroundMessage, TuiParallelModeControlPlaneEventSink};
-use auto_follow_controls::{
-    AutoFollowControlEffect, AutoFollowControlEvent, reduce_auto_follow_controls,
-};
+use auto_follow_controls::{AutoFollowControlEvent, reduce_auto_follow_controls};
 use auto_follow_overlay_ui::{
     AutoFollowOverlayUiEvent, AutoFollowOverlayUiState, reduce_auto_follow_overlay_ui,
 };
