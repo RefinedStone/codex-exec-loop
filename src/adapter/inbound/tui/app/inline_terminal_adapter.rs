@@ -8,7 +8,9 @@ use ratatui::text::Line;
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::history_insertion::HistoryInsertionMode;
-use super::shell_presentation::{build_startup_banner_lines, format_conversation_scrollback_lines};
+use super::shell_presentation::{
+    ConversationProjectionSample, build_startup_banner_lines, format_conversation_scrollback_lines,
+};
 use super::shell_rendering::{
     InlineConversationFrameProjection, draw_projected, inline_parallel_event_stream_visible_rows,
     prepare_projected_render_state,
@@ -256,13 +258,18 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     let terminal_size = resize_snapshot.size;
     let physical_terminal_resized = inline_terminal.physical_terminal_resized(resize_snapshot);
     let viewport_area = current_viewport_area(terminal);
+    let projection_sample = ConversationProjectionSample::capture(runtime.app_mut());
     let parallel_handoff_conversation_lines =
         if policy.parallel_mode_enabled && policy.host_insert_mode().is_some() {
             parallel_conversation_handoff_projection(runtime.app_mut())
         } else {
             None
         };
-    let current_lines = current_inline_history_lines_for_viewport(runtime.app_mut(), viewport_area);
+    let current_lines = current_inline_history_lines_for_viewport(
+        runtime.app_mut(),
+        viewport_area,
+        &projection_sample,
+    );
     let parallel_handoff_pending_lines = parallel_handoff_conversation_lines
         .as_deref()
         .map(|conversation_lines| {
@@ -306,8 +313,11 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         }
         inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
         inline_terminal.mark_resize_reconciled(resize_snapshot);
-        let frame_projection =
-            InlineConversationFrameProjection::from_app(runtime.app_mut(), viewport_area.width);
+        let frame_projection = InlineConversationFrameProjection::from_app_with_sample(
+            runtime.app_mut(),
+            viewport_area.width,
+            &projection_sample,
+        );
         let tail_frame_changed = inline_terminal.should_draw_inline_frame(
             &frame_projection,
             viewport_area.width,
@@ -491,8 +501,11 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     inline_terminal.viewport.insert_mode = insert_mode;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
     inline_terminal.mark_resize_reconciled(resize_snapshot);
-    let frame_projection =
-        InlineConversationFrameProjection::from_app(runtime.app_mut(), viewport_area.width);
+    let frame_projection = InlineConversationFrameProjection::from_app_with_sample(
+        runtime.app_mut(),
+        viewport_area.width,
+        &projection_sample,
+    );
     let tail_frame_changed = inline_terminal.should_draw_inline_frame(
         &frame_projection,
         viewport_area.width,
@@ -573,12 +586,18 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
 
 #[cfg(test)]
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    current_inline_history_lines_for_viewport(app, Rect::new(0, 0, 80, INLINE_VIEWPORT_HEIGHT))
+    let sample = ConversationProjectionSample::capture(app);
+    current_inline_history_lines_for_viewport(
+        app,
+        Rect::new(0, 0, 80, INLINE_VIEWPORT_HEIGHT),
+        &sample,
+    )
 }
 
 fn current_inline_history_lines_for_viewport(
     app: &NativeTuiApp,
     viewport_area: Rect,
+    sample: &ConversationProjectionSample,
 ) -> Vec<Line<'static>> {
     if app.parallel_mode_enabled() {
         /*
@@ -587,7 +606,7 @@ fn current_inline_history_lines_for_viewport(
          * operators can scroll back through past activity without replaying the
          * live panel title or footer chrome.
          */
-        return current_inline_parallel_history_lines(app, viewport_area);
+        return current_inline_parallel_history_lines(app, viewport_area, sample);
     }
     if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
         /*
@@ -626,8 +645,9 @@ fn current_inline_history_lines_for_viewport(
 fn current_inline_parallel_history_lines(
     app: &NativeTuiApp,
     viewport_area: Rect,
+    sample: &ConversationProjectionSample,
 ) -> Vec<Line<'static>> {
-    let live_tail_lines = inline_parallel_event_stream_visible_rows(app, viewport_area);
+    let live_tail_lines = inline_parallel_event_stream_visible_rows(app, viewport_area, sample);
     app.parallel_supervisor_event_scrollback_lines_before_live_tail(
         live_tail_lines,
         viewport_area.width,

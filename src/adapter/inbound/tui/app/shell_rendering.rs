@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use super::shell_presentation::{
-    ConversationScreenModel, InlineTailView, build_inline_live_transcript_lines,
-    build_inline_tail_view,
+    ConversationProjectionSample, ConversationScreenModel, InlineTailView,
+    build_inline_live_transcript_lines, build_inline_tail_view,
 };
 use super::*;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -42,8 +42,18 @@ pub(super) struct InlineConversationFrameProjection {
 }
 
 impl InlineConversationFrameProjection {
+    #[cfg(test)]
     pub(super) fn from_app(app: &NativeTuiApp, content_width: u16) -> Self {
-        let screen_model = ConversationScreenModel::from_app(app);
+        let sample = ConversationProjectionSample::capture(app);
+        Self::from_app_with_sample(app, content_width, &sample)
+    }
+
+    pub(super) fn from_app_with_sample(
+        app: &NativeTuiApp,
+        content_width: u16,
+        sample: &ConversationProjectionSample,
+    ) -> Self {
+        let screen_model = ConversationScreenModel::from_app_with_sample(app, sample);
         Self::from_screen_model(&screen_model, content_width)
     }
 
@@ -107,12 +117,17 @@ pub(super) fn prepare_projected_render_state(
 pub(super) fn inline_parallel_event_stream_visible_rows(
     app: &NativeTuiApp,
     frame_area: Rect,
+    sample: &ConversationProjectionSample,
 ) -> usize {
     if !app.parallel_mode_enabled() && app.shell_overlay != ShellOverlay::Supersession {
         return 0;
     }
 
-    let projection = InlineConversationFrameProjection::from_app(app, frame_area.width);
+    // The sample stabilizes the conversation tail and outer flow layout. The
+    // inspection document and its internal stream row plan remain a separate
+    // projection boundary until overlay rendering owns an immutable screen model.
+    let projection =
+        InlineConversationFrameProjection::from_app_with_sample(app, frame_area.width, sample);
     let layout =
         build_inline_terminal_flow_layout(&projection, frame_area, &projection.tail_view.lines);
     inline_inspection::parallel_event_stream_visible_rows(app, layout[0])
