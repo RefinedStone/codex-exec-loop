@@ -1419,7 +1419,7 @@ impl NativeTuiApp {
         changed
     }
 
-    fn apply_core_dispatch_outcome(&mut self, outcome: CoreDispatchOutcome) {
+    pub(super) fn apply_core_dispatch_outcome(&mut self, outcome: CoreDispatchOutcome) {
         for event in outcome.events {
             self.apply_core_event(event);
         }
@@ -1460,6 +1460,7 @@ impl NativeTuiApp {
             } => {
                 self.apply_parallel_peek_conversation_load(request_id, thread_id, result);
             }
+            AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnStreamSnapshotChanged(stream_snapshot) => {
                 self.dispatch_conversation_runtime(
                     ConversationRuntimeEvent::StreamSnapshotApplied(stream_snapshot),
@@ -1733,18 +1734,22 @@ impl NativeTuiApp {
 
         let reduction = reduce_conversation_runtime(conversation, event);
         let mut effects = reduction.effects;
-        let started_stream = effects
-            .iter()
-            .any(|effect| matches!(effect, ConversationRuntimeEffect::StartStream { .. }));
+        let requests_turn_submission = effects.iter().any(|effect| {
+            matches!(
+                effect,
+                ConversationRuntimeEffect::RequestTurnSubmission { .. }
+            )
+        });
         self.conversation_state = ConversationState::ready(reduction.state);
-        if !self.conversation_has_running_turn() {
+        if !requests_turn_submission && !self.conversation_has_running_turn() {
             self.turn_steer_confirmation = None;
         }
         self.route_post_turn_continuation_effects(post_turn_context, &mut effects);
+        let mut turn_submission_admitted = false;
         for effect in effects {
-            self.execute_conversation_runtime_effect(effect);
+            turn_submission_admitted |= self.execute_conversation_runtime_effect(effect);
         }
-        started_stream
+        turn_submission_admitted
     }
 
     pub(super) fn dispatch_conversation_input(&mut self, event: ConversationInputEvent) {

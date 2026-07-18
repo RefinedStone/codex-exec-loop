@@ -14,7 +14,9 @@ use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHando
 use crate::application::service::planning::{
     ManualPromptIntakeOutcome, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
-use crate::core::app::{AppCommand, CorePromptOrigin, TurnSubmissionRequest};
+use crate::core::app::{
+    AppCommand, AppEvent, CorePromptOrigin, TurnSubmissionAdmission, TurnSubmissionRequest,
+};
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::planning::ManualPromptCorrelation;
 use crate::domain::planning::{
@@ -71,24 +73,48 @@ impl NativeTuiApp {
     pub(super) fn execute_conversation_runtime_effect(
         &mut self,
         effect: ConversationRuntimeEffect,
-    ) {
+    ) -> bool {
         // This switchboard is intentionally thin: stream work and post-turn planning
         // live in submodules, while auto-follow reuses the same submit path as a
         // manual prompt with a different origin.
+        let mut turn_submission_admitted = false;
         match effect {
-            ConversationRuntimeEffect::StartStream {
+            ConversationRuntimeEffect::RequestTurnSubmission {
                 workspace_directory,
                 thread_id,
                 prompt,
+                transcript_text,
                 prompt_origin,
-            } => self.dispatch_core_command(AppCommand::SubmitTurn(
-                self.build_turn_submission_request(
-                    workspace_directory,
-                    thread_id,
-                    prompt,
-                    &prompt_origin,
-                ),
-            )),
+            } => {
+                let outcome = self.core_runtime.dispatch_command(AppCommand::SubmitTurn(
+                    self.build_turn_submission_request(
+                        workspace_directory,
+                        thread_id,
+                        prompt,
+                        &prompt_origin,
+                    ),
+                ));
+                turn_submission_admitted = outcome.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        AppEvent::TurnSubmissionAdmissionResolved(
+                            TurnSubmissionAdmission::Accepted { .. }
+                        )
+                    )
+                });
+                if turn_submission_admitted {
+                    self.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::PromptSubmissionAdmitted {
+                            transcript_text,
+                            origin: prompt_origin,
+                        },
+                    );
+                }
+                // Admission is committed before stream events from an immediate
+                // executor are applied, so even synchronous failure reduces from
+                // the submitted state instead of being overwritten by it.
+                self.apply_core_dispatch_outcome(outcome);
+            }
             ConversationRuntimeEffect::EvaluatePostTurn {
                 workspace_directory,
                 completed_turn_id,
@@ -108,7 +134,7 @@ impl NativeTuiApp {
                 handoff_task,
             } => {
                 let debug_detail = self.build_auto_follow_transcript_debug_detail(&transcript_text);
-                let _ = self.submit_prompt(
+                turn_submission_admitted = self.submit_prompt(
                     prompt,
                     PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
                         completed_turn_id,
@@ -188,6 +214,7 @@ impl NativeTuiApp {
                 }
             }
         }
+        turn_submission_admitted
     }
 
     fn build_turn_submission_request(
@@ -218,10 +245,12 @@ impl NativeTuiApp {
         {
             return None;
         }
-        let ConversationState::Ready(conversation) = &self.conversation_state else {
-            return None;
+        let handoff_task = match prompt_origin {
+            PromptOrigin::Manual => None,
+            PromptOrigin::ManualIntake(context) => context.handoff_task.as_ref(),
+            PromptOrigin::AutoFollow(context) => context.handoff_task.as_ref(),
         };
-        let handoff_task = conversation.last_planning_task_handoff()?;
+        let handoff_task = handoff_task?;
 
         Some(ParallelTurnSlotLeaseHandoff::new(
             handoff_task.task_id.clone(),
@@ -952,9 +981,10 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers;
     use crate::adapter::inbound::tui::app::{
-        AutoFollowSubmitContext, BackgroundMessage, ConversationInputEvent, ConversationState,
-        ConversationViewMode, NativeTuiApp, NativeTuiParallelModeBinding, PlanningInitOverlayStep,
-        PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay, StartupState, TuiLanguage,
+        AutoFollowSubmitContext, BackgroundMessage, ConversationInputEvent, ConversationInputState,
+        ConversationState, ConversationViewMode, NativeTuiApp, NativeTuiParallelModeBinding,
+        PlanningInitOverlayStep, PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay,
+        StartupState, TuiLanguage,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -974,7 +1004,7 @@ mod tests {
     };
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
-    use crate::core::app::{CorePromptOrigin, StartupReadySnapshot};
+    use crate::core::app::{CoreInput, CorePromptOrigin, StartupReadySnapshot, TurnStreamEvent};
     use crate::domain::conversation::{
         ConversationReasoningEffort, ConversationRuntimeControlTruth, ConversationSnapshot,
         ConversationTurnOptions,
@@ -1278,10 +1308,11 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-effect-arms");
         let mut app = make_test_app(&workspace);
 
-        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::StartStream {
+        app.execute_conversation_runtime_effect(ConversationRuntimeEffect::RequestTurnSubmission {
             workspace_directory: workspace.path_str().to_string(),
             thread_id: None,
             prompt: "ship it".to_string(),
+            transcript_text: "ship it".to_string(),
             prompt_origin: PromptOrigin::Manual,
         });
         app.execute_conversation_runtime_effect(ConversationRuntimeEffect::EvaluatePostTurn {
@@ -1666,6 +1697,60 @@ mod tests {
         );
         assert_eq!(app.manual_prompt_preparation_generation, first_generation);
         assert_eq!(ready_conversation(&app).status_text, "starting turn");
+    }
+
+    #[test]
+    fn turn_submission_admission_rejection_preserves_draft_then_retry_commits_once() {
+        let workspace = TempWorkspace::new("turn-submit-core-rejection");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "second prompt");
+        let previous_messages = ready_conversation(&app).messages.clone();
+        let previous_status = ready_conversation(&app).status_text.clone();
+        let active_correlation = app.core_runtime.begin_test_turn_submission();
+
+        let admitted = app.submit_prompt_with_transcript(
+            "second prompt".to_string(),
+            "second prompt".to_string(),
+            PromptOrigin::Manual,
+        );
+
+        let conversation = ready_conversation(&app);
+        assert!(!admitted);
+        assert_eq!(conversation.input_buffer, "second prompt");
+        assert_eq!(conversation.messages, previous_messages);
+        assert_eq!(conversation.status_text, previous_status);
+        assert_eq!(conversation.input_state, ConversationInputState::DraftReady);
+
+        let _ = app
+            .core_runtime
+            .dispatch_input(CoreInput::ConversationStreamUpdated {
+                correlation: active_correlation,
+                event: TurnStreamEvent::Failed {
+                    message: "first submission released".to_string(),
+                },
+            });
+        let message_count_before_retry = ready_conversation(&app).messages.len();
+
+        assert!(app.submit_prompt_with_transcript(
+            "second prompt".to_string(),
+            "second prompt".to_string(),
+            PromptOrigin::Manual,
+        ));
+
+        let conversation = ready_conversation(&app);
+        assert!(conversation.input_buffer.is_empty());
+        assert_eq!(conversation.messages.len(), message_count_before_retry + 1);
+        assert_eq!(
+            conversation
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some("second prompt")
+        );
+        assert_eq!(
+            conversation.input_state,
+            ConversationInputState::SubmittingTurn
+        );
     }
 
     #[test]
@@ -2378,14 +2463,20 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-helper-edges");
         let mut app = make_test_app(&workspace);
         let task = sample_handoff_task();
-        ready_conversation_mut(&mut app).record_manual_intake_handoff(Some(&task));
         app.set_parallel_mode_enabled_for_test(true);
+        let auto_origin = PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+            completed_turn_id: "turn-1".to_string(),
+            mode_label: "planning queue".to_string(),
+            transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
+            debug_detail: None,
+            handoff_task: Some(task.clone()),
+        }));
 
         let auto_request = app.build_turn_submission_request(
             workspace.path_str().to_string(),
             Some("thread-1".to_string()),
             "continue queued task".to_string(),
-            &auto_follow_origin(),
+            &auto_origin,
         );
         assert_eq!(
             auto_request.slot_lease_handoff,

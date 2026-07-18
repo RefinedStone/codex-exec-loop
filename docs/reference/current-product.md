@@ -67,7 +67,8 @@ continuation paths. A later `:parallel` re-arms only parallel continuation.
 ## Turn and Approval Flow
 
 1. Input may be drafted before startup completes; submission waits until readiness permits it.
-2. Core issues the turn effect and reduces typed app-server stream events into app state.
+2. Core admits one turn submission at a time; an accepted dispatch issues exactly one worker effect
+   and permits the TUI to clear the editor and append the prompt to transcript history.
 3. Active output remains in the live inline tail; final assistant output moves to committed history.
 4. Typed activity, runtime notices, approvals, and warnings update the same shell projection.
 5. Post-turn evaluation advances, pauses, or stops continuation from accepted planning state.

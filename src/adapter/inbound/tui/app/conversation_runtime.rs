@@ -36,13 +36,17 @@ use serde_json::json;
 #[derive(Debug, Clone)]
 pub(super) enum ConversationRuntimeEvent {
     /*
-     * Runtime events are facts that already happened at the TUI boundary. Manual
-     * and auto-follow submissions enter through SubmitPrompt, core stream
-     * snapshots enter through StreamSnapshotApplied, and post-turn evaluation
-     * completions return through PostTurnEvaluationCompleted.
+     * Manual and auto-follow intent enters through SubmitPrompt. Core admission
+     * returns synchronously through PromptSubmissionAdmitted before the reducer
+     * commits transcript or input state. Stream snapshots and post-turn
+     * completions remain facts that already happened at the runtime boundary.
      */
     SubmitPrompt {
         prompt: String,
+        transcript_text: String,
+        origin: PromptOrigin,
+    },
+    PromptSubmissionAdmitted {
         transcript_text: String,
         origin: PromptOrigin,
     },
@@ -70,10 +74,11 @@ pub(super) enum ConversationRuntimeEffect {
      * re-submission outside state mutation, while still making their ordering
      * visible to app_runtime.
      */
-    StartStream {
+    RequestTurnSubmission {
         workspace_directory: String,
         thread_id: Option<String>,
         prompt: String,
+        transcript_text: String,
         prompt_origin: PromptOrigin,
     },
     EvaluatePostTurn {
@@ -186,8 +191,9 @@ pub(super) enum PostTurnContinuationAction {
 pub(super) struct ConversationRuntimeReduction {
     // Updated view model that shell rendering reads immediately after dispatch.
     pub state: ConversationViewModel,
-    // Effects are executed after state replacement, so UI copy can already show
-    // "streaming/evaluating/queued" while background work starts.
+    // Effects are executed after state replacement. Turn submission is the one
+    // admission-gated exception: SubmitPrompt leaves state unchanged and its
+    // effect re-enters with PromptSubmissionAdmitted only after core accepts it.
     pub effects: Vec<ConversationRuntimeEffect>,
 }
 pub(super) fn reduce_conversation_runtime(
@@ -195,10 +201,9 @@ pub(super) fn reduce_conversation_runtime(
     event: ConversationRuntimeEvent,
 ) -> ConversationRuntimeReduction {
     /*
-     * The reducer always mutates local state before returning effects. That order
-     * ensures the shell can render a coherent "starting turn", "evaluating", or
-     * "queued auto-follow" state even if the next background message arrives
-     * quickly.
+     * Runtime facts mutate local state before returning effects. Submission
+     * intent instead requests core admission first so a rejected duplicate
+     * cannot fabricate a transcript row or a permanent "starting turn" state.
      */
     let mut effects = Vec::new();
     match event {
@@ -255,7 +260,18 @@ pub(super) fn reduce_conversation_runtime(
                 });
                 return ConversationRuntimeReduction { state, effects };
             }
-            let thread_id = state.has_active_thread().then(|| state.thread_id.clone());
+            effects.push(ConversationRuntimeEffect::RequestTurnSubmission {
+                workspace_directory: state.planning_workspace_directory().to_string(),
+                thread_id: state.has_active_thread().then(|| state.thread_id.clone()),
+                prompt,
+                transcript_text,
+                prompt_origin: origin,
+            });
+        }
+        ConversationRuntimeEvent::PromptSubmissionAdmitted {
+            transcript_text,
+            origin,
+        } => {
             let workspace_directory = state.planning_workspace_directory().to_string();
             match &origin {
                 PromptOrigin::Manual => {
@@ -329,12 +345,6 @@ pub(super) fn reduce_conversation_runtime(
                     context.mode_label
                 ),
             };
-            effects.push(ConversationRuntimeEffect::StartStream {
-                workspace_directory,
-                thread_id,
-                prompt,
-                prompt_origin: origin,
-            });
         }
         ConversationRuntimeEvent::StreamSnapshotApplied(snapshot) => {
             let applied = take_stream_snapshot_update(&mut state, snapshot);
@@ -1151,6 +1161,39 @@ mod tests {
         }))
     }
 
+    fn admit_prompt(
+        state: ConversationViewModel,
+        prompt: &str,
+        transcript_text: &str,
+        origin: PromptOrigin,
+    ) -> ConversationRuntimeReduction {
+        let requested = reduce_conversation_runtime(
+            state,
+            ConversationRuntimeEvent::SubmitPrompt {
+                prompt: prompt.to_string(),
+                transcript_text: transcript_text.to_string(),
+                origin,
+            },
+        );
+        let [
+            ConversationRuntimeEffect::RequestTurnSubmission {
+                transcript_text,
+                prompt_origin,
+                ..
+            },
+        ] = requested.effects.as_slice()
+        else {
+            panic!("valid prompt should request one core admission");
+        };
+        reduce_conversation_runtime(
+            requested.state,
+            ConversationRuntimeEvent::PromptSubmissionAdmitted {
+                transcript_text: transcript_text.clone(),
+                origin: prompt_origin.clone(),
+            },
+        )
+    }
+
     #[test]
     fn ignored_prompt_edges_and_origin_labels_are_stable() {
         assert_eq!(prompt_origin_label(&PromptOrigin::Manual), "manual");
@@ -1822,19 +1865,17 @@ mod tests {
         state.thread_id = "thread-1".to_string();
         state.auto_follow_state.set_max_auto_turns(20);
 
-        let reduction = reduce_conversation_runtime(
+        let reduction = admit_prompt(
             state,
-            ConversationRuntimeEvent::SubmitPrompt {
-                prompt: "continue queue".to_string(),
+            "continue queue",
+            "continue queue",
+            PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
+                completed_turn_id: "turn-root".to_string(),
+                mode_label: "planning queue".to_string(),
                 transcript_text: "continue queue".to_string(),
-                origin: PromptOrigin::AutoFollow(Box::new(AutoFollowSubmitContext {
-                    completed_turn_id: "turn-root".to_string(),
-                    mode_label: "planning queue".to_string(),
-                    transcript_text: "continue queue".to_string(),
-                    debug_detail: None,
-                    handoff_task: None,
-                })),
-            },
+                debug_detail: None,
+                handoff_task: None,
+            })),
         );
         assert_eq!(reduction.state.auto_follow_state.progress_label(), "0/20");
 
@@ -2223,14 +2264,7 @@ mod tests {
         let mut stopped = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         stopped.auto_follow_state.set_max_auto_turns(5);
         stopped.auto_follow_state.pause_post_turn_continuation();
-        let stopped = reduce_conversation_runtime(
-            stopped,
-            ConversationRuntimeEvent::SubmitPrompt {
-                prompt: "manual work".to_string(),
-                transcript_text: "manual work".to_string(),
-                origin: PromptOrigin::Manual,
-            },
-        );
+        let stopped = admit_prompt(stopped, "manual work", "manual work", PromptOrigin::Manual);
         assert!(
             stopped
                 .state
@@ -2239,13 +2273,11 @@ mod tests {
         );
         assert!(!stopped.state.auto_follow_state.can_queue_next());
 
-        let disabled = reduce_conversation_runtime(
+        let disabled = admit_prompt(
             ConversationViewModel::new_draft("/tmp/workspace".to_string()),
-            ConversationRuntimeEvent::SubmitPrompt {
-                prompt: "manual work".to_string(),
-                transcript_text: "manual work".to_string(),
-                origin: PromptOrigin::Manual,
-            },
+            "manual work",
+            "manual work",
+            PromptOrigin::Manual,
         );
         assert!(!disabled.state.auto_follow_state.is_enabled());
         assert!(!disabled.state.auto_follow_state.can_queue_next());
