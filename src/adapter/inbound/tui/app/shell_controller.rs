@@ -1095,7 +1095,8 @@ mod tests {
         PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
     };
     use crate::application::service::planning::{
-        PlanningRuntimeProjection, PlanningTaskToolRequest,
+        PlanningBootstrapMode, PlanningInitStageResult, PlanningRuntimeProjection,
+        PlanningTaskToolRequest,
     };
     use crate::core::app::StartupReadySnapshot;
     use crate::domain::conversation::{
@@ -1103,7 +1104,8 @@ mod tests {
     };
     use crate::domain::planning::{
         PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
-        PriorityQueueProjection, PriorityQueueSkippedTask, PriorityQueueTask, TaskStatus,
+        PlanningValidationReport, PriorityQueueProjection, PriorityQueueSkippedTask,
+        PriorityQueueTask, TaskStatus,
     };
     use crate::domain::startup_diagnostics::StartupDiagnostics;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
@@ -1114,6 +1116,19 @@ mod tests {
 
     fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> event::KeyEvent {
         event::KeyEvent::new(code, modifiers)
+    }
+
+    fn open_simple_review(app: &mut NativeTuiApp) {
+        app.shell_overlay = ShellOverlay::PlanningInit;
+        app.planning_init_overlay_ui_state
+            .open_simple_review(PlanningInitStageResult {
+                mode: PlanningBootstrapMode::Simple,
+                draft_name: "bootstrap-1".to_string(),
+                draft_directory: "/tmp/bootstrap-1".to_string(),
+                staged_files: Vec::new(),
+                staged_file_count: 4,
+                validation_report: PlanningValidationReport::default(),
+            });
     }
 
     fn steer_intent(
@@ -1468,6 +1483,66 @@ mod tests {
             "startup ready"
         );
         assert_eq!(app.submission_blocked_status(PromptOrigin::Manual), "ready");
+    }
+
+    #[test]
+    fn turn_budget_editor_key_path_preserves_cancels_commits_and_expires_its_draft() {
+        let mut app = test_native_tui_app();
+        open_simple_review(&mut app);
+
+        assert!(
+            app.handle_shell_overlay_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL))
+        );
+        for _ in 0..3 {
+            assert!(app.handle_shell_overlay_key(key(KeyCode::Backspace)));
+        }
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.max_auto_turns_edit_buffer(), Some("x"));
+        assert_eq!(app.current_max_auto_turns_label(), "off");
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+
+        assert!(
+            app.handle_shell_overlay_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL))
+        );
+        for _ in 0..3 {
+            assert!(app.handle_shell_overlay_key(key(KeyCode::Backspace)));
+        }
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('1'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('2'))));
+        let status = build_planning_init_overlay_view(&app)
+            .status_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(status.contains("value: 12"));
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+        assert_eq!(app.current_max_auto_turns_label(), "12");
+
+        assert!(
+            app.handle_shell_overlay_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL))
+        );
+        assert_eq!(app.max_auto_turns_edit_buffer(), Some("12"));
+        app.show_model_selection_overlay();
+        assert_eq!(app.shell_overlay, ShellOverlay::ModelSelection);
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+
+        open_simple_review(&mut app);
+        assert!(!app.is_max_auto_turns_editing());
+        assert!(
+            app.handle_shell_overlay_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL))
+        );
+        app.close_shell_overlay();
+        assert_eq!(app.max_auto_turns_edit_buffer(), None);
+
+        open_simple_review(&mut app);
+        assert!(!app.is_max_auto_turns_editing());
     }
 
     #[test]

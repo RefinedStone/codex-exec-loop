@@ -12,8 +12,8 @@ pub(super) fn build_simple_review_status_view(
     PlanningSimpleReviewStatusView {
         // status_lines는 현재 상태와 다음 행동을 설명하는 본문 줄이다.
         status_lines: lines::build_simple_review_status_lines(copy),
-        // key_lines는 현재 editing mode에 맞는 shortcut hints다. 같은 copy flag를 써서 status text와
+        // key_lines는 현재 editing mode에 맞는 shortcut hints다. 같은 copy draft를 써서 status text와
         // shortcut guide가 서로 다른 mode를 말하지 않게 한다.
-        key_lines: key_lines::build_simple_review_key_lines(copy.is_turn_budget_editing),
+        key_lines: key_lines::build_simple_review_key_lines(copy.turn_budget_edit_buffer.is_some()),
     }
 }

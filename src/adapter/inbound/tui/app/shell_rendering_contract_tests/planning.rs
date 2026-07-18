@@ -203,13 +203,21 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
             validation_report: PlanningValidationReport::default(),
         });
     app.start_max_auto_turns_edit();
-    app.auto_follow_overlay_ui_state
-        .max_auto_turns_editor
-        .buffer = "12".to_string();
+    for _ in 0..3 {
+        app.pop_max_auto_turns_character();
+    }
+    app.push_max_auto_turns_character('1');
+    app.push_max_auto_turns_character('2');
 
     // Once the turn-budget editor takes focus, generic promotion guidance would
     // be misleading. This locks the mode-specific validation and save hints.
     let view = build_planning_init_overlay_view(&app);
+    let status = view
+        .status_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     let keys = view
         .key_lines
         .iter()
@@ -217,6 +225,7 @@ fn inline_planning_simple_review_renders_editing_specific_key_guidance() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    assert!(status.contains("value: 12"));
     assert!(keys.contains("next action: type the new turn budget directly."));
     assert!(keys.contains("controls: Enter saves"));
     assert!(keys.contains(

@@ -156,6 +156,10 @@ queue, GitHub, transcript, layout, animation, and prompt-focus helpers do not re
 `NativeTuiApp` or application service handles. Conversation semantic state stores messages, not
 cached Ratatui `Line` values.
 
+The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft. When the editor
+is closed, status and review presentation read the canonical policy from the conversation model;
+the adapter does not retain or reverse-sync a second budget value.
+
 The detailed, test-guarded contract is
 [TUI Layered Architecture](../design/07-tui-layered-architecture-and-aesthetic-contract.md).
 
