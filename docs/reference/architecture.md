@@ -42,6 +42,11 @@ and post-turn evaluation use this flow. Parallel mutation remains application-ow
 through `ParallelModeControlPlaneHandle`; core may copy the projection but must not own a second
 parallel runtime.
 
+Turn submission admission is core-owned and single-flight. The TUI stages prompt intent without
+clearing the editor or appending transcript history, then commits that local projection only after
+core emits an accepted admission. An active submission produces an explicit rejection event and no
+worker effect, so adapter and core state cannot diverge into a phantom "starting turn".
+
 An accepted post-turn completion updates the core planning-runtime projection in the same
 correlated dispatch. TUI conversation state does not retain a second planning-runtime copy.
 

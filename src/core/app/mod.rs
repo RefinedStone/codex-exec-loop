@@ -41,4 +41,6 @@ pub use turn_stream::{
     TurnStreamEvent, TurnStreamProgressiveActivityUpdate, TurnStreamRuntimeEnvelopeRejection,
     TurnStreamSnapshot, TurnStreamState, TurnStreamTerminalSnapshot, TurnStreamUpdate,
 };
-pub use turn_submission::{CorePromptOrigin, TurnSubmissionCorrelation, TurnSubmissionRequest};
+pub use turn_submission::{
+    CorePromptOrigin, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+};

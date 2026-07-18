@@ -2,7 +2,7 @@ use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
     CoreEffectCompletion, CoreInput, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
     SessionRenameCorrelation, StartupCheckCorrelation, TurnStreamEvent, TurnStreamState,
-    TurnStreamUpdate, TurnSubmissionCorrelation,
+    TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::ManualPromptCorrelation;
@@ -176,12 +176,20 @@ impl CoreController {
                 self.unchanged_outcome()
             }
             CoreInput::Command(AppCommand::SubmitTurn(request)) => {
-                if self.active_turn_submission.is_some() {
-                    return self.unchanged_outcome();
+                if let Some(active_correlation) = self.active_turn_submission {
+                    return CoreDispatchOutcome {
+                        events: vec![AppEvent::TurnSubmissionAdmissionResolved(
+                            TurnSubmissionAdmission::RejectedActive { active_correlation },
+                        )],
+                        effects: Vec::new(),
+                        snapshot: self.snapshot(),
+                    };
                 }
                 let correlation = self.begin_turn_submission();
                 CoreDispatchOutcome {
-                    events: Vec::new(),
+                    events: vec![AppEvent::TurnSubmissionAdmissionResolved(
+                        TurnSubmissionAdmission::Accepted { correlation },
+                    )],
                     effects: vec![CoreEffect::SubmitTurn {
                         correlation,
                         request,
@@ -1367,7 +1375,14 @@ mod tests {
         let outcome =
             controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(request.clone())));
 
-        assert!(outcome.events.is_empty());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::Accepted {
+                    correlation: TurnSubmissionCorrelation::new(1),
+                },
+            )]
+        );
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::SubmitTurn {
@@ -1390,7 +1405,22 @@ mod tests {
             controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(second)));
 
         assert_eq!(first_outcome.effects.len(), 1);
-        assert!(second_outcome.events.is_empty());
+        assert_eq!(
+            first_outcome.events,
+            vec![AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::Accepted {
+                    correlation: TurnSubmissionCorrelation::new(1),
+                },
+            )]
+        );
+        assert_eq!(
+            second_outcome.events,
+            vec![AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedActive {
+                    active_correlation: TurnSubmissionCorrelation::new(1),
+                },
+            )]
+        );
         assert!(second_outcome.effects.is_empty());
     }
 

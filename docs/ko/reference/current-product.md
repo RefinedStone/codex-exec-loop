@@ -67,7 +67,8 @@ Modal이 focus를 소유할 때는 전역 키보다 우선할 수 있으며, 표
 ## Turn과 approval 흐름
 
 1. 시작 진단 중에도 입력을 작성할 수 있지만 제출은 준비 상태를 기다립니다.
-2. Core가 turn effect를 실행하고 typed app-server stream event를 app state로 reduce합니다.
+2. Core는 한 번에 하나의 turn submission만 승인합니다. Accepted dispatch는 정확히 하나의 worker
+   effect를 발행하고, TUI가 editor를 비우고 transcript history에 prompt를 추가하도록 허용합니다.
 3. 활성 출력은 live inline tail에 머물고 최종 assistant 출력은 committed history로 이동합니다.
 4. Typed activity, runtime notice, approval, warning은 같은 shell projection을 갱신합니다.
 5. Post-turn 평가는 승인된 planning 상태에 따라 continuation을 진행·일시정지·종료합니다.

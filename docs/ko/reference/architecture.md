@@ -40,6 +40,11 @@ Mapping은 adapter에, policy는 domain 또는 application service에 둡니다.
 사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.
 Core는 projection을 복사할 수 있지만 두 번째 parallel runtime을 소유하면 안 됩니다.
 
+Turn submission admission은 core가 소유하는 single-flight 권한입니다. TUI는 prompt intent 단계에서
+editor를 지우거나 transcript history를 추가하지 않고, core가 accepted admission을 반환한 뒤에만
+로컬 projection을 확정합니다. 활성 submission이 있으면 core는 명시적 rejection event를 내보내고
+worker effect를 만들지 않으므로 adapter와 core가 가짜 `starting turn` 상태로 갈라지지 않습니다.
+
 Session rename도 core-correlated single-flight 작업입니다. Provider의 성공 응답을 core가 수락하면
 일치하는 catalog row, 불러온 conversation title, stream identity를 함께 갱신합니다. 충돌하는
 catalog load와 같은 thread의 conversation load는 버리지 않고 rename 완료 뒤로 지연하므로 예전

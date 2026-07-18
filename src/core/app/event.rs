@@ -7,7 +7,9 @@ use super::{
     StartupCheckCorrelation,
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
-use super::{TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionCorrelation};
+use super::{
+    TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionAdmission, TurnSubmissionCorrelation,
+};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::{ManualPromptOutcome, PostTurnExecution, RuntimeProjection};
 
@@ -93,6 +95,7 @@ pub enum AppEvent {
         thread_id: String,
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
+    TurnSubmissionAdmissionResolved(TurnSubmissionAdmission),
     TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationCompleted(Box<PostTurnExecution>),

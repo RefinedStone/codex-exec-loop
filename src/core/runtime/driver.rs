@@ -103,7 +103,7 @@ mod tests {
     use crate::core::app::{
         AppEvent, CoreEffectCompletion, CorePromptOrigin, StartupAttachmentSnapshot,
         StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
-        TurnSubmissionRequest,
+        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
 
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_turn_command_runs_submit_turn_effect_without_snapshot_change() {
+    fn submit_turn_admission_runs_exactly_one_worker_until_the_active_turn_closes() {
         let (_tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
@@ -203,16 +203,63 @@ mod tests {
             slot_lease_handoff: None,
         };
 
-        let outcome = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
+        let first = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
+        let rejected = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
 
-        assert!(outcome.events.is_empty());
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            first.events,
+            vec![AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::Accepted {
+                    correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                },
+            )]
+        );
+        assert_eq!(
+            rejected.events,
+            vec![AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedActive {
+                    active_correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                },
+            )]
+        );
+        assert!(rejected.effects.is_empty());
+        assert_eq!(first.snapshot, AppSnapshot::initial());
         assert_eq!(
             effects.recorded_effects(),
             vec![CoreEffect::SubmitTurn {
                 correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
-                request,
+                request: request.clone(),
             }]
+        );
+
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+            event: TurnStreamEvent::Failed {
+                message: "worker stopped before turn/start".to_string(),
+            },
+        });
+        let retried = runtime.dispatch_command(AppCommand::SubmitTurn(request.clone()));
+
+        assert_eq!(
+            retried.events,
+            vec![AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::Accepted {
+                    correlation: crate::core::app::TurnSubmissionCorrelation::new(2),
+                },
+            )]
+        );
+        assert_eq!(
+            effects.recorded_effects(),
+            vec![
+                CoreEffect::SubmitTurn {
+                    correlation: crate::core::app::TurnSubmissionCorrelation::new(1),
+                    request: request.clone(),
+                },
+                CoreEffect::SubmitTurn {
+                    correlation: crate::core::app::TurnSubmissionCorrelation::new(2),
+                    request,
+                },
+            ]
         );
     }
 

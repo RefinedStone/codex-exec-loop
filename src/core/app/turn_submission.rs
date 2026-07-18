@@ -13,6 +13,16 @@ impl TurnSubmissionCorrelation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnSubmissionAdmission {
+    Accepted {
+        correlation: TurnSubmissionCorrelation,
+    },
+    RejectedActive {
+        active_correlation: TurnSubmissionCorrelation,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CorePromptOrigin {
     Manual,
     ManualIntake,
