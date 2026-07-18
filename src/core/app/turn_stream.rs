@@ -107,6 +107,25 @@ impl TurnStreamState {
         self.last_applied_post_turn_evaluation_id = None;
     }
 
+    pub fn matches_thread(&self, thread_id: &str) -> bool {
+        self.thread_id.as_deref() == Some(thread_id)
+    }
+
+    pub fn apply_session_rename(
+        &mut self,
+        thread_id: &str,
+        title: &str,
+    ) -> Option<TurnStreamSnapshot> {
+        if self.thread_id.as_deref() != Some(thread_id) || self.title.as_deref() == Some(title) {
+            return None;
+        }
+        self.title = Some(title.to_string());
+        Some(self.snapshot(TurnStreamUpdate::SessionRenamed {
+            thread_id: thread_id.to_string(),
+            title: title.to_string(),
+        }))
+    }
+
     pub fn apply_stream_event(&mut self, event: TurnStreamEvent) -> TurnStreamSnapshot {
         let update = match event {
             TurnStreamEvent::AttachmentObserved { profile } => {
@@ -574,6 +593,10 @@ pub enum TurnStreamUpdate {
     AttachmentObserved {
         profile: TerminalBridgeAttachmentProfile,
     },
+    SessionRenamed {
+        thread_id: String,
+        title: String,
+    },
     ThreadPrepared {
         thread_id: String,
         title: String,
@@ -870,6 +893,36 @@ mod tests {
         assert_eq!(snapshot.title.as_deref(), Some("Loaded thread"));
         assert_eq!(snapshot.cwd.as_deref(), Some("/tmp/loaded"));
         assert_eq!(snapshot.status_text, None);
+    }
+
+    #[test]
+    fn session_rename_updates_only_matching_stream_identity() {
+        let mut state = TurnStreamState::new();
+        state.seed_loaded_thread_identity("thread-loaded", "Loaded thread", "/tmp/loaded");
+
+        assert!(
+            state
+                .apply_session_rename("thread-other", "Other title")
+                .is_none()
+        );
+        let snapshot = state
+            .apply_session_rename("thread-loaded", "Renamed thread")
+            .expect("matching rename should publish a stream snapshot");
+        assert!(
+            state
+                .apply_session_rename("thread-loaded", "Renamed thread")
+                .is_none()
+        );
+
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(snapshot.title.as_deref(), Some("Renamed thread"));
+        assert_eq!(
+            snapshot.update,
+            TurnStreamUpdate::SessionRenamed {
+                thread_id: "thread-loaded".to_string(),
+                title: "Renamed thread".to_string(),
+            }
+        );
     }
 
     #[test]

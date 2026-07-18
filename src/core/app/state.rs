@@ -4,6 +4,7 @@ use super::{
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::RuntimeProjection;
+use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
@@ -62,6 +63,39 @@ impl AppState {
             Err(message) => SessionCatalogState::Failed(message),
         };
         self.advance_revision();
+    }
+
+    pub fn apply_session_rename(&mut self, request: &SessionRenameRequest) -> bool {
+        let mut changed = false;
+        if let SessionCatalogState::Ready(ready) = &mut self.session_catalog
+            && let SessionCatalog::Ready {
+                recent_sessions, ..
+            } = ready.catalog.as_mut()
+            && let Some(session) = recent_sessions
+                .items
+                .iter_mut()
+                .find(|session| session.id == request.thread_id)
+            && session.name.as_deref() != Some(request.name.as_str())
+        {
+            session.name = Some(request.name.clone());
+            changed = true;
+        }
+        if let super::ConversationState::Ready(ready) = &mut self.conversation
+            && ready.thread_id == request.thread_id
+        {
+            if ready.title != request.name {
+                ready.title = request.name.clone();
+                changed = true;
+            }
+            if ready.conversation.title != request.name {
+                ready.conversation.title = request.name.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            self.advance_revision();
+        }
+        changed
     }
 
     pub fn mark_conversation_loading(&mut self) {

@@ -16,7 +16,8 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
     ConversationLoadCorrelation, ConversationReadySnapshot, ConversationThreadReviewSnapshot,
-    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, StartupCheckCorrelation,
+    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -83,6 +84,10 @@ impl CoreEffectRunner {
                 self.spawn_session_catalog_load(correlation, limit, workspace_directory);
                 None
             }
+            CoreEffect::RenameSession { correlation } => {
+                self.spawn_session_rename(correlation);
+                None
+            }
             CoreEffect::LoadConversation {
                 correlation,
                 fallback_workspace_directory,
@@ -130,6 +135,16 @@ impl CoreEffectRunner {
                 correlation,
                 session_service.load_session_catalog(request),
             );
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
+    pub fn spawn_session_rename(&self, correlation: SessionRenameCorrelation) {
+        let session_service = self.session_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = session_service.rename_session(correlation.request.clone());
+            let completion = session_rename_completion(correlation, result);
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -219,6 +234,16 @@ fn session_catalog_completion(
     }
 }
 
+fn session_rename_completion(
+    correlation: SessionRenameCorrelation,
+    result: Result<()>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::SessionRenamed {
+        correlation,
+        result: result.map_err(|error| error.to_string()),
+    }
+}
+
 fn conversation_snapshot_completion(
     correlation: ConversationLoadCorrelation,
     result: Result<LoadedConversationThreadSnapshot>,
@@ -295,7 +320,9 @@ mod tests {
     use super::*;
     use crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection;
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalogTier};
+    use crate::domain::recent_sessions::{
+        RecentSessions, SessionCatalogTier, SessionRenameRequest,
+    };
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
 
     fn startup_correlation() -> StartupCheckCorrelation {
@@ -304,6 +331,10 @@ mod tests {
 
     fn session_catalog_correlation() -> SessionCatalogLoadCorrelation {
         SessionCatalogLoadCorrelation::new(8)
+    }
+
+    fn session_rename_correlation() -> SessionRenameCorrelation {
+        SessionRenameCorrelation::new(9, SessionRenameRequest::new("thread-1", "Renamed"))
     }
 
     fn conversation_correlation(thread_id: &str) -> ConversationLoadCorrelation {
@@ -421,6 +452,27 @@ mod tests {
             CoreEffectCompletion::SessionCatalogLoaded {
                 correlation: session_catalog_correlation(),
                 result: Err("catalog unavailable".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn session_rename_result_maps_to_exact_core_completion() {
+        assert_eq!(
+            session_rename_completion(session_rename_correlation(), Ok(())),
+            CoreEffectCompletion::SessionRenamed {
+                correlation: session_rename_correlation(),
+                result: Ok(()),
+            }
+        );
+        assert_eq!(
+            session_rename_completion(
+                session_rename_correlation(),
+                Err(anyhow::anyhow!("rename unavailable")),
+            ),
+            CoreEffectCompletion::SessionRenamed {
+                correlation: session_rename_correlation(),
+                result: Err("rename unavailable".to_string()),
             }
         );
     }

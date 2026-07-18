@@ -1,7 +1,8 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
-    CoreEffectCompletion, CoreInput, SessionCatalogLoadCorrelation, StartupCheckCorrelation,
-    TurnStreamEvent, TurnStreamState, TurnStreamUpdate, TurnSubmissionCorrelation,
+    CoreEffectCompletion, CoreInput, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
+    SessionRenameCorrelation, StartupCheckCorrelation, TurnStreamEvent, TurnStreamState,
+    TurnStreamUpdate, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::ManualPromptCorrelation;
@@ -21,8 +22,13 @@ pub struct CoreController {
     in_flight_startup_check: Option<StartupCheckCorrelation>,
     next_session_catalog_load_generation: u64,
     in_flight_session_catalog_load: Option<SessionCatalogLoadCorrelation>,
+    next_session_rename_generation: u64,
+    in_flight_session_rename: Option<SessionRenameCorrelation>,
+    guarded_session_rename_stream: Option<(TurnSubmissionCorrelation, SessionRenameCorrelation)>,
+    deferred_session_catalog_load: Option<(usize, String)>,
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
+    deferred_conversation_load: Option<(String, String)>,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
@@ -37,8 +43,13 @@ impl CoreController {
             in_flight_startup_check: None,
             next_session_catalog_load_generation: 1,
             in_flight_session_catalog_load: None,
+            next_session_rename_generation: 1,
+            in_flight_session_rename: None,
+            guarded_session_rename_stream: None,
+            deferred_session_catalog_load: None,
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
+            deferred_conversation_load: None,
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
@@ -72,43 +83,64 @@ impl CoreController {
                 limit,
                 workspace_directory,
             }) => {
-                let correlation = SessionCatalogLoadCorrelation::new(take_generation(
-                    &mut self.next_session_catalog_load_generation,
-                    "session catalog load",
-                ));
-                self.in_flight_session_catalog_load = Some(correlation);
-                self.state.mark_session_catalog_loading();
-                self.session_catalog_changed_outcome(vec![CoreEffect::LoadSessionCatalog {
-                    correlation,
-                    limit,
-                    workspace_directory,
-                }])
+                if self.in_flight_session_rename.is_some() {
+                    self.deferred_session_catalog_load = Some((limit, workspace_directory));
+                    return self.unchanged_outcome();
+                }
+                self.start_session_catalog_load(limit, workspace_directory)
+            }
+            CoreInput::Command(AppCommand::RenameSession(request)) => {
+                if self.in_flight_session_rename.is_some() {
+                    return self.unchanged_outcome();
+                }
+                let correlation = SessionRenameCorrelation::new(
+                    take_generation(&mut self.next_session_rename_generation, "session rename"),
+                    request,
+                );
+                if self.in_flight_session_catalog_load.is_some() {
+                    return self.session_rename_rejected_outcome(
+                        correlation,
+                        "session rename is unavailable while the session catalog is loading",
+                    );
+                }
+                if self
+                    .in_flight_conversation_load
+                    .as_ref()
+                    .is_some_and(|load| load.requested_thread_id == correlation.request.thread_id)
+                {
+                    return self.session_rename_rejected_outcome(
+                        correlation,
+                        "session rename is unavailable while that conversation is loading",
+                    );
+                }
+                self.in_flight_session_rename = Some(correlation.clone());
+                CoreDispatchOutcome {
+                    events: Vec::new(),
+                    effects: vec![CoreEffect::RenameSession { correlation }],
+                    snapshot: self.snapshot(),
+                }
             }
             CoreInput::Command(AppCommand::LoadConversation {
                 thread_id,
                 fallback_workspace_directory,
             }) => {
-                self.active_turn_submission = None;
-                let correlation = ConversationLoadCorrelation::new(
-                    take_generation(
-                        &mut self.next_conversation_load_generation,
-                        "conversation load",
-                    ),
-                    thread_id,
-                );
-                self.in_flight_conversation_load = Some(correlation.clone());
-                self.state.mark_conversation_loading();
-                self.conversation_changed_outcome(
-                    Some(correlation.clone()),
-                    vec![CoreEffect::LoadConversation {
-                        correlation,
-                        fallback_workspace_directory,
-                    }],
-                )
+                if self
+                    .in_flight_session_rename
+                    .as_ref()
+                    .is_some_and(|rename| rename.request.thread_id == thread_id)
+                {
+                    self.deferred_conversation_load =
+                        Some((thread_id, fallback_workspace_directory));
+                    return self.unchanged_outcome();
+                }
+                self.deferred_conversation_load = None;
+                self.start_conversation_load(thread_id, fallback_workspace_directory)
             }
             CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
+                self.deferred_conversation_load = None;
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.guarded_session_rename_stream = None;
                 self.state.reset_conversation();
                 self.turn_stream_state = TurnStreamState::new();
                 self.conversation_changed_outcome(None, Vec::new())
@@ -184,6 +216,47 @@ impl CoreController {
                 self.state.apply_session_catalog_result(result);
                 self.session_catalog_changed_outcome(Vec::new())
             }
+            CoreInput::EffectCompleted(CoreEffectCompletion::SessionRenamed {
+                correlation,
+                result,
+            }) => {
+                if self.in_flight_session_rename.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.in_flight_session_rename = None;
+                let result = result.map(|()| {
+                    self.state.apply_session_rename(&correlation.request);
+                    if self
+                        .turn_stream_state
+                        .matches_thread(&correlation.request.thread_id)
+                        && let Some(turn_correlation) = self.active_turn_submission
+                    {
+                        self.guarded_session_rename_stream =
+                            Some((turn_correlation, correlation.clone()));
+                    }
+                    SessionRenameAcceptedSnapshot {
+                        session_catalog: self.snapshot().session_catalog,
+                        turn_stream: self
+                            .turn_stream_state
+                            .apply_session_rename(
+                                &correlation.request.thread_id,
+                                &correlation.request.name,
+                            )
+                            .map(Box::new),
+                    }
+                });
+                let mut events = vec![AppEvent::SessionRenameCompleted {
+                    correlation,
+                    result,
+                }];
+                let mut effects = Vec::new();
+                self.start_deferred_session_reads(&mut events, &mut effects);
+                CoreDispatchOutcome {
+                    events,
+                    effects,
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::ConversationLoaded {
                 correlation,
                 mut result,
@@ -219,6 +292,7 @@ impl CoreController {
                 };
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.guarded_session_rename_stream = None;
                 self.state.apply_conversation_result(result);
                 self.turn_stream_state = TurnStreamState::new();
                 if let Some((thread_id, title, cwd, item_lifecycle)) = loaded_stream_identity {
@@ -341,6 +415,69 @@ impl CoreController {
         }
     }
 
+    fn start_session_catalog_load(
+        &mut self,
+        limit: usize,
+        workspace_directory: String,
+    ) -> CoreDispatchOutcome {
+        let correlation = SessionCatalogLoadCorrelation::new(take_generation(
+            &mut self.next_session_catalog_load_generation,
+            "session catalog load",
+        ));
+        self.in_flight_session_catalog_load = Some(correlation);
+        self.state.mark_session_catalog_loading();
+        self.session_catalog_changed_outcome(vec![CoreEffect::LoadSessionCatalog {
+            correlation,
+            limit,
+            workspace_directory,
+        }])
+    }
+
+    fn start_conversation_load(
+        &mut self,
+        thread_id: String,
+        fallback_workspace_directory: String,
+    ) -> CoreDispatchOutcome {
+        self.active_turn_submission = None;
+        self.guarded_session_rename_stream = None;
+        let correlation = ConversationLoadCorrelation::new(
+            take_generation(
+                &mut self.next_conversation_load_generation,
+                "conversation load",
+            ),
+            thread_id,
+        );
+        self.in_flight_conversation_load = Some(correlation.clone());
+        self.state.mark_conversation_loading();
+        self.turn_stream_state = TurnStreamState::new();
+        self.conversation_changed_outcome(
+            Some(correlation.clone()),
+            vec![CoreEffect::LoadConversation {
+                correlation,
+                fallback_workspace_directory,
+            }],
+        )
+    }
+
+    fn start_deferred_session_reads(
+        &mut self,
+        events: &mut Vec<AppEvent>,
+        effects: &mut Vec<CoreEffect>,
+    ) {
+        if let Some((limit, workspace_directory)) = self.deferred_session_catalog_load.take() {
+            let outcome = self.start_session_catalog_load(limit, workspace_directory);
+            events.extend(outcome.events);
+            effects.extend(outcome.effects);
+        }
+        if let Some((thread_id, fallback_workspace_directory)) =
+            self.deferred_conversation_load.take()
+        {
+            let outcome = self.start_conversation_load(thread_id, fallback_workspace_directory);
+            events.extend(outcome.events);
+            effects.extend(outcome.effects);
+        }
+    }
+
     fn snapshot_changed_outcome(&self, changed: bool) -> CoreDispatchOutcome {
         let snapshot = self.snapshot();
         CoreDispatchOutcome {
@@ -359,6 +496,7 @@ impl CoreController {
             &mut self.next_turn_submission_generation,
             "turn submission",
         ));
+        self.guarded_session_rename_stream = None;
         self.active_turn_submission = Some(correlation);
         self.turn_stream_state.begin_submission();
         correlation
@@ -367,12 +505,26 @@ impl CoreController {
     fn apply_correlated_turn_stream_event(
         &mut self,
         correlation: TurnSubmissionCorrelation,
-        event: TurnStreamEvent,
+        mut event: TurnStreamEvent,
     ) -> CoreDispatchOutcome {
         if self.active_turn_submission != Some(correlation) {
             return self.unchanged_outcome();
         }
 
+        if let TurnStreamEvent::ThreadPrepared {
+            thread_id, title, ..
+        } = &mut event
+            && let Some(guarded_rename) = self
+                .guarded_session_rename_stream
+                .as_ref()
+                .filter(|(turn, _)| *turn == correlation)
+                .map(|(_, rename)| rename.clone())
+        {
+            if thread_id == &guarded_rename.request.thread_id {
+                *title = guarded_rename.request.name;
+            }
+            self.guarded_session_rename_stream = None;
+        }
         let stream_snapshot = self.turn_stream_state.apply_stream_event(event);
         let closes_submission = matches!(
             &stream_snapshot.update,
@@ -395,8 +547,10 @@ impl CoreController {
                 });
             events.push(AppEvent::turn_stream_snapshot_changed(failed));
             self.active_turn_submission = None;
+            self.guarded_session_rename_stream = None;
         } else if closes_submission {
             self.active_turn_submission = None;
+            self.guarded_session_rename_stream = None;
         }
 
         CoreDispatchOutcome {
@@ -447,6 +601,21 @@ impl CoreController {
             )],
             effects,
             snapshot,
+        }
+    }
+
+    fn session_rename_rejected_outcome(
+        &self,
+        correlation: SessionRenameCorrelation,
+        message: &str,
+    ) -> CoreDispatchOutcome {
+        CoreDispatchOutcome {
+            events: vec![AppEvent::SessionRenameCompleted {
+                correlation,
+                result: Err(message.to_string()),
+            }],
+            effects: Vec::new(),
+            snapshot: self.snapshot(),
         }
     }
 
@@ -508,7 +677,8 @@ mod tests {
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::planning::TurnSnapshotCapture;
-    use crate::domain::recent_sessions::RecentSessions;
+    use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
+    use crate::domain::session_summary::SessionSummary;
 
     fn manual_prompt_correlation() -> crate::domain::planning::ManualPromptCorrelation {
         crate::domain::planning::ManualPromptCorrelation {
@@ -527,6 +697,14 @@ mod tests {
         thread_id: &str,
     ) -> ConversationLoadCorrelation {
         ConversationLoadCorrelation::new(generation, thread_id)
+    }
+
+    fn session_rename_correlation(
+        generation: u64,
+        thread_id: &str,
+        name: &str,
+    ) -> SessionRenameCorrelation {
+        SessionRenameCorrelation::new(generation, SessionRenameRequest::new(thread_id, name))
     }
 
     #[test]
@@ -706,6 +884,423 @@ mod tests {
                 workspace_directory: "/tmp/workspace".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn rename_session_dispatches_core_effect_without_changing_snapshot() {
+        let mut controller = CoreController::new();
+        let request = SessionRenameRequest::new("thread-1", "Renamed");
+
+        let outcome =
+            controller.handle_input(CoreInput::Command(AppCommand::RenameSession(request)));
+
+        assert!(outcome.events.is_empty());
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::RenameSession {
+                correlation: session_rename_correlation(1, "thread-1", "Renamed"),
+            }]
+        );
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+    }
+
+    #[test]
+    fn matching_session_rename_updates_core_projections_in_one_revision() {
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        load_test_conversation(&mut controller, "thread-beta");
+        let revision_before_rename = controller.snapshot().revision;
+        let correlation = session_rename_correlation(1, "thread-beta", "Beta renamed");
+        let command = controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            correlation.request.clone(),
+        )));
+        assert!(matches!(
+            command.effects.as_slice(),
+            [CoreEffect::RenameSession {
+                correlation: effect_correlation
+            }] if effect_correlation == &correlation
+        ));
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: correlation.clone(),
+                result: Ok(()),
+            },
+        ));
+
+        assert_eq!(outcome.snapshot.revision, revision_before_rename + 1);
+        let SessionCatalogSnapshot::Ready(catalog) = &outcome.snapshot.session_catalog else {
+            panic!("session catalog should remain ready");
+        };
+        let sessions = catalog
+            .catalog
+            .recent_sessions()
+            .expect("ready catalog should expose rows");
+        assert_eq!(
+            sessions
+                .items
+                .iter()
+                .find(|session| session.id == "thread-alpha")
+                .and_then(|session| session.name.as_deref()),
+            Some("Alpha")
+        );
+        assert_eq!(
+            sessions
+                .items
+                .iter()
+                .find(|session| session.id == "thread-beta")
+                .and_then(|session| session.name.as_deref()),
+            Some("Beta renamed")
+        );
+        let ConversationSnapshot::Ready(conversation) = &outcome.snapshot.conversation else {
+            panic!("conversation should remain ready");
+        };
+        assert_eq!(conversation.title, "Beta renamed");
+        assert_eq!(conversation.conversation.title, "Beta renamed");
+        let [
+            AppEvent::SessionRenameCompleted {
+                correlation: event_correlation,
+                result: Ok(accepted),
+            },
+        ] = outcome.events.as_slice()
+        else {
+            panic!("matching rename should publish one accepted projection");
+        };
+        assert_eq!(event_correlation, &correlation);
+        assert_eq!(
+            accepted.session_catalog,
+            outcome.snapshot.session_catalog.clone()
+        );
+        let stream = accepted
+            .turn_stream
+            .as_deref()
+            .expect("matching loaded conversation should publish stream identity");
+        assert_eq!(stream.title.as_deref(), Some("Beta renamed"));
+        assert_eq!(
+            stream.update,
+            TurnStreamUpdate::SessionRenamed {
+                thread_id: "thread-beta".to_string(),
+                title: "Beta renamed".to_string(),
+            }
+        );
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn session_rename_does_not_change_another_loaded_conversation() {
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        load_test_conversation(&mut controller, "thread-alpha");
+        let correlation = session_rename_correlation(1, "thread-beta", "Beta renamed");
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            correlation.request.clone(),
+        )));
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation,
+                result: Ok(()),
+            },
+        ));
+
+        let ConversationSnapshot::Ready(conversation) = outcome.snapshot.conversation else {
+            panic!("conversation should remain ready");
+        };
+        assert_eq!(conversation.thread_id, "thread-alpha");
+        assert_eq!(conversation.title, "Core runtime");
+        assert_eq!(conversation.conversation.title, "Core runtime");
+    }
+
+    #[test]
+    fn renamed_title_wins_over_a_late_same_thread_prepared_event() {
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        load_test_conversation(&mut controller, "thread-beta");
+        let correlation = session_rename_correlation(1, "thread-beta", "Beta renamed");
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            correlation.request.clone(),
+        )));
+        let turn = submit_test_turn(&mut controller, Some("thread-beta"));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation,
+                result: Ok(()),
+            },
+        ));
+
+        let outcome = controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-beta".to_string(),
+                title: "Stale provider title".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if snapshot.title.as_deref() == Some("Beta renamed")
+                    && matches!(
+                        &snapshot.update,
+                        TurnStreamUpdate::ThreadPrepared { title, .. }
+                            if title == "Beta renamed"
+                    )
+        ));
+    }
+
+    #[test]
+    fn provider_title_is_accepted_for_a_turn_started_after_rename() {
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        load_test_conversation(&mut controller, "thread-beta");
+        let correlation = session_rename_correlation(1, "thread-beta", "Beta renamed");
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            correlation.request.clone(),
+        )));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation,
+                result: Ok(()),
+            },
+        ));
+
+        let turn = submit_test_turn(&mut controller, Some("thread-beta"));
+        let outcome = controller.handle_input(test_turn_stream_input(
+            turn,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-beta".to_string(),
+                title: "Provider retitled".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if snapshot.title.as_deref() == Some("Provider retitled")
+                    && matches!(
+                        &snapshot.update,
+                        TurnStreamUpdate::ThreadPrepared { title, .. }
+                            if title == "Provider retitled"
+                    )
+        ));
+    }
+
+    #[test]
+    fn session_rename_failure_and_stale_completions_leave_snapshot_unchanged() {
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        load_test_conversation(&mut controller, "thread-alpha");
+        let snapshot_before_rename = controller.snapshot();
+        let correlation = session_rename_correlation(1, "thread-alpha", "Renamed");
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            correlation.request.clone(),
+        )));
+        let duplicate_command = controller.handle_input(CoreInput::Command(
+            AppCommand::RenameSession(SessionRenameRequest::new("thread-2", "Other")),
+        ));
+        assert!(duplicate_command.events.is_empty());
+        assert!(duplicate_command.effects.is_empty());
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: session_rename_correlation(99, "thread-alpha", "Renamed"),
+                result: Ok(()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(stale.snapshot, snapshot_before_rename);
+
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: correlation.clone(),
+                result: Err("provider unavailable".to_string()),
+            },
+        ));
+        assert_eq!(failed.snapshot, snapshot_before_rename);
+        assert!(matches!(
+            failed.events.as_slice(),
+            [AppEvent::SessionRenameCompleted {
+                correlation: event_correlation,
+                result: Err(message),
+            }] if event_correlation == &correlation && message == "provider unavailable"
+        ));
+
+        let duplicate_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation,
+                result: Ok(()),
+            },
+        ));
+        assert!(duplicate_completion.events.is_empty());
+        assert_eq!(duplicate_completion.snapshot, snapshot_before_rename);
+    }
+
+    #[test]
+    fn session_rename_success_without_a_projected_row_keeps_revision() {
+        let mut controller = CoreController::new();
+        let correlation = session_rename_correlation(1, "thread-unloaded", "Renamed");
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            correlation.request.clone(),
+        )));
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: correlation.clone(),
+                result: Ok(()),
+            },
+        ));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::SessionRenameCompleted {
+                correlation,
+                result: Ok(SessionRenameAcceptedSnapshot {
+                    session_catalog: SessionCatalogSnapshot::Idle,
+                    turn_stream: None,
+                }),
+            }]
+        );
+    }
+
+    #[test]
+    fn session_rename_rejects_conflicting_loads_but_allows_other_thread_load() {
+        let mut catalog_loading = CoreController::new();
+        catalog_loading.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
+            limit: 10,
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        let rejected = catalog_loading.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            SessionRenameRequest::new("thread-1", "Renamed"),
+        )));
+        assert!(rejected.effects.is_empty());
+        assert!(matches!(
+            rejected.events.as_slice(),
+            [AppEvent::SessionRenameCompleted {
+                result: Err(message),
+                ..
+            }] if message.contains("catalog is loading")
+        ));
+
+        let mut same_thread_loading = CoreController::new();
+        same_thread_loading.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-1".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        let rejected = same_thread_loading.handle_input(CoreInput::Command(
+            AppCommand::RenameSession(SessionRenameRequest::new("thread-1", "Renamed")),
+        ));
+        assert!(rejected.effects.is_empty());
+        assert!(matches!(
+            rejected.events.as_slice(),
+            [AppEvent::SessionRenameCompleted {
+                result: Err(message),
+                ..
+            }] if message.contains("conversation is loading")
+        ));
+
+        let accepted = same_thread_loading.handle_input(CoreInput::Command(
+            AppCommand::RenameSession(SessionRenameRequest::new("thread-2", "Other renamed")),
+        ));
+        assert!(matches!(
+            accepted.effects.as_slice(),
+            [CoreEffect::RenameSession { correlation }]
+                if correlation.request.thread_id == "thread-2"
+        ));
+    }
+
+    #[test]
+    fn active_session_rename_defers_conflicting_reads_and_allows_other_thread_load() {
+        let mut catalog = CoreController::new();
+        let catalog_rename = session_rename_correlation(1, "thread-1", "Renamed");
+        catalog.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            catalog_rename.request.clone(),
+        )));
+        let deferred = catalog.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
+            limit: 10,
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        assert!(deferred.events.is_empty());
+        assert!(deferred.effects.is_empty());
+        let resumed = catalog.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: catalog_rename,
+                result: Ok(()),
+            },
+        ));
+        assert!(matches!(
+            resumed.events.as_slice(),
+            [
+                AppEvent::SessionRenameCompleted { result: Ok(_), .. },
+                AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Loading),
+            ]
+        ));
+        assert!(matches!(
+            resumed.effects.as_slice(),
+            [CoreEffect::LoadSessionCatalog {
+                correlation: SessionCatalogLoadCorrelation { generation: 1 },
+                limit: 10,
+                workspace_directory,
+            }] if workspace_directory == "/tmp/workspace"
+        ));
+
+        let mut conversations = CoreController::new();
+        load_test_session_catalog(&mut conversations);
+        load_test_conversation(&mut conversations, "thread-beta");
+        let snapshot_before_rename = conversations.snapshot();
+        let conversation_rename = session_rename_correlation(1, "thread-beta", "Beta renamed");
+        conversations.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            conversation_rename.request.clone(),
+        )));
+        let deferred =
+            conversations.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+                thread_id: "thread-beta".to_string(),
+                fallback_workspace_directory: "/tmp/workspace".to_string(),
+            }));
+        assert!(deferred.effects.is_empty());
+        assert_eq!(deferred.snapshot, snapshot_before_rename);
+        let resumed = conversations.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: conversation_rename,
+                result: Ok(()),
+            },
+        ));
+        assert!(matches!(
+            resumed.events.as_slice(),
+            [
+                AppEvent::SessionRenameCompleted { result: Ok(_), .. },
+                AppEvent::ConversationChanged {
+                    correlation: Some(ConversationLoadCorrelation {
+                        generation: 2,
+                        requested_thread_id,
+                    }),
+                    snapshot: ConversationSnapshot::Loading,
+                },
+            ] if requested_thread_id == "thread-beta"
+        ));
+        assert!(matches!(
+            resumed.effects.as_slice(),
+            [CoreEffect::LoadConversation { correlation, .. }]
+                if correlation.requested_thread_id == "thread-beta"
+        ));
+
+        let mut other_thread = CoreController::new();
+        other_thread.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            SessionRenameRequest::new("thread-1", "Renamed"),
+        )));
+        let allowed = other_thread.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        assert!(matches!(
+            allowed.effects.as_slice(),
+            [CoreEffect::LoadConversation { correlation, .. }]
+                if correlation.requested_thread_id == "thread-2"
+        ));
     }
 
     #[test]
@@ -1973,6 +2568,57 @@ mod tests {
             item_lifecycle: Default::default(),
         }
         .into()
+    }
+
+    fn sample_session_summary(thread_id: &str, name: &str) -> SessionSummary {
+        SessionSummary {
+            id: thread_id.to_string(),
+            name: Some(name.to_string()),
+            preview: format!("{name} preview"),
+            cwd: "/tmp/workspace".to_string(),
+            source: "test".to_string(),
+            model_provider: "test".to_string(),
+            updated_at_epoch: 1,
+            status_type: "ready".to_string(),
+            path: format!("/tmp/workspace/{thread_id}"),
+            git_branch: None,
+        }
+    }
+
+    fn load_test_session_catalog(controller: &mut CoreController) {
+        controller.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
+            limit: 10,
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: SessionCatalogLoadCorrelation::new(1),
+                result: Ok(SessionCatalogReadySnapshot::from_catalog(
+                    RecentSessions {
+                        items: vec![
+                            sample_session_summary("thread-alpha", "Alpha"),
+                            sample_session_summary("thread-beta", "Beta"),
+                        ],
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                )),
+            },
+        ));
+    }
+
+    fn load_test_conversation(controller: &mut CoreController, thread_id: &str) {
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: thread_id.to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, thread_id),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for(thread_id))),
+            },
+        ));
     }
 
     fn confirmed_terminal_receipt(

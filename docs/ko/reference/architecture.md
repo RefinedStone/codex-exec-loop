@@ -40,6 +40,12 @@ Mapping은 adapter에, policy는 domain 또는 application service에 둡니다.
 사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.
 Core는 projection을 복사할 수 있지만 두 번째 parallel runtime을 소유하면 안 됩니다.
 
+Session rename도 core-correlated single-flight 작업입니다. Provider의 성공 응답을 core가 수락하면
+일치하는 catalog row, 불러온 conversation title, stream identity를 함께 갱신합니다. 충돌하는
+catalog load와 같은 thread의 conversation load는 버리지 않고 rename 완료 뒤로 지연하므로 예전
+read가 이전 title을 복원할 수 없습니다. TUI는 core가 수락한 projection과 stream event를 매핑할
+뿐이며 rename editor draft, pending feedback, selected row만 소유합니다.
+
 ## 상태 권한
 
 | 상태 | 권한 소유자 |

@@ -1,10 +1,12 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::{
-    BackgroundMessage, ConversationInputEvent, ConversationIntentEvent, NativeTuiApp,
+    ConversationInputEvent, ConversationIntentEvent, ConversationRuntimeEvent, NativeTuiApp,
     SESSION_PAGE_SIZE, SessionState, ShellChromeEvent, ShellOverlay,
 };
-use crate::domain::recent_sessions::SessionRenameRequest;
+use crate::core::app::{
+    AppCommand, SessionCatalogSnapshot, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
+};
 use crate::domain::session_browser::{
     SessionBrowserPage, SessionBrowserSelection, build_session_browser_page,
 };
@@ -282,7 +284,7 @@ impl NativeTuiApp {
     }
 
     fn submit_session_rename(&mut self) {
-        let Some((request_id, request)) = self
+        let Some(request) = self
             .session_overlay_ui_state
             .prepare_rename_request(self.tui_language)
         else {
@@ -303,63 +305,36 @@ impl NativeTuiApp {
                 .tui_language
                 .session_rename_started_status(&request.name),
         });
-        let application = self.application.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let result = application.rename_session(request.clone());
-            let _ = tx.send(BackgroundMessage::SessionRenameCompleted {
-                request_id,
-                request,
-                result,
-            });
-        });
+        self.dispatch_core_command(AppCommand::RenameSession(request));
     }
 
     pub(super) fn apply_session_rename_completion(
         &mut self,
-        request_id: u64,
-        request: SessionRenameRequest,
-        result: Result<(), String>,
+        correlation: SessionRenameCorrelation,
+        result: Result<SessionRenameAcceptedSnapshot, String>,
     ) {
         if !self
             .session_overlay_ui_state
-            .pending_rename_matches(request_id, &request)
+            .pending_rename_matches(&correlation.request)
         {
             return;
         }
 
         match result {
-            Ok(()) => {
-                if let SessionState::Ready(crate::domain::recent_sessions::SessionCatalog::Ready {
-                    recent_sessions,
-                    ..
-                }) = &mut self.session_state
-                    && let Some(session) = recent_sessions
-                        .items
-                        .iter_mut()
-                        .find(|session| session.id == request.thread_id)
-                {
-                    session.name = Some(request.name.clone());
-                }
-                if self
-                    .active_session
-                    .as_ref()
-                    .map(|session| session.id.as_str())
-                    == Some(request.thread_id.as_str())
-                    && let Some(active_session) = &mut self.active_session
-                {
-                    active_session.name = Some(request.name.clone());
-                }
-                if let super::ConversationState::Ready(conversation) = &mut self.conversation_state
-                    && conversation.thread_id == request.thread_id
-                {
-                    conversation.title = request.name.clone();
+            Ok(accepted) => {
+                self.apply_session_catalog_projection(accepted.session_catalog);
+                if let Some(stream_snapshot) = accepted.turn_stream {
+                    self.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::StreamSnapshotApplied(stream_snapshot),
+                    );
                 }
                 self.session_overlay_ui_state.finish_rename_success();
                 self.session_overlay_ui_state
-                    .set_selected_session_id(Some(request.thread_id.clone()));
+                    .set_selected_session_id(Some(correlation.request.thread_id.clone()));
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: self.tui_language.session_renamed_status(&request.name),
+                    status_text: self
+                        .tui_language
+                        .session_renamed_status(&correlation.request.name),
                 });
             }
             Err(reason) => {
@@ -370,6 +345,15 @@ impl NativeTuiApp {
                 });
             }
         }
+    }
+
+    fn apply_session_catalog_projection(&mut self, snapshot: SessionCatalogSnapshot) {
+        self.session_state = match snapshot {
+            SessionCatalogSnapshot::Idle => SessionState::Idle,
+            SessionCatalogSnapshot::Loading => SessionState::Loading,
+            SessionCatalogSnapshot::Ready(ready) => SessionState::Ready(*ready.catalog),
+            SessionCatalogSnapshot::Failed { message } => SessionState::Failed(message),
+        };
     }
 
     pub(super) fn handle_session_overlay_key(&mut self, key: event::KeyEvent) -> bool {
@@ -428,11 +412,23 @@ impl NativeTuiApp {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    use anyhow::Result;
+
     use super::*;
-    use crate::adapter::inbound::tui::app::ConversationState;
     use crate::adapter::inbound::tui::app::language::TuiLanguage;
-    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
-    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+    use crate::adapter::inbound::tui::app::test_helpers::{
+        test_native_tui_app, test_native_tui_app_with_session_catalog_port,
+    };
+    use crate::adapter::inbound::tui::app::{ConversationState, StartupState};
+    use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
+    use crate::core::app::TurnStreamState;
+    use crate::domain::recent_sessions::{
+        RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
+        SessionRenameRequest,
+    };
     use crate::domain::session_browser::SessionProjectFilter;
 
     fn key(code: KeyCode) -> event::KeyEvent {
@@ -470,8 +466,141 @@ mod tests {
         app.shell_overlay = ShellOverlay::Sessions;
     }
 
+    fn catalog_snapshot(sessions: Vec<SessionSummary>) -> SessionCatalogSnapshot {
+        SessionCatalogSnapshot::Ready(crate::core::app::SessionCatalogReadySnapshot::from_catalog(
+            SessionCatalog::ready(
+                SessionCatalogTier::ProviderBackedCatalog,
+                RecentSessions {
+                    items: sessions,
+                    warnings: Vec::new(),
+                    next_cursor: None,
+                },
+            ),
+        ))
+    }
+
+    fn accepted_rename_snapshot(
+        sessions: Vec<SessionSummary>,
+        thread_id: &str,
+        previous_title: &str,
+        renamed_title: &str,
+    ) -> SessionRenameAcceptedSnapshot {
+        let mut stream = TurnStreamState::new();
+        stream.seed_loaded_thread_identity(thread_id, previous_title, "/tmp/root");
+        SessionRenameAcceptedSnapshot {
+            session_catalog: catalog_snapshot(sessions),
+            turn_stream: stream
+                .apply_session_rename(thread_id, renamed_title)
+                .map(Box::new),
+        }
+    }
+
     fn selected_session_id(app: &NativeTuiApp) -> Option<&str> {
         app.current_session().map(|session| session.id.as_str())
+    }
+
+    struct RecordingSessionCatalogPort {
+        sessions: Mutex<Vec<SessionSummary>>,
+        rename_error: Option<String>,
+        rename_requests: Mutex<Vec<SessionRenameRequest>>,
+        rename_gate: Option<RenameGate>,
+    }
+
+    struct RenameGate {
+        started: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl RecordingSessionCatalogPort {
+        fn new(rename_error: Option<&str>) -> Self {
+            Self {
+                sessions: Mutex::new(vec![session("thread-beta", "Beta draft", "/tmp/root")]),
+                rename_error: rename_error.map(str::to_string),
+                rename_requests: Mutex::new(Vec::new()),
+                rename_gate: None,
+            }
+        }
+
+        fn with_rename_gate(
+            mut self,
+            started: mpsc::SyncSender<()>,
+            release: mpsc::Receiver<()>,
+        ) -> Self {
+            self.rename_gate = Some(RenameGate {
+                started,
+                release: Mutex::new(release),
+            });
+            self
+        }
+    }
+
+    impl SessionCatalogPort for RecordingSessionCatalogPort {
+        fn load_session_catalog(&self, _request: SessionCatalogRequest) -> Result<SessionCatalog> {
+            Ok(SessionCatalog::ready(
+                SessionCatalogTier::ProviderBackedCatalog,
+                RecentSessions {
+                    items: self
+                        .sessions
+                        .lock()
+                        .expect("session catalog mutex poisoned")
+                        .clone(),
+                    warnings: Vec::new(),
+                    next_cursor: None,
+                },
+            ))
+        }
+
+        fn rename_session(&self, request: SessionRenameRequest) -> Result<()> {
+            self.rename_requests
+                .lock()
+                .expect("rename request mutex poisoned")
+                .push(request.clone());
+            if let Some(gate) = &self.rename_gate {
+                gate.started
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("rename test gate start receiver closed"))?;
+                gate.release
+                    .lock()
+                    .expect("rename test gate mutex poisoned")
+                    .recv_timeout(Duration::from_secs(1))
+                    .map_err(|error| {
+                        anyhow::anyhow!("rename test gate was not released: {error}")
+                    })?;
+            }
+            if let Some(error) = &self.rename_error {
+                anyhow::bail!(error.clone());
+            }
+            if let Some(session) = self
+                .sessions
+                .lock()
+                .expect("session catalog mutex poisoned")
+                .iter_mut()
+                .find(|session| session.id == request.thread_id)
+            {
+                session.name = Some(request.name);
+            }
+            Ok(())
+        }
+    }
+
+    fn poll_until(app: &mut NativeTuiApp, complete: impl Fn(&NativeTuiApp) -> bool) {
+        for _ in 0..200 {
+            app.poll_core_runtime_inputs(8);
+            if complete(app) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("core runtime did not settle");
+    }
+
+    fn load_recording_catalog(app: &mut NativeTuiApp) {
+        app.dispatch_core_command(AppCommand::RunStartupChecks);
+        poll_until(app, |app| {
+            matches!(app.startup_state, StartupState::Ready(_))
+                && matches!(app.session_state, SessionState::Ready(_))
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
     }
 
     #[test]
@@ -639,9 +768,9 @@ mod tests {
 
         assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
         assert_eq!(
-            app.active_session
+            app.pending_conversation_load
                 .as_ref()
-                .map(|session| session.id.as_str()),
+                .map(|load| load.requested_thread_id.as_str()),
             Some("thread-beta")
         );
         assert!(matches!(app.conversation_state, ConversationState::Loading));
@@ -705,21 +834,19 @@ mod tests {
             ],
         );
         app.move_selection(1);
-        app.active_session = app.current_session().cloned();
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("test conversation should be ready");
         };
         conversation.thread_id = "thread-beta".to_string();
         conversation.title = "Beta draft".to_string();
         app.start_session_rename_edit();
-        let (failed_request_id, failed_request) = app
+        let failed_request = app
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename request should prepare");
 
         app.apply_session_rename_completion(
-            failed_request_id,
-            failed_request,
+            SessionRenameCorrelation::new(1, failed_request),
             Err("provider unavailable".to_string()),
         );
 
@@ -729,40 +856,38 @@ mod tests {
             "Beta draft"
         );
 
-        let (retry_request_id, retry_request) = app
+        let retry_request = app
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("same-value retry should prepare");
-        app.apply_session_rename_completion(failed_request_id, retry_request.clone(), Ok(()));
-        assert!(app.session_overlay_ui_state.is_rename_pending());
-        assert_eq!(
-            app.current_session().map(SessionSummary::title).as_deref(),
-            Some("Beta draft")
-        );
         app.apply_session_rename_completion(
-            retry_request_id,
-            retry_request,
+            SessionRenameCorrelation::new(2, retry_request),
             Err("retry required".to_string()),
         );
 
         app.session_overlay_ui_state.pop_rename_character();
         app.session_overlay_ui_state.push_rename_character('2');
-        let (success_request_id, success_request) = app
+        let success_request = app
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("retry should prepare");
-        app.apply_session_rename_completion(success_request_id, success_request, Ok(()));
+        app.apply_session_rename_completion(
+            SessionRenameCorrelation::new(3, success_request),
+            Ok(accepted_rename_snapshot(
+                vec![
+                    session("thread-alpha", "Alpha draft", "/tmp/root"),
+                    session("thread-beta", "Beta draf2", "/tmp/root"),
+                ],
+                "thread-beta",
+                "Beta draft",
+                "Beta draf2",
+            )),
+        );
 
         assert!(!app.is_session_rename_editing());
         assert_eq!(selected_session_id(&app), Some("thread-beta"));
         assert_eq!(
             app.current_session().map(SessionSummary::title).as_deref(),
-            Some("Beta draf2")
-        );
-        assert_eq!(
-            app.active_session
-                .as_ref()
-                .and_then(|session| session.name.as_deref()),
             Some("Beta draf2")
         );
         assert!(matches!(
@@ -773,6 +898,131 @@ mod tests {
         assert_eq!(
             app.current_session().map(SessionSummary::title).as_deref(),
             Some("Alpha draft")
+        );
+    }
+
+    #[test]
+    fn rename_enter_runs_service_completion_back_through_core_runtime() {
+        let port = Arc::new(RecordingSessionCatalogPort::new(None));
+        let mut app = test_native_tui_app_with_session_catalog_port(port.clone());
+        load_recording_catalog(&mut app);
+        app.dispatch_core_command(AppCommand::LoadConversation {
+            thread_id: "thread-beta".to_string(),
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        });
+        poll_until(&mut app, |app| {
+            matches!(
+                &app.conversation_state,
+                ConversationState::Ready(conversation)
+                    if conversation.thread_id == "thread-beta"
+            )
+        });
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.start_session_rename_edit();
+        while !app
+            .session_overlay_ui_state
+            .rename_editor_buffer()
+            .is_empty()
+        {
+            app.session_overlay_ui_state.pop_rename_character();
+        }
+        app.handle_session_rename_paste("Beta renamed");
+
+        assert!(app.handle_session_rename_editor_key(key(KeyCode::Enter)));
+        assert!(app.session_overlay_ui_state.is_rename_pending());
+        poll_until(&mut app, |app| {
+            !app.session_overlay_ui_state.is_rename_pending()
+        });
+
+        assert_eq!(
+            *port
+                .rename_requests
+                .lock()
+                .expect("rename request mutex poisoned"),
+            vec![SessionRenameRequest::new("thread-beta", "Beta renamed")]
+        );
+        assert!(!app.is_session_rename_editing());
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Beta renamed")
+        );
+        assert!(matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.thread_id == "thread-beta"
+                    && conversation.title == "Beta renamed"
+        ));
+    }
+
+    #[test]
+    fn rename_service_failure_returns_to_the_editor_with_its_draft() {
+        let port = Arc::new(RecordingSessionCatalogPort::new(Some(
+            "provider unavailable",
+        )));
+        let mut app = test_native_tui_app_with_session_catalog_port(port.clone());
+        load_recording_catalog(&mut app);
+        app.start_session_rename_edit();
+
+        assert!(app.handle_session_rename_editor_key(key(KeyCode::Enter)));
+        poll_until(&mut app, |app| {
+            !app.session_overlay_ui_state.is_rename_pending()
+        });
+
+        assert_eq!(
+            *port
+                .rename_requests
+                .lock()
+                .expect("rename request mutex poisoned"),
+            vec![SessionRenameRequest::new("thread-beta", "Beta draft")]
+        );
+        assert!(app.is_session_rename_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_buffer(),
+            "Beta draft"
+        );
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Beta draft")
+        );
+    }
+
+    #[test]
+    fn catalog_reload_during_rename_is_deferred_without_sticking_loading() {
+        let (rename_started_tx, rename_started_rx) = mpsc::sync_channel(1);
+        let (release_rename_tx, release_rename_rx) = mpsc::sync_channel(1);
+        let port = Arc::new(
+            RecordingSessionCatalogPort::new(None)
+                .with_rename_gate(rename_started_tx, release_rename_rx),
+        );
+        let mut app = test_native_tui_app_with_session_catalog_port(port);
+        load_recording_catalog(&mut app);
+        app.start_session_rename_edit();
+        while !app
+            .session_overlay_ui_state
+            .rename_editor_buffer()
+            .is_empty()
+        {
+            app.session_overlay_ui_state.pop_rename_character();
+        }
+        app.handle_session_rename_paste("Beta renamed");
+        app.handle_session_rename_editor_key(key(KeyCode::Enter));
+        rename_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("rename worker should reach the test gate");
+
+        app.dispatch_shell_chrome(ShellChromeEvent::SessionsRequested { limit: 10 });
+        assert!(matches!(app.session_state, SessionState::Loading));
+        release_rename_tx
+            .send(())
+            .expect("rename worker should still be waiting");
+        poll_until(&mut app, |app| {
+            !app.session_overlay_ui_state.is_rename_pending()
+                && matches!(app.session_state, SessionState::Ready(_))
+        });
+
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Beta renamed")
         );
     }
 }

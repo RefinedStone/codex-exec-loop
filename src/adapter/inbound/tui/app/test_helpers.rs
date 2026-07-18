@@ -552,6 +552,7 @@ pub(super) fn test_native_tui_app_with_review_center_repository(
     test_native_tui_app_with_planning_and_review_center_repository(
         planning,
         review_center_repository,
+        None,
     )
 }
 
@@ -559,12 +560,24 @@ pub(super) fn test_native_tui_app_with_planning(planning: PlanningServices) -> N
     test_native_tui_app_with_planning_and_review_center_repository(
         planning,
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        None,
+    )
+}
+
+pub(super) fn test_native_tui_app_with_session_catalog_port(
+    session_catalog_port: Arc<dyn SessionCatalogPort>,
+) -> NativeTuiApp {
+    test_native_tui_app_with_planning_and_review_center_repository(
+        test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new())),
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        Some(session_catalog_port),
     )
 }
 
 fn test_native_tui_app_with_planning_and_review_center_repository(
     planning: PlanningServices,
     review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
+    session_catalog_port: Option<Arc<dyn SessionCatalogPort>>,
 ) -> NativeTuiApp {
     /*
      * Build the same production-shaped service graph used by TUI fixtures, with app-server IO
@@ -579,9 +592,10 @@ fn test_native_tui_app_with_planning_and_review_center_repository(
         ConversationService::new(app_server_port.clone()).with_review_center_read_service(
             ReviewCenterReadService::new("/tmp/root", review_center_repository),
         );
+    let session_catalog_port = session_catalog_port.unwrap_or_else(|| app_server_port.clone());
     let mut app = NativeTuiApp::new(
         StartupService::new(app_server_port.clone()),
-        SessionService::new(app_server_port.clone()),
+        SessionService::new(session_catalog_port),
         conversation_service,
         parallel_mode_binding,
     );

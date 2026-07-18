@@ -742,6 +742,20 @@ fn tui_session_catalog_loads_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_session_renames_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI session renames must be dispatched through core runtime, not a local worker or SessionService handle",
+        &["src/adapter/inbound/tui"],
+        &[
+            ".rename_session(",
+            "NativeTuiSessionHandle",
+            "BackgroundMessage::SessionRenameCompleted",
+            "ConversationLifecycleEvent::SessionRenamed",
+        ],
+    );
+}
+
+#[test]
 fn tui_review_presentation_reads_screen_model_without_effects() {
     // Review Center authority loading belongs to the controller/effect path. Presentation must
     // remain a pure projection of the request-correlated immutable screen model.

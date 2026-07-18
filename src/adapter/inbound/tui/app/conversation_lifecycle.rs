@@ -23,7 +23,7 @@ pub(super) enum ConversationLifecycleEvent {
         workspace_directory: String,
     },
     SessionChosen {
-        // Summary는 shell chrome에 즉시 보관하고, body는 snapshot load effect 뒤에 채운다.
+        // Summary에서 provider thread identity와 workspace context를 읽어 load effect를 만든다.
         session: SessionSummary,
         fallback_workspace_directory: String,
     },
@@ -45,12 +45,10 @@ pub(super) enum ConversationLifecycleEffect {
 }
 
 #[derive(Debug, Clone)]
-// Lifecycle state는 conversation body와 session chrome이 같은 선택을 보도록 묶는다.
+// Lifecycle state는 conversation body와 snapshot 재구성에 필요한 runtime truth를 묶는다.
 pub(super) struct ConversationLifecycleState {
     // Body 영역의 Loading/Ready/Failed state다.
     pub conversation_state: ConversationState,
-    // Shell이 선택된 기존 session으로 강조할 summary다. Draft에서는 비워 둔다.
-    pub active_session: Option<SessionSummary>,
     // Stop/interrupt 같은 turn-control truth는 snapshot 재구성 뒤에도 같은 source를 쓴다.
     pub turn_control_truth: ConversationRuntimeControlTruth,
 }
@@ -78,8 +76,6 @@ pub(super) fn reduce_conversation_lifecycle(
         ConversationLifecycleEvent::NewDraftOpened {
             workspace_directory,
         } => {
-            // Draft 전환은 session 목록 선택과 독립적이므로 shell highlight부터 끊는다.
-            state.active_session = None;
             state.conversation_state =
                 ConversationState::ready(ConversationViewModel::new_draft_with_truth(
                     workspace_directory,
@@ -90,10 +86,8 @@ pub(super) fn reduce_conversation_lifecycle(
             session,
             fallback_workspace_directory,
         } => {
-            // Summary는 state로 move되므로 effect용 thread id를 먼저 복사한다. Body lifecycle은
-            // 이어서 발생하는 core ConversationChanged(Loading) snapshot이 정한다.
-            let thread_id = session.id.clone();
-            state.active_session = Some(session);
+            // Body lifecycle은 이어서 발생하는 core ConversationChanged(Loading) snapshot이 정한다.
+            let thread_id = session.id;
             effects.push(ConversationLifecycleEffect::LoadConversation {
                 thread_id,
                 fallback_workspace_directory,
@@ -150,14 +144,6 @@ mod tests {
             reduced.state.conversation_state,
             ConversationState::Ready(_)
         ));
-        assert_eq!(
-            reduced
-                .state
-                .active_session
-                .as_ref()
-                .map(|session| session.id.as_str()),
-            Some("thread-2")
-        );
         assert_eq!(
             reduced.effects,
             vec![ConversationLifecycleEffect::LoadConversation {
@@ -234,13 +220,9 @@ mod tests {
     }
 
     #[test]
-    fn new_draft_replaces_active_session_and_sets_workspace() {
-        // Draft 전환은 기존 session 선택을 해제하고 즉시 입력 가능한 Ready 상태로 돌아간다.
-        let mut state = sample_state();
-        state.active_session = Some(sample_session("thread-1"));
-
+    fn new_draft_sets_workspace() {
         let reduced = reduce_conversation_lifecycle(
-            state,
+            sample_state(),
             ConversationLifecycleEvent::NewDraftOpened {
                 workspace_directory: "/tmp/new-root".to_string(),
             },
@@ -249,7 +231,6 @@ mod tests {
         let ConversationState::Ready(conversation) = reduced.state.conversation_state else {
             panic!("draft should become ready");
         };
-        assert!(reduced.state.active_session.is_none());
         assert_eq!(conversation.cwd, "/tmp/new-root");
     }
 
@@ -262,7 +243,6 @@ mod tests {
                     ConversationRuntimeControlTruth::default(),
                 ),
             ),
-            active_session: None,
             turn_control_truth: ConversationRuntimeControlTruth::default(),
         }
     }
