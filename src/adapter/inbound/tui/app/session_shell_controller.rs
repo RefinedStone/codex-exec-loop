@@ -584,7 +584,9 @@ mod tests {
     }
 
     fn poll_until(app: &mut NativeTuiApp, complete: impl Fn(&NativeTuiApp) -> bool) {
-        for _ in 0..200 {
+        // Full CI suites can schedule the rename worker behind other work; 200ms was
+        // flaky under load even when the rename path itself was healthy.
+        for _ in 0..2_000 {
             app.poll_core_runtime_inputs(8);
             if complete(app) {
                 return;
