@@ -346,6 +346,11 @@ pub(super) fn reduce_conversation_runtime(
                     // conversation content.
                     state.extend_runtime_notices([attachment_runtime_notice(profile)]);
                 }
+                TurnStreamUpdate::SessionRenamed { thread_id, title } => {
+                    if state.thread_id == thread_id {
+                        state.title = title;
+                    }
+                }
                 TurnStreamUpdate::ThreadPrepared {
                     thread_id,
                     title,

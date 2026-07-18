@@ -2,11 +2,20 @@ use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
 };
-use super::{ConversationLoadCorrelation, SessionCatalogLoadCorrelation, StartupCheckCorrelation};
+use super::{
+    ConversationLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation,
+};
 use super::{StartupReadySnapshot, StartupSnapshot};
 use super::{TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionCorrelation};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::{ManualPromptOutcome, PostTurnExecution, RuntimeProjection};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRenameAcceptedSnapshot {
+    pub session_catalog: SessionCatalogSnapshot,
+    pub turn_stream: Option<Box<TurnStreamSnapshot>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreInput {
@@ -41,6 +50,10 @@ pub enum CoreEffectCompletion {
         correlation: SessionCatalogLoadCorrelation,
         result: Result<SessionCatalogReadySnapshot, String>,
     },
+    SessionRenamed {
+        correlation: SessionRenameCorrelation,
+        result: Result<(), String>,
+    },
     ConversationLoaded {
         correlation: ConversationLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,
@@ -67,6 +80,10 @@ pub enum AppEvent {
         snapshot: StartupSnapshot,
     },
     SessionCatalogChanged(SessionCatalogSnapshot),
+    SessionRenameCompleted {
+        correlation: SessionRenameCorrelation,
+        result: Result<SessionRenameAcceptedSnapshot, String>,
+    },
     ConversationChanged {
         correlation: Option<ConversationLoadCorrelation>,
         snapshot: ConversationSnapshot,

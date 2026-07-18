@@ -20,7 +20,7 @@ an explicitly proposed document, not here.
 | --- | --- | --- |
 | Conversation | default | draft prompts, stream a turn, review approvals, and continue work |
 | Diagnostics | `Ctrl+d`, `:diag` | inspect startup readiness and blockers |
-| Sessions | `Ctrl+o`, `:sessions` | search, resume, or start a blank draft |
+| Sessions | `Ctrl+o`, `:sessions` | search, rename, resume, or start a blank draft |
 | Reviews | `:reviews` | inspect the bounded review center projection |
 | Activity | `:activity [diff\|output]`, `:act` | inspect retained typed diff or output detail for the active turn |
 | Queue | `:queue`, `:q`, `akra queue` | inspect accepted head, proposals, skip framing, and receipts |

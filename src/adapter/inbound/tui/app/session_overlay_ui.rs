@@ -18,7 +18,7 @@ struct SessionSearchQueryEditorState {
 struct SessionRenameEditorState {
     thread_id: Option<String>,
     buffer: String,
-    pending_request: Option<(u64, SessionRenameRequest)>,
+    pending_request: Option<SessionRenameRequest>,
     feedback: Option<String>,
 }
 
@@ -38,7 +38,6 @@ pub(super) struct SessionOverlayUiState {
     selected_session_id: Option<String>,
     search_query_editor: SessionSearchQueryEditorState,
     rename_editor: SessionRenameEditorState,
-    next_rename_request_id: u64,
 }
 
 impl Default for SessionOverlayUiState {
@@ -57,7 +56,6 @@ impl SessionOverlayUiState {
             selected_session_id: None,
             search_query_editor: SessionSearchQueryEditorState::default(),
             rename_editor: SessionRenameEditorState::default(),
-            next_rename_request_id: 0,
         }
     }
     pub fn browser_state(&self) -> &SessionBrowserState {
@@ -141,7 +139,7 @@ impl SessionOverlayUiState {
     pub fn prepare_rename_request(
         &mut self,
         language: TuiLanguage,
-    ) -> Option<(u64, SessionRenameRequest)> {
+    ) -> Option<SessionRenameRequest> {
         if self.is_rename_pending() {
             self.rename_editor.feedback = Some(
                 language
@@ -158,18 +156,13 @@ impl SessionOverlayUiState {
         }
         let thread_id = self.rename_editor.thread_id.clone()?;
         let request = SessionRenameRequest::new(thread_id, name);
-        self.next_rename_request_id = self.next_rename_request_id.wrapping_add(1).max(1);
-        let request_id = self.next_rename_request_id;
-        self.rename_editor.pending_request = Some((request_id, request.clone()));
+        self.rename_editor.pending_request = Some(request.clone());
         self.rename_editor.feedback = Some(language.session_rename_working_feedback().to_string());
-        Some((request_id, request))
+        Some(request)
     }
 
-    pub fn pending_rename_matches(&self, request_id: u64, request: &SessionRenameRequest) -> bool {
-        self.rename_editor
-            .pending_request
-            .as_ref()
-            .is_some_and(|pending| pending.0 == request_id && pending.1 == *request)
+    pub fn pending_rename_matches(&self, request: &SessionRenameRequest) -> bool {
+        self.rename_editor.pending_request.as_ref() == Some(request)
     }
 
     pub fn finish_rename_success(&mut self) {
@@ -445,7 +438,7 @@ mod tests {
         let mut state = SessionOverlayUiState::new(10);
         state.start_rename_edit("thread-exact", "  Release draft  ");
 
-        let (_, request) = state
+        let request = state
             .prepare_rename_request(TuiLanguage::English)
             .expect("valid rename should be prepared");
         assert_eq!(

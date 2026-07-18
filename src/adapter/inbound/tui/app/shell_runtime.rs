@@ -169,14 +169,6 @@ impl ShellRuntime {
                 BackgroundMessage::TurnSteerCompleted { request_id, result } => {
                     self.app.apply_turn_steer_completion(request_id, result);
                 }
-                BackgroundMessage::SessionRenameCompleted {
-                    request_id,
-                    request,
-                    result,
-                } => {
-                    self.app
-                        .apply_session_rename_completion(request_id, request, result);
-                }
                 BackgroundMessage::ReviewsOverlayLoaded { request, authority } => {
                     if self.app.apply_reviews_overlay_loaded(request, authority)
                         == super::reviews_overlay_ui::ReviewsOverlayLoadCompletion::ReloadRequired

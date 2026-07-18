@@ -14,7 +14,6 @@ use crate::domain::conversation::{
     ConversationRuntimeControlTruth, ConversationTurnOptions, ConversationTurnSteerRequest,
 };
 use crate::domain::planning::{ManualPromptCorrelation, PostTurnContinuationGate};
-use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -359,7 +358,6 @@ struct NativeTuiApp {
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
-    active_session: Option<SessionSummary>,
     application: NativeTuiApplicationHandle,
     core_runtime: CoreRuntime<CoreEffectRunner>,
     turn_control_truth: ConversationRuntimeControlTruth,

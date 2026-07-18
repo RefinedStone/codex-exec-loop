@@ -24,10 +24,11 @@ pub use conversation::{
     ConversationThreadReviewSnapshot,
 };
 pub use effect::CoreEffect;
-pub use event::{AppEvent, CoreEffectCompletion, CoreInput};
+pub use event::{AppEvent, CoreEffectCompletion, CoreInput, SessionRenameAcceptedSnapshot};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
 pub use request::{
-    ConversationLoadCorrelation, SessionCatalogLoadCorrelation, StartupCheckCorrelation,
+    ConversationLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 pub use session::{SessionCatalogReadySnapshot, SessionCatalogSnapshot, SessionCatalogState};
 pub use snapshot::AppSnapshot;

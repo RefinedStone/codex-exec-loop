@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | Conversation | 기본 | prompt 작성, turn streaming, approval 검토, 연속 작업 |
 | Diagnostics | `Ctrl+d`, `:diag` | 시작 준비 상태와 blocker 확인 |
-| Sessions | `Ctrl+o`, `:sessions` | 세션 검색·재개 또는 새 draft 시작 |
+| Sessions | `Ctrl+o`, `:sessions` | 세션 검색·이름 변경·재개 또는 새 draft 시작 |
 | Reviews | `:reviews` | 제한된 review center projection 확인 |
 | Activity | `:activity [diff\|output]`, `:act` | 현재 turn의 보존된 typed diff/output 확인 |
 | Queue | `:queue`, `:q`, `akra queue` | 승인된 head, proposal, skip, receipt 확인 |
