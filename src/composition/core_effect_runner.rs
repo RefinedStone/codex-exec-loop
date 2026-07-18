@@ -114,6 +114,13 @@ impl CoreEffectRunner {
                 self.spawn_turn_submission(correlation, request);
                 None
             }
+            CoreEffect::SteerTurn {
+                correlation,
+                request,
+            } => {
+                self.spawn_turn_steer(correlation, request);
+                None
+            }
             CoreEffect::EvaluatePostTurn(request) => {
                 self.spawn_post_turn_evaluation(*request);
                 None
@@ -189,6 +196,20 @@ impl CoreEffectRunner {
             self.parallel_mode_turn_service.clone(),
             self.input_sender.clone(),
         );
+    }
+
+    pub fn spawn_turn_steer(
+        &self,
+        correlation: crate::core::app::TurnSteerCorrelation,
+        request: crate::domain::conversation::ConversationTurnSteerRequest,
+    ) {
+        let conversation_service = self.conversation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let completion =
+                turn_steer_completion(correlation, conversation_service.steer_turn(request));
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
     }
 
     pub fn spawn_post_turn_evaluation(&self, request: crate::domain::planning::PostTurnRequest) {
@@ -292,6 +313,16 @@ fn parallel_peek_conversation_completion(
     }
 }
 
+fn turn_steer_completion(
+    correlation: crate::core::app::TurnSteerCorrelation,
+    result: Result<crate::domain::conversation::ConversationTurnSteerReceipt>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::TurnSteered {
+        correlation,
+        result: result.map_err(|error| error.to_string()),
+    }
+}
+
 fn conversation_ready_snapshot(
     snapshot: LoadedConversationThreadSnapshot,
 ) -> ConversationReadySnapshot {
@@ -339,6 +370,13 @@ mod tests {
 
     fn conversation_correlation(thread_id: &str) -> ConversationLoadCorrelation {
         ConversationLoadCorrelation::new(9, thread_id)
+    }
+
+    fn turn_steer_correlation() -> crate::core::app::TurnSteerCorrelation {
+        crate::core::app::TurnSteerCorrelation::new(
+            3,
+            crate::core::app::TurnSubmissionCorrelation::new(2),
+        )
     }
 
     #[test]
@@ -473,6 +511,30 @@ mod tests {
             CoreEffectCompletion::SessionRenamed {
                 correlation: session_rename_correlation(),
                 result: Err("rename unavailable".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn turn_steer_result_maps_to_exact_core_completion() {
+        let receipt = crate::domain::conversation::ConversationTurnSteerReceipt {
+            turn_id: "turn-1".to_string(),
+        };
+        assert_eq!(
+            turn_steer_completion(turn_steer_correlation(), Ok(receipt.clone())),
+            CoreEffectCompletion::TurnSteered {
+                correlation: turn_steer_correlation(),
+                result: Ok(receipt),
+            }
+        );
+        assert_eq!(
+            turn_steer_completion(
+                turn_steer_correlation(),
+                Err(anyhow::anyhow!("steer unavailable")),
+            ),
+            CoreEffectCompletion::TurnSteered {
+                correlation: turn_steer_correlation(),
+                result: Err("steer unavailable".to_string()),
             }
         );
     }

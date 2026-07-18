@@ -111,6 +111,11 @@ impl TurnStreamState {
         self.thread_id.as_deref() == Some(thread_id)
     }
 
+    pub fn matches_active_turn(&self, thread_id: &str, turn_id: &str) -> bool {
+        self.thread_id.as_deref() == Some(thread_id)
+            && self.active_turn_id.as_deref() == Some(turn_id)
+    }
+
     pub fn apply_session_rename(
         &mut self,
         thread_id: &str,

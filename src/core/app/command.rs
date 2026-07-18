@@ -1,4 +1,5 @@
 use super::TurnSubmissionRequest;
+use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
 use crate::domain::recent_sessions::SessionRenameRequest;
 
@@ -28,5 +29,6 @@ pub enum AppCommand {
     PrepareManualPrompt(Box<ManualPromptRequest>),
     CancelManualPromptPreparation,
     SubmitTurn(TurnSubmissionRequest),
+    SteerTurn(ConversationTurnSteerRequest),
     EvaluatePostTurn(Box<PostTurnRequest>),
 }

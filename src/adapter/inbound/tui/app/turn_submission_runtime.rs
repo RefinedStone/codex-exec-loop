@@ -2459,6 +2459,80 @@ mod tests {
     }
 
     #[test]
+    fn terminal_before_steer_completion_does_not_drop_auto_follow_submission() {
+        let workspace = TempWorkspace::new("turn-submit-steer-auto-race");
+        let mut app = make_test_app(&workspace);
+        let turn_submission = app.core_runtime.begin_test_turn_submission();
+        app.dispatch_core_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: workspace.path_str().to_string(),
+                runtime_envelope: Box::default(),
+            },
+        });
+        app.dispatch_core_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+        set_input(&mut app, "steer this before completion");
+        ready_conversation_mut(&mut app)
+            .auto_follow_state
+            .set_max_auto_turns(1);
+        assert!(app.show_turn_steer_confirmation());
+        assert!(
+            app.handle_turn_steer_confirmation_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ))
+        );
+        assert!(app.pending_turn_steer.is_some());
+
+        app.dispatch_core_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::TurnTerminal {
+                receipt: crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
+                    "thread-1",
+                    "turn-1",
+                    Vec::new(),
+                )
+                .with_application_delivery(
+                    crate::domain::turn_terminal::ConversationTurnApplicationDelivery::Confirmed,
+                ),
+                execution_snapshot_capture: None,
+            },
+        });
+        let admitted =
+            app.execute_conversation_runtime_effect(ConversationRuntimeEffect::QueueAutoPrompt {
+                prompt: "continue task".to_string(),
+                completed_turn_id: "turn-1".to_string(),
+                mode_label: "planning queue".to_string(),
+                transcript_text: QUEUED_TASK_TRANSCRIPT_TEXT.to_string(),
+                handoff_task: None,
+            });
+
+        assert!(admitted);
+        assert!(app.pending_turn_steer.is_some());
+        let conversation = ready_conversation(&app);
+        assert!(
+            conversation
+                .status_text
+                .starts_with("auto-follow submitted / turn")
+        );
+        assert_eq!(
+            conversation
+                .messages
+                .last()
+                .map(|message| message.text.as_str()),
+            Some(QUEUED_TASK_TRANSCRIPT_TEXT)
+        );
+    }
+
+    #[test]
     fn helper_functions_cover_slot_handoff_origins_truncation_and_debug_absence() {
         let workspace = TempWorkspace::new("turn-submit-helper-edges");
         let mut app = make_test_app(&workspace);

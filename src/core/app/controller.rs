@@ -1,8 +1,9 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
     CoreEffectCompletion, CoreInput, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation, TurnStreamEvent, TurnStreamState,
-    TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    SessionRenameCorrelation, StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
+    TurnStreamEvent, TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission,
+    TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::ManualPromptCorrelation;
@@ -12,6 +13,12 @@ pub struct CoreDispatchOutcome {
     pub events: Vec<AppEvent>,
     pub effects: Vec<CoreEffect>,
     pub snapshot: AppSnapshot,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTurnSteer {
+    correlation: TurnSteerCorrelation,
+    expected_turn_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +39,8 @@ pub struct CoreController {
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
+    next_turn_steer_generation: u64,
+    active_turn_steer: Option<ActiveTurnSteer>,
 }
 
 impl CoreController {
@@ -53,6 +62,8 @@ impl CoreController {
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
+            next_turn_steer_generation: 1,
+            active_turn_steer: None,
         }
     }
 
@@ -140,6 +151,7 @@ impl CoreController {
                 self.deferred_conversation_load = None;
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.active_turn_steer = None;
                 self.guarded_session_rename_stream = None;
                 self.state.reset_conversation();
                 self.turn_stream_state = TurnStreamState::new();
@@ -191,6 +203,46 @@ impl CoreController {
                         TurnSubmissionAdmission::Accepted { correlation },
                     )],
                     effects: vec![CoreEffect::SubmitTurn {
+                        correlation,
+                        request,
+                    }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::SteerTurn(request)) => {
+                if let Some(active) = &self.active_turn_steer {
+                    return CoreDispatchOutcome {
+                        events: vec![AppEvent::TurnSteerAdmissionResolved(
+                            TurnSteerAdmission::RejectedActive {
+                                active_correlation: active.correlation,
+                            },
+                        )],
+                        effects: Vec::new(),
+                        snapshot: self.snapshot(),
+                    };
+                }
+                let Some(turn_submission) = self.active_turn_submission else {
+                    return self.turn_steer_unavailable_outcome();
+                };
+                if !self
+                    .turn_stream_state
+                    .matches_active_turn(&request.thread_id, &request.expected_turn_id)
+                {
+                    return self.turn_steer_unavailable_outcome();
+                }
+                let correlation = TurnSteerCorrelation::new(
+                    take_generation(&mut self.next_turn_steer_generation, "active turn steer"),
+                    turn_submission,
+                );
+                self.active_turn_steer = Some(ActiveTurnSteer {
+                    correlation,
+                    expected_turn_id: request.expected_turn_id.clone(),
+                });
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::TurnSteerAdmissionResolved(
+                        TurnSteerAdmission::Accepted { correlation },
+                    )],
+                    effects: vec![CoreEffect::SteerTurn {
                         correlation,
                         request,
                     }],
@@ -300,6 +352,7 @@ impl CoreController {
                 };
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.active_turn_steer = None;
                 self.guarded_session_rename_stream = None;
                 self.state.apply_conversation_result(result);
                 self.turn_stream_state = TurnStreamState::new();
@@ -326,6 +379,37 @@ impl CoreController {
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
+            CoreInput::EffectCompleted(CoreEffectCompletion::TurnSteered {
+                correlation,
+                result,
+            }) => {
+                if self
+                    .active_turn_steer
+                    .as_ref()
+                    .is_none_or(|active| active.correlation != correlation)
+                {
+                    return self.unchanged_outcome();
+                }
+                let active = self
+                    .active_turn_steer
+                    .take()
+                    .expect("exact active turn steer must remain present");
+                let result = result.and_then(|receipt| {
+                    if receipt.turn_id == active.expected_turn_id {
+                        Ok(receipt)
+                    } else {
+                        Err("turn steer provider returned a different turn".to_string())
+                    }
+                });
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::TurnSteerCompleted {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
                 if self.in_flight_manual_prompt_preparation.as_ref() != Some(result.correlation()) {
                     return CoreDispatchOutcome {
@@ -447,6 +531,7 @@ impl CoreController {
         fallback_workspace_directory: String,
     ) -> CoreDispatchOutcome {
         self.active_turn_submission = None;
+        self.active_turn_steer = None;
         self.guarded_session_rename_stream = None;
         let correlation = ConversationLoadCorrelation::new(
             take_generation(
@@ -508,6 +593,16 @@ impl CoreController {
         self.active_turn_submission = Some(correlation);
         self.turn_stream_state.begin_submission();
         correlation
+    }
+
+    fn turn_steer_unavailable_outcome(&self) -> CoreDispatchOutcome {
+        CoreDispatchOutcome {
+            events: vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::RejectedUnavailable,
+            )],
+            effects: Vec::new(),
+            snapshot: self.snapshot(),
+        }
     }
 
     fn apply_correlated_turn_stream_event(
@@ -676,7 +771,7 @@ mod tests {
     };
     use crate::domain::conversation::{
         ConversationMessage, ConversationMessageKind,
-        ConversationSnapshot as DomainConversationSnapshot,
+        ConversationSnapshot as DomainConversationSnapshot, ConversationTurnSteerRequest,
     };
     use crate::domain::conversation_item_lifecycle::{
         ConversationItemKind, ConversationItemLifecycleConsistency,
@@ -1422,6 +1517,178 @@ mod tests {
             )]
         );
         assert!(second_outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn turn_steer_is_admitted_once_for_the_exact_active_turn() {
+        let mut controller = CoreController::new();
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-1".to_string(),
+            expected_turn_id: "turn-1".to_string(),
+            prompt: "focus the active work".to_string(),
+        };
+        let unavailable =
+            controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(request.clone())));
+        assert_eq!(
+            unavailable.events,
+            vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::RejectedUnavailable,
+            )]
+        );
+        assert!(unavailable.effects.is_empty());
+
+        let turn_submission = start_test_turn(&mut controller, "thread-1", "turn-1");
+        let mismatched = controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(
+            ConversationTurnSteerRequest {
+                expected_turn_id: "turn-other".to_string(),
+                ..request.clone()
+            },
+        )));
+        assert_eq!(
+            mismatched.events,
+            vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::RejectedUnavailable,
+            )]
+        );
+        assert!(mismatched.effects.is_empty());
+
+        let accepted =
+            controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(request.clone())));
+        let correlation = TurnSteerCorrelation::new(1, turn_submission);
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::Accepted { correlation },
+            )]
+        );
+        assert_eq!(
+            accepted.effects,
+            vec![CoreEffect::SteerTurn {
+                correlation,
+                request: request.clone(),
+            }]
+        );
+
+        let duplicate = controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(request)));
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::TurnSteerAdmissionResolved(
+                TurnSteerAdmission::RejectedActive {
+                    active_correlation: correlation,
+                },
+            )]
+        );
+        assert!(duplicate.effects.is_empty());
+    }
+
+    #[test]
+    fn turn_steer_completion_is_generation_guarded_across_terminal_and_invalidation() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-1", "turn-1");
+        let request = ConversationTurnSteerRequest {
+            thread_id: "thread-1".to_string(),
+            expected_turn_id: "turn-1".to_string(),
+            prompt: "focus the active work".to_string(),
+        };
+        controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(request.clone())));
+        let correlation = TurnSteerCorrelation::new(1, turn_submission);
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::TurnSteered {
+                correlation: TurnSteerCorrelation::new(2, turn_submission),
+                result: Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                    turn_id: "turn-1".to_string(),
+                }),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(
+            controller
+                .active_turn_steer
+                .as_ref()
+                .map(|active| active.correlation),
+            Some(correlation)
+        );
+
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt("thread-1", "turn-1", Vec::new()),
+                execution_snapshot_capture: None,
+            },
+        ));
+        let next_submit = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            test_turn_submission_request(Some("thread-1")),
+        )));
+        assert_eq!(
+            next_submit.events,
+            vec![AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::Accepted {
+                    correlation: TurnSubmissionCorrelation::new(2),
+                },
+            )]
+        );
+        assert!(matches!(
+            next_submit.effects.as_slice(),
+            [CoreEffect::SubmitTurn { correlation, .. }]
+                if *correlation == TurnSubmissionCorrelation::new(2)
+        ));
+
+        let completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::TurnSteered {
+                correlation,
+                result: Ok(crate::domain::conversation::ConversationTurnSteerReceipt {
+                    turn_id: "turn-1".to_string(),
+                }),
+            },
+        ));
+        assert!(matches!(
+            completed.events.as_slice(),
+            [AppEvent::TurnSteerCompleted {
+                correlation: completed_correlation,
+                result: Ok(receipt),
+            }] if *completed_correlation == correlation && receipt.turn_id == "turn-1"
+        ));
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::TurnSteered {
+                correlation,
+                result: Err("late duplicate".to_string()),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+
+        let next_turn = TurnSubmissionCorrelation::new(2);
+        controller.handle_input(test_turn_stream_input(
+            next_turn,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+        controller.handle_input(test_turn_stream_input(
+            next_turn,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-2".to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        let next_request = ConversationTurnSteerRequest {
+            expected_turn_id: "turn-2".to_string(),
+            ..request
+        };
+        controller.handle_input(CoreInput::Command(AppCommand::SteerTurn(next_request)));
+        let next_correlation = TurnSteerCorrelation::new(2, next_turn);
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        let late = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::TurnSteered {
+                correlation: next_correlation,
+                result: Err("late completion".to_string()),
+            },
+        ));
+        assert!(late.events.is_empty());
+        assert!(controller.active_turn_steer.is_none());
     }
 
     #[test]
@@ -2730,6 +2997,31 @@ mod tests {
             panic!("test submission should produce one correlated effect");
         };
         *correlation
+    }
+
+    fn start_test_turn(
+        controller: &mut CoreController,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> TurnSubmissionCorrelation {
+        let correlation = submit_test_turn(controller, Some(thread_id));
+        controller.handle_input(test_turn_stream_input(
+            correlation,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: thread_id.to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+        controller.handle_input(test_turn_stream_input(
+            correlation,
+            TurnStreamEvent::TurnStarted {
+                turn_id: turn_id.to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        correlation
     }
 
     fn sample_post_turn_execution()

@@ -129,7 +129,6 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
         "Prioritize the exact queue cancellation regression before continuing.\n    cargo test --lib"
             .to_string();
     app.turn_steer_confirmation = Some(TurnSteerUiIntent {
-        request_id: 1,
         input_revision: 0,
         source_input_buffer: conversation.input_buffer.clone(),
         request: ConversationTurnSteerRequest {
@@ -188,7 +187,6 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
     let expected_cursor = terminal.backend().parser_cursor_position();
 
     app.turn_steer_confirmation = Some(TurnSteerUiIntent {
-        request_id: 1,
         input_revision: 0,
         source_input_buffer: draft.clone(),
         request: ConversationTurnSteerRequest {

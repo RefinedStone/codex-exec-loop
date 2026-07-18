@@ -71,9 +71,12 @@ continuation paths. A later `:parallel` re-arms only parallel continuation.
 1. Input may be drafted before startup completes; submission waits until readiness permits it.
 2. Core admits one turn submission at a time; an accepted dispatch issues exactly one worker effect
    and permits the TUI to clear the editor and append the prompt to transcript history.
-3. Active output remains in the live inline tail; final assistant output moves to committed history.
-4. Typed activity, runtime notices, approvals, and warnings update the same shell projection.
-5. Post-turn evaluation advances, pauses, or stops continuation from accepted planning state.
+3. `Tab` can confirm delivery into the exact active turn. Core admits one correlated steer worker,
+   keeps the draft until provider acknowledgement, and ignores stale completions; later edits or
+   identical retyped input are never cleared by an older acknowledgement.
+4. Active output remains in the live inline tail; final assistant output moves to committed history.
+5. Typed activity, runtime notices, approvals, and warnings update the same shell projection.
+6. Post-turn evaluation advances, pauses, or stops continuation from accepted planning state.
 
 Only the interactive main conversation can answer a reviewable command or bounded additional
 permission request. `Y` accepts once; `N`/`Esc` declines; `Enter` is inert. Timeout, interrupt,

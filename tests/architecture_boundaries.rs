@@ -506,6 +506,7 @@ fn future_core_app_public_contracts_are_core_owned() {
             "src/core/app/projection.rs",
             "src/core/app/snapshot.rs",
             "src/core/app/state.rs",
+            "src/core/app/turn_steer.rs",
             "src/core/app/turn_stream.rs",
             "src/core/app/turn_submission.rs",
         ],
@@ -1245,6 +1246,30 @@ fn tui_conversation_turn_events_enter_through_core_runtime() {
             "ConversationRuntimeEvent::StreamTurnCompleted",
             "ConversationRuntimeEvent::StreamExecutionObserved",
         ],
+    );
+}
+
+#[test]
+fn tui_active_turn_steering_enters_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI active-turn steering must not own a service worker or completion mailbox",
+        &[
+            "src/adapter/inbound/tui/app/app_runtime.rs",
+            "src/adapter/inbound/tui/app/shell_controller.rs",
+            "src/adapter/inbound/tui/app/shell_runtime.rs",
+        ],
+        &[
+            ".steer_turn(",
+            "BackgroundMessage::TurnSteerCompleted",
+            "TurnSteerCompleted {\n        request_id:",
+        ],
+    );
+    let controller_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_controller.rs"))
+            .expect("shell controller source should be readable");
+    assert!(
+        controller_source.contains("AppCommand::SteerTurn(request)"),
+        "TUI steer confirmation must dispatch the typed core command"
     );
 }
 

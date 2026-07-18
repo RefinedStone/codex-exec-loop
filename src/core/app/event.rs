@@ -7,9 +7,11 @@ use super::{
     StartupCheckCorrelation,
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
+use super::{TurnSteerAdmission, TurnSteerCorrelation};
 use super::{
     TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
+use crate::domain::conversation::ConversationTurnSteerReceipt;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::{ManualPromptOutcome, PostTurnExecution, RuntimeProjection};
 
@@ -65,6 +67,10 @@ pub enum CoreEffectCompletion {
         thread_id: String,
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
+    TurnSteered {
+        correlation: TurnSteerCorrelation,
+        result: Result<ConversationTurnSteerReceipt, String>,
+    },
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationCompleted(Box<PostTurnExecution>),
 }
@@ -96,6 +102,11 @@ pub enum AppEvent {
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
     TurnSubmissionAdmissionResolved(TurnSubmissionAdmission),
+    TurnSteerAdmissionResolved(TurnSteerAdmission),
+    TurnSteerCompleted {
+        correlation: TurnSteerCorrelation,
+        result: Result<ConversationTurnSteerReceipt, String>,
+    },
     TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationCompleted(Box<PostTurnExecution>),

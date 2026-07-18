@@ -71,9 +71,12 @@ Modal이 focus를 소유할 때는 전역 키보다 우선할 수 있으며, 표
 1. 시작 진단 중에도 입력을 작성할 수 있지만 제출은 준비 상태를 기다립니다.
 2. Core는 한 번에 하나의 turn submission만 승인합니다. Accepted dispatch는 정확히 하나의 worker
    effect를 발행하고, TUI가 editor를 비우고 transcript history에 prompt를 추가하도록 허용합니다.
-3. 활성 출력은 live inline tail에 머물고 최종 assistant 출력은 committed history로 이동합니다.
-4. Typed activity, runtime notice, approval, warning은 같은 shell projection을 갱신합니다.
-5. Post-turn 평가는 승인된 planning 상태에 따라 continuation을 진행·일시정지·종료합니다.
+3. `Tab`으로 정확한 활성 turn에 전달할 내용을 확인할 수 있습니다. Core는 correlation된 steer
+   worker 하나만 승인하고 provider 확인 전까지 draft를 유지하며 stale completion을 버립니다. 이후
+   편집했거나 같은 문구를 다시 입력한 draft는 이전 확인 응답으로 지우지 않습니다.
+4. 활성 출력은 live inline tail에 머물고 최종 assistant 출력은 committed history로 이동합니다.
+5. Typed activity, runtime notice, approval, warning은 같은 shell projection을 갱신합니다.
+6. Post-turn 평가는 승인된 planning 상태에 따라 continuation을 진행·일시정지·종료합니다.
 
 상호작용 가능한 main conversation만 검토 가능한 명령 또는 제한된 추가 권한 요청에 답할 수
 있습니다. `Y`는 한 번 승인하고 `N`/`Esc`는 거부하며 `Enter`는 아무 동작도 하지 않습니다. Timeout,
