@@ -4,6 +4,7 @@ SQLite planning authority adapter가 application port의 snapshot 계약을 실�
 포트 메서드로 호출해 task authority 문서와 queue projection의 동시 round-trip을 고정한다.
 */
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
 use crate::application::port::outbound::app_server_prompt_log_port::{
     AppServerPromptInputRecord, AppServerPromptInteractionRecord, AppServerPromptLogPort,
     AppServerPromptOutputRecord,
@@ -23,6 +24,7 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommitResult, PlanningTaskAuthorityMutationAudit,
     PlanningTaskAuthorityMutationKind, PlanningTaskRepositoryPort,
 };
+use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningWorkspaceLoadRecord, RepoScopedPlanningWorkspacePort,
 };
@@ -34,8 +36,8 @@ use crate::application::port::outbound::telegram_update_ledger_port::{
     TelegramRunnerLeaseClaimDecision, TelegramUpdateLedgerPort,
 };
 use crate::application::service::planning::{
-    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget, PlanningQueueUseCases,
-    PlanningTaskMutationService, RESULT_OUTPUT_FILE_PATH,
+    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget, PlanningServices,
+    RESULT_OUTPUT_FILE_PATH,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAutomationTrigger,
@@ -1540,10 +1542,13 @@ fn queue_cancellation_persists_cancelled_state_across_adapter_restart() {
             },
         )
         .expect("task authority should seed");
-    let queue = PlanningQueueUseCases::new(
-        PlanningTaskMutationService::new(adapter.clone(), PriorityQueueService::new()),
+    let queue = PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
         adapter.clone(),
-    );
+        adapter.clone(),
+        Arc::new(NoopPlanningWorkerPort),
+    )
+    .queue;
     let before = queue
         .load_authority_snapshot(&workspace_dir)
         .expect("queue authority should load");

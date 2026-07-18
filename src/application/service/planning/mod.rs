@@ -162,10 +162,11 @@ pub use self::use_cases::{
     PlanningPostTurnRepairAttemptResult, PlanningPostTurnRepairOutcome,
     PlanningPostTurnRepairRequest, PlanningPostTurnWorkerPanelStartRequest,
     PlanningPostTurnWorkerPanelStartState, PlanningPreparedOfficialCompletionRefresh,
-    PlanningPreparedQueueRefresh, PlanningQueueUseCases, PlanningRuntimeUseCases,
-    PlanningTaskToolUseCases, PlanningTurnExecutionSnapshotCapture,
-    PlanningTurnExecutionSnapshotCaptureRequest, PlanningTurnExecutionSnapshotCaptureState,
-    PlanningWorkerUseCases, PlanningWorkspaceUseCases,
+    PlanningPreparedQueueRefresh, PlanningQueueAuthorityProjection,
+    PlanningQueueAuthorityRefreshError, PlanningQueueCancellationTransactionResult,
+    PlanningQueueUseCases, PlanningRuntimeUseCases, PlanningTaskToolUseCases,
+    PlanningTurnExecutionSnapshotCapture, PlanningTurnExecutionSnapshotCaptureRequest,
+    PlanningTurnExecutionSnapshotCaptureState, PlanningWorkerUseCases, PlanningWorkspaceUseCases,
 };
 // worker orchestration 타입은 queue refresh, official completion refresh, worker run outcome처럼 app-server worker 경로의
 // 입력과 결과를 공개한다.

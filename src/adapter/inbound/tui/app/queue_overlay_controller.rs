@@ -25,7 +25,9 @@ impl NativeTuiApp {
         let planning = self.application.planning().clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let authority = planning.load_queue_authority(&request.context.workspace_directory);
+            let authority = planning
+                .queue()
+                .load_coherent_authority(&request.context.workspace_directory);
             let _ = tx.send(BackgroundMessage::QueueOverlayAuthorityLoaded(Box::new(
                 queue_overlay_ui::QueueOverlayAuthorityLoadResult { request, authority },
             )));
@@ -317,7 +319,14 @@ impl NativeTuiApp {
         let planning = self.application.planning().clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = planning.execute_queue_mutation(operation);
+            let transaction = planning
+                .queue()
+                .execute_cancellation_transaction(operation.request.clone());
+            let result = queue_overlay_ui::QueueMutationWorkerResult {
+                operation,
+                mutation: transaction.mutation.map_err(|error| error.to_string()),
+                authority: transaction.authority,
+            };
             let _ = tx.send(BackgroundMessage::QueueMutationCompleted(Box::new(result)));
         });
         true
