@@ -26,6 +26,7 @@ pub(crate) struct ActivityOverlayView {
     pub(crate) next_page_start: Option<usize>,
 }
 
+#[cfg(test)]
 pub(crate) fn build_activity_overlay_view(
     selected_kind: ProgressiveActivityDetailKind,
     diff_available: bool,

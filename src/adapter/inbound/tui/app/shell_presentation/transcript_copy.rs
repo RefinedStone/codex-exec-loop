@@ -181,9 +181,9 @@ fn format_tool_card_lines(
         let mut in_markdown_code_fence = false;
         for text_line in message.text.lines() {
             let mut body = format_markdown_body_line(text_line, &mut in_markdown_code_fence);
-            // Dim tool body slightly so expanded detail stays secondary to agent prose.
-            if let Some(last) = body.spans.last_mut() {
-                last.style = last.style.patch(AkraTheme::tool_card_body());
+            // Dim every non-indent span so multi-span markdown tool bodies stay consistent.
+            for span in body.spans.iter_mut().skip(1) {
+                span.style = span.style.patch(AkraTheme::tool_card_body());
             }
             lines.push(body);
         }
