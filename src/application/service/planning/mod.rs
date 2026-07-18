@@ -108,8 +108,10 @@ pub use self::runtime::intake::{
 pub use self::runtime::manual_intake::{
     ManualPromptIntakeOutcome, ManualPromptIntakeRequest, ManualPromptMainSessionHandoff,
 };
-// auto-follow block reason은 runtime policy가 자동 후속 실행을 막은 이유를 UI copy와 테스트가 분기할 수 있게 공개한다.
-pub use self::runtime::policy::PlanningAutoFollowBlockReason;
+// runtime policy의 순수 summary 함수와 auto-follow block reason을 adapter가 service graph 없이 재사용하게 공개한다.
+pub use self::runtime::policy::{
+    PlanningAutoFollowBlockReason, build_planning_runtime_summary_line,
+};
 // runtime projection/status는 현재 planning workspace가 실행 가능한지, task가 있는지, invalid인지 판단하는 핵심 projection이다.
 pub use self::runtime::prompt::{PlanningRuntimeProjection, PlanningRuntimeWorkspaceStatus};
 // validation service는 여러 planning service와 테스트가 같은 검증 규칙을 직접 재사용할 수 있게 공개한다.

@@ -67,7 +67,8 @@ pub(super) use overlays::{
 use runtime_status_copy::{
     auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
 };
-use shell_core::{ShellConversationState, ShellCorePresentationContext};
+pub(super) use shell_core::{ConversationScreenModel, conversation_startup_screen_is_active};
+use shell_core::{QueueMutationTailState, ShellConversationState};
 pub(super) use startup_banner::startup_ascii_art_lines;
 pub(super) use status_panels::InlineTailView;
 #[cfg(test)]
@@ -78,25 +79,30 @@ pub(super) use transcript_copy::{format_conversation_lines, format_conversation_
 
 #[cfg(test)]
 pub(super) fn build_inline_tail_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    status_panels::build_inline_tail_lines(app)
+    let screen_model = ConversationScreenModel::from_app(app);
+    status_panels::build_inline_tail_lines(&screen_model)
 }
 
-pub(super) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> InlineTailView {
+pub(super) fn build_inline_tail_view(
+    screen_model: &ConversationScreenModel<'_>,
+    content_width: u16,
+) -> InlineTailView {
     // renderer는 폭만 알고 status panel의 세부 우선순위는 알지 못한다. content_width를
     // 넘겨 presentation 쪽에서 어떤 상태를 남기고 줄일지 결정한다.
-    status_panels::build_inline_tail_view(app, content_width)
+    status_panels::build_inline_tail_view(screen_model, content_width)
 }
 
-pub(super) fn build_inline_live_transcript_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
+pub(super) fn build_inline_live_transcript_lines(
+    screen_model: &ConversationScreenModel<'_>,
+) -> Vec<Line<'static>> {
     // loading/failed 상태에서는 live agent message가 존재할 수 없으므로 빈 view를 반환한다.
     // Ready에서만 cached conversation과 live streaming tail을 같은 panel 규칙으로 합친다.
-    let ConversationState::Ready(conversation) = &app.conversation_state else {
+    let ShellConversationState::Ready(conversation) = screen_model.conversation_state else {
         return Vec::new();
     };
     status_panels::current_live_agent_lines(
         conversation,
-        app.inline_history_render_mode.writes_host_scrollback()
-            || conversation.has_pending_viewport_transcript_handoff(),
+        screen_model.live_transcript_lines_include_committed_handoff(),
     )
     .unwrap_or_default()
 }

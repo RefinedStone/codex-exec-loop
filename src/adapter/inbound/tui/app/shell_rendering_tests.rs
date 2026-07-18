@@ -158,6 +158,121 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
 }
 
 #[test]
+fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
+    let mut terminal =
+        ratatui::Terminal::new(tui_testkit::Vt100Backend::new(48, 18)).expect("vt100 terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let draft = "keep this exact draft for the active turn".to_string();
+    let (thread_id, turn_id) = {
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start in a ready conversation state");
+        };
+        conversation.thread_id = "thread-cursor-steer".to_string();
+        conversation.record_turn_started("turn-cursor-steer".to_string());
+        conversation.input_buffer = draft.clone();
+        conversation.set_input_cursor_byte_index("keep this exact ".len());
+        (
+            conversation.thread_id.clone(),
+            conversation
+                .active_turn_id
+                .clone()
+                .expect("running turn should have identity"),
+        )
+    };
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("baseline shell render succeeds");
+    assert!(!terminal.backend().parser_cursor_hidden());
+    let expected_cursor = terminal.backend().parser_cursor_position();
+
+    app.turn_steer_confirmation = Some(TurnSteerUiIntent {
+        request_id: 1,
+        input_revision: 0,
+        source_input_buffer: draft.clone(),
+        request: ConversationTurnSteerRequest {
+            thread_id,
+            expected_turn_id: turn_id,
+            prompt: draft.clone(),
+        },
+    });
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("turn steer confirmation render succeeds");
+
+    assert!(terminal.backend().parser_cursor_hidden());
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, draft);
+
+    assert!(app.handle_turn_steer_confirmation_key(event::KeyEvent::new(
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+    )));
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("restored shell render succeeds");
+
+    assert!(!terminal.backend().parser_cursor_hidden());
+    assert_eq!(terminal.backend().parser_cursor_position(), expected_cursor);
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, draft);
+}
+
+#[test]
+fn vt100_exit_confirmation_hides_prompt_cursor_and_cancel_restores_it() {
+    let mut terminal =
+        ratatui::Terminal::new(tui_testkit::Vt100Backend::new(48, 18)).expect("vt100 terminal");
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    let draft = "cancel exit and keep this draft".to_string();
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.input_buffer = draft.clone();
+    conversation.set_input_cursor_byte_index("cancel exit ".len());
+
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("baseline shell render succeeds");
+    assert!(!terminal.backend().parser_cursor_hidden());
+    let expected_cursor = terminal.backend().parser_cursor_position();
+
+    app.dispatch_shell_chrome(ShellChromeEvent::ExitConfirmationShown);
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("exit confirmation render succeeds");
+
+    assert!(terminal.backend().parser_cursor_hidden());
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, draft);
+
+    assert_eq!(
+        app.handle_exit_confirmation_key(event::KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::NONE,
+        )),
+        Some(false)
+    );
+    terminal
+        .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+        .expect("restored shell render succeeds");
+
+    assert!(!terminal.backend().parser_cursor_hidden());
+    assert_eq!(terminal.backend().parser_cursor_position(), expected_cursor);
+    let ConversationState::Ready(conversation) = &app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    assert_eq!(conversation.input_buffer, draft);
+}
+
+#[test]
 fn steer_prompt_preview_preserves_lines_and_marks_bounded_omissions() {
     let (preview, truncated) = steer_prompt_preview("first\n    indented\nlast", 64, 6);
     assert_eq!(preview, vec!["first", "    indented", "last"]);

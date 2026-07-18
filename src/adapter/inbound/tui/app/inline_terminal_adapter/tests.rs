@@ -1,12 +1,15 @@
 use super::super::tui_testkit;
 use super::{
-    FrameCacheState, HistoryInsertionMode, InlineResizeBackend, InlineTerminalBackend,
-    InlineTerminalState, ShellRuntime, TerminalViewportState, current_inline_history_lines,
-    draw_inline_frame, draw_inline_transaction, sync_inline_viewport,
+    FrameCacheState, HistoryInsertionMode, InlineConversationFrameProjection, InlineResizeBackend,
+    InlineTerminalBackend, InlineTerminalState, ShellRuntime, TerminalViewportState,
+    current_inline_history_lines, draw_inline_frame, draw_inline_transaction, sync_inline_viewport,
     terminal_options_for_render_mode,
 };
+use crate::adapter::inbound::tui::app::conversation_input::InputCursorMovement;
 use crate::adapter::inbound::tui::app::ratatui_frontend::prepare_runtime_for_due_draw;
-use crate::adapter::inbound::tui::app::shell_presentation::build_inline_live_transcript_lines;
+use crate::adapter::inbound::tui::app::shell_presentation::{
+    ConversationScreenModel, build_inline_live_transcript_lines,
+};
 use crate::adapter::inbound::tui::app::{
     ConversationIntentEvent, ConversationMessage, ConversationMessageKind, ConversationState,
     ConversationViewMode, INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp,
@@ -32,6 +35,34 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::ops::Range;
 use std::time::{Duration, Instant};
+
+fn projected_live_transcript_lines(app: &NativeTuiApp) -> Vec<ratatui::text::Line<'static>> {
+    let screen_model = ConversationScreenModel::from_app(app);
+    build_inline_live_transcript_lines(&screen_model)
+}
+
+fn frame_projection(app: &NativeTuiApp, width: u16) -> InlineConversationFrameProjection {
+    InlineConversationFrameProjection::from_app(app, width)
+}
+
+fn frame_cache_should_draw(
+    cache: &mut FrameCacheState,
+    app: &NativeTuiApp,
+    viewport: &TerminalViewportState,
+    width: u16,
+    height: u16,
+) -> bool {
+    cache.should_draw_inline_frame(&frame_projection(app, width), viewport, width, height)
+}
+
+fn inline_state_should_draw(
+    state: &mut InlineTerminalState,
+    app: &NativeTuiApp,
+    width: u16,
+    height: u16,
+) -> bool {
+    state.should_draw_inline_frame(&frame_projection(app, width), width, height)
+}
 
 // These tests pin the terminal-adapter contract between committed host
 // history and the live inline tail. They intentionally exercise both
@@ -666,7 +697,7 @@ fn completed_agent_handoff_stays_visible_until_settlement_then_flushes_once() {
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("released handoff draw transaction");
     let released_screen = tui_testkit::screen_text(&terminal);
-    assert!(build_inline_live_transcript_lines(runtime.app()).is_empty());
+    assert!(projected_live_transcript_lines(runtime.app()).is_empty());
     assert!(released_screen.matches(FINAL_MARKER).count() <= 1);
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("history flush must keep the current conversation ready");
@@ -789,7 +820,7 @@ fn viewport_replay_does_not_duplicate_completed_agent_handoff() {
 
     let screen = tui_testkit::screen_text(&terminal);
     assert_eq!(screen.matches(FINAL_MARKER).count(), 1, "{screen}");
-    let live_handoff = build_inline_live_transcript_lines(runtime.app())
+    let live_handoff = projected_live_transcript_lines(runtime.app())
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
@@ -807,7 +838,7 @@ fn viewport_replay_does_not_duplicate_completed_agent_handoff() {
 
     let released_screen = tui_testkit::screen_text(&terminal);
     assert_eq!(released_screen.matches(FINAL_MARKER).count(), 1);
-    assert!(build_inline_live_transcript_lines(runtime.app()).is_empty());
+    assert!(projected_live_transcript_lines(runtime.app()).is_empty());
 }
 
 #[test]
@@ -826,8 +857,10 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
     let mut cache = FrameCacheState::default();
     let viewport = TerminalViewportState::default();
 
-    assert!(cache.should_draw_inline_frame(&app, &viewport, 80, 24));
-    assert!(!cache.should_draw_inline_frame(&app, &viewport, 80, 24));
+    assert!(frame_cache_should_draw(&mut cache, &app, &viewport, 80, 24));
+    assert!(!frame_cache_should_draw(
+        &mut cache, &app, &viewport, 80, 24
+    ));
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should keep a ready conversation state");
     };
@@ -837,7 +870,47 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
         " second".to_string(),
     );
 
-    assert!(cache.should_draw_inline_frame(&app, &viewport, 80, 24));
+    assert!(frame_cache_should_draw(&mut cache, &app, &viewport, 80, 24));
+}
+
+#[test]
+fn frame_cache_never_reuses_a_dialog_frame_and_redraws_after_close() {
+    let app = make_test_app();
+    let mut cache = FrameCacheState::default();
+    let viewport = TerminalViewportState::default();
+    let baseline = frame_projection(&app, 80);
+
+    assert!(cache.should_draw_inline_frame(&baseline, &viewport, 80, 24));
+    assert!(!cache.should_draw_inline_frame(&baseline, &viewport, 80, 24));
+
+    let mut dialog = frame_projection(&app, 80);
+    dialog.turn_steer_confirmation_visible = true;
+    assert!(cache.should_draw_inline_frame(&dialog, &viewport, 80, 24));
+    assert!(cache.should_draw_inline_frame(&dialog, &viewport, 80, 24));
+
+    let restored = frame_projection(&app, 80);
+    assert!(cache.should_draw_inline_frame(&restored, &viewport, 80, 24));
+}
+
+#[test]
+fn frame_cache_invalidates_when_only_the_cjk_prompt_cursor_moves() {
+    let mut app = make_test_app();
+    assert!(app.insert_input_text("가나다".to_string()));
+    let mut cache = FrameCacheState::default();
+    let viewport = TerminalViewportState::default();
+    let before = frame_projection(&app, 80);
+
+    assert!(cache.should_draw_inline_frame(&before, &viewport, 80, 24));
+    assert!(!cache.should_draw_inline_frame(&before, &viewport, 80, 24));
+
+    app.move_input_cursor(InputCursorMovement::PreviousCharacter);
+    let after = frame_projection(&app, 80);
+    assert_eq!(before.tail_view.lines, after.tail_view.lines);
+    assert_ne!(
+        before.tail_view.prompt_cursor_offset,
+        after.tail_view.prompt_cursor_offset
+    );
+    assert!(cache.should_draw_inline_frame(&after, &viewport, 80, 24));
 }
 
 const FOCUS_REACQUIRE_HISTORY_MARKER: &str = "FOCUS_REACQUIRE_HISTORY_MARKER";
@@ -3230,9 +3303,14 @@ fn hidden_inline_tail_skips_redundant_frame_draws() {
     let app = make_test_app();
     let mut inline_viewport = InlineTerminalState::default();
 
-    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
-    assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24));
-    assert!(inline_viewport.should_draw_inline_frame(&app, 96, 24));
+    assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
+    assert!(!inline_state_should_draw(
+        &mut inline_viewport,
+        &app,
+        80,
+        24
+    ));
+    assert!(inline_state_should_draw(&mut inline_viewport, &app, 96, 24));
 }
 
 #[test]
@@ -3244,8 +3322,13 @@ fn parallel_runtime_live_event_invalidates_hidden_frame_cache() {
     )));
     let mut inline_viewport = InlineTerminalState::default();
 
-    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
-    assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24));
+    assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
+    assert!(!inline_state_should_draw(
+        &mut inline_viewport,
+        &app,
+        80,
+        24
+    ));
 
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
         vec![
@@ -3261,7 +3344,7 @@ fn parallel_runtime_live_event_invalidates_hidden_frame_cache() {
         .join("\n");
 
     assert!(live_events.contains("new runtime event two"));
-    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+    assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
 }
 
 #[test]
@@ -3269,14 +3352,19 @@ fn overlay_cycle_resets_hidden_tail_redraw_cache() {
     let mut app = make_test_app();
     let mut inline_viewport = InlineTerminalState::default();
 
-    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
-    assert!(!inline_viewport.should_draw_inline_frame(&app, 80, 24));
+    assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
+    assert!(!inline_state_should_draw(
+        &mut inline_viewport,
+        &app,
+        80,
+        24
+    ));
 
     app.shell_overlay = ShellOverlay::Startup;
-    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+    assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
 
     app.shell_overlay = ShellOverlay::Hidden;
-    assert!(inline_viewport.should_draw_inline_frame(&app, 80, 24));
+    assert!(inline_state_should_draw(&mut inline_viewport, &app, 80, 24));
 }
 #[test]
 fn inline_history_uses_startup_banner_while_typing_in_new_draft() {
@@ -3331,7 +3419,6 @@ fn inline_history_shows_planning_worker_debug_detail_when_visibility_is_debug() 
         .with_display_label("Auto Follow-up")
         .with_debug_detail("planning worker temporary session: refresh / refresh ok"),
     );
-    conversation.refresh_conversation_lines();
     let normal_lines = current_inline_history_lines(&app)
         .into_iter()
         .map(|line| line.to_string())
@@ -3409,18 +3496,6 @@ fn host_scrollback_preserves_long_single_completion_beyond_screen_cap() {
         .collect::<Vec<_>>()
         .join("\n");
     append_history_message(&mut app, &body);
-    let capped_lines = {
-        let ConversationState::Ready(conversation) = &app.conversation_state else {
-            panic!("test app should start in a ready conversation state");
-        };
-        conversation.cached_conversation_lines.clone()
-    };
-    assert!(
-        !capped_lines
-            .iter()
-            .any(|line| line.to_string().contains("LONG_SINGLE_MARKER_FIRST")),
-        "fixture must prove the live screen projection is capped"
-    );
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -3491,7 +3566,9 @@ where
     InlineTerminalBackend<B>: InlineResizeBackend,
     <InlineTerminalBackend<B> as Backend>::Error: std::fmt::Debug,
 {
-    draw_inline_frame(terminal, runtime, inline_terminal).expect("draw test frame")
+    let width = terminal.size().expect("terminal size").width;
+    let projection = frame_projection(runtime.app(), width);
+    draw_inline_frame(terminal, runtime, inline_terminal, projection).expect("draw test frame")
 }
 fn append_history_message(app: &mut NativeTuiApp, text: &str) {
     append_message(app, ConversationMessageKind::Agent, text);
@@ -3506,7 +3583,6 @@ fn append_message(app: &mut NativeTuiApp, kind: ConversationMessageKind, text: &
     conversation
         .messages
         .push(ConversationMessage::new(kind, text.to_string(), None, None));
-    conversation.refresh_conversation_lines();
 }
 
 // Counting backend is a probe for adapter behavior: it exposes accidental

@@ -863,6 +863,93 @@ fn tui_generic_shell_controller_does_not_own_queue_mutation_effects() {
 }
 
 #[test]
+fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
+    assert_no_forbidden_references_in_paths(
+        "TUI conversation tail must consume ConversationScreenModel without app, service, I/O, or clock access",
+        &[
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels",
+            "src/adapter/inbound/tui/app/shell_presentation/runtime_status_copy.rs",
+            "src/adapter/inbound/tui/app/planning/presentation.rs",
+            "src/adapter/inbound/tui/app/planning/status_projection.rs",
+        ],
+        &[
+            "NativeTuiApp",
+            "NativeTuiApplicationHandle",
+            ".application",
+            ".planning()",
+            ".runtime()",
+            "CoreRuntime",
+            "core_runtime",
+            "std::fs",
+            "std::thread",
+            "std::sync",
+            "SystemTime::now",
+            "Instant::now",
+        ],
+    );
+
+    let screen_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
+    )
+    .expect("conversation screen-model source should load");
+    let production_source = production_lines(&screen_model_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        production_source.matches("core_runtime.snapshot()").count(),
+        1,
+        "ConversationScreenModel must capture exactly one core snapshot per projection"
+    );
+    for forbidden in [
+        ".application",
+        ".planning()",
+        ".runtime()",
+        "std::fs",
+        "std::thread",
+        "std::sync",
+    ] {
+        assert!(
+            !production_source.contains(forbidden),
+            "ConversationScreenModel choke point must not execute services or I/O: {forbidden}"
+        );
+    }
+
+    let terminal_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+    )
+    .expect("inline terminal adapter source should load");
+    assert!(
+        terminal_source.contains("frame_projection: &InlineConversationFrameProjection"),
+        "frame cache must accept the immutable frame projection instead of NativeTuiApp"
+    );
+    assert!(
+        terminal_source.contains(
+            "draw_projected(\n                frame,\n                app,\n                ShellFrontendMode::InlineMainBuffer,\n                frame_projection,"
+        ),
+        "the transaction must draw the same frame projection used by cache comparison"
+    );
+}
+
+#[test]
+fn conversation_state_model_has_no_ratatui_projection_cache() {
+    assert_no_forbidden_references_in_paths(
+        "conversation semantic state must not depend on shell presentation or cache ratatui lines",
+        &[
+            "src/adapter/inbound/tui/app/conversation_model/view_model.rs",
+            "src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs",
+        ],
+        &[
+            "ratatui",
+            "shell_presentation",
+            "cached_conversation_lines",
+            "refresh_conversation_lines",
+        ],
+    );
+}
+
+#[test]
 fn tui_conversation_loads_enter_through_core_runtime() {
     // Static guard for the conversation lifecycle migration: TUI may keep presentation
     // state and reducers, but snapshot loading must enter CoreRuntime/CoreEffectRunner.

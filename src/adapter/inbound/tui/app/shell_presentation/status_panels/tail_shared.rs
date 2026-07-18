@@ -3,8 +3,8 @@ use ratatui::text::Line;
 use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summary;
 
 use super::super::{
-    ConversationViewModel, INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT,
-    NativeTuiApp, compact_inline_detail, format_conversation_lines,
+    ConversationScreenModel, ConversationViewModel, INLINE_TAIL_THREAD_LABEL_LIMIT,
+    INLINE_TAIL_WARNING_DETAIL_LIMIT, compact_inline_detail, format_conversation_lines,
 };
 use super::activity_rail::build_activity_rail_notice_line;
 
@@ -35,20 +35,20 @@ pub(super) fn current_live_agent_lines(
     (!lines.is_empty()).then_some(lines)
 }
 
-pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> Option<String> {
+pub(super) fn parallel_mode_summary_line(
+    screen_model: &ConversationScreenModel<'_>,
+) -> Option<String> {
     /*
      * 기본 tail은 사용자가 지금 기다려야 하는 단계만 보여 준다. pool 내부 ID, agent 수, distributor
      * 구현 용어는 supersession board/event stream에서 계속 확인할 수 있지만, 일상 화면에서는 작업 흐름과
      * 사용 가능한 capacity가 먼저 보여야 dispatch 지연을 idle로 오해하지 않는다.
      */
-    match app.parallel_mode_readiness_snapshot() {
-        Some(_) if app.parallel_mode_enabled() => {
-            let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
-            let planning_projection = app.planning_runtime_projection_snapshot();
+    match screen_model.parallel_mode_readiness.as_ref() {
+        Some(_) if screen_model.parallel_mode_enabled => {
             let progress = parallel_mode_progress_summary(
-                &supervisor_snapshot,
-                planning_projection.queue_projection(),
-                app.parallel_mode_control_effect_in_flight(),
+                &screen_model.parallel_mode_supervisor,
+                screen_model.planning_runtime_projection.queue_projection(),
+                screen_model.parallel_mode_control_effect_in_flight,
             );
             Some(format!("Parallel  {}", progress.compact_line()))
         }
@@ -57,7 +57,9 @@ pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> Option<String> {
          * mode는 켜졌지만 readiness snapshot이 아직 없으면 background reconcile 전이다.
          * 이 상태를 "off"로 보이면 사용자가 toggle이 먹지 않았다고 오해하므로 preparing copy를 별도로 둔다.
          */
-        None if app.parallel_mode_enabled() => Some("Parallel  ◐ preparing workspace".to_string()),
+        None if screen_model.parallel_mode_enabled => {
+            Some("Parallel  ◐ preparing workspace".to_string())
+        }
         /*
          * snapshot도 없고 mode도 꺼져 있으면 parallel subsystem은 의도적으로 inactive다.
          * 이 상태는 operator가 조치할 정보가 없으므로 inline tail에서는 숨긴다.
@@ -66,13 +68,17 @@ pub(super) fn parallel_mode_summary_line(app: &NativeTuiApp) -> Option<String> {
     }
 }
 
-pub(super) fn parallel_mode_alert_line(app: &NativeTuiApp) -> Option<String> {
+pub(super) fn parallel_mode_alert_line(
+    screen_model: &ConversationScreenModel<'_>,
+) -> Option<String> {
     /*
      * readiness snapshot의 top_alert는 missing worktree, dirty integration branch 같은 즉시 조치 항목이다.
      * summary line과 분리해 tail/footer가 경고를 한 줄 더 강조할 수 있게 한다.
      */
-    app.parallel_mode_readiness_snapshot()
-        .and_then(|snapshot| snapshot.top_alert)
+    screen_model
+        .parallel_mode_readiness
+        .as_ref()
+        .and_then(|snapshot| snapshot.top_alert.as_deref())
         .map(|alert| format!("parallel alert: {alert}"))
 }
 

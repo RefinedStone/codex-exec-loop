@@ -26,6 +26,23 @@ pub enum ShellOverlay {
     Approval,
 }
 
+impl ShellOverlay {
+    pub(crate) fn prompt_input_has_focus(
+        self,
+        dialog_visible: bool,
+        parallel_prompt_input_locked: bool,
+    ) -> bool {
+        if dialog_visible {
+            return false;
+        }
+        match self {
+            Self::Hidden => true,
+            Self::Supersession => !parallel_prompt_input_locked,
+            _ => false,
+        }
+    }
+}
+
 // exit confirmation은 overlay stack 일부가 아니라 별도 focus guard다. 어떤 overlay event도 이를 닫을 수 있어야 한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitConfirmationState {
@@ -697,6 +714,15 @@ mod tests {
             ShellChromeEvent::ApprovalOverlayClosed,
         );
         assert_eq!(closed.state.shell_overlay, ShellOverlay::Hidden);
+    }
+    #[test]
+    fn prompt_focus_policy_covers_dialogs_overlays_and_supersession_loading() {
+        assert!(ShellOverlay::Hidden.prompt_input_has_focus(false, false));
+        assert!(!ShellOverlay::Hidden.prompt_input_has_focus(true, false));
+        assert!(!ShellOverlay::Queue.prompt_input_has_focus(false, false));
+        assert!(ShellOverlay::Supersession.prompt_input_has_focus(false, false));
+        assert!(!ShellOverlay::Supersession.prompt_input_has_focus(false, true));
+        assert!(!ShellOverlay::Supersession.prompt_input_has_focus(true, false));
     }
     fn sample_startup_diagnostics() -> Box<StartupReadySnapshot> {
         Box::new(StartupReadySnapshot::from_diagnostics(

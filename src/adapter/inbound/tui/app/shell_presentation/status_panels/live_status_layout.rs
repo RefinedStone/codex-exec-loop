@@ -2,9 +2,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::super::prompt_composer::{build_prompt_cursor_offset, wrapped_row_count};
-use super::super::{
-    Line, NativeTuiApp, ShellConversationState, ShellCorePresentationContext, ShellOverlay,
-};
+use super::super::{ConversationScreenModel, Line, ShellConversationState, ShellOverlay};
 use super::tail_copy::{
     QUEUE_RECEIPT_UNDO_ACTION_LABEL, build_inline_tail_lines_with_context,
     build_inline_tail_prompt_lines_with_context,
@@ -29,31 +27,31 @@ pub(crate) struct InlineTailView {
 
 // Build the tail text and cursor plan from the same presentation context.
 // This avoids a frame where copy says one shell state while cursor math assumes another.
-pub(crate) fn build_inline_tail_view(app: &NativeTuiApp, content_width: u16) -> InlineTailView {
-    // The context narrows NativeTuiApp to the shell state needed by both tail copy and cursor layout.
-    let context = ShellCorePresentationContext::from_app(app);
+pub(crate) fn build_inline_tail_view(
+    screen_model: &ConversationScreenModel<'_>,
+    content_width: u16,
+) -> InlineTailView {
     let notice_detail_limit = usize::from(content_width)
         .saturating_sub(INLINE_TAIL_NOTICE_PREFIX_WIDTH)
         .min(INLINE_TAIL_MAX_NOTICE_DETAIL_LIMIT);
     let mut lines = build_inline_tail_lines_with_context(
-        app,
-        &context,
-        app.github_review_recent_changes_summary(notice_detail_limit),
+        screen_model,
+        screen_model.github_review_recent_changes_summary.clone(),
         notice_detail_limit,
     );
-    lines = compact_inspection_tail_lines(app, &context, content_width, lines);
+    lines = compact_inspection_tail_lines(screen_model, content_width, lines);
 
     let queue_receipt_undo_hit_area =
         find_inline_action_hit_area(&lines, content_width, QUEUE_RECEIPT_UNDO_ACTION_LABEL);
 
     // Cursor placement depends on the actual line stack because status/notice rows before the prompt can wrap.
     let prompt_cursor_offset =
-        build_inline_prompt_cursor_offset_for_lines(app, &context, content_width, &lines);
+        build_inline_prompt_cursor_offset_for_lines(screen_model, content_width, &lines);
 
     InlineTailView {
         lines,
         prompt_cursor_offset,
-        render_from_top: context.startup_screen_is_active(),
+        render_from_top: screen_model.startup_screen_is_active(),
         queue_receipt_undo_hit_area,
     }
 }
@@ -97,22 +95,20 @@ fn find_inline_action_hit_area(
 }
 
 fn compact_inspection_tail_lines(
-    app: &NativeTuiApp,
-    context: &ShellCorePresentationContext<'_>,
+    screen_model: &ConversationScreenModel<'_>,
     content_width: u16,
     lines: Vec<Line<'static>>,
 ) -> Vec<Line<'static>> {
     const MAX_INSPECTION_TAIL_ROWS: usize = 6;
     const MAX_ACTIVITY_TAIL_ROWS: usize = 4;
     if content_width == 0
-        || app.shell_overlay == ShellOverlay::Hidden
-        || context.startup_screen_is_active()
+        || screen_model.shell_overlay == ShellOverlay::Hidden
+        || screen_model.startup_screen_is_active()
     {
         return lines;
     }
 
-    let prompt_lines =
-        build_inline_tail_prompt_lines_with_context(app, context, app.shell_action_availability());
+    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
     if prompt_lines.is_empty() || lines.len() <= prompt_lines.len() {
         return lines;
     }
@@ -120,7 +116,8 @@ fn compact_inspection_tail_lines(
     let prompt_start_index = lines.len().saturating_sub(prompt_lines.len());
     let prefix_lines = &lines[..prompt_start_index];
     let prompt_rows = rendered_rows(&prompt_lines, content_width);
-    let compact_activity_tail = app.shell_overlay == ShellOverlay::Activity && content_width <= 48;
+    let compact_activity_tail =
+        screen_model.shell_overlay == ShellOverlay::Activity && content_width <= 48;
     let max_tail_rows = if compact_activity_tail {
         MAX_ACTIVITY_TAIL_ROWS
     } else {
@@ -217,22 +214,22 @@ fn rendered_rows(lines: &[Line<'static>], content_width: u16) -> usize {
 // Convert the prompt-local cursor into a tail-local cursor.
 // Every wrapped row before the prompt becomes vertical offset that must be added to the prompt composer result.
 fn build_inline_prompt_cursor_offset_for_lines(
-    app: &NativeTuiApp,
-    // Shared context keeps prompt suffix reconstruction aligned with the tail lines already built.
-    context: &ShellCorePresentationContext<'_>,
+    screen_model: &ConversationScreenModel<'_>,
     // Tail content width is the common basis for both wrapping and prompt cursor composition.
     content_width: u16,
     // Final display lines; we count wrapped rows before the prompt suffix inside this slice.
     tail_lines: &[Line<'static>],
 ) -> Option<(u16, u16)> {
+    if !screen_model.prompt_input_has_focus {
+        return None;
+    }
     // Only a ready conversation owns a reliable input buffer cursor.
-    let ShellConversationState::Ready(conversation) = context.conversation_state else {
+    let ShellConversationState::Ready(conversation) = screen_model.conversation_state else {
         return None;
     };
 
     // Rebuild only the prompt suffix to find where that suffix begins in the already assembled tail.
-    let prompt_lines =
-        build_inline_tail_prompt_lines_with_context(app, context, app.shell_action_availability());
+    let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
     // Saturating subtraction keeps degraded state from slicing before the beginning of tail_lines.
     let prompt_start_index = tail_lines.len().saturating_sub(prompt_lines.len());
 
@@ -246,4 +243,44 @@ fn build_inline_prompt_cursor_offset_for_lines(
 
     // Add pre-prompt rows to reach tail-local coordinates, saturating for extremely tall notice stacks.
     Some((cursor_x, prompt_start_row.saturating_add(cursor_y)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::shell_presentation::{
+        ConversationScreenModel, build_inline_live_transcript_lines,
+    };
+    use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::adapter::inbound::tui::app::{ConversationState, TuiLanguage};
+
+    #[test]
+    fn one_screen_model_produces_stable_cjk_copy_layout_and_live_lines() {
+        let mut app = test_native_tui_app();
+        app.tui_language = TuiLanguage::Korean;
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.input_buffer = "한글 prompt".to_string();
+        conversation.set_input_cursor_byte_index("한글".len());
+
+        let screen_model = ConversationScreenModel::from_app(&app);
+        let first = build_inline_tail_view(&screen_model, 80);
+        let second = build_inline_tail_view(&screen_model, 80);
+        let first_live = build_inline_live_transcript_lines(&screen_model);
+        let second_live = build_inline_live_transcript_lines(&screen_model);
+
+        assert_eq!(first.lines, second.lines);
+        assert_eq!(first.prompt_cursor_offset, second.prompt_cursor_offset);
+        assert_eq!(first.render_from_top, second.render_from_top);
+        assert_eq!(
+            first.queue_receipt_undo_hit_area,
+            second.queue_receipt_undo_hit_area
+        );
+        assert_eq!(first_live, second_live);
+        assert_eq!(
+            screen_model.core_revision,
+            app.core_runtime.snapshot().revision
+        );
+    }
 }

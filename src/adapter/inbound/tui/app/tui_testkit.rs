@@ -307,8 +307,8 @@ fn is_cjk_wide(character: char) -> bool {
     )
 }
 pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
-    // History injection keeps fixtures small while still rebuilding the cached
-    // formatted transcript lines expected by renderers.
+    // History injection keeps fixtures small while exercising the renderer's
+    // projection from the canonical message log.
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");
     };
@@ -318,7 +318,6 @@ pub(super) fn append_agent_history_message(app: &mut NativeTuiApp, text: &str) {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    conversation.refresh_conversation_lines();
 }
 pub(super) fn set_live_agent_message(app: &mut NativeTuiApp, text: &str) {
     // Live-message injection sets the same running-turn markers used by runtime
@@ -624,6 +623,9 @@ impl Vt100Backend {
     pub(super) fn parser_cursor_position(&self) -> Position {
         let (row, column) = self.parser().screen().cursor_position();
         Position::new(column, row)
+    }
+    pub(super) fn parser_cursor_hidden(&self) -> bool {
+        self.parser().screen().hide_cursor()
     }
     fn rows(&self) -> Vec<String> {
         self.parser().screen().rows(0, self.width).collect()

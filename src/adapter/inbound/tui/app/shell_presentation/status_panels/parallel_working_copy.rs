@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::{Line, Span};
 
@@ -9,7 +8,8 @@ use crate::domain::parallel_mode::{
 };
 
 use super::super::{
-    AkraTheme, INLINE_TAIL_STATUS_DETAIL_LIMIT, Modifier, NativeTuiApp, compact_inline_detail,
+    AkraTheme, ConversationScreenModel, INLINE_TAIL_STATUS_DETAIL_LIMIT, Modifier,
+    compact_inline_detail,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,16 +20,17 @@ struct ParallelSlotWorkingStatus {
     detail: String,
 }
 
-pub(super) fn build_parallel_slot_working_line(app: &NativeTuiApp) -> Option<Line<'static>> {
-    if !app.parallel_mode_enabled() {
+pub(super) fn build_parallel_slot_working_line(
+    screen_model: &ConversationScreenModel<'_>,
+) -> Option<Line<'static>> {
+    if !screen_model.parallel_mode_enabled {
         return None;
     }
 
-    let snapshot = app.parallel_mode_supervisor_snapshot();
-    let statuses = parallel_slot_working_statuses(&snapshot);
+    let statuses = parallel_slot_working_statuses(&screen_model.parallel_mode_supervisor);
     let selected_index = rotated_parallel_slot_status_index(
         statuses.len(),
-        current_parallel_slot_rotation_elapsed_seconds(),
+        (screen_model.animation_elapsed_millis / 1_000) as u64,
     )?;
     let status = statuses.get(selected_index)?;
     let mut segments = vec![format!("pool {}", status.slot_id)];
@@ -199,13 +200,6 @@ fn parallel_slot_detail_from_pool_slot(slot: &ParallelModePoolSlotSnapshot) -> S
         return worktree_label.to_string();
     }
     slot.branch_name.clone()
-}
-
-fn current_parallel_slot_rotation_elapsed_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
 }
 
 fn rotated_parallel_slot_status_index(status_count: usize, elapsed_seconds: u64) -> Option<usize> {

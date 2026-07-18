@@ -100,6 +100,12 @@ pub struct PlanningRuntimeStatusProjection {
     pub failure_line: Option<String>,
 }
 
+pub fn build_planning_runtime_summary_line(
+    request: PlanningRuntimeSummaryLineRequest<'_>,
+) -> Option<String> {
+    PlanningRuntimePolicyService::new().build_summary_line(request)
+}
+
 impl PlanningRuntimePolicyService {
     pub fn new() -> Self {
         Self {

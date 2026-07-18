@@ -1,5 +1,4 @@
 use ratatui::text::{Line, Span};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::super::capability_copy::{
     startup_attachment_summary_line, startup_diagnostics_summary_line,
@@ -10,13 +9,13 @@ use super::super::planning::build_planning_worker_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
 use super::super::{
-    AkraTheme, ConversationInputState, ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT,
-    INLINE_TAIL_NOTICE_DETAIL_LIMIT, INLINE_TAIL_PLANNING_DETAIL_LIMIT,
-    INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT, INLINE_TAIL_STATUS_DETAIL_LIMIT,
-    INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode, InlineShellCommandInput, Modifier,
-    NativeTuiApp, ShellActionAvailability, ShellConversationState, ShellCorePresentationContext,
-    ShellOverlay, StartupState, TuiLanguage, auto_follow_prompt_status_line, build_working_line,
-    compact_inline_detail,
+    AkraTheme, ConversationInputState, ConversationScreenModel, ConversationViewModel,
+    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+    INLINE_TAIL_PLANNING_DETAIL_LIMIT, INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
+    INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode,
+    InlineShellCommandInput, Modifier, QueueMutationTailState, ShellActionAvailability,
+    ShellConversationState, ShellOverlay, StartupState, TuiLanguage,
+    auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
 };
 use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
@@ -36,8 +35,7 @@ pub(super) const QUEUE_RECEIPT_UNDO_ACTION_LABEL: &str = "[ Undo queue ]";
  * turn is streaming or while startup checks are blocking submission.
  */
 pub(super) fn build_inline_tail_lines_with_context(
-    app: &NativeTuiApp,
-    context: &ShellCorePresentationContext<'_>,
+    screen_model: &ConversationScreenModel<'_>,
     github_review_recent_changes_summary: Option<String>,
     notice_detail_limit: usize,
 ) -> Vec<Line<'static>> {
@@ -47,39 +45,39 @@ pub(super) fn build_inline_tail_lines_with_context(
     projection renderer-adjacent prevents lower application services from knowing
     about terminal row budgets.
     */
-    let planning_status_projection = context.ready_conversation().map(|conversation| {
+    let planning_status_projection = screen_model.ready_conversation().map(|conversation| {
         build_planning_status_surface_projection(
-            app,
+            &screen_model.planning_runtime_projection,
             conversation,
             INLINE_TAIL_PLANNING_DETAIL_LIMIT,
             INLINE_TAIL_NOTICE_DETAIL_LIMIT,
             false,
         )
     });
-    let planning_worker_panel_lines =
-        build_planning_worker_panel_lines(app, INLINE_TAIL_NOTICE_DETAIL_LIMIT);
+    let planning_worker_panel_lines = build_planning_worker_panel_lines(
+        screen_model.planning_worker_shows_debug_details,
+        &screen_model.planning_worker_panel_state,
+        INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+    );
 
-    if context.startup_screen_is_active() {
-        let has_buffered_input = context
+    if screen_model.startup_screen_is_active() {
+        let has_buffered_input = screen_model
             .ready_conversation()
             .is_some_and(|conversation| !conversation.input_buffer.is_empty());
         // The full startup masthead is useful only before the operator starts typing.
         // Once an overlay or buffered prompt exists, keep the tail compact so the
         // prompt remains close to its status line.
-        let mut lines = if app.shell_overlay == ShellOverlay::Hidden && !has_buffered_input {
-            build_inline_startup_screen_lines_with_context(context)
+        let mut lines = if screen_model.shell_overlay == ShellOverlay::Hidden && !has_buffered_input
+        {
+            build_inline_startup_screen_lines_with_context(screen_model)
         } else {
-            build_inline_startup_overlay_tail_lines_with_context(context)
+            build_inline_startup_overlay_tail_lines_with_context(screen_model)
         };
-        lines.extend(build_inline_tail_prompt_lines_with_context(
-            app,
-            context,
-            app.shell_action_availability(),
-        ));
+        lines.extend(build_inline_tail_prompt_lines_with_context(screen_model));
         return lines;
     }
     let mut lines = Vec::new();
-    match context.conversation_state {
+    match screen_model.conversation_state {
         ShellConversationState::Loading => {
             /*
             Loading and failed states still render a full tail because the inline
@@ -88,15 +86,16 @@ pub(super) fn build_inline_tail_lines_with_context(
             */
             lines.push(Line::from(format!(
                 "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
-                context.shell_action_availability.status_text(),
-                context.recent_session_status_label.as_str(),
+                screen_model.shell_action_availability.status_text(),
+                screen_model.recent_session_status_label.as_str(),
             )));
-            let github_status = (context.github_review_polling_status_label != "off").then(|| {
-                format!(
-                    "  |  gh: {}",
-                    context.github_review_polling_status_label.as_str()
-                )
-            });
+            let github_status =
+                (screen_model.github_review_polling_status_label != "off").then(|| {
+                    format!(
+                        "  |  gh: {}",
+                        screen_model.github_review_polling_status_label.as_str()
+                    )
+                });
             lines.push(Line::from(format!(
                 "runtime: loading thread history{}  |  flow: terminal main buffer",
                 github_status.unwrap_or_default(),
@@ -109,15 +108,16 @@ pub(super) fn build_inline_tail_lines_with_context(
         ShellConversationState::Failed(message) => {
             lines.push(Line::from(format!(
                 "Akra  |  thread: unavailable  |  startup: {}  |  sessions: {}",
-                context.shell_action_availability.status_text(),
-                context.recent_session_status_label.as_str(),
+                screen_model.shell_action_availability.status_text(),
+                screen_model.recent_session_status_label.as_str(),
             )));
-            let github_status = (context.github_review_polling_status_label != "off").then(|| {
-                format!(
-                    "  |  gh: {}",
-                    context.github_review_polling_status_label.as_str()
-                )
-            });
+            let github_status =
+                (screen_model.github_review_polling_status_label != "off").then(|| {
+                    format!(
+                        "  |  gh: {}",
+                        screen_model.github_review_polling_status_label.as_str()
+                    )
+                });
             lines.push(Line::from(format!(
                 "runtime: unavailable{}  |  flow: terminal main buffer",
                 github_status.unwrap_or_default(),
@@ -138,20 +138,19 @@ pub(super) fn build_inline_tail_lines_with_context(
                 .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
                 .map(|summary| compact_inline_summary_label(&summary));
 
-            /*
-            The first three lines form the always-visible health header. They avoid
-            expensive detail expansion and reserve later rows for planning, worker,
-            transcript, and notice detail that may appear only in specific states.
-            */
             lines.push(build_ready_status_ribbon_line(conversation));
-            if let Some(status_detail_line) = build_ready_status_detail_line(conversation, context)
+            if let Some(status_detail_line) =
+                build_ready_status_detail_line(conversation, screen_model)
             {
                 lines.push(status_detail_line);
             }
             if let Some(completion_line) = build_completion_alert_line(conversation) {
                 lines.push(completion_line);
             }
-            if let Some(queue_mutation_line) = build_queue_mutation_line(app) {
+            if let Some(queue_mutation_line) = build_queue_mutation_line(
+                screen_model.queue_mutation_tail_state,
+                screen_model.tui_language,
+            ) {
                 lines.push(queue_mutation_line);
             }
             if let Some(runtime_notice_summary) = runtime_notice_summary {
@@ -163,39 +162,24 @@ pub(super) fn build_inline_tail_lines_with_context(
             } else if warning_summary_has_signal(&warning_summary) {
                 lines.push(Line::from(warning_summary));
             }
-            if !app.turn_options.is_default() {
-                lines.push(Line::from(format!(
-                    "turn options: {}",
-                    app.turn_options.summary_label()
-                )));
+            if let Some(turn_options_summary) = screen_model.turn_options_summary.as_deref() {
+                lines.push(Line::from(format!("turn options: {turn_options_summary}")));
             }
-            if let Some(parallel_summary_line) = parallel_mode_summary_line(app) {
+            if let Some(parallel_summary_line) = parallel_mode_summary_line(screen_model) {
                 lines.push(Line::from(parallel_summary_line));
             }
 
-            if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(app) {
-                /*
-                Parallel alerts sit immediately after the summary line because they
-                can block dispatch even when the rest of the conversation is ready.
-                Placing them before planning detail keeps slot/recovery issues from
-                being buried below queue copy.
-                */
+            if let Some(parallel_mode_alert_line) = parallel_mode_alert_line(screen_model) {
                 lines.push(Line::from(parallel_mode_alert_line));
             }
-            // The notice budget excludes the eight-cell `notice: ` prefix while
-            // the working line has seventeen fixed cells around its detail.
             let working_detail_limit =
                 INLINE_TAIL_STATUS_DETAIL_LIMIT.min(notice_detail_limit.saturating_sub(9));
-            if let Some(working_line) = build_working_line(conversation, working_detail_limit) {
+            if let Some(working_line) =
+                build_working_line(conversation, working_detail_limit, screen_model.rendered_at)
+            {
                 lines.push(working_line);
             }
             if let Some(planning_projection) = planning_status_projection.as_ref() {
-                /*
-                The planning projection is already budgeted for inline detail limits.
-                Tail copy preserves its order: summary first, queue framing next,
-                notices last. That mirrors the popup/status surfaces without making
-                this compact renderer know planning service enum internals.
-                */
                 if let Some(planning_line) = planning_projection.summary_line.as_deref() {
                     lines.push(Line::from(planning_line.to_string()));
                 }
@@ -206,22 +190,22 @@ pub(super) fn build_inline_tail_lines_with_context(
             } else {
                 lines.push(Line::from(format!(
                     "planning: unavailable  |  startup: {}",
-                    context.shell_action_availability.status_text()
+                    screen_model.shell_action_availability.status_text()
                 )));
             }
-            if let Some(parallel_working_line) = build_parallel_slot_working_line(app) {
+            if let Some(parallel_working_line) = build_parallel_slot_working_line(screen_model) {
                 lines.push(parallel_working_line);
             }
 
             lines.extend(planning_worker_panel_lines.into_iter().map(Line::from));
             let renders_viewport_handoff = matches!(
-                app.inline_history_render_mode,
+                screen_model.inline_history_render_mode,
                 InlineHistoryRenderMode::ViewportReplay
             ) && conversation
                 .has_pending_viewport_transcript_handoff();
             if !renders_viewport_handoff {
                 lines.extend(build_recent_transcript_summary_lines(
-                    app.inline_history_render_mode,
+                    screen_model.inline_history_render_mode,
                     conversation,
                 ));
             }
@@ -236,11 +220,7 @@ pub(super) fn build_inline_tail_lines_with_context(
         }
     }
 
-    lines.extend(build_inline_tail_prompt_lines_with_context(
-        app,
-        context,
-        app.shell_action_availability(),
-    ));
+    lines.extend(build_inline_tail_prompt_lines_with_context(screen_model));
     lines
 }
 fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<'static> {
@@ -268,44 +248,52 @@ fn build_ready_status_ribbon_line(conversation: &ConversationViewModel) -> Line<
     Line::from(parts.join("  |  "))
 }
 
-fn build_queue_mutation_line(app: &NativeTuiApp) -> Option<Line<'static>> {
-    if let Some(operation_id) = app.pending_queue_mutation_operation_id() {
+fn build_queue_mutation_line(
+    state: QueueMutationTailState,
+    language: TuiLanguage,
+) -> Option<Line<'static>> {
+    if let QueueMutationTailState::Pending(operation_id) = state {
         // This status intentionally omits the undo action label so layout cannot bind a stale mouse target.
         return Some(Line::from(vec![
             Span::styled(
-                app.tui_language
-                    .queue_mutation_tail_pending_label(operation_id),
+                language.queue_mutation_tail_pending_label(operation_id),
                 AkraTheme::warning(),
             ),
-            Span::raw(app.tui_language.queue_mutation_tail_pending_detail()),
+            Span::raw(language.queue_mutation_tail_pending_detail()),
         ]));
     }
-    if app.queue_mutation_requires_authority_refresh() {
+    if state == QueueMutationTailState::RefreshRequired {
         return Some(Line::from(vec![
             Span::styled(
-                app.tui_language.queue_mutation_tail_refresh_label(),
+                language.queue_mutation_tail_refresh_label(),
                 AkraTheme::warning(),
             ),
-            Span::raw(app.tui_language.queue_mutation_tail_refresh_detail()),
+            Span::raw(language.queue_mutation_tail_refresh_detail()),
         ]));
     }
 
-    build_queue_receipt_undo_action_line(app)
+    match state {
+        QueueMutationTailState::UndoAvailable(task_count) => {
+            Some(build_queue_receipt_undo_action_line(task_count))
+        }
+        QueueMutationTailState::Idle
+        | QueueMutationTailState::Pending(_)
+        | QueueMutationTailState::RefreshRequired => None,
+    }
 }
 
-fn build_queue_receipt_undo_action_line(app: &NativeTuiApp) -> Option<Line<'static>> {
-    let queued_task_count = app.queue_receipt_undo_task_count()?;
+fn build_queue_receipt_undo_action_line(queued_task_count: usize) -> Line<'static> {
     let task_label = if queued_task_count == 1 {
         "task"
     } else {
         "tasks"
     };
-    Some(Line::from(vec![
+    Line::from(vec![
         Span::styled(QUEUE_RECEIPT_UNDO_ACTION_LABEL, AkraTheme::inline_action()),
         Span::raw(format!(
             "  click to cancel {queued_task_count} queued {task_label}  |  keyboard: :queue then u"
         )),
-    ]))
+    ])
 }
 
 fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool {
@@ -319,7 +307,7 @@ fn should_show_auto_follow_status(conversation: &ConversationViewModel) -> bool 
 
 fn build_ready_status_detail_line(
     conversation: &ConversationViewModel,
-    context: &ShellCorePresentationContext<'_>,
+    screen_model: &ConversationScreenModel<'_>,
 ) -> Option<Line<'static>> {
     let status = conversation.status_text_for_viewport().trim();
     let terminal_status_is_owned_by_notice = conversation.activity_rail_terminal_state.is_some()
@@ -339,13 +327,13 @@ fn build_ready_status_detail_line(
             compact_inline_detail(status, INLINE_TAIL_STATUS_DETAIL_LIMIT)
         ));
     }
-    if context.shell_action_availability != ShellActionAvailability::Ready {
+    if screen_model.shell_action_availability != ShellActionAvailability::Ready {
         parts.push(format!(
             "startup: {}",
-            context.shell_action_availability.status_text()
+            screen_model.shell_action_availability.status_text()
         ));
     }
-    let github_status = context.github_review_polling_status_label.as_str();
+    let github_status = screen_model.github_review_polling_status_label.as_str();
     if github_status != "off" {
         parts.push(format!("gh: {github_status}"));
     }
@@ -442,14 +430,14 @@ fn recent_transcript_messages(conversation: &ConversationViewModel) -> Vec<&Conv
 }
 
 fn build_inline_startup_screen_lines_with_context(
-    context: &ShellCorePresentationContext<'_>,
+    screen_model: &ConversationScreenModel<'_>,
 ) -> Vec<Line<'static>> {
     /*
     The startup masthead is allowed to be taller than the steady-state tail
     because no transcript exists yet. Once the operator starts typing, callers
     switch to the compact startup overlay tail to keep the prompt close to hand.
     */
-    let mut lines = if matches!(context.startup_state, StartupState::Ready(_)) {
+    let mut lines = if matches!(screen_model.startup_state, StartupState::Ready(_)) {
         Vec::new()
     } else {
         startup_masthead_lines()
@@ -457,23 +445,23 @@ fn build_inline_startup_screen_lines_with_context(
     lines.push(Line::from(vec![
         ratatui::text::Span::styled("Akra", AkraTheme::brand()),
         ratatui::text::Span::raw(
-            context.tui_language.startup_axis_row(
-                context
+            screen_model.tui_language.startup_axis_row(
+                screen_model
                     .tui_language
-                    .startup_axis_status(context.shell_action_availability),
-                context.recent_session_status_label.as_str(),
-                &context
+                    .startup_axis_status(screen_model.shell_action_availability),
+                screen_model.recent_session_status_label.as_str(),
+                &screen_model
                     .tui_language
-                    .github_review_polling_status(&context.github_review_polling_status_label),
+                    .github_review_polling_status(&screen_model.github_review_polling_status_label),
             ),
         ),
     ]));
-    match context.startup_state {
+    match screen_model.startup_state {
         StartupState::Idle => {
             lines.push(Line::from(startup_preparing_status_line()));
-            if let Some(conversation) = context.ready_conversation() {
+            if let Some(conversation) = screen_model.ready_conversation() {
                 lines.push(Line::from(
-                    context
+                    screen_model
                         .tui_language
                         .startup_workspace_line(&conversation.cwd),
                 ));
@@ -482,46 +470,52 @@ fn build_inline_startup_screen_lines_with_context(
         StartupState::Loading => {
             lines.push(Line::from(startup_initializing_status_line()));
             lines.extend(super::super::build_startup_check_lines_from_state(
-                context.startup_state,
+                screen_model.startup_state,
             ));
         }
         StartupState::Ready(ready) => {
             lines.push(Line::from(
-                context.tui_language.startup_workspace_line(&ready.cwd),
+                screen_model.tui_language.startup_workspace_line(&ready.cwd),
             ));
             lines.push(Line::from(startup_diagnostics_summary_line(
                 ready,
-                context.tui_language,
+                screen_model.tui_language,
             )));
             lines.push(Line::from(startup_attachment_summary_line(
                 ready,
-                context.tui_language,
+                screen_model.tui_language,
             )));
             if let Some(first_warning) = ready.warnings.first() {
-                lines.push(Line::from(context.tui_language.startup_warning_line(
+                lines.push(Line::from(screen_model.tui_language.startup_warning_line(
                     &compact_inline_detail(first_warning, INLINE_TAIL_NOTICE_DETAIL_LIMIT),
                 )));
             }
-            lines.push(Line::from(context.tui_language.startup_ready_action_line()));
-            if startup_prompt_buffered_in_context(context) {
+            lines.push(Line::from(
+                screen_model.tui_language.startup_ready_action_line(),
+            ));
+            if startup_prompt_buffered_in_context(screen_model) {
                 lines.push(Line::from(
-                    context.tui_language.startup_buffered_prompt_line(),
+                    screen_model.tui_language.startup_buffered_prompt_line(),
                 ));
             } else {
-                lines.push(Line::from(context.tui_language.startup_examples_line()));
+                lines.push(Line::from(
+                    screen_model.tui_language.startup_examples_line(),
+                ));
             }
-            lines.push(Line::from(context.tui_language.startup_shortcuts_line()));
+            lines.push(Line::from(
+                screen_model.tui_language.startup_shortcuts_line(),
+            ));
         }
         StartupState::Failed(message) => {
             lines.push(Line::from(
-                context.tui_language.startup_status_line(message),
+                screen_model.tui_language.startup_status_line(message),
             ));
             for warning_line in
-                super::super::build_startup_warning_lines_from_state(context.startup_state)
+                super::super::build_startup_warning_lines_from_state(screen_model.startup_state)
                     .into_iter()
                     .filter(|line| !line.to_string().eq_ignore_ascii_case("no warnings"))
             {
-                lines.push(Line::from(context.tui_language.startup_warning_line(
+                lines.push(Line::from(screen_model.tui_language.startup_warning_line(
                     &compact_inline_detail(
                         &warning_line.to_string(),
                         INLINE_TAIL_NOTICE_DETAIL_LIMIT,
@@ -536,7 +530,7 @@ fn build_inline_startup_screen_lines_with_context(
 }
 
 fn build_inline_startup_overlay_tail_lines_with_context(
-    context: &ShellCorePresentationContext<'_>,
+    screen_model: &ConversationScreenModel<'_>,
 ) -> Vec<Line<'static>> {
     /*
     Compact startup tail is deliberately a single operational axis row. It is used
@@ -546,14 +540,14 @@ fn build_inline_startup_overlay_tail_lines_with_context(
     vec![Line::from(vec![
         ratatui::text::Span::styled("Akra", AkraTheme::brand()),
         ratatui::text::Span::raw(
-            context.tui_language.startup_axis_row(
-                context
+            screen_model.tui_language.startup_axis_row(
+                screen_model
                     .tui_language
-                    .startup_axis_status(context.shell_action_availability),
-                context.recent_session_status_label.as_str(),
-                &context
+                    .startup_axis_status(screen_model.shell_action_availability),
+                screen_model.recent_session_status_label.as_str(),
+                &screen_model
                     .tui_language
-                    .github_review_polling_status(&context.github_review_polling_status_label),
+                    .github_review_polling_status(&screen_model.github_review_polling_status_label),
             ),
         ),
     ])]
@@ -588,56 +582,55 @@ fn startup_masthead_lines() -> Vec<Line<'static>> {
     ]
 }
 
-fn startup_prompt_buffered_in_context(context: &ShellCorePresentationContext<'_>) -> bool {
-    let Some(conversation) = context.ready_conversation() else {
+fn startup_prompt_buffered_in_context(screen_model: &ConversationScreenModel<'_>) -> bool {
+    let Some(conversation) = screen_model.ready_conversation() else {
         return false;
     };
     !conversation.input_buffer.trim().is_empty()
 }
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
-    app: &NativeTuiApp,
-    context: &ShellCorePresentationContext<'_>,
-    shell_action_availability: ShellActionAvailability,
+    screen_model: &ConversationScreenModel<'_>,
 ) -> Vec<Line<'static>> {
     /*
     Prompt copy is separated from the status body because layout code also uses
     this function to compute cursor offsets. Loading/failed states get static
     affordance rows; ready state delegates to the input-aware branch below.
     */
-    if app.shell_overlay == ShellOverlay::Approval {
+    if screen_model.shell_overlay == ShellOverlay::Approval {
         return vec![Line::from(
             "prompt: paused while an approval decision is pending",
         )];
     }
     if matches!(
-        context.conversation_state,
+        screen_model.conversation_state,
         ShellConversationState::Ready(conversation)
             if conversation.has_pending_viewport_transcript_handoff()
-    ) && (app.shell_overlay != ShellOverlay::Hidden
-        || app.is_exit_confirmation_visible()
-        || app.is_turn_steer_confirmation_visible())
+    ) && (screen_model.shell_overlay != ShellOverlay::Hidden || screen_model.dialog_visible())
     {
         return vec![Line::from("prompt: response held while the dialog is open")];
     }
-    let mut lines = match context.conversation_state {
+    let mut lines = match screen_model.conversation_state {
         ShellConversationState::Loading => vec![Line::from("prompt: waiting for shell readiness")],
         ShellConversationState::Failed(message) => {
             vec![Line::from(format!("prompt: unavailable  |  {message}"))]
         }
         ShellConversationState::Ready(conversation) => build_inline_ready_prompt_lines(
             conversation,
-            shell_action_availability,
-            context.tui_language,
+            screen_model.shell_action_availability,
+            screen_model.tui_language,
         ),
     };
-    if app.parallel_mode_loading_prompt_indicator_visible()
+    if screen_model.parallel_mode_loading_prompt_indicator_visible
         && let Some(first_line) = lines.first_mut()
     {
         first_line.spans.insert(
             0,
             Span::styled(
-                format!("{} ", parallel_loading_prompt_indicator_frame()),
+                format!(
+                    "{} ",
+                    parallel_loading_prompt_indicator_frame(screen_model.animation_elapsed_millis,)
+                ),
                 AkraTheme::brand(),
             ),
         );
@@ -645,12 +638,9 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
     lines
 }
 
-fn parallel_loading_prompt_indicator_frame() -> &'static str {
+fn parallel_loading_prompt_indicator_frame(animation_elapsed_millis: u128) -> &'static str {
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let tick = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| (duration.as_millis() / 120) as usize)
-        .unwrap_or(0);
+    let tick = (animation_elapsed_millis / 120) as usize;
     FRAMES[tick % FRAMES.len()]
 }
 
@@ -793,7 +783,7 @@ mod coverage_tests {
     use crate::adapter::inbound::tui::app::queue_overlay_ui::QueueMutationKind;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
-        AutoFollowRuntimePhase, ConversationState, InlineShellCommand,
+        AutoFollowRuntimePhase, ConversationState, InlineShellCommand, NativeTuiApp,
     };
     use crate::application::service::planning::PlanningQueueCancellationRequest;
     use crate::core::app::StartupReadySnapshot;
@@ -829,11 +819,11 @@ mod coverage_tests {
     }
 
     fn render_tail(app: &NativeTuiApp, recent_changes: Option<&str>) -> String {
-        let context = ShellCorePresentationContext::from_app(app);
+        let mut screen_model = ConversationScreenModel::from_app(app);
+        screen_model.github_review_recent_changes_summary = recent_changes.map(str::to_string);
         rendered(build_inline_tail_lines_with_context(
-            app,
-            &context,
-            recent_changes.map(str::to_string),
+            &screen_model,
+            screen_model.github_review_recent_changes_summary.clone(),
             INLINE_TAIL_NOTICE_DETAIL_LIMIT,
         ))
     }
@@ -865,17 +855,12 @@ mod coverage_tests {
         startup_state: &'a StartupState,
         shell_action_availability: ShellActionAvailability,
         conversation_state: ShellConversationState<'a>,
-    ) -> ShellCorePresentationContext<'a> {
-        ShellCorePresentationContext {
-            show_startup_ascii_art: false,
+    ) -> ConversationScreenModel<'a> {
+        ConversationScreenModel::from_test_parts(
             startup_state,
             shell_action_availability,
-            recent_session_status_label: "loaded".to_string(),
-            github_review_polling_status_label: "polling".to_string(),
-            tui_language: TuiLanguage::English,
-            parallel_mode_enabled: false,
             conversation_state,
-        }
+        )
     }
 
     #[test]
@@ -929,14 +914,14 @@ mod coverage_tests {
         assert!(!overlay.contains("████"));
 
         app.startup_state = StartupState::Ready(startup_ready_snapshot(true));
-        let context = ShellCorePresentationContext::from_app(&app);
+        let context = ConversationScreenModel::from_app(&app);
         assert!(
             rendered(build_inline_startup_screen_lines_with_context(&context))
                 .contains("draft: opening prompt buffered below")
         );
 
         app.conversation_state = ConversationState::Loading;
-        let loading_context = ShellCorePresentationContext::from_app(&app);
+        let loading_context = ConversationScreenModel::from_app(&app);
         assert!(!startup_prompt_buffered_in_context(&loading_context));
     }
 
@@ -1201,7 +1186,7 @@ mod coverage_tests {
             );
         }
 
-        assert!(!parallel_loading_prompt_indicator_frame().is_empty());
+        assert!(!parallel_loading_prompt_indicator_frame(0).is_empty());
     }
 
     #[test]
@@ -1212,7 +1197,7 @@ mod coverage_tests {
 
         assert!(!conversation.can_accept_manual_prompt());
         assert!(
-            build_working_line(&conversation, 40)
+            build_working_line(&conversation, 40, Instant::now())
                 .is_some_and(|line| line.to_string().contains("settling planning queue"))
         );
         let empty_prompt = rendered(build_inline_ready_prompt_lines(
@@ -1297,7 +1282,8 @@ mod coverage_tests {
             )
             .expect("queue mutation should enter the pending gate");
 
-        let tail_view = super::super::live_status_layout::build_inline_tail_view(&app, 96);
+        let screen_model = ConversationScreenModel::from_app(&app);
+        let tail_view = super::super::live_status_layout::build_inline_tail_view(&screen_model, 96);
         let tail = rendered(tail_view.lines);
 
         assert!(
@@ -1320,7 +1306,8 @@ mod coverage_tests {
         ready_conversation_mut(&mut app).thread_id = "thread-refresh-required".to_string();
         app.queue_mutation_ui_state.require_authority_refresh();
 
-        let tail_view = super::super::live_status_layout::build_inline_tail_view(&app, 96);
+        let screen_model = ConversationScreenModel::from_app(&app);
+        let tail_view = super::super::live_status_layout::build_inline_tail_view(&screen_model, 96);
         let tail = rendered(tail_view.lines);
 
         assert!(

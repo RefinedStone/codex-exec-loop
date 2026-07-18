@@ -400,11 +400,13 @@ impl NativeTuiApp {
         true
     }
     pub(super) fn can_edit_prompt_input(&self) -> bool {
-        match self.shell_overlay {
-            ShellOverlay::Hidden => true,
-            ShellOverlay::Supersession => !self.parallel_mode_prompt_input_locked(),
-            _ => false,
-        }
+        self.prompt_input_has_focus()
+    }
+    pub(super) fn prompt_input_has_focus(&self) -> bool {
+        self.shell_overlay.prompt_input_has_focus(
+            self.is_exit_confirmation_visible() || self.is_turn_steer_confirmation_visible(),
+            self.parallel_mode_prompt_input_locked(),
+        )
     }
     pub(super) fn is_inline_command_palette_active(&self) -> bool {
         matches!(

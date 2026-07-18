@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use super::shell_presentation::{build_inline_live_transcript_lines, build_inline_tail_view};
+use super::shell_presentation::{
+    ConversationScreenModel, InlineTailView, build_inline_live_transcript_lines,
+    build_inline_tail_view,
+};
 use super::*;
 use ratatui::widgets::{Paragraph, Wrap};
 
@@ -24,7 +27,55 @@ use inline_layout::{
     render_inline_body, render_inline_body_suffix, set_cursor_if_visible,
 };
 
+pub(super) struct InlineConversationFrameProjection {
+    pub(super) core_revision: u64,
+    pub(super) tail_view: InlineTailView,
+    pub(super) live_transcript_lines: Vec<Line<'static>>,
+    pub(super) shell_overlay: ShellOverlay,
+    pub(super) inline_history_render_mode: InlineHistoryRenderMode,
+    pub(super) parallel_mode_enabled: bool,
+    pub(super) renders_viewport_transcript_handoff: bool,
+    pub(super) renders_parallel_viewport_handoff: bool,
+    pub(super) exit_confirmation_visible: bool,
+    pub(super) turn_steer_confirmation_visible: bool,
+    pub(super) parallel_supervisor_event_lines: Vec<Line<'static>>,
+}
+
+impl InlineConversationFrameProjection {
+    pub(super) fn from_app(app: &NativeTuiApp, content_width: u16) -> Self {
+        let screen_model = ConversationScreenModel::from_app(app);
+        Self::from_screen_model(&screen_model, content_width)
+    }
+
+    fn from_screen_model(screen_model: &ConversationScreenModel<'_>, content_width: u16) -> Self {
+        Self {
+            core_revision: screen_model.core_revision,
+            tail_view: build_inline_tail_view(screen_model, content_width),
+            live_transcript_lines: build_inline_live_transcript_lines(screen_model),
+            shell_overlay: screen_model.shell_overlay,
+            inline_history_render_mode: screen_model.inline_history_render_mode,
+            parallel_mode_enabled: screen_model.parallel_mode_enabled,
+            renders_viewport_transcript_handoff: screen_model.renders_viewport_transcript_handoff(),
+            renders_parallel_viewport_handoff: screen_model.renders_parallel_viewport_handoff(),
+            exit_confirmation_visible: screen_model.exit_confirmation_visible,
+            turn_steer_confirmation_visible: screen_model.turn_steer_confirmation_visible,
+            parallel_supervisor_event_lines: screen_model.parallel_supervisor_event_lines.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMode, area: Rect) {
+    let projection = InlineConversationFrameProjection::from_app(app, area.width);
+    prepare_projected_render_state(app, mode, area, &projection);
+}
+
+pub(super) fn prepare_projected_render_state(
+    app: &mut NativeTuiApp,
+    mode: ShellFrontendMode,
+    area: Rect,
+    projection: &InlineConversationFrameProjection,
+) {
     // prepare signature를 draw와 맞춰 두면, 나중에 frontend mode별 pre-render state가 필요해도 entrypoint를 늘리지 않는다.
     let _ = mode;
     // manual editor overlay만 render area를 알아야 scroll을 맞출 수 있다.
@@ -39,8 +90,8 @@ pub(super) fn prepare_render_state(app: &mut NativeTuiApp, mode: ShellFrontendMo
     }
     // editor는 inspection area 안에 있고, 그 높이는 현재 tail에 따라 달라진다.
     // draw가 사용할 layout 입력을 그대로 다시 만들어 layout[0]에서 textarea viewport 높이를 산출한다.
-    let tail_view = build_inline_tail_view(app, area.width);
-    let inspection_area = build_inline_terminal_flow_layout(app, area, &tail_view.lines)[0];
+    let inspection_area =
+        build_inline_terminal_flow_layout(projection, area, &projection.tail_view.lines)[0];
     // editor chrome은 title, tabs, validation/status, borders로 고정 row를 소비한다.
     // 아주 작은 terminal에서도 cursor 계산이 정의되도록 작은 하한을 유지한다.
     let editor_content_height = inspection_area
@@ -61,12 +112,24 @@ pub(super) fn inline_parallel_event_stream_visible_rows(
         return 0;
     }
 
-    let tail_view = build_inline_tail_view(app, frame_area.width);
-    let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_view.lines);
+    let projection = InlineConversationFrameProjection::from_app(app, frame_area.width);
+    let layout =
+        build_inline_terminal_flow_layout(&projection, frame_area, &projection.tail_view.lines);
     inline_inspection::parallel_event_stream_visible_rows(app, layout[0])
 }
 
+#[cfg(test)]
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFrontendMode) {
+    let projection = InlineConversationFrameProjection::from_app(app, frame.area().width);
+    draw_projected(frame, app, mode, projection);
+}
+
+pub(super) fn draw_projected(
+    frame: &mut Frame<'_>,
+    app: &mut NativeTuiApp,
+    mode: ShellFrontendMode,
+    projection: InlineConversationFrameProjection,
+) {
     // 현재 native shell renderer는 하나뿐이지만, mode 인자를 유지해 app runtime과 shell frontend 추상화를 한 경계에서 묶는다.
     let _ = mode;
     // Mouse coordinates belong to the last completed frame. Clear them before rebuilding this frame's geometry.
@@ -74,22 +137,26 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut NativeTuiApp, mode: ShellFro
     let frame_area = frame.area();
     // tail view는 status/prompt line과 cursor offset을 함께 담는다.
     // 같은 tail 높이가 inline inspection/body 분할 기준도 된다.
-    let tail_view = build_inline_tail_view(app, frame_area.width);
-    let live_transcript_lines = build_inline_live_transcript_lines(app);
-    let layout = build_inline_terminal_flow_layout(app, frame_area, &tail_view.lines);
+    let layout =
+        build_inline_terminal_flow_layout(&projection, frame_area, &projection.tail_view.lines);
+    let shell_overlay = projection.shell_overlay;
+    let parallel_mode_enabled = projection.parallel_mode_enabled;
+    let renders_parallel_viewport_handoff = projection.renders_parallel_viewport_handoff;
+    let turn_steer_confirmation_visible = projection.turn_steer_confirmation_visible;
+    let exit_confirmation_visible = projection.exit_confirmation_visible;
 
-    draw_inline_conversation_shell(frame, app, tail_view, live_transcript_lines, &layout);
+    draw_inline_conversation_shell(frame, app, projection, &layout);
     // inline inspection은 base shell 뒤에 그려 overlay가 고정된 prompt/status tail은 두고 상단 body만 대체하게 한다.
-    if app.shell_overlay != ShellOverlay::Hidden {
+    if shell_overlay != ShellOverlay::Hidden {
         draw_inline_shell_inspection(frame, app, layout[0]);
-    } else if app.parallel_mode_enabled() && !renders_parallel_viewport_handoff(app) {
+    } else if parallel_mode_enabled && !renders_parallel_viewport_handoff {
         draw_inline_parallel_mode_inspection(frame, layout[0], app);
     }
-    if app.is_turn_steer_confirmation_visible() {
+    if turn_steer_confirmation_visible {
         draw_turn_steer_confirmation(frame, app);
     }
     // exit confirmation은 모든 shell/overlay state 위의 modal이므로 마지막 draw operation이어야 한다.
-    if app.is_exit_confirmation_visible() {
+    if exit_confirmation_visible {
         draw_exit_confirmation(frame);
     }
 }
@@ -222,26 +289,27 @@ fn draw_exit_confirmation(frame: &mut Frame<'_>) {
 fn draw_inline_conversation_shell(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
-    tail_view: super::shell_presentation::InlineTailView,
-    live_transcript_lines: Vec<Line<'static>>,
+    projection: InlineConversationFrameProjection,
     layout: &Rc<[Rect]>,
 ) {
+    let InlineConversationFrameProjection {
+        tail_view,
+        live_transcript_lines,
+        shell_overlay,
+        parallel_mode_enabled,
+        renders_parallel_viewport_handoff,
+        ..
+    } = projection;
     // 더 좁은 overlay나 더 짧은 tail이 terminal buffer에 stale cell을 남기지 않도록 항상 전체 frame을 먼저 지운다.
     let frame_area = frame.area();
     frame.render_widget(Clear, frame_area);
     // hidden-overlay path는 일반 conversation shell이다.
     // inspection layout을 우회해 transcript가 tail 위의 전체 공간을 채우게 한다.
-    if app.shell_overlay == ShellOverlay::Hidden {
-        if app.parallel_mode_enabled() && !renders_parallel_viewport_handoff(app) {
+    if shell_overlay == ShellOverlay::Hidden {
+        if parallel_mode_enabled && !renders_parallel_viewport_handoff {
             let tail_band = layout.get(1).copied().unwrap_or(frame_area);
             let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
-            render_bottom_anchored_tail(
-                frame,
-                app,
-                tail_area,
-                tail_view,
-                !app.parallel_mode_prompt_input_locked() && !app.is_exit_confirmation_visible(),
-            );
+            render_bottom_anchored_tail(frame, app, tail_area, tail_view);
             return;
         }
         // startup banner 같은 presentation state는 의도적으로 상단부터 전체 frame을 소유하므로 bottom anchored가 아니어야 한다.
@@ -252,22 +320,14 @@ fn draw_inline_conversation_shell(
                 tail_view.queue_receipt_undo_hit_area,
             );
             render_inline_body(frame, frame_area, tail_view.lines, false);
-            if !app.is_exit_confirmation_visible() {
-                set_cursor_if_visible(frame, frame_area, tail_view.prompt_cursor_offset);
-            }
+            set_cursor_if_visible(frame, frame_area, tail_view.prompt_cursor_offset);
             return;
         }
         // standard shell에서는 tail 높이를 먼저 재고 live transcript line을 그 위 공간에 clip한다.
         let tail_band = layout.get(1).copied().unwrap_or(frame_area);
         let tail_area = inline_body_render_area(tail_band, &tail_view.lines);
         render_inline_live_transcript(frame, frame_area, tail_area, live_transcript_lines);
-        render_bottom_anchored_tail(
-            frame,
-            app,
-            tail_area,
-            tail_view,
-            !app.is_exit_confirmation_visible(),
-        );
+        render_bottom_anchored_tail(frame, app, tail_area, tail_view);
         return;
     }
     // overlay/modal이 active이면 layout[0]은 inspection이 쓰고 layout[1]은 그 아래에 tail을 고정한다.
@@ -275,30 +335,9 @@ fn draw_inline_conversation_shell(
     let tail_area = inline_body_render_area(layout[1], &tail_view.lines);
     bind_queue_receipt_undo_hit_area(app, tail_area, tail_view.queue_receipt_undo_hit_area);
     render_inline_body(frame, tail_area, tail_view.lines, false);
-    if app.shell_overlay == ShellOverlay::Supersession && !app.parallel_mode_prompt_input_locked() {
+    if shell_overlay == ShellOverlay::Supersession {
         set_cursor_if_visible(frame, tail_area, tail_view.prompt_cursor_offset);
     }
-}
-
-pub(super) fn renders_parallel_viewport_handoff(app: &NativeTuiApp) -> bool {
-    app.parallel_mode_enabled() && renders_viewport_transcript_handoff(app)
-}
-
-pub(super) fn renders_viewport_transcript_handoff(app: &NativeTuiApp) -> bool {
-    app.shell_overlay == ShellOverlay::Hidden
-        && !app.is_exit_confirmation_visible()
-        && !app.is_turn_steer_confirmation_visible()
-        && matches!(
-            app.inline_history_render_mode,
-            InlineHistoryRenderMode::ViewportReplay
-        )
-        && matches!(
-            &app.conversation_state,
-            ConversationState::Ready(conversation)
-                if conversation
-                    .viewport_transcript_handoff_release_messages()
-                    .is_some()
-        )
 }
 
 fn render_bottom_anchored_tail(
@@ -306,7 +345,6 @@ fn render_bottom_anchored_tail(
     app: &mut NativeTuiApp,
     tail_area: Rect,
     tail_view: super::shell_presentation::InlineTailView,
-    show_cursor: bool,
 ) {
     let focus_row = tail_view.prompt_cursor_offset.map(|(_, y)| y);
     let dropped_rows = render_inline_body_suffix(frame, tail_area, tail_view.lines, focus_row);
@@ -318,9 +356,7 @@ fn render_bottom_anchored_tail(
         .and_then(|(x, y)| y.checked_sub(dropped_rows).map(|y| (x, y)));
 
     bind_queue_receipt_undo_hit_area(app, tail_area, hit_area);
-    if show_cursor {
-        set_cursor_if_visible(frame, tail_area, prompt_cursor_offset);
-    }
+    set_cursor_if_visible(frame, tail_area, prompt_cursor_offset);
 }
 
 fn scroll_relative_rect(area: Rect, dropped_rows: u16) -> Option<Rect> {
