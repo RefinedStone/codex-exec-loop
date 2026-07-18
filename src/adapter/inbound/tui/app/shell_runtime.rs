@@ -184,6 +184,13 @@ impl ShellRuntime {
                         self.app.start_reviews_overlay_authority_load();
                     }
                 }
+                BackgroundMessage::QueueOverlayAuthorityLoaded(result) => {
+                    if self.app.apply_queue_overlay_authority_loaded(*result)
+                        == super::queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::ReloadRequired
+                    {
+                        self.app.start_queue_overlay_authority_load();
+                    }
+                }
                 BackgroundMessage::QueueMutationCompleted(result) => {
                     self.app.apply_queue_mutation_completion(*result);
                 }
@@ -222,6 +229,7 @@ impl ShellRuntime {
         self.last_live_activity_pulse = live_activity_pulse;
         redraw_requested |= self.app.tick_parallel_mode_control_plane(now);
         redraw_requested |= self.app.reconcile_reviews_overlay_authority_context();
+        redraw_requested |= self.app.reconcile_queue_overlay_authority_context();
         if redraw_requested {
             self.request_redraw_at(now);
         } else if live_activity_pulse.is_some() {

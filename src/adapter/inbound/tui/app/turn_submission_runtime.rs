@@ -556,7 +556,10 @@ impl NativeTuiApp {
         let handoff_task = handoff.task;
         let undo_available =
             mutation_kind == PlanningQueueMutationKind::Created && handoff_task.is_some();
-        let _ = self.refresh_queue_overlay_authority_binding();
+        // The preparation result already carried the committed runtime projection.
+        // Invalidate any disposable Queue snapshot so the next open verifies its
+        // destructive-action tokens off the input thread.
+        self.queue_overlay_ui_state.reset();
         let status_text = self.tui_language.manual_prompt_queued_status(
             &task_id,
             planning_revision,

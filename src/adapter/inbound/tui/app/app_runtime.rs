@@ -37,7 +37,7 @@ use crate::domain::recent_sessions::SessionRenameRequest;
 
 use super::queue_overlay_ui::{
     QueueMutationAuthorityRefreshError, QueueMutationAuthoritySnapshot, QueueMutationOperation,
-    QueueMutationWorkerResult,
+    QueueMutationWorkerResult, QueueOverlayAuthorityLoadResult,
 };
 use super::reviews_overlay_ui::{ReviewsOverlayAuthoritySnapshot, ReviewsOverlayLoadRequest};
 use super::{
@@ -92,6 +92,7 @@ pub(super) enum BackgroundMessage {
         request: ReviewsOverlayLoadRequest,
         authority: ReviewsOverlayAuthoritySnapshot,
     },
+    QueueOverlayAuthorityLoaded(Box<QueueOverlayAuthorityLoadResult>),
     QueueMutationCompleted(Box<QueueMutationWorkerResult>),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
@@ -1279,7 +1280,7 @@ impl NativeTuiPlanningHandle {
             .map_err(|error| error.to_string());
         // Refresh after both Ok and Err. Releasing the cross-process mutation guard can fail
         // after the commit, so the error channel alone cannot tell the TUI which authority won.
-        let authority = self.load_queue_mutation_authority(&operation.context.workspace_directory);
+        let authority = self.load_queue_authority(&operation.context.workspace_directory);
         QueueMutationWorkerResult {
             operation,
             mutation,
@@ -1287,7 +1288,7 @@ impl NativeTuiPlanningHandle {
         }
     }
 
-    fn load_queue_mutation_authority(
+    pub(super) fn load_queue_authority(
         &self,
         workspace_directory: &str,
     ) -> Result<QueueMutationAuthoritySnapshot, QueueMutationAuthorityRefreshError> {
@@ -1485,6 +1486,9 @@ impl NativeTuiApp {
         if previous_overlay == ShellOverlay::Reviews && self.shell_overlay != ShellOverlay::Reviews
         {
             self.reviews_overlay_ui_state.reset();
+        }
+        if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue {
+            self.queue_overlay_ui_state.reset();
         }
         for effect in reduction.effects {
             self.execute_shell_chrome_effect(effect);

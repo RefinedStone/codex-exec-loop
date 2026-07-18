@@ -120,6 +120,8 @@ mod planning_worker_debug_preview;
 mod post_turn_continuation;
 #[path = "app/progressive_activity_overlay_ui.rs"]
 mod progressive_activity_overlay_ui;
+#[path = "app/queue_overlay_controller.rs"]
+mod queue_overlay_controller;
 #[path = "app/queue_overlay_ui.rs"]
 mod queue_overlay_ui;
 #[path = "app/ratatui_frontend.rs"]

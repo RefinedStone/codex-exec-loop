@@ -221,12 +221,30 @@ fn queue_overlay_matches_snapshot() {
      */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.sync_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
-        "Planning Context\nQueue Summary",
-        "Queue Summary",
-    ));
+    app.sync_ready_conversation_planning_runtime_projection(
+        sample_planning_runtime_projection("Planning Context\nQueue Summary", "Queue Summary")
+            .with_planning_revision(Some(1)),
+    );
     app.shell_overlay = ShellOverlay::Queue;
-    app.sync_queue_overlay_selection();
+    app.bind_queue_overlay_authority_for_test(
+        1,
+        std::collections::BTreeMap::from([
+            (
+                "task-1".to_string(),
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: TaskStatus::Ready,
+                    updated_at: "2026-04-10T00:00:00Z".to_string(),
+                },
+            ),
+            (
+                "task-2".to_string(),
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: TaskStatus::Ready,
+                    updated_at: "2026-04-10T01:00:00Z".to_string(),
+                },
+            ),
+        ]),
+    );
 
     let rendered = tui_testkit::render_shell_snapshot(&mut app, 96, 28);
 
@@ -897,12 +915,30 @@ fn vt100_queue_overlay_matches_snapshot() {
      */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    app.sync_ready_conversation_planning_runtime_projection(sample_planning_runtime_projection(
-        "Planning Context\nQueue Summary",
-        "Queue Summary",
-    ));
+    app.sync_ready_conversation_planning_runtime_projection(
+        sample_planning_runtime_projection("Planning Context\nQueue Summary", "Queue Summary")
+            .with_planning_revision(Some(1)),
+    );
     app.shell_overlay = ShellOverlay::Queue;
-    app.sync_queue_overlay_selection();
+    app.bind_queue_overlay_authority_for_test(
+        1,
+        std::collections::BTreeMap::from([
+            (
+                "task-1".to_string(),
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: TaskStatus::Ready,
+                    updated_at: "2026-04-10T00:00:00Z".to_string(),
+                },
+            ),
+            (
+                "task-2".to_string(),
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: TaskStatus::Ready,
+                    updated_at: "2026-04-10T01:00:00Z".to_string(),
+                },
+            ),
+        ]),
+    );
 
     let rendered = tui_testkit::render_shell_vt100_snapshot(&mut app, 96, 28);
 

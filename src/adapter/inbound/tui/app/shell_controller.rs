@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(test)]
 use crate::application::service::planning::{
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
 };
@@ -91,16 +92,6 @@ impl NativeTuiApp {
             limit: SESSION_PAGE_SIZE,
         });
     }
-    pub(super) fn show_queue_overlay(&mut self) {
-        // A pending operation owns projection settlement. Reopening disposable chrome must not
-        // bypass its correlation gate with an opportunistic authority read on the input thread.
-        if self.pending_queue_mutation_operation_id().is_none()
-            && let Err(error) = self.refresh_queue_overlay_authority_binding()
-        {
-            self.queue_overlay_ui_state.set_feedback(error);
-        }
-        self.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
-    }
     pub(super) fn show_reviews_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::ReviewsOverlayShown);
         self.start_reviews_overlay_authority_load();
@@ -168,9 +159,6 @@ impl NativeTuiApp {
             }
             ShellOverlay::Activity => {
                 self.progressive_activity_overlay_ui_state.reset();
-            }
-            ShellOverlay::Queue => {
-                self.queue_overlay_ui_state.reset();
             }
             _ => {}
         }
@@ -811,488 +799,6 @@ impl NativeTuiApp {
         true
     }
 
-    fn handle_queue_overlay_key(&mut self, key: event::KeyEvent) -> bool {
-        let task_ids = self
-            .queue_action_tasks()
-            .into_iter()
-            .map(|task| task.task_id)
-            .collect::<Vec<_>>();
-        match (key.code, key.modifiers) {
-            (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
-                self.queue_overlay_ui_state.move_selection(&task_ids, -1);
-            }
-            (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
-                self.queue_overlay_ui_state.move_selection(&task_ids, 1);
-            }
-            (KeyCode::Char('x') | KeyCode::Delete, KeyModifiers::NONE) => {
-                self.cancel_selected_queue_task();
-            }
-            (KeyCode::Char('u'), KeyModifiers::NONE) => {
-                self.undo_latest_queue_registration();
-            }
-            _ => {}
-        }
-        true
-    }
-
-    fn cancel_selected_queue_task(&mut self) {
-        if let Some(operation_id) = self.pending_queue_mutation_operation_id() {
-            self.queue_overlay_ui_state.set_feedback(
-                self.tui_language
-                    .queue_mutation_pending_feedback(operation_id),
-            );
-            return;
-        }
-        if self.queue_mutation_requires_authority_refresh() {
-            self.queue_overlay_ui_state
-                .set_feedback(self.tui_language.queue_mutation_refresh_required_feedback());
-            return;
-        }
-        if let Some(reason) = self.queue_mutation_block_reason() {
-            self.queue_overlay_ui_state.set_feedback(reason);
-            return;
-        }
-        let selected = self.queue_overlay_ui_state.selected_authority_token().map(
-            |(revision, task_id, token)| {
-                (
-                    revision,
-                    task_id.to_string(),
-                    token.status,
-                    token.updated_at.clone(),
-                )
-            },
-        );
-        let Some((planning_revision, task_id, status, updated_at)) = selected else {
-            self.queue_overlay_ui_state.set_feedback(
-                self.tui_language
-                    .queue_mutation_selected_item_changed_feedback(),
-            );
-            return;
-        };
-        self.start_queue_cancellation(
-            PlanningQueueCancellationRequest {
-                workspace_directory: self.planning_workspace_directory(),
-                expected_planning_revision: planning_revision,
-                targets: vec![PlanningQueueCancellationTarget {
-                    task_id,
-                    expected_status: status,
-                    expected_updated_at: updated_at,
-                }],
-            },
-            queue_overlay_ui::QueueMutationKind::RemoveSelected,
-        );
-    }
-
-    pub(super) fn undo_latest_queue_registration(&mut self) -> bool {
-        if let Some(operation_id) = self.pending_queue_mutation_operation_id() {
-            self.queue_overlay_ui_state.set_feedback(
-                self.tui_language
-                    .queue_mutation_pending_feedback(operation_id),
-            );
-            return false;
-        }
-        if self.queue_mutation_requires_authority_refresh() {
-            self.queue_overlay_ui_state
-                .set_feedback(self.tui_language.queue_mutation_refresh_required_feedback());
-            return false;
-        }
-        if let Some(reason) = self.queue_receipt_undo_block_reason() {
-            self.queue_overlay_ui_state.set_feedback(reason);
-            return false;
-        }
-        let receipt = match &self.conversation_state {
-            ConversationState::Ready(conversation) => {
-                conversation.latest_queue_mutation_receipt.clone()
-            }
-            ConversationState::Loading | ConversationState::Failed(_) => None,
-        };
-        let Some(receipt) = receipt else {
-            self.queue_overlay_ui_state
-                .set_feedback("No recent queue registration is available to undo.");
-            return false;
-        };
-        let created_count = receipt.created_entries().count();
-        if created_count == 0 {
-            self.queue_overlay_ui_state
-                .set_feedback("The latest receipt did not add removable queue items.");
-            return false;
-        }
-        if !receipt.created_batch_is_cancellable() {
-            self.queue_overlay_ui_state.set_feedback(
-                "The latest registration changed after it was shown; review the queue before removing items.",
-            );
-            return false;
-        }
-        let targets = receipt
-            .created_entries()
-            .map(|entry| PlanningQueueCancellationTarget {
-                task_id: entry.task_id.clone(),
-                expected_status: entry.after_status,
-                expected_updated_at: entry.after_updated_at.clone(),
-            })
-            .collect::<Vec<_>>();
-        self.start_queue_cancellation(
-            PlanningQueueCancellationRequest {
-                workspace_directory: self.planning_workspace_directory(),
-                expected_planning_revision: receipt.planning_revision,
-                targets,
-            },
-            queue_overlay_ui::QueueMutationKind::UndoLatestRegistration,
-        )
-    }
-
-    fn start_queue_cancellation(
-        &mut self,
-        request: PlanningQueueCancellationRequest,
-        kind: queue_overlay_ui::QueueMutationKind,
-    ) -> bool {
-        let receipt_at_start = match &self.conversation_state {
-            ConversationState::Ready(conversation) => {
-                conversation.latest_queue_mutation_receipt.clone()
-            }
-            ConversationState::Loading | ConversationState::Failed(_) => None,
-        };
-        let context = self.current_queue_mutation_context();
-        let Some(operation) =
-            self.queue_mutation_ui_state
-                .begin(context, kind, request, receipt_at_start)
-        else {
-            return false;
-        };
-        let operation_id = operation.operation_id;
-        self.queue_overlay_ui_state.set_feedback(
-            self.tui_language
-                .queue_mutation_pending_feedback(operation_id),
-        );
-        self.clear_queue_receipt_undo_hit_area();
-        let planning = self.application.planning().clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let result = planning.execute_queue_mutation(operation);
-            let _ = tx.send(BackgroundMessage::QueueMutationCompleted(Box::new(result)));
-        });
-        true
-    }
-
-    pub(super) fn apply_queue_mutation_completion(
-        &mut self,
-        completion: queue_overlay_ui::QueueMutationWorkerResult,
-    ) {
-        let Some(operation) = self
-            .queue_mutation_ui_state
-            .take_matching(&completion.operation)
-        else {
-            return;
-        };
-        let current_context = self.current_queue_mutation_context();
-        if !matches!(self.conversation_state, ConversationState::Ready(_))
-            || current_context != operation.context
-        {
-            if current_context.workspace_directory == operation.context.workspace_directory {
-                self.queue_mutation_ui_state.require_authority_refresh();
-                self.queue_overlay_ui_state.clear_authority_binding();
-            }
-            return;
-        }
-
-        let operation_id = operation.operation_id;
-        let authority = match completion.authority {
-            Ok(authority) => authority,
-            Err(refresh_error) => {
-                self.queue_mutation_ui_state.require_authority_refresh();
-                self.queue_overlay_ui_state.clear_authority_binding();
-                let refresh_error = self
-                    .tui_language
-                    .queue_mutation_authority_refresh_error(&refresh_error);
-                let feedback = match completion.mutation {
-                    Ok(_) => self
-                        .tui_language
-                        .queue_mutation_committed_refresh_failed(operation_id, &refresh_error),
-                    Err(mutation_error) => {
-                        self.tui_language.queue_mutation_unresolved_refresh_failed(
-                            operation_id,
-                            &mutation_error,
-                            &refresh_error,
-                        )
-                    }
-                };
-                self.surface_queue_mutation_feedback(feedback);
-                return;
-            }
-        };
-
-        let authority_confirms_cancellation = !operation.request.targets.is_empty()
-            && operation.request.targets.iter().all(|target| {
-                authority.queue_authority.tasks.iter().any(|task| {
-                    task.id == target.task_id
-                        && task.status == crate::domain::planning::TaskStatus::Cancelled
-                })
-            });
-        if let Err(error) = self.apply_queue_mutation_authority_snapshot(&authority) {
-            self.queue_mutation_ui_state.require_authority_refresh();
-            self.queue_overlay_ui_state.clear_authority_binding();
-            self.surface_queue_mutation_feedback(
-                self.tui_language
-                    .queue_mutation_reconcile_failed(operation_id, &error),
-            );
-            return;
-        }
-
-        let feedback = match completion.mutation {
-            Ok(result) if authority_confirms_cancellation => {
-                self.settle_correlated_queue_receipt(&operation, &authority.queue_authority);
-                self.tui_language.queue_mutation_acknowledged(
-                    operation_id,
-                    self.tui_language
-                        .queue_mutation_success_label(operation.kind),
-                    result.committed_task_ids.len(),
-                    result.committed_planning_revision,
-                )
-            }
-            Ok(_) => {
-                self.reconcile_correlated_queue_receipt(&operation, &authority.queue_authority);
-                self.tui_language
-                    .queue_mutation_acknowledged_without_confirmation(operation_id)
-            }
-            Err(error) if authority_confirms_cancellation => {
-                self.settle_correlated_queue_receipt(&operation, &authority.queue_authority);
-                self.tui_language
-                    .queue_mutation_authority_confirmed_after_error(operation_id, &error)
-            }
-            Err(error) => {
-                self.reconcile_correlated_queue_receipt(&operation, &authority.queue_authority);
-                self.tui_language
-                    .queue_mutation_rejected(operation_id, &error)
-            }
-        };
-        self.surface_queue_mutation_feedback(feedback);
-    }
-
-    fn apply_queue_mutation_authority_snapshot(
-        &mut self,
-        authority: &queue_overlay_ui::QueueMutationAuthoritySnapshot,
-    ) -> Result<(), String> {
-        let projection_revision = authority
-            .runtime_projection
-            .planning_revision()
-            .ok_or_else(|| {
-                self.tui_language
-                    .queue_mutation_projection_revision_missing()
-                    .to_string()
-            })?;
-        if self
-            .planning_runtime_projection_snapshot()
-            .planning_revision()
-            .is_some_and(|current_revision| current_revision > projection_revision)
-        {
-            return Err(self
-                .tui_language
-                .queue_mutation_completion_older_than_planning(projection_revision));
-        }
-        if matches!(
-            &self.conversation_state,
-            ConversationState::Ready(conversation)
-                if conversation
-                    .latest_queue_mutation_receipt
-                    .as_ref()
-                    .is_some_and(|receipt| receipt.planning_revision > projection_revision)
-        ) {
-            return Err(self
-                .tui_language
-                .queue_mutation_completion_older_than_receipt(projection_revision));
-        }
-        if projection_revision != authority.queue_authority.planning_revision {
-            return Err(self
-                .tui_language
-                .queue_mutation_projection_authority_revision_mismatch(
-                    projection_revision,
-                    authority.queue_authority.planning_revision,
-                ));
-        }
-        let tokens = Self::queue_authority_tokens_for_projection(
-            &authority.runtime_projection,
-            &authority.queue_authority,
-        )
-        .ok_or_else(|| {
-            self.tui_language
-                .queue_mutation_rows_mismatch_authority()
-                .to_string()
-        })?;
-        self.sync_ready_conversation_planning_runtime_projection(
-            authority.runtime_projection.clone(),
-        );
-        self.queue_overlay_ui_state
-            .bind_authority(projection_revision, tokens);
-        self.queue_mutation_ui_state.record_authority_refresh();
-        self.sync_queue_overlay_selection();
-        Ok(())
-    }
-
-    fn settle_correlated_queue_receipt(
-        &mut self,
-        operation: &queue_overlay_ui::QueueMutationOperation,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
-    ) {
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
-            return;
-        };
-        let Some(current_receipt) = conversation.latest_queue_mutation_receipt.clone() else {
-            return;
-        };
-        if operation.receipt_at_start.as_ref() != Some(&current_receipt) {
-            if authority.planning_revision >= current_receipt.planning_revision {
-                conversation.latest_queue_mutation_receipt = Some(
-                    Self::queue_receipt_reconciled_with_authority(&current_receipt, authority),
-                );
-            }
-            return;
-        }
-        let receipt_at_start = operation
-            .receipt_at_start
-            .as_ref()
-            .expect("matching captured receipt should exist");
-        let invalidates_receipt = operation.kind
-            == queue_overlay_ui::QueueMutationKind::UndoLatestRegistration
-            || operation.request.targets.iter().any(|target| {
-                receipt_at_start
-                    .created_entries()
-                    .any(|entry| entry.task_id == target.task_id)
-            });
-        if invalidates_receipt {
-            conversation.latest_queue_mutation_receipt = None;
-        } else {
-            conversation.latest_queue_mutation_receipt = Some(
-                Self::queue_receipt_reconciled_with_authority(receipt_at_start, authority),
-            );
-        }
-    }
-
-    fn reconcile_correlated_queue_receipt(
-        &mut self,
-        operation: &queue_overlay_ui::QueueMutationOperation,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
-    ) {
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
-            return;
-        };
-        let Some(current_receipt) = conversation.latest_queue_mutation_receipt.clone() else {
-            return;
-        };
-        if operation.receipt_at_start.as_ref() != Some(&current_receipt) {
-            if authority.planning_revision >= current_receipt.planning_revision {
-                conversation.latest_queue_mutation_receipt = Some(
-                    Self::queue_receipt_reconciled_with_authority(&current_receipt, authority),
-                );
-            }
-            return;
-        }
-        let receipt_at_start = operation
-            .receipt_at_start
-            .as_ref()
-            .expect("matching captured receipt should exist");
-
-        conversation.latest_queue_mutation_receipt = Some(
-            Self::queue_receipt_reconciled_with_authority(receipt_at_start, authority),
-        );
-    }
-
-    fn surface_queue_mutation_feedback(&mut self, feedback: String) {
-        self.queue_overlay_ui_state.set_feedback(feedback.clone());
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.status_text = feedback.clone();
-            conversation.append_status_message(feedback);
-        }
-    }
-
-    fn reconcile_latest_queue_receipt_with_authority(
-        &mut self,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
-    ) {
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
-            return;
-        };
-        let Some(receipt) = conversation.latest_queue_mutation_receipt.as_ref() else {
-            return;
-        };
-        conversation.latest_queue_mutation_receipt = Some(
-            Self::queue_receipt_reconciled_with_authority(receipt, authority),
-        );
-    }
-
-    fn queue_receipt_reconciled_with_authority(
-        receipt: &crate::domain::planning::PlanningQueueMutationReceipt,
-        authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
-    ) -> crate::domain::planning::PlanningQueueMutationReceipt {
-        let mut reconciled = receipt.clone();
-        reconciled.planning_revision = authority.planning_revision;
-        for entry in &mut reconciled.entries {
-            if entry.mutation_kind != crate::domain::planning::PlanningQueueMutationKind::Created {
-                continue;
-            }
-            entry.unchanged_since_mutation = authority.tasks.iter().any(|task| {
-                task.id == entry.task_id
-                    && task.status == entry.after_status
-                    && task.updated_at == entry.after_updated_at
-            });
-        }
-        reconciled
-    }
-
-    pub(super) fn refresh_queue_overlay_authority_binding(&mut self) -> Result<(), String> {
-        self.queue_mutation_ui_state.require_authority_refresh();
-        self.queue_overlay_ui_state.clear_authority_binding();
-        for _ in 0..2 {
-            self.refresh_ready_conversation_planning_runtime_projection();
-            let projection_revision = self
-                .planning_runtime_projection_snapshot()
-                .planning_revision()
-                .ok_or_else(|| {
-                    "Queue authority is unavailable; retry after planning reloads.".to_string()
-                })?;
-            let action_tasks = self.queue_action_tasks();
-            let authority = self
-                .application
-                .planning()
-                .queue()
-                .load_authority_snapshot(&self.planning_workspace_directory())
-                .map_err(|error| format!("Queue authority is unavailable: {error}"))?;
-            if authority.planning_revision != projection_revision {
-                continue;
-            }
-            self.reconcile_latest_queue_receipt_with_authority(&authority);
-            let tokens = action_tasks
-                .iter()
-                .map(|action_task| {
-                    authority
-                        .tasks
-                        .iter()
-                        .find(|task| {
-                            task.id == action_task.task_id && task.status == action_task.status
-                        })
-                        .map(|authority_task| {
-                            (
-                                action_task.task_id.clone(),
-                                queue_overlay_ui::QueueOverlayAuthorityToken {
-                                    status: authority_task.status,
-                                    updated_at: authority_task.updated_at.clone(),
-                                },
-                            )
-                        })
-                })
-                .collect::<Option<std::collections::BTreeMap<_, _>>>();
-            let Some(tokens) = tokens else {
-                continue;
-            };
-            self.queue_overlay_ui_state
-                .bind_authority(authority.planning_revision, tokens);
-            self.queue_mutation_ui_state.record_authority_refresh();
-            self.sync_queue_overlay_selection();
-            return Ok(());
-        }
-        self.queue_overlay_ui_state.clear_authority_binding();
-        self.sync_queue_overlay_selection();
-        Err("Queue is still changing; reopen it to refresh before removing items.".to_string())
-    }
     fn handle_progressive_activity_overlay_key(&mut self, key: event::KeyEvent) -> bool {
         match (key.code, key.modifiers) {
             (
@@ -1575,8 +1081,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::adapter::inbound::tui::app::test_helpers::{
-        sample_queue_head, test_native_tui_app, test_native_tui_app_with_planning,
-        test_planning_services_with_task_repository,
+        sample_planning_runtime_projection, sample_queue_head, test_native_tui_app,
+        test_native_tui_app_with_planning, test_planning_services_with_task_repository,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_task_repository_port::{
@@ -1673,6 +1179,29 @@ mod tests {
         }
     }
 
+    fn single_queue_projection(
+        task_id: &str,
+        task_title: &str,
+        planning_revision: i64,
+    ) -> PlanningRuntimeProjection {
+        let mut task = sample_queue_head();
+        task.task_id = task_id.to_string();
+        task.task_title = task_title.to_string();
+        PlanningRuntimeProjection::ready_with_queue_projection(
+            "context".to_string(),
+            "queue".to_string(),
+            None,
+            Some(task.clone()),
+            PriorityQueueProjection {
+                next_task: Some(task.clone()),
+                active_tasks: vec![task],
+                proposed_tasks: Vec::new(),
+                skipped_tasks: Vec::new(),
+            },
+        )
+        .with_planning_revision(Some(planning_revision))
+    }
+
     struct GatedPlanningTaskRepository {
         inner: NoopPlanningTaskRepositoryPort,
         count_mutations: AtomicBool,
@@ -1681,12 +1210,25 @@ mod tests {
         mutation_thread_id: Mutex<Option<ThreadId>>,
         mutation_started: mpsc::SyncSender<()>,
         release_mutation: Mutex<mpsc::Receiver<()>>,
+        gate_next_authority_load: AtomicBool,
+        authority_load_thread_id: Mutex<Option<ThreadId>>,
+        authority_load_started: mpsc::SyncSender<()>,
+        release_authority_load: Mutex<mpsc::Receiver<()>>,
+    }
+
+    struct GatedPlanningTaskRepositoryControls {
+        mutation_started: mpsc::Receiver<()>,
+        release_mutation: mpsc::SyncSender<()>,
+        authority_load_started: mpsc::Receiver<()>,
+        release_authority_load: mpsc::SyncSender<()>,
     }
 
     impl GatedPlanningTaskRepository {
-        fn new() -> (Arc<Self>, mpsc::Receiver<()>, mpsc::SyncSender<()>) {
+        fn new() -> (Arc<Self>, GatedPlanningTaskRepositoryControls) {
             let (mutation_started, started_rx) = mpsc::sync_channel(1);
             let (release_tx, release_mutation) = mpsc::sync_channel(1);
+            let (authority_load_started, authority_started_rx) = mpsc::sync_channel(1);
+            let (release_authority_tx, release_authority_load) = mpsc::sync_channel(1);
             (
                 Arc::new(Self {
                     inner: NoopPlanningTaskRepositoryPort,
@@ -1696,9 +1238,17 @@ mod tests {
                     mutation_thread_id: Mutex::new(None),
                     mutation_started,
                     release_mutation: Mutex::new(release_mutation),
+                    gate_next_authority_load: AtomicBool::new(false),
+                    authority_load_thread_id: Mutex::new(None),
+                    authority_load_started,
+                    release_authority_load: Mutex::new(release_authority_load),
                 }),
-                started_rx,
-                release_tx,
+                GatedPlanningTaskRepositoryControls {
+                    mutation_started: started_rx,
+                    release_mutation: release_tx,
+                    authority_load_started: authority_started_rx,
+                    release_authority_load: release_authority_tx,
+                },
             )
         }
 
@@ -1717,6 +1267,17 @@ mod tests {
                 .mutation_thread_id
                 .lock()
                 .expect("mutation thread id lock should not be poisoned")
+        }
+
+        fn arm_authority_load(&self) {
+            self.gate_next_authority_load.store(true, Ordering::SeqCst);
+        }
+
+        fn authority_load_thread_id(&self) -> Option<ThreadId> {
+            *self
+                .authority_load_thread_id
+                .lock()
+                .expect("authority load thread id lock should not be poisoned")
         }
     }
 
@@ -1745,6 +1306,19 @@ mod tests {
             &self,
             workspace_dir: &str,
         ) -> anyhow::Result<Option<PlanningTaskAuthoritySnapshot>> {
+            if self.gate_next_authority_load.swap(false, Ordering::SeqCst) {
+                *self
+                    .authority_load_thread_id
+                    .lock()
+                    .expect("authority load thread id lock should not be poisoned") =
+                    Some(std::thread::current().id());
+                let _ = self.authority_load_started.send(());
+                self.release_authority_load
+                    .lock()
+                    .expect("authority load release lock should not be poisoned")
+                    .recv()
+                    .expect("test should release the queue authority load");
+            }
             self.inner.load_task_authority_snapshot(workspace_dir)
         }
 
@@ -1826,6 +1400,20 @@ mod tests {
     fn apply_next_queue_mutation_completion(app: &mut NativeTuiApp) {
         let completion = take_next_queue_mutation_completion(app);
         app.apply_queue_mutation_completion(completion);
+    }
+
+    fn apply_next_queue_overlay_authority_load(app: &mut NativeTuiApp) {
+        let message = app
+            .rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("queue authority worker should complete");
+        let BackgroundMessage::QueueOverlayAuthorityLoaded(result) = message else {
+            panic!("expected queue authority completion, got {message:?}");
+        };
+        assert_eq!(
+            app.apply_queue_overlay_authority_loaded(*result),
+            queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied
+        );
     }
 
     fn status_text(app: &NativeTuiApp) -> &str {
@@ -2292,16 +1880,329 @@ mod tests {
     fn queue_overlay_consumes_direct_manipulation_keys_without_editing_prompt() {
         let mut app = test_native_tui_app();
         ready_conversation_mut(&mut app).input_buffer = "keep draft".to_string();
+        app.sync_ready_conversation_planning_runtime_projection(
+            sample_planning_runtime_projection("context", "queue").with_planning_revision(Some(1)),
+        );
         app.shell_overlay = ShellOverlay::Queue;
+        app.bind_queue_overlay_authority_for_test(
+            1,
+            std::collections::BTreeMap::from([
+                (
+                    "task-1".to_string(),
+                    queue_overlay_ui::QueueOverlayAuthorityToken {
+                        status: TaskStatus::Ready,
+                        updated_at: "2026-04-10T00:00:00Z".to_string(),
+                    },
+                ),
+                (
+                    "task-2".to_string(),
+                    queue_overlay_ui::QueueOverlayAuthorityToken {
+                        status: TaskStatus::Ready,
+                        updated_at: "2026-04-10T01:00:00Z".to_string(),
+                    },
+                ),
+            ]),
+        );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
 
         assert_eq!(ready_conversation(&app).input_buffer, "keep draft");
+        assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
         assert_eq!(
             app.queue_overlay_ui_state.feedback(),
-            Some("No recent queue registration is available to undo.")
+            Some("Queue change op-1 is waiting for authority acknowledgement.")
+        );
+        let _completion = take_next_queue_mutation_completion(&mut app);
+    }
+
+    #[test]
+    fn queue_loading_and_failed_authority_states_block_destructive_input() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(single_queue_projection(
+            "task-read-only",
+            "Read-only task",
+            7,
+        ));
+        app.shell_overlay = ShellOverlay::Queue;
+        let request = app.begin_queue_overlay_authority_load();
+
+        app.cancel_selected_queue_task();
+        assert!(!app.undo_latest_queue_registration());
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("Queue authority is still loading; remove and undo remain disabled.")
+        );
+        assert!(matches!(app.rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        assert!(
+            app.queue_overlay_ui_state
+                .apply_authority_load_failed(request.clone(), "database unavailable".to_string(),)
+        );
+        app.queue_mutation_ui_state.require_authority_refresh();
+        app.cancel_selected_queue_task();
+        assert!(!app.undo_latest_queue_registration());
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("queue authority load-1 failed: database unavailable")
+        );
+        assert!(matches!(app.rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn queue_action_reloads_a_failed_authority_from_a_stale_context() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(single_queue_projection(
+            "task-stale",
+            "Stale authority task",
+            7,
+        ));
+        app.shell_overlay = ShellOverlay::Queue;
+        let stale_request = app.begin_queue_overlay_authority_load();
+        assert!(
+            app.queue_overlay_ui_state
+                .apply_authority_load_failed(stale_request, "database unavailable".to_string())
+        );
+        ready_conversation_mut(&mut app)
+            .sync_draft_workspace("/tmp/queue-stale-failed-context".to_string());
+
+        app.cancel_selected_queue_task();
+
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("Queue authority is still loading; remove and undo remain disabled.")
+        );
+        assert!(matches!(
+            app.queue_overlay_ui_state.authority_screen_model(),
+            queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
+        ));
+        let message = app
+            .rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("stale failed authority should start a replacement load");
+        let BackgroundMessage::QueueOverlayAuthorityLoaded(result) = message else {
+            panic!("expected queue authority completion, got {message:?}");
+        };
+        assert_eq!(
+            result.request.context.workspace_directory,
+            "/tmp/queue-stale-failed-context"
+        );
+    }
+
+    #[test]
+    fn queue_close_reopen_ignores_old_authority_completion_before_applying_the_new_one() {
+        let mut app = test_native_tui_app();
+        app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
+        let old_request = app.begin_queue_overlay_authority_load();
+        app.close_shell_overlay();
+        app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
+        let new_request = app.begin_queue_overlay_authority_load();
+        assert!(new_request.request_id > old_request.request_id);
+
+        assert_eq!(
+            app.apply_queue_overlay_authority_loaded(
+                queue_overlay_ui::QueueOverlayAuthorityLoadResult {
+                    request: old_request,
+                    authority: Err(
+                        queue_overlay_ui::QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable,
+                    ),
+                },
+            ),
+            queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Ignored
+        );
+        assert!(app.queue_overlay_ui_state.is_loading_request(&new_request));
+
+        assert_eq!(
+            app.apply_queue_overlay_authority_loaded(
+                queue_overlay_ui::QueueOverlayAuthorityLoadResult {
+                    request: new_request.clone(),
+                    authority: Err(
+                        queue_overlay_ui::QueueMutationAuthorityRefreshError::AuthorityUnavailable(
+                            "database unavailable".to_string(),
+                        ),
+                    ),
+                },
+            ),
+            queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied
+        );
+        assert!(matches!(
+            app.queue_overlay_ui_state.authority_screen_model(),
+            queue_overlay_ui::QueueOverlayAuthorityScreenModel::Failed {
+                request_id,
+                ..
+            } if request_id == new_request.request_id
+        ));
+    }
+
+    #[test]
+    fn queue_screen_model_keeps_rows_and_actions_on_one_authority_snapshot() {
+        let mut app = test_native_tui_app();
+        let authority_projection =
+            single_queue_projection("task-authority", "Authority snapshot row", 7);
+        app.sync_ready_conversation_planning_runtime_projection(single_queue_projection(
+            "task-live",
+            "Newer live row",
+            8,
+        ));
+        app.shell_overlay = ShellOverlay::Queue;
+        let request = app.begin_queue_overlay_authority_load();
+        assert!(app.queue_overlay_ui_state.apply_authority_loaded(
+            request,
+            authority_projection,
+            7,
+            std::collections::BTreeMap::from([(
+                "task-authority".to_string(),
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: TaskStatus::Ready,
+                    updated_at: "2026-04-10T00:00:00Z".to_string(),
+                },
+            )]),
+        ));
+        app.sync_queue_overlay_selection();
+
+        let view =
+            crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
+        let rows = view
+            .queue_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rows.contains("Authority snapshot row"), "{rows}");
+        assert!(!rows.contains("Newer live row"), "{rows}");
+        assert_eq!(
+            app.queue_overlay_ui_state.selected_task_id(),
+            Some("task-authority")
+        );
+        let keys = view
+            .key_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(keys.contains("queue authority changed; wait for refresh"));
+        assert!(!keys.contains("x/Delete"), "{keys}");
+        assert!(!keys.contains("u: undo"), "{keys}");
+
+        app.cancel_selected_queue_task();
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+        assert!(matches!(
+            app.queue_overlay_ui_state.authority_screen_model(),
+            queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
+        ));
+        let message = app
+            .rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("revision drift should load a replacement authority snapshot");
+        assert!(matches!(
+            message,
+            BackgroundMessage::QueueOverlayAuthorityLoaded(_)
+        ));
+    }
+
+    #[test]
+    fn queue_displayed_selection_matches_the_mutation_request_target() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(single_queue_projection(
+            "task-displayed",
+            "Displayed authority row",
+            7,
+        ));
+        app.shell_overlay = ShellOverlay::Queue;
+        app.bind_queue_overlay_authority_for_test(
+            7,
+            std::collections::BTreeMap::from([(
+                "task-displayed".to_string(),
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: TaskStatus::Ready,
+                    updated_at: "2026-04-10T00:00:00Z".to_string(),
+                },
+            )]),
+        );
+        let view =
+            crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
+        assert!(
+            view.queue_lines
+                .iter()
+                .any(|line| line.to_string().contains("Displayed authority row"))
+        );
+
+        app.cancel_selected_queue_task();
+        let completion = take_next_queue_mutation_completion(&mut app);
+        assert_eq!(completion.operation.request.expected_planning_revision, 7);
+        assert_eq!(completion.operation.request.targets.len(), 1);
+        assert_eq!(
+            completion.operation.request.targets[0].task_id,
+            "task-displayed"
+        );
+        assert_eq!(
+            completion.operation.request.targets[0].expected_status,
+            TaskStatus::Ready
+        );
+        assert_eq!(
+            completion.operation.request.targets[0].expected_updated_at,
+            "2026-04-10T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn queue_action_reloads_authority_before_using_a_drifted_workspace_context() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(
+            sample_planning_runtime_projection("context", "queue").with_planning_revision(Some(7)),
+        );
+        app.shell_overlay = ShellOverlay::Queue;
+        app.bind_queue_overlay_authority_for_test(
+            7,
+            std::collections::BTreeMap::from([
+                (
+                    "task-1".to_string(),
+                    queue_overlay_ui::QueueOverlayAuthorityToken {
+                        status: TaskStatus::Ready,
+                        updated_at: "2026-04-10T00:00:00Z".to_string(),
+                    },
+                ),
+                (
+                    "task-2".to_string(),
+                    queue_overlay_ui::QueueOverlayAuthorityToken {
+                        status: TaskStatus::Ready,
+                        updated_at: "2026-04-10T01:00:00Z".to_string(),
+                    },
+                ),
+            ]),
+        );
+        assert_eq!(
+            app.queue_overlay_ui_state.selected_task_id(),
+            Some("task-1")
+        );
+
+        ready_conversation_mut(&mut app)
+            .sync_draft_workspace("/tmp/queue-drifted-workspace".to_string());
+        app.cancel_selected_queue_task();
+
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+        assert_eq!(
+            app.queue_overlay_ui_state.feedback(),
+            Some("Queue authority is still loading; remove and undo remain disabled.")
+        );
+        assert!(matches!(
+            app.queue_overlay_ui_state.authority_screen_model(),
+            queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
+        ));
+        let message = app
+            .rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("drifted context should start a replacement authority load");
+        let BackgroundMessage::QueueOverlayAuthorityLoaded(result) = message else {
+            panic!("expected queue authority completion, got {message:?}");
+        };
+        assert_eq!(
+            result.request.context.workspace_directory,
+            "/tmp/queue-drifted-workspace"
         );
     }
 
@@ -2325,9 +2226,11 @@ mod tests {
                 planning_revision: 17,
                 entries,
             });
-        app.queue_overlay_ui_state
-            .bind_authority(17, std::collections::BTreeMap::new());
+        app.sync_ready_conversation_planning_runtime_projection(
+            PlanningRuntimeProjection::uninitialized().with_planning_revision(Some(17)),
+        );
         app.shell_overlay = ShellOverlay::Queue;
+        app.bind_queue_overlay_authority_for_test(17, std::collections::BTreeMap::new());
 
         let view =
             crate::adapter::inbound::tui::app::shell_presentation::build_queue_overlay_view(&app);
@@ -2335,6 +2238,11 @@ mod tests {
             view.key_lines
                 .iter()
                 .any(|line| line.to_string().contains("u:"))
+        );
+        assert!(
+            view.key_lines
+                .iter()
+                .all(|line| !line.to_string().contains("x/Delete"))
         );
     }
 
@@ -2420,6 +2328,7 @@ mod tests {
         app.queue_mutation_ui_state.require_authority_refresh();
 
         app.show_queue_overlay();
+        apply_next_queue_overlay_authority_load(&mut app);
 
         let receipt = ready_conversation(&app)
             .latest_queue_mutation_receipt
@@ -2590,8 +2499,96 @@ mod tests {
     }
 
     #[test]
+    fn queue_overlay_opens_before_authority_load_completes() {
+        let (repository, controls) = GatedPlanningTaskRepository::new();
+        let GatedPlanningTaskRepositoryControls {
+            authority_load_started,
+            release_authority_load,
+            ..
+        } = controls;
+        let planning = test_planning_services_with_task_repository(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            repository.clone(),
+        );
+        let mut app = test_native_tui_app_with_planning(planning);
+        let workspace = std::env::temp_dir()
+            .join(format!(
+                "akra-queue-authority-load-gate-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system time should follow epoch")
+                    .as_nanos()
+            ))
+            .to_string_lossy()
+            .to_string();
+        std::fs::create_dir_all(&workspace).expect("queue workspace should exist");
+        app.application
+            .planning()
+            .workspace()
+            .initialize_simple_workspace(&workspace)
+            .expect("planning workspace should initialize");
+        ready_conversation_mut(&mut app).sync_draft_workspace(workspace.clone());
+
+        repository.arm_authority_load();
+        let terminal_thread_id = std::thread::current().id();
+        let (cancel_watchdog, watchdog_cancelled) = mpsc::sync_channel(1);
+        let watchdog_release = release_authority_load.clone();
+        let watchdog = std::thread::spawn(move || {
+            if watchdog_cancelled
+                .recv_timeout(Duration::from_secs(2))
+                .is_err()
+            {
+                let _ = watchdog_release.send(());
+            }
+        });
+
+        let input_started = Instant::now();
+        app.show_queue_overlay();
+        let input_elapsed = input_started.elapsed();
+        authority_load_started
+            .recv_timeout(Duration::from_secs(2))
+            .expect("background authority load should reach the repository gate");
+        assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+        assert!(matches!(
+            app.queue_overlay_ui_state.authority_screen_model(),
+            queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
+        ));
+        assert_ne!(
+            repository.authority_load_thread_id(),
+            Some(terminal_thread_id)
+        );
+
+        if input_elapsed < Duration::from_secs(1) {
+            cancel_watchdog
+                .send(())
+                .expect("fast input return should cancel the deadlock watchdog");
+            release_authority_load
+                .send(())
+                .expect("test should release the background authority load");
+        }
+        watchdog.join().expect("deadlock watchdog should exit");
+        assert!(
+            input_elapsed < Duration::from_secs(1),
+            "opening the queue blocked the terminal thread for {input_elapsed:?}"
+        );
+        apply_next_queue_overlay_authority_load(&mut app);
+        assert!(matches!(
+            app.queue_overlay_ui_state.authority_screen_model(),
+            queue_overlay_ui::QueueOverlayAuthorityScreenModel::Ready { .. }
+        ));
+
+        std::fs::remove_dir_all(&workspace).expect("queue workspace should clean up");
+    }
+
+    #[test]
     fn queue_mutation_returns_before_commit_and_settles_only_the_correlated_operation() {
-        let (repository, mutation_started, release_mutation) = GatedPlanningTaskRepository::new();
+        let (repository, controls) = GatedPlanningTaskRepository::new();
+        let GatedPlanningTaskRepositoryControls {
+            mutation_started,
+            release_mutation,
+            ..
+        } = controls;
         let planning = test_planning_services_with_task_repository(
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
             repository.clone(),
@@ -2655,6 +2652,7 @@ mod tests {
         };
         ready_conversation_mut(&mut app).latest_queue_mutation_receipt = Some(receipt.clone());
         app.show_queue_overlay();
+        apply_next_queue_overlay_authority_load(&mut app);
         assert_eq!(
             app.planning_runtime_projection_snapshot()
                 .planning_revision(),
@@ -3173,6 +3171,7 @@ mod tests {
                 }],
             });
         app.show_queue_overlay();
+        apply_next_queue_overlay_authority_load(&mut app);
 
         ready_conversation_mut(&mut app).begin_post_turn_settlement("turn-queue");
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
@@ -3280,6 +3279,7 @@ mod tests {
                 }],
             });
         app.show_queue_overlay();
+        apply_next_queue_overlay_authority_load(&mut app);
         app.application
             .planning()
             .task_tool()

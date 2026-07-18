@@ -1,15 +1,19 @@
 use super::super::super::terminal_text::truncate_end_to_cells;
 use super::super::super::{
-    AkraTheme, ConversationState, Line, NativeTuiApp, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
-    QUEUE_INSPECTION_PROPOSAL_LIMIT, QUEUE_INSPECTION_TASK_LIMIT,
-    QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, TuiLanguage, compact_whitespace_detail,
+    AkraTheme, Line, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, QUEUE_INSPECTION_PROPOSAL_LIMIT,
+    QUEUE_INSPECTION_TASK_LIMIT, QUEUE_INSPECTION_TITLE_DETAIL_LIMIT, TuiLanguage,
+    compact_whitespace_detail,
 };
 use super::QueueOverlayView;
+use crate::adapter::inbound::tui::app::queue_overlay_ui::{
+    QueueActionBlockReason, QueueOverlayAuthorityScreenModel, QueueOverlayConversationScreenModel,
+    QueueOverlayScreenModel,
+};
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
 };
 
-pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
+pub(crate) fn build_queue_overlay_view(screen_model: QueueOverlayScreenModel) -> QueueOverlayView {
     /*
      * Queue overlay는 PlanningApplicationProjection을 popup renderer가 바로 배치할 수 있는
      * header/summary/queue/proposal/note/key section으로 낮춘다. PriorityQueueService가 이미
@@ -21,24 +25,15 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
         " / shell inspection",
     )];
 
-    let pending_operation_id = app.pending_queue_mutation_operation_id();
-    let authority_refresh_required = app.queue_mutation_requires_authority_refresh();
-    let selected_task_id = app.queue_overlay_ui_state.selected_task_id();
-    let latest_registration_undo_available = matches!(
-        &app.conversation_state,
-        ConversationState::Ready(conversation)
-            if conversation
-                .latest_queue_mutation_receipt
-                .as_ref()
-                .is_some_and(|receipt| {
-                    receipt.created_batch_is_cancellable()
-                        && app.queue_overlay_ui_state.authority_revision()
-                            == Some(receipt.planning_revision)
-                })
-    );
+    let pending_operation_id = screen_model.pending_operation_id;
+    let authority_refresh_required = screen_model.authority_refresh_required;
+    let selected_task_id = screen_model.selected_task_id.as_deref();
+    let remove_block_reason = screen_model.remove_block_reason;
+    let undo_block_reason = screen_model.undo_block_reason;
+    let tui_language = screen_model.tui_language;
 
-    match &app.conversation_state {
-        ConversationState::Loading => QueueOverlayView {
+    match screen_model.conversation {
+        QueueOverlayConversationScreenModel::Loading => QueueOverlayView {
             header_lines,
             /*
              * Conversation이 아직 load 중이면 planning runtime projection 자체가 없다. 이 상태에서 queue/proposal
@@ -48,7 +43,8 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 "status: loading".to_string(),
                 pending_operation_id,
                 authority_refresh_required,
-                app.tui_language,
+                &screen_model.authority,
+                tui_language,
             ),
             queue_lines: Vec::new(),
             proposal_lines: Vec::new(),
@@ -58,10 +54,13 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 false,
                 pending_operation_id,
                 authority_refresh_required,
-                app.tui_language,
+                &screen_model.authority,
+                remove_block_reason,
+                undo_block_reason,
+                tui_language,
             ),
         },
-        ConversationState::Failed(message) => QueueOverlayView {
+        QueueOverlayConversationScreenModel::Failed(message) => QueueOverlayView {
             header_lines,
             /*
              * Conversation load 실패는 planning queue failure와 다르다. queue projection을 만들 수 없는 상태라
@@ -71,25 +70,31 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 "status: unavailable".to_string(),
                 pending_operation_id,
                 authority_refresh_required,
-                app.tui_language,
+                &screen_model.authority,
+                tui_language,
             ),
             queue_lines: vec![Line::from("Reload the session or open a new draft.")],
             proposal_lines: Vec::new(),
             note_lines: vec![Line::from(format!(
                 "conversation error: {}",
-                compact_whitespace_detail(message, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                compact_whitespace_detail(&message, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
             ))],
             selected_content_line_index: None,
             key_lines: build_queue_overlay_key_lines(
                 false,
                 pending_operation_id,
                 authority_refresh_required,
-                app.tui_language,
+                &screen_model.authority,
+                remove_block_reason,
+                undo_block_reason,
+                tui_language,
             ),
         },
-        ConversationState::Ready(conversation) => {
+        QueueOverlayConversationScreenModel::Ready {
+            runtime_projection,
+            planning_notice,
+        } => {
             // Ready conversation state only gates availability. The runtime read model itself comes from core.
-            let runtime_projection = app.planning_runtime_projection_snapshot();
             let projection =
                 PlanningApplicationProjection::from_runtime_projection(&runtime_projection);
             /*
@@ -154,7 +159,8 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 summary_segments.join("  |  "),
                 pending_operation_id,
                 authority_refresh_required,
-                app.tui_language,
+                &screen_model.authority,
+                tui_language,
             );
 
             /*
@@ -181,15 +187,16 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 note_lines.push(line);
                 index
             });
-            if let Some(feedback) = app.queue_overlay_ui_state.feedback() {
-                note_lines.push(Line::from(feedback.to_string()));
+            if let Some(feedback) = screen_model.feedback {
+                note_lines.push(Line::from(feedback));
             }
-            if let Some(summary) =
-                conversation.planning_notice_summary(QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
-            {
-                note_lines.push(Line::from(format!("planning notice: {summary}")));
+            if let Some(summary) = planning_notice {
+                note_lines.push(Line::from(format!(
+                    "planning notice: {}",
+                    compact_whitespace_detail(&summary, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
+                )));
             }
-            if let Some(detail) = app.planning_worker_panel_state.last_host_detail.as_deref() {
+            if let Some(detail) = screen_model.planning_worker_host_detail.as_deref() {
                 note_lines.push(Line::from(format!(
                     "worker: {}",
                     compact_whitespace_detail(detail, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
@@ -226,10 +233,13 @@ pub(crate) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
                 note_lines,
                 selected_content_line_index,
                 key_lines: build_queue_overlay_key_lines(
-                    latest_registration_undo_available,
+                    screen_model.latest_registration_undo_available,
                     pending_operation_id,
                     authority_refresh_required,
-                    app.tui_language,
+                    &screen_model.authority,
+                    remove_block_reason,
+                    undo_block_reason,
+                    tui_language,
                 ),
             }
         }
@@ -240,6 +250,7 @@ fn build_queue_overlay_summary_lines(
     summary: String,
     pending_operation_id: Option<u64>,
     authority_refresh_required: bool,
+    authority: &QueueOverlayAuthorityScreenModel,
     tui_language: TuiLanguage,
 ) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(summary)];
@@ -248,11 +259,34 @@ fn build_queue_overlay_summary_lines(
             Line::from(tui_language.queue_mutation_pending_summary(operation_id))
                 .style(AkraTheme::warning()),
         );
-    } else if authority_refresh_required {
-        lines.push(
-            Line::from(tui_language.queue_mutation_refresh_required_summary())
-                .style(AkraTheme::warning()),
-        );
+    } else {
+        let authority_line = match authority {
+            QueueOverlayAuthorityScreenModel::Idle
+            | QueueOverlayAuthorityScreenModel::Ready { .. }
+                if authority_refresh_required =>
+            {
+                Some(
+                    tui_language
+                        .queue_mutation_refresh_required_summary()
+                        .to_string(),
+                )
+            }
+            QueueOverlayAuthorityScreenModel::Idle => Some(
+                tui_language
+                    .queue_overlay_authority_pending_summary()
+                    .to_string(),
+            ),
+            QueueOverlayAuthorityScreenModel::Loading { request_id } => {
+                Some(tui_language.queue_overlay_authority_loading_summary(*request_id))
+            }
+            QueueOverlayAuthorityScreenModel::Ready { .. } => None,
+            QueueOverlayAuthorityScreenModel::Failed { request_id, error } => {
+                Some(tui_language.queue_overlay_authority_failed_summary(*request_id, error))
+            }
+        };
+        if let Some(authority_line) = authority_line {
+            lines.push(Line::from(authority_line).style(AkraTheme::warning()));
+        }
     }
     lines
 }
@@ -261,6 +295,9 @@ fn build_queue_overlay_key_lines(
     latest_registration_undo_available: bool,
     pending_operation_id: Option<u64>,
     authority_refresh_required: bool,
+    authority: &QueueOverlayAuthorityScreenModel,
+    remove_block_reason: Option<QueueActionBlockReason>,
+    undo_block_reason: Option<QueueActionBlockReason>,
     tui_language: TuiLanguage,
 ) -> Vec<Line<'static>> {
     if let Some(operation_id) = pending_operation_id {
@@ -272,6 +309,26 @@ fn build_queue_overlay_key_lines(
             AkraTheme::key_line(tui_language.queue_overlay_close_key_line()),
         ];
     }
+    match authority {
+        QueueOverlayAuthorityScreenModel::Loading { .. } => {
+            return vec![
+                AkraTheme::key_line(tui_language.queue_overlay_select_key_line()),
+                Line::from(tui_language.queue_overlay_authority_loading_disabled_key_line())
+                    .style(AkraTheme::warning()),
+                AkraTheme::key_line(tui_language.queue_overlay_close_key_line()),
+            ];
+        }
+        QueueOverlayAuthorityScreenModel::Failed { .. } => {
+            return vec![
+                AkraTheme::key_line(tui_language.queue_overlay_select_key_line()),
+                Line::from(tui_language.queue_overlay_authority_failed_disabled_key_line())
+                    .style(AkraTheme::warning()),
+                AkraTheme::key_line(tui_language.queue_overlay_close_key_line()),
+            ];
+        }
+        QueueOverlayAuthorityScreenModel::Idle | QueueOverlayAuthorityScreenModel::Ready { .. } => {
+        }
+    }
     if authority_refresh_required {
         return vec![
             AkraTheme::key_line(tui_language.queue_overlay_select_key_line()),
@@ -280,13 +337,47 @@ fn build_queue_overlay_key_lines(
             AkraTheme::key_line(tui_language.queue_overlay_close_key_line()),
         ];
     }
+    if matches!(authority, QueueOverlayAuthorityScreenModel::Idle) {
+        return vec![
+            AkraTheme::key_line(tui_language.queue_overlay_select_key_line()),
+            Line::from(tui_language.queue_overlay_authority_loading_disabled_key_line())
+                .style(AkraTheme::warning()),
+            AkraTheme::key_line(tui_language.queue_overlay_close_key_line()),
+        ];
+    }
 
-    let mut lines = vec![
-        AkraTheme::key_line(tui_language.queue_overlay_select_key_line()),
-        AkraTheme::key_line(
-            tui_language.queue_overlay_remove_key_line(latest_registration_undo_available),
-        ),
-    ];
+    let undo_available = latest_registration_undo_available && undo_block_reason.is_none();
+    let mut lines = vec![AkraTheme::key_line(
+        tui_language.queue_overlay_select_key_line(),
+    )];
+    match (remove_block_reason, undo_available) {
+        (None, _) => {
+            lines.push(AkraTheme::key_line(
+                tui_language.queue_overlay_remove_key_line(undo_available),
+            ));
+            if latest_registration_undo_available && let Some(reason) = undo_block_reason {
+                lines.push(
+                    Line::from(tui_language.queue_overlay_undo_blocked_key_line(reason))
+                        .style(AkraTheme::warning()),
+                );
+            }
+        }
+        (Some(reason), true) => {
+            lines.push(
+                Line::from(tui_language.queue_overlay_remove_blocked_key_line(reason))
+                    .style(AkraTheme::warning()),
+            );
+            lines.push(AkraTheme::key_line(
+                tui_language.queue_overlay_undo_only_key_line(),
+            ));
+        }
+        (Some(reason), false) => {
+            lines.push(
+                Line::from(tui_language.queue_overlay_actions_blocked_key_line(reason))
+                    .style(AkraTheme::warning()),
+            );
+        }
+    }
     lines.push(AkraTheme::key_line(
         tui_language.queue_overlay_close_key_line(),
     ));
@@ -418,8 +509,8 @@ fn build_skipped_queue_note_line(
 mod tests {
     use super::super::super::super::terminal_text::display_width;
     use super::{
-        TuiLanguage, build_queue_overlay_key_lines, build_queue_overlay_summary_lines,
-        compact_queue_title,
+        QueueActionBlockReason, QueueOverlayAuthorityScreenModel, TuiLanguage,
+        build_queue_overlay_key_lines, build_queue_overlay_summary_lines, compact_queue_title,
     };
 
     #[test]
@@ -434,16 +525,36 @@ mod tests {
 
     #[test]
     fn queue_keys_only_show_undo_when_the_latest_batch_is_cancellable() {
-        let normal = build_queue_overlay_key_lines(false, None, false, TuiLanguage::English)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let cancellable = build_queue_overlay_key_lines(true, None, false, TuiLanguage::English)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let authority = QueueOverlayAuthorityScreenModel::Ready {
+            request_id: 1,
+            planning_revision: 7,
+        };
+        let normal = build_queue_overlay_key_lines(
+            false,
+            None,
+            false,
+            &authority,
+            None,
+            None,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let cancellable = build_queue_overlay_key_lines(
+            true,
+            None,
+            false,
+            &authority,
+            None,
+            None,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
 
         assert!(normal.contains("Up/Down, j/k: select"));
         assert!(normal.contains("x/Delete: remove"));
@@ -454,21 +565,34 @@ mod tests {
 
     #[test]
     fn pending_queue_mutation_keeps_navigation_and_hides_destructive_shortcuts() {
+        let authority = QueueOverlayAuthorityScreenModel::Ready {
+            request_id: 1,
+            planning_revision: 7,
+        };
         let summary = build_queue_overlay_summary_lines(
             "status: ready".to_string(),
             Some(17),
             false,
+            &authority,
             TuiLanguage::English,
         )
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let keys = build_queue_overlay_key_lines(true, Some(17), false, TuiLanguage::English)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let keys = build_queue_overlay_key_lines(
+            true,
+            Some(17),
+            false,
+            &authority,
+            None,
+            None,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
 
         assert!(summary.contains("op-17 | authority acknowledgement pending"));
         assert!(keys.contains("Up/Down, j/k: select"));
@@ -481,6 +605,7 @@ mod tests {
             "status: ready".to_string(),
             Some(17),
             false,
+            &authority,
             TuiLanguage::Korean,
         )
         .into_iter()
@@ -488,11 +613,19 @@ mod tests {
         .collect::<Vec<_>>()
         .join("\n");
         assert!(korean.contains("op-17 | 권한 확인 대기 중"));
-        let korean_keys = build_queue_overlay_key_lines(true, Some(17), false, TuiLanguage::Korean)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let korean_keys = build_queue_overlay_key_lines(
+            true,
+            Some(17),
+            false,
+            &authority,
+            None,
+            None,
+            TuiLanguage::Korean,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
         assert!(korean_keys.contains("Up/Down, j/k: 선택"));
         assert!(korean_keys.contains("제거/되돌리기 비활성화"));
         assert!(korean_keys.contains("Esc/Ctrl+C: 닫기"));
@@ -500,32 +633,248 @@ mod tests {
 
     #[test]
     fn required_authority_refresh_disables_mutation_until_reopen() {
+        let authority = QueueOverlayAuthorityScreenModel::Ready {
+            request_id: 1,
+            planning_revision: 7,
+        };
         let summary = build_queue_overlay_summary_lines(
             "status: ready".to_string(),
             None,
             true,
+            &authority,
             TuiLanguage::English,
         )
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let keys = build_queue_overlay_key_lines(true, None, true, TuiLanguage::English)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let keys = build_queue_overlay_key_lines(
+            true,
+            None,
+            true,
+            &authority,
+            None,
+            None,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
 
         assert!(summary.contains("queue authority refresh required"));
         assert!(keys.contains("close and reopen to refresh"));
         assert!(!keys.contains("x/Delete"));
         assert!(!keys.contains("u: undo"));
 
-        let korean = build_queue_overlay_key_lines(true, None, true, TuiLanguage::Korean)
+        let korean = build_queue_overlay_key_lines(
+            true,
+            None,
+            true,
+            &authority,
+            None,
+            None,
+            TuiLanguage::Korean,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(korean.contains("닫았다가 다시 열어 새로고침"));
+    }
+
+    #[test]
+    fn loading_queue_authority_keeps_rows_read_only() {
+        let authority = QueueOverlayAuthorityScreenModel::Loading { request_id: 23 };
+        let summary = build_queue_overlay_summary_lines(
+            "status: ready".to_string(),
+            None,
+            false,
+            &authority,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let keys = build_queue_overlay_key_lines(
+            true,
+            None,
+            false,
+            &authority,
+            None,
+            None,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert!(summary.contains("queue authority load-23 in progress; rows remain read-only"));
+        assert!(keys.contains("authority loading: remove/undo disabled"));
+        assert!(!keys.contains("x/Delete"));
+        assert!(!keys.contains("u: undo"));
+    }
+
+    #[test]
+    fn failed_queue_authority_keeps_rows_read_only_with_localized_status() {
+        let authority = QueueOverlayAuthorityScreenModel::Failed {
+            request_id: 24,
+            error: "저장소 연결 끊김".to_string(),
+        };
+        let summary = build_queue_overlay_summary_lines(
+            "status: ready".to_string(),
+            None,
+            false,
+            &authority,
+            TuiLanguage::Korean,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let keys = build_queue_overlay_key_lines(
+            true,
+            None,
+            false,
+            &authority,
+            None,
+            None,
+            TuiLanguage::Korean,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert!(summary.contains("큐 권한 load-24 실패: 저장소 연결 끊김"));
+        assert!(keys.contains("권한 확인 실패: 닫았다가 다시 열어 재시도"));
+        assert!(!keys.contains("x/Delete"));
+        assert!(!keys.contains("u: undo"));
+    }
+
+    #[test]
+    fn failed_authority_status_wins_over_refresh_required_copy() {
+        let authority = QueueOverlayAuthorityScreenModel::Failed {
+            request_id: 25,
+            error: "repository unavailable".to_string(),
+        };
+        let summary = build_queue_overlay_summary_lines(
+            "status: ready".to_string(),
+            None,
+            true,
+            &authority,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let keys = build_queue_overlay_key_lines(
+            true,
+            None,
+            true,
+            &authority,
+            None,
+            None,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert!(summary.contains("queue authority load-25 failed: repository unavailable"));
+        assert!(!summary.contains("queue authority refresh required"));
+        assert!(keys.contains("authority unavailable: close and reopen to retry"));
+        assert!(!keys.contains("close and reopen to refresh"));
+        assert!(!keys.contains("x/Delete"));
+        assert!(!keys.contains("u: undo"));
+    }
+
+    #[test]
+    fn ready_authority_only_advertises_actions_allowed_by_the_screen_model() {
+        let authority = QueueOverlayAuthorityScreenModel::Ready {
+            request_id: 1,
+            planning_revision: 7,
+        };
+        let fully_blocked = build_queue_overlay_key_lines(
+            true,
+            None,
+            false,
+            &authority,
+            Some(QueueActionBlockReason::PostTurnPlanningInFlight),
+            Some(QueueActionBlockReason::PostTurnPlanningInFlight),
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let undo_only = build_queue_overlay_key_lines(
+            true,
+            None,
+            false,
+            &authority,
+            Some(QueueActionBlockReason::ActiveTurnInFlight),
+            None,
+            TuiLanguage::English,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert!(
+            fully_blocked.contains("remove/undo disabled: wait for post-turn planning to finish")
+        );
+        assert!(!fully_blocked.contains("x/Delete"));
+        assert!(!fully_blocked.contains("u: undo"));
+        assert!(undo_only.contains("remove disabled: wait for the active turn to finish"));
+        assert!(undo_only.contains("u: undo added"));
+        assert!(!undo_only.contains("x/Delete"));
+    }
+
+    #[test]
+    fn korean_action_block_reasons_do_not_leak_english_controller_copy() {
+        let authority = QueueOverlayAuthorityScreenModel::Ready {
+            request_id: 1,
+            planning_revision: 7,
+        };
+        for (reason, expected) in [
+            (
+                QueueActionBlockReason::ActiveTurnInFlight,
+                "진행 중인 턴이 끝날 때까지 기다리세요",
+            ),
+            (
+                QueueActionBlockReason::PostTurnPlanningInFlight,
+                "턴 이후 계획 처리가 끝날 때까지 기다리세요",
+            ),
+            (
+                QueueActionBlockReason::ParallelModeOwnsTaskLeases,
+                "병렬 모드가 작업 임대를 소유하는 동안 큐를 변경할 수 없습니다",
+            ),
+        ] {
+            let keys = build_queue_overlay_key_lines(
+                true,
+                None,
+                false,
+                &authority,
+                Some(reason),
+                Some(reason),
+                TuiLanguage::Korean,
+            )
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(korean.contains("닫았다가 다시 열어 새로고침"));
+
+            assert!(keys.contains(expected), "{keys}");
+            assert!(!keys.contains("wait for"), "{keys}");
+            assert!(!keys.contains("parallel mode"), "{keys}");
+            assert!(!keys.contains("x/Delete"), "{keys}");
+            assert!(!keys.contains("u:"), "{keys}");
+        }
     }
 }

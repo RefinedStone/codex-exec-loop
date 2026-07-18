@@ -52,7 +52,7 @@ pub(crate) use popup::{
     StartupOverlayView, SupersessionOverlayView, ViewSelectionOverlayView,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_reviews_overlay_view,
-    build_session_overlay_view, build_startup_overlay_view, build_supersession_overlay_view,
-    build_view_selection_overlay_view,
+    build_planning_init_overlay_view, build_queue_overlay_view_from_screen_model,
+    build_reviews_overlay_view, build_session_overlay_view, build_startup_overlay_view,
+    build_supersession_overlay_view, build_view_selection_overlay_view,
 };
