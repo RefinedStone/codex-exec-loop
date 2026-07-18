@@ -106,12 +106,14 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
             super::ConversationState::Ready(conversation) => {
                 let detail = &conversation.progressive_activity_detail;
                 let cards = detail.cards();
+                // Never fall back to an unfiltered Diff/Output document when a card
+                // filter is active: empty filter results must stay empty in the detail
+                // pane so `:activity plan` cannot surface unrelated command/diff text.
                 let filtered_indices = super::filter_cards_by_kind(&cards, card_filter);
                 let selected_document = filtered_indices
                     .get(requested_card_index)
                     .and_then(|card_index| cards.get(*card_index))
-                    .and_then(|card| detail.card_document(card))
-                    .or_else(|| detail.document(selected_kind));
+                    .and_then(|card| detail.card_document(card));
                 (
                     detail.lifecycle_epoch(),
                     detail

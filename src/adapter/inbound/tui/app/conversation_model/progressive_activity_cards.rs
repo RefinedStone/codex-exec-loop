@@ -85,6 +85,7 @@ pub(crate) struct ProgressiveActivityCard {
 }
 
 impl ProgressiveActivityCard {
+    #[cfg(test)]
     pub(crate) fn header_line(&self, expanded: bool) -> String {
         let indicator = if !self.expandable {
             "  "
@@ -117,18 +118,6 @@ impl ProgressiveActivityExpandState {
         self.expanded.contains(&key)
     }
 
-    pub(crate) fn toggle_card(&mut self, key: ProgressiveActivityCardKey) -> bool {
-        if let Some(index) = self.expanded.iter().position(|entry| *entry == key) {
-            self.expanded.remove(index);
-            return false;
-        }
-        if self.expanded.len() >= MAX_EXPANDED_CARD_KEYS {
-            self.expanded.remove(0);
-        }
-        self.expanded.push(key);
-        true
-    }
-
     pub(crate) fn expand_card(&mut self, key: ProgressiveActivityCardKey) {
         if self.is_card_expanded(key) {
             return;
@@ -143,6 +132,7 @@ impl ProgressiveActivityExpandState {
         self.expanded_tool_digests.contains(&digest)
     }
 
+    #[cfg(test)]
     pub(crate) fn expand_tool(&mut self, digest: [u8; 32]) {
         if self.is_tool_expanded(digest) {
             return;
@@ -151,6 +141,16 @@ impl ProgressiveActivityExpandState {
             self.expanded_tool_digests.remove(0);
         }
         self.expanded_tool_digests.push(digest);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn toggle_card(&mut self, key: ProgressiveActivityCardKey) -> bool {
+        if let Some(index) = self.expanded.iter().position(|entry| *entry == key) {
+            self.expanded.remove(index);
+            return false;
+        }
+        self.expand_card(key);
+        true
     }
 }
 
@@ -560,11 +560,13 @@ fn synthesize_payload_detail(payload: &ConversationProgressiveActivityPayload) -
     if raw.len() <= MAX_SYNTHESIZED_DETAIL_BYTES {
         raw
     } else {
-        let mut truncated = raw;
-        truncated.truncate(MAX_SYNTHESIZED_DETAIL_BYTES);
-        while !truncated.is_char_boundary(truncated.len()) {
-            truncated.pop();
+        // Find a UTF-8 boundary before truncating; String::truncate panics mid-character.
+        let mut limit = MAX_SYNTHESIZED_DETAIL_BYTES.min(raw.len());
+        while limit > 0 && !raw.is_char_boundary(limit) {
+            limit -= 1;
         }
+        let mut truncated = raw;
+        truncated.truncate(limit);
         truncated.push_str("\n[truncated by Akra activity card detail bound]");
         truncated
     }
@@ -765,5 +767,25 @@ mod tests {
         let digest = tool_message_digest("one\ntwo");
         state.expand_tool(digest);
         assert!(state.is_tool_expanded(digest));
+    }
+
+    #[test]
+    fn synthesized_detail_truncates_on_utf8_boundary_without_panic() {
+        // Build a payload whose synthesized detail exceeds the bound and ends with multi-byte chars.
+        let mut tail = "a".repeat(MAX_SYNTHESIZED_DETAIL_BYTES - 2);
+        tail.push('한');
+        tail.push('글');
+        let payload = ConversationProgressiveActivityPayload::CommandOutput {
+            tail,
+            chunk_count: 1,
+            source_bytes: (MAX_SYNTHESIZED_DETAIL_BYTES + 4) as u64,
+            newline_count: 0,
+            ends_with_newline: false,
+            truncated_bytes: 0,
+        };
+        let detail = synthesize_payload_detail(&payload);
+        assert!(detail.len() <= MAX_SYNTHESIZED_DETAIL_BYTES + 80);
+        assert!(detail.ends_with("[truncated by Akra activity card detail bound]"));
+        assert!(detail.is_char_boundary(detail.len()));
     }
 }
