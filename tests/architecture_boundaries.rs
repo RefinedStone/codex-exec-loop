@@ -1105,6 +1105,22 @@ fn conversation_state_model_has_no_presentation_or_planning_projection_cache() {
 }
 
 #[test]
+fn tui_planning_worker_state_uses_the_domain_contract_without_round_trip_mappers() {
+    assert_no_forbidden_references_in_paths(
+        "TUI planning worker diagnostics must store the domain snapshot directly",
+        &["src/adapter/inbound/tui"],
+        &[
+            "enum PlanningWorkerStatus",
+            "struct PlanningWorkerPanelState",
+            "fn application_planning_worker_panel_state(",
+            "fn application_planning_worker_status(",
+            "fn tui_planning_worker_panel_state(",
+            "fn tui_planning_worker_status(",
+        ],
+    );
+}
+
+#[test]
 fn auto_follow_overlay_keeps_only_an_active_turn_budget_draft() {
     assert_no_forbidden_references_in_paths(
         "closed auto-follow presentation must read the canonical conversation policy without mirroring it",

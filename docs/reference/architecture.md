@@ -167,6 +167,10 @@ The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft
 is closed, status and review presentation read the canonical policy from the conversation model;
 the adapter does not retain or reverse-sync a second budget value.
 
+Planning-worker diagnostics retain the domain `PlanningWorkerPanelState` directly from post-turn
+execution through the screen model. TUI presentation derives labels and content visibility without
+an adapter-owned status DTO or round-trip mapper.
+
 The detailed, test-guarded contract is
 [TUI Layered Architecture](../design/07-tui-layered-architecture-and-aesthetic-contract.md).
 

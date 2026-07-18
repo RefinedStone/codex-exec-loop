@@ -24,6 +24,7 @@ use crate::domain::planning::{
 use post_turn_execution::PostTurnEvaluationRequest;
 
 use super::conversation_input::MAX_PROMPT_INPUT_BYTES;
+use super::planning::planning_worker_status_label;
 use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
     AutoFollowSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
@@ -817,7 +818,7 @@ impl NativeTuiApp {
         }
         let mut lines = vec![format!(
             "planning worker temporary session: {operation_label} / {}",
-            planning_worker.status.label()
+            planning_worker_status_label(planning_worker.status)
         )];
         if let Some(summary) = summary.filter(|summary: &&str| !summary.trim().is_empty()) {
             lines.push(format!("planning worker summary: {summary}"));

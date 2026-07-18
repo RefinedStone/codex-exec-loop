@@ -13,7 +13,10 @@ use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
     ConversationRuntimeControlTruth, ConversationTurnOptions, ConversationTurnSteerRequest,
 };
-use crate::domain::planning::{ManualPromptCorrelation, PostTurnContinuationGate};
+use crate::domain::planning::{
+    ManualPromptCorrelation, PlanningWorkerPanelState, PlanningWorkerStatus,
+    PostTurnContinuationGate,
+};
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -204,7 +207,7 @@ use parallel_panel_controller::{
 };
 use parallel_peek_overlay_ui::{ParallelPeekOverlayStep, ParallelPeekOverlayUiState};
 use parallel_supervisor_events::{PARALLEL_SUPERVISOR_OPERATOR_ACTOR, ParallelSupervisorEventLog};
-use planning::{PlanningWorkerPanelState, PlanningWorkerStatus, PlanningWorkerVisibility};
+use planning::PlanningWorkerVisibility;
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
