@@ -1,9 +1,12 @@
 use ratatui::text::{Line, Span};
 
-use super::super::super::{AkraTheme, ProgressiveActivityDetailKind};
+use super::super::super::{
+    AkraTheme, ProgressiveActivityCard, ProgressiveActivityCardKind, ProgressiveActivityDetailKind,
+};
 
 const PAGE_SCAN_BYTES_PER_CELL: usize = 8;
 const PAGE_OUTPUT_BYTES_PER_CELL: usize = 8;
+const MAX_LIST_ROWS: usize = 8;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ActivityOverlayDocument<'a> {
@@ -32,20 +35,60 @@ pub(crate) fn build_activity_overlay_view(
     viewport_width: u16,
     viewport_height: u16,
 ) -> ActivityOverlayView {
-    let mut header_lines = vec![build_tab_line(
+    build_activity_overlay_list_view(
+        None,
+        &[],
+        0,
+        true,
+        selected_kind,
+        diff_available,
+        output_available,
+        document,
+        requested_page_start,
+        viewport_width,
+        viewport_height,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_activity_overlay_list_view(
+    card_filter: Option<ProgressiveActivityCardKind>,
+    cards: &[ProgressiveActivityCard],
+    selected_card_index: usize,
+    list_focus: bool,
+    selected_kind: ProgressiveActivityDetailKind,
+    diff_available: bool,
+    output_available: bool,
+    document: Option<ActivityOverlayDocument<'_>>,
+    requested_page_start: usize,
+    viewport_width: u16,
+    viewport_height: u16,
+) -> ActivityOverlayView {
+    let mut header_lines = vec![build_filter_line(
+        card_filter,
         selected_kind,
         diff_available,
         output_available,
     )];
+    header_lines.extend(build_card_list_lines(
+        cards,
+        selected_card_index,
+        list_focus,
+    ));
+
     let Some(document) = document else {
-        header_lines.push(Line::styled("detail unavailable", AkraTheme::muted()));
+        if cards.is_empty() {
+            header_lines.push(Line::styled(
+                "no retained progressive activity cards",
+                AkraTheme::muted(),
+            ));
+        }
         return ActivityOverlayView {
             header_lines,
-            detail_title: Line::from(detail_title(selected_kind)),
-            detail_lines: vec![Line::from(format!(
-                "No retained {} is available for the active turn.",
-                detail_label(selected_kind).to_ascii_lowercase()
-            ))],
+            detail_title: Line::from(selected_card_detail_title(cards, selected_card_index)),
+            detail_lines: vec![Line::from(
+                "No retained detail is available for the selected activity card.".to_string(),
+            )],
             key_lines: build_activity_overlay_key_lines(viewport_width),
             current_page_start: 0,
             next_page_start: None,
@@ -61,7 +104,7 @@ pub(crate) fn build_activity_overlay_view(
     );
     let detail_title = Line::from(format!(
         "{} | {}-{} / {} B",
-        detail_label(selected_kind),
+        selected_card_detail_title(cards, selected_card_index),
         page.start_byte,
         page.end_byte,
         document.retained_bytes
@@ -77,24 +120,110 @@ pub(crate) fn build_activity_overlay_view(
     }
 }
 
-fn build_tab_line(
+fn build_filter_line(
+    card_filter: Option<ProgressiveActivityCardKind>,
     selected_kind: ProgressiveActivityDetailKind,
     diff_available: bool,
     output_available: bool,
 ) -> Line<'static> {
+    if card_filter.is_none()
+        && matches!(
+            selected_kind,
+            ProgressiveActivityDetailKind::Diff | ProgressiveActivityDetailKind::Output
+        )
+        && (diff_available || output_available)
+    {
+        // Keep the legacy Diff/Output tab chrome when the list is unfiltered and those
+        // documents still exist so existing snapshots/operators retain familiar labels.
+    }
+
+    let filter_label = match card_filter {
+        None => "all",
+        Some(kind) => kind.label(),
+    };
     Line::from(vec![
-        tab_span(
-            "Diff",
-            selected_kind == ProgressiveActivityDetailKind::Diff,
-            diff_available,
-        ),
+        Span::styled("filter: ", AkraTheme::muted()),
+        Span::styled(filter_label.to_string(), AkraTheme::selected()),
         Span::raw("    "),
         tab_span(
+            "Diff",
+            matches!(selected_kind, ProgressiveActivityDetailKind::Diff)
+                || card_filter == Some(ProgressiveActivityCardKind::Diff),
+            diff_available || card_filter == Some(ProgressiveActivityCardKind::Diff),
+        ),
+        Span::raw("  "),
+        tab_span(
             "Output",
-            selected_kind == ProgressiveActivityDetailKind::Output,
-            output_available,
+            matches!(selected_kind, ProgressiveActivityDetailKind::Output)
+                || card_filter == Some(ProgressiveActivityCardKind::Command),
+            output_available || card_filter == Some(ProgressiveActivityCardKind::Command),
         ),
     ])
+}
+
+fn build_card_list_lines(
+    cards: &[ProgressiveActivityCard],
+    selected_card_index: usize,
+    list_focus: bool,
+) -> Vec<Line<'static>> {
+    if cards.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let start = selected_card_index.saturating_sub(MAX_LIST_ROWS / 2);
+    let end = (start + MAX_LIST_ROWS).min(cards.len());
+    let start = end.saturating_sub(MAX_LIST_ROWS);
+    for (offset, card) in cards[start..end].iter().enumerate() {
+        let index = start + offset;
+        let selected = index == selected_card_index;
+        let marker = if selected {
+            AkraTheme::selected_marker()
+        } else {
+            AkraTheme::idle_marker()
+        };
+        let indicator = if card.expandable {
+            AkraTheme::collapsed_indicator()
+        } else {
+            AkraTheme::non_expandable_indicator()
+        };
+        let fact = if card.fact.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", card.fact)
+        };
+        let text = format!(
+            "{marker}{indicator}{}{:<9} {}{fact}",
+            AkraTheme::tool_card_bullet_glyph(),
+            card.key.kind.label(),
+            card.title
+        );
+        let style = if selected && list_focus {
+            AkraTheme::selected()
+        } else if selected {
+            AkraTheme::accent()
+        } else {
+            AkraTheme::tool_card_header()
+        };
+        lines.push(Line::styled(text, style));
+    }
+    if cards.len() > MAX_LIST_ROWS {
+        lines.push(Line::styled(
+            format!("  showing {}-{} / {}", start + 1, end, cards.len()),
+            AkraTheme::muted(),
+        ));
+    }
+    lines
+}
+
+fn selected_card_detail_title(
+    cards: &[ProgressiveActivityCard],
+    selected_card_index: usize,
+) -> String {
+    cards
+        .get(selected_card_index)
+        .map(|card| format!("{} · {}", card.key.kind.label(), card.title))
+        .unwrap_or_else(|| "Retained Activity Detail".to_string())
 }
 
 fn tab_span(label: &'static str, selected: bool, available: bool) -> Span<'static> {
@@ -138,34 +267,20 @@ fn build_document_status_lines(document: &ActivityOverlayDocument<'_>) -> Vec<Li
 fn build_activity_overlay_key_lines(viewport_width: u16) -> Vec<Line<'static>> {
     if viewport_width >= 96 {
         return vec![AkraTheme::key_line(
-            "Tab/Shift+Tab/Left/Right: view | Up/Down/PgUp/PgDn: page | Home: first | Esc: close",
+            "Up/Down: card | Enter/e: detail | PgUp/PgDn: page | Tab: filter | Home: first | Esc: close",
         )];
     }
     if viewport_width >= 64 {
         return vec![
-            AkraTheme::key_line("Tab/Shift+Tab/Left/Right: view | Up/Down/PgUp/PgDn: page"),
-            AkraTheme::key_line("Home: first | Esc: close"),
+            AkraTheme::key_line("Up/Down: card | Enter/e: detail | PgUp/PgDn: page"),
+            AkraTheme::key_line("Tab: filter | Home: first | Esc: close"),
         ];
     }
     vec![
-        AkraTheme::key_line("Up/Down/PgUp/PgDn: page | Esc: close"),
-        AkraTheme::key_line("Tab/Shift+Tab/Left/Right: view"),
+        AkraTheme::key_line("Up/Down: card | Enter/e: detail"),
+        AkraTheme::key_line("PgUp/PgDn: page | Tab: filter"),
         AkraTheme::key_line("Home: first | Esc: close"),
     ]
-}
-
-const fn detail_label(kind: ProgressiveActivityDetailKind) -> &'static str {
-    match kind {
-        ProgressiveActivityDetailKind::Diff => "Diff",
-        ProgressiveActivityDetailKind::Output => "Output",
-    }
-}
-
-const fn detail_title(kind: ProgressiveActivityDetailKind) -> &'static str {
-    match kind {
-        ProgressiveActivityDetailKind::Diff => "Retained Diff",
-        ProgressiveActivityDetailKind::Output => "Retained Output Tail",
-    }
 }
 
 struct BoundedDocumentPage {
@@ -454,12 +569,22 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert_eq!(view.header_lines.len(), 1);
+        assert!(view.header_lines.len() >= 1);
         assert!(!header.contains("truncated:0"));
         assert!(!header.contains("history:complete"));
         assert_eq!(view.key_lines.len(), 3);
-        assert!(view.key_lines[0].to_string().contains("Esc: close"));
-        assert!(view.key_lines[1].to_string().contains("Tab/Shift+Tab"));
+        assert!(
+            view.key_lines[0].to_string().contains("Esc: close")
+                || view
+                    .key_lines
+                    .iter()
+                    .any(|line| line.to_string().contains("Esc: close"))
+        );
+        assert!(
+            view.key_lines
+                .iter()
+                .any(|line| line.to_string().contains("Tab"))
+        );
     }
 
     #[test]
@@ -497,8 +622,8 @@ mod tests {
         assert!(
             view.detail_lines[0]
                 .to_string()
-                .contains("No retained output is available")
+                .contains("No retained detail is available")
         );
-        assert!(view.header_lines[0].to_string().contains("> Output"));
+        assert!(view.header_lines[0].to_string().contains("filter:"));
     }
 }

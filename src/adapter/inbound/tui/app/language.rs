@@ -9,7 +9,9 @@ use super::parallel_mode_shell_command::{
 use super::planning_overlay_shell_command::parse_planning_overlay_shell_argument;
 use super::planning_reset_shell_command::parse_planning_reset_shell_argument;
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
-use super::progressive_activity_overlay_ui::parse_progressive_activity_detail_kind;
+use super::progressive_activity_overlay_ui::{
+    parse_progressive_activity_card_filter, parse_progressive_activity_detail_kind,
+};
 use super::queue_overlay_ui::{
     QueueActionBlockReason, QueueMutationAuthorityRefreshError, QueueMutationKind,
 };
@@ -752,7 +754,7 @@ impl TuiLanguage {
             (Self::English, InlineShellCommand::Diagnostics) => "diagnostics",
             (Self::English, InlineShellCommand::Parallel) => "parallel mode",
             (Self::English, InlineShellCommand::Peek) => "parallel agent peek",
-            (Self::English, InlineShellCommand::Activity) => "turn activity detail",
+            (Self::English, InlineShellCommand::Activity) => "progressive activity cards",
             (Self::English, InlineShellCommand::Sessions) => "recent sessions",
             (Self::English, InlineShellCommand::Reviews) => "review center",
             (Self::English, InlineShellCommand::Queue) => "planning queue",
@@ -771,7 +773,7 @@ impl TuiLanguage {
             (Self::Korean, InlineShellCommand::Diagnostics) => "진단",
             (Self::Korean, InlineShellCommand::Parallel) => "병렬 모드",
             (Self::Korean, InlineShellCommand::Peek) => "병렬 에이전트 보기",
-            (Self::Korean, InlineShellCommand::Activity) => "턴 활동 상세",
+            (Self::Korean, InlineShellCommand::Activity) => "활동 카드 목록",
             (Self::Korean, InlineShellCommand::Sessions) => "최근 세션",
             (Self::Korean, InlineShellCommand::Reviews) => "리뷰 센터",
             (Self::Korean, InlineShellCommand::Queue) => "계획 큐",
@@ -878,16 +880,21 @@ impl TuiLanguage {
             },
             InlineShellCommand::Activity => match argument {
                 None => base_hint(),
-                Some(argument) => match parse_progressive_activity_detail_kind(argument) {
-                    Some(_) => format!(
-                        "Enter로 보관된 `{}` 활동 상세를 확인합니다.",
-                        argument.trim().to_ascii_lowercase()
-                    ),
-                    None => format!(
-                        "`:activity {}`은 지원하지 않습니다. 사용 가능: diff, output.",
-                        argument.trim()
-                    ),
-                },
+                Some(argument) => {
+                    if parse_progressive_activity_detail_kind(argument).is_some()
+                        || parse_progressive_activity_card_filter(argument).is_some()
+                    {
+                        format!(
+                            "Enter로 보관된 `{}` activity 카드를 확인합니다.",
+                            argument.trim().to_ascii_lowercase()
+                        )
+                    } else {
+                        format!(
+                            "`:activity {}`은 지원하지 않습니다. 사용 가능: all, diff, output, command, patch, mcp, plan, reason, agent, terminal, token, guardian, moderation, unknown.",
+                            argument.trim()
+                        )
+                    }
+                }
             },
             InlineShellCommand::PlanningInit => match parse_planning_shell_argument(argument) {
                 Ok(ParsedPlanningShellCommand::OpenControlCenter) => base_hint(),

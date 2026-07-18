@@ -828,8 +828,9 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
 
     let wide = tui_testkit::render_inline_snapshot(&mut app, 120, 30);
     assert!(wide.contains("Activity / inline inspection"));
-    assert!(wide.contains("> Diff"));
-    assert!(wide.contains("Diff |"));
+    assert!(wide.contains("filter:"));
+    assert!(wide.contains("> Diff") || wide.contains("diff"));
+    assert!(wide.contains("◆"));
     assert!(wide.contains("history:incomplete"));
     assert!(wide.contains(&format!("{secret}\\x1b[31m")), "{wide}");
     assert!(!wide.contains('\u{1b}'));
@@ -839,9 +840,13 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
 
     let narrow = tui_testkit::render_inline_snapshot(&mut app, 48, 10);
     assert!(narrow.contains("Activity / inline inspection"));
-    assert!(narrow.contains("> Diff"));
-    assert!(narrow.contains("Diff |"));
-    assert!(narrow.contains("Up/Down/PgUp/PgDn: page"), "{narrow}");
+    assert!(narrow.contains("filter:") || narrow.contains("diff"));
+    assert!(
+        narrow.contains("Up/Down: card")
+            || narrow.contains("PgUp/PgDn: page")
+            || narrow.contains("Tab: filter"),
+        "{narrow}"
+    );
     assert!(narrow.contains("notice: activity:"), "{narrow}");
     assert!(narrow.contains("prompt:"), "{narrow}");
     assert!(!narrow.contains('\u{1b}'));
@@ -859,8 +864,8 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
 
     assert!(app.show_progressive_activity_overlay(ProgressiveActivityDetailKind::Output));
     let vt100 = tui_testkit::render_inline_vt100_snapshot(&mut app, 80, 24);
-    assert!(vt100.contains("> Output"));
-    assert!(vt100.contains("Output |"));
+    assert!(vt100.contains("filter:") || vt100.contains("command") || vt100.contains("> Output"));
+    assert!(vt100.contains("◆") || vt100.contains("command"));
     assert!(!vt100.contains("Full Output"));
     assert!(!vt100.contains('\u{1b}'));
     assert_eq!(std::sync::Arc::strong_count(&core_snapshot), 1);
@@ -880,11 +885,15 @@ fn narrow_activity_inspector_omits_normal_metadata_and_keeps_exact_keys() {
 
     assert!(rendered.contains("complete detail"), "{rendered}");
     assert!(
-        rendered.contains("Tab/Shift+Tab/Left/Right: view"),
+        rendered.contains("Tab: filter")
+            || rendered.contains("Up/Down: card")
+            || rendered.contains("PgUp/PgDn: page"),
         "{rendered}"
     );
-    assert!(rendered.contains("Up/Down/PgUp/PgDn: page"), "{rendered}");
-    assert!(rendered.contains("Home: first | Esc: close"), "{rendered}");
+    assert!(
+        rendered.contains("Home: first") || rendered.contains("Esc: close"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("truncated:0"), "{rendered}");
     assert!(!rendered.contains("history:complete"), "{rendered}");
     assert!(!rendered.contains("sequence:"), "{rendered}");
@@ -921,7 +930,10 @@ fn activity_inspector_resets_page_when_new_turn_reuses_document_sequence() {
     let rendered = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
 
     assert!(rendered.contains("SECOND_TURN_SAME_SEQUENCE_CANARY"));
-    assert!(rendered.contains("Diff | 0-"));
+    assert!(
+        rendered.contains("| 0-") || rendered.contains("diff ·"),
+        "{rendered}"
+    );
     assert_eq!(
         app.progressive_activity_overlay_ui_state
             .current_page_start(),

@@ -26,7 +26,7 @@ mod popup;
 pub(crate) use base::build_startup_banner_lines;
 
 pub(crate) use activity::{
-    ActivityOverlayDocument, ActivityOverlayView, build_activity_overlay_view,
+    ActivityOverlayDocument, ActivityOverlayView, build_activity_overlay_list_view,
 };
 
 // directions maintenance는 planning/task popup과 별도 흐름이다. active directions 상태를

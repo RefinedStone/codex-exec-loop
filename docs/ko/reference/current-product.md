@@ -22,7 +22,7 @@
 | Diagnostics | `Ctrl+d`, `:diag` | 시작 준비 상태와 blocker 확인 |
 | Sessions | `Ctrl+o`, `:sessions` | 세션 검색·이름 변경·재개 또는 새 draft 시작 |
 | Reviews | `:reviews` | 제한된 review center projection 확인 |
-| Activity | `:activity [diff\|output]`, `:act` | 현재 turn의 보존된 typed diff/output 확인 |
+| Activity | `:activity [all\|diff\|output\|command\|patch\|…]`, `:act` | 보존된 progressive activity 카드 목록·선택 상세 확인 (라이브/오버레이 펼침; host scrollback은 정적) |
 | Queue | `:queue`, `:q`, `akra queue` | 승인된 head, proposal, skip, receipt 확인 |
 | Planning | `:planning`, `:planning-init` | planning 변경 staging·검증·승격 |
 | Directions | `:directions` | direction과 queue-idle 지원 자료 관리 |
@@ -42,7 +42,7 @@ Modal이 focus를 소유할 때는 전역 키보다 우선할 수 있으며, 표
 :diag
 :parallel [off]
 :peek
-:activity [diff|output]
+:activity [all|diff|output|command|patch|mcp|plan|reason|agent|terminal|token|guardian|moderation|unknown]
 :sessions
 :reviews
 :queue

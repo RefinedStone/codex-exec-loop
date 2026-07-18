@@ -7,7 +7,9 @@ use super::planning_reset_shell_command::{
     ParsedPlanningResetShellCommand, parse_planning_reset_shell_argument,
 };
 use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_shell_argument};
-use super::progressive_activity_overlay_ui::parse_progressive_activity_detail_kind;
+use super::progressive_activity_overlay_ui::{
+    parse_progressive_activity_card_filter, parse_progressive_activity_detail_kind,
+};
 use super::view_selection_overlay_ui::ConversationViewMode;
 use crate::application::service::planning::PlanningResetTarget;
 use crate::domain::conversation::ConversationReasoningEffort;
@@ -67,8 +69,8 @@ pub(crate) struct InlineShellCommandHelpEntry {
     pub(crate) detail: &'static str,
 }
 #[cfg(test)]
-const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :activity [diff|output]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
-const ACTIVITY_USAGE: &str = "Type `:activity [diff|output]` to inspect retained turn detail.";
+const COMMAND_LIST_LINE: &str = "Shell commands: :diag  :parallel [off]  :peek  :activity [all|diff|output|command|…]  :sessions  :reviews  :queue  :directions  :turns <positive|infinite|off>  :stop  :model [default]  :view [simple|medium|detail]  :language [english|korean]  :think <none|minimal|low|medium|high|xhigh|default>  :planning [doctor]  :doctor  :reset <queue|directions|all>  :new  :help";
+const ACTIVITY_USAGE: &str = "Type `:activity [all|diff|output|command|patch|…]` to inspect retained progressive activity cards.";
 const RESET_USAGE: &str =
     "Type `:reset <queue|directions|all>` and press Enter to reset planning state.";
 const MODEL_USAGE: &str = "Type `:model` to choose the model and think level, or `:model default` to use app-server defaults.";
@@ -466,7 +468,7 @@ impl InlineShellCommand {
         match self {
             InlineShellCommand::Parallel => ":parallel [off]",
             InlineShellCommand::Peek => ":peek",
-            InlineShellCommand::Activity => ":activity [diff|output]",
+            InlineShellCommand::Activity => ":activity [all|diff|output|command|patch|mcp|plan|…]",
             InlineShellCommand::Queue => ":queue",
             InlineShellCommand::Reviews => ":reviews",
             InlineShellCommand::Directions => ":directions",
@@ -541,16 +543,18 @@ fn activity_argument_hint(argument: Option<&str>) -> String {
     let Some(argument) = argument else {
         return ACTIVITY_USAGE.to_string();
     };
-    match parse_progressive_activity_detail_kind(argument) {
-        Some(_) => format!(
-            "Press Enter to inspect retained `{}` activity detail.",
+    if parse_progressive_activity_detail_kind(argument).is_some()
+        || parse_progressive_activity_card_filter(argument).is_some()
+    {
+        return format!(
+            "Press Enter to inspect retained `{}` activity cards.",
             argument.trim().to_ascii_lowercase()
-        ),
-        None => format!(
-            "`:activity {}` is unsupported; pressing Enter leaves the current overlay unchanged. Supported values: diff, output.",
-            argument.trim()
-        ),
+        );
     }
+    format!(
+        "`:activity {}` is unsupported; pressing Enter leaves the current overlay unchanged. Supported values: all, diff, output, command, patch, mcp, plan, reason, agent, terminal, token, guardian, moderation, unknown.",
+        argument.trim()
+    )
 }
 pub(super) fn is_turn_option_clear_argument(argument: &str) -> bool {
     matches!(

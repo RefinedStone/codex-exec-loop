@@ -65,7 +65,7 @@ cargo run
 | `:planning` | planning 작성 시작 또는 재개 |
 | `:directions` | planning 방향과 idle 정책 관리 |
 | `:reviews` | review center 확인 |
-| `:activity [diff\|output]` | 현재 turn의 보존된 diff/output 상세 확인 |
+| `:activity [all\|diff\|output\|command\|…]` | progressive activity 카드 목록과 선택 상세 확인 |
 | `:parallel` / `:pa` | parallel board 활성화 또는 갱신 |
 | `:parallel off` | worktree를 삭제하지 않고 로컬 병렬 자동화 중지 |
 | `:turns <positive\|infinite\|off>` | 단일 세션 auto-follow 제어 |

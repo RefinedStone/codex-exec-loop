@@ -3,16 +3,16 @@ source: src/adapter/inbound/tui/app/shell_rendering_tests.rs
 expression: vt100
 ---
 Akra / Activity / inline inspection
-  Diff    > Output
+filter: command      Diff  > Output
+> › ◆ command   한글 wide detail  52 lines
 retained:795/795 B  history:incomplete
-Output | 0-76 / 795 B
+command · 한글 wide detail | 0-42 / 795 B
 한글 wide detail
 @@ -1 +1 @@
 -old value
-+AKRA_ACTIVITY_DETAIL_SECRET\x1b[31m
 Keys
-Tab/Shift+Tab/Left/Right: view | Up/Down/PgUp/PgDn: page
-Home: first | Esc: close
+Up/Down: card | Enter/e: detail | PgUp/PgDn: page
+Tab: filter | Home: first | Esc: close
 Akra  |  thread: Progressive activity
 ◦ Working (0s • waiting for response / interrupt runtime-...)
 notice: activity: active:command | diff:+1 -1 h1 | cmd:52 lines | ctx:75.00%

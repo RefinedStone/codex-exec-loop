@@ -334,7 +334,9 @@ fn help_entries_use_renderable_command_forms() {
     assert!(rendered.contains(":diag - diagnostics"));
     assert!(rendered.contains(":parallel [off] - parallel mode"));
     assert!(rendered.contains(":peek - parallel agent peek"));
-    assert!(rendered.contains(":activity [diff|output] - turn activity detail"));
+    assert!(rendered.contains(
+        ":activity [all|diff|output|command|patch|mcp|plan|…] - progressive activity cards"
+    ));
     assert!(!rendered.lines().any(|line| line.starts_with(":pa ")));
     assert!(
         rendered.contains(":turns <positive|infinite|off> - auto-follow opt-in; off or 0 disables")
@@ -375,11 +377,15 @@ fn buffered_command_hints_follow_the_selected_tui_language() {
         reset.buffered_hint()
     );
 
-    let invalid = InlineShellCommandInput::parse(":activity all").expect("command should parse");
+    let invalid = InlineShellCommandInput::parse(":activity nope").expect("command should parse");
     let korean = invalid.localized_buffered_hint(TuiLanguage::Korean);
     assert!(korean.contains("지원하지 않습니다"));
-    assert!(korean.contains("diff, output"));
+    assert!(korean.contains("all, diff, output"));
     assert!(!korean.contains("Press Enter"));
+
+    let all = InlineShellCommandInput::parse(":activity all").expect("command should parse");
+    let korean_all = all.localized_buffered_hint(TuiLanguage::Korean);
+    assert!(korean_all.contains("activity 카드") || korean_all.contains("Enter로"));
 
     let diagnostics = InlineShellCommandInput::parse(":diag").expect("command should parse");
     assert_eq!(
@@ -507,24 +513,27 @@ fn activity_command_hint_is_argument_aware() {
     let plain = InlineShellCommandInput::parse(":activity").expect("command should parse");
     let diff = InlineShellCommandInput::parse(":activity diff").expect("command should parse");
     let output = InlineShellCommandInput::parse(":act OUTPUT").expect("command should parse");
-    let invalid = InlineShellCommandInput::parse(":activity all").expect("command should parse");
+    let all = InlineShellCommandInput::parse(":activity all").expect("command should parse");
+    let invalid = InlineShellCommandInput::parse(":activity nope").expect("command should parse");
 
     assert_eq!(
         plain.buffered_hint(),
-        "Type `:activity [diff|output]` to inspect retained turn detail."
+        "Type `:activity [all|diff|output|command|patch|…]` to inspect retained progressive activity cards."
     );
     assert_eq!(
         diff.buffered_hint(),
-        "Press Enter to inspect retained `diff` activity detail."
+        "Press Enter to inspect retained `diff` activity cards."
     );
     assert_eq!(
         output.buffered_hint(),
-        "Press Enter to inspect retained `output` activity detail."
+        "Press Enter to inspect retained `output` activity cards."
     );
     assert_eq!(
-        invalid.buffered_hint(),
-        "`:activity all` is unsupported; pressing Enter leaves the current overlay unchanged. Supported values: diff, output."
+        all.buffered_hint(),
+        "Press Enter to inspect retained `all` activity cards."
     );
+    assert!(invalid.buffered_hint().contains("unsupported"));
+    assert!(invalid.buffered_hint().contains("all, diff, output"));
 }
 
 #[test]
