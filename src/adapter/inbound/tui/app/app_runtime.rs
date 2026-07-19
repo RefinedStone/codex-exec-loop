@@ -806,8 +806,7 @@ mod tests {
         assert!(!unchanged_workspace_permit.is_current());
 
         let new_draft_permit = app.post_turn_continuation_gate.capture();
-        let new_draft_generation =
-            arm_pending_manual_prompt_for_identity_test(&mut app, "new draft prompt");
+        arm_pending_manual_prompt_for_identity_test(&mut app, "new draft prompt");
         app.pending_conversation_load = Some(ConversationLoadCorrelation::new(9, "thread-stale"));
         app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: "off".to_string(),
@@ -817,7 +816,6 @@ mod tests {
         });
         assert!(!new_draft_permit.is_current());
         assert!(app.pending_manual_prompt_preparation.is_none());
-        assert!(app.manual_prompt_preparation_generation > new_draft_generation);
         assert!(app.pending_conversation_load.is_none());
         assert!(matches!(
             &app.conversation_state,
@@ -826,8 +824,7 @@ mod tests {
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
 
         let session_permit = app.post_turn_continuation_gate.capture();
-        let session_generation =
-            arm_pending_manual_prompt_for_identity_test(&mut app, "session prompt");
+        arm_pending_manual_prompt_for_identity_test(&mut app, "session prompt");
         app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: "off".to_string(),
         });
@@ -848,7 +845,6 @@ mod tests {
         });
         assert!(!session_permit.is_current());
         assert!(app.pending_manual_prompt_preparation.is_none());
-        assert!(app.manual_prompt_preparation_generation > session_generation);
         assert!(matches!(app.conversation_state, ConversationState::Loading));
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
         assert_eq!(
@@ -1123,30 +1119,22 @@ mod tests {
         ))
     }
 
-    fn arm_pending_manual_prompt_for_identity_test(
-        app: &mut NativeTuiApp,
-        transcript_text: &str,
-    ) -> u64 {
-        let generation = app
-            .manual_prompt_preparation_generation
-            .wrapping_add(1)
-            .max(1);
+    fn arm_pending_manual_prompt_for_identity_test(app: &mut NativeTuiApp, transcript_text: &str) {
         let workspace_directory = app.planning_workspace_directory();
-        app.manual_prompt_preparation_generation = generation;
         app.pending_manual_prompt_preparation = Some(
             crate::adapter::inbound::tui::app::PendingManualPromptPreparation {
                 correlation: crate::domain::planning::ManualPromptCorrelation {
-                    request_id: generation,
-                    generation,
+                    request_id: 1,
+                    generation: 1,
                     workspace_directory,
                 },
+                source_input_buffer: transcript_text.to_string(),
                 transcript_text: transcript_text.to_string(),
                 parallel_mode_enabled_at_submission: false,
                 delivery: crate::adapter::inbound::tui::app::ManualPromptDelivery::StartTurn,
                 parent_turn_id: None,
             },
         );
-        generation
     }
 }
 
@@ -1378,8 +1366,6 @@ impl NativeTuiApp {
             reviews_overlay_ui_state: super::reviews_overlay_ui::ReviewsOverlayUiState::default(),
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,
-            next_manual_prompt_preparation_request_id: 0,
-            manual_prompt_preparation_generation: 0,
             prompt_input_revision: 0,
             turn_steer_confirmation: None,
             pending_turn_steer: None,
@@ -1518,6 +1504,7 @@ impl NativeTuiApp {
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnSteerAdmissionResolved(_) => {}
+            AppEvent::ManualPromptPreparationAdmissionResolved(_) => {}
             AppEvent::TurnSteerCompleted {
                 correlation,
                 result,

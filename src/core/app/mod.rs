@@ -8,6 +8,7 @@ pub mod controller;
 pub mod conversation;
 pub mod effect;
 pub mod event;
+pub mod manual_prompt;
 pub mod projection;
 pub mod request;
 pub mod session;
@@ -26,6 +27,7 @@ pub use conversation::{
 };
 pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput, SessionRenameAcceptedSnapshot};
+pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparationIntent};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
 pub use request::{
     ConversationLoadCorrelation, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,

@@ -7,15 +7,15 @@
 mod post_turn_execution;
 
 use crate::application::service::manual_prompt_preparation::{
-    ManualPlanningBootstrapFailureKind, ManualPromptPreparationRequest,
-    ManualPromptPreparationResult,
+    ManualPlanningBootstrapFailureKind, ManualPromptPreparationResult,
 };
 use crate::application::service::parallel_mode::turn::ParallelTurnSlotLeaseHandoff;
 use crate::application::service::planning::{
     ManualPromptIntakeOutcome, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
 use crate::core::app::{
-    AppCommand, AppEvent, CorePromptOrigin, TurnSubmissionAdmission, TurnSubmissionRequest,
+    AppCommand, AppEvent, CorePromptOrigin, ManualPromptPreparationAdmission,
+    ManualPromptPreparationIntent, TurnSubmissionAdmission, TurnSubmissionRequest,
 };
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use crate::domain::planning::ManualPromptCorrelation;
@@ -320,7 +320,7 @@ impl NativeTuiApp {
                 ConversationState::Ready(conversation) => {
                     let delivery = manual_prompt_delivery(conversation);
                     (
-                        delivery.is_some() && conversation.input_buffer.trim() == transcript_text,
+                        delivery.is_some() && conversation.input_buffer == operator_prompt,
                         delivery.unwrap_or(ManualPromptDelivery::StartTurn),
                         Some(conversation.thread_id.clone())
                             .filter(|thread_id| !thread_id.trim().is_empty()),
@@ -359,40 +359,56 @@ impl NativeTuiApp {
         }
 
         let workspace_directory = self.planning_workspace_directory();
-        let correlation = self.next_manual_prompt_preparation_correlation(workspace_directory);
         let parallel_mode_enabled_at_submission = self.parallel_mode_enabled();
-        self.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
-            correlation: correlation.clone(),
-            transcript_text: transcript_text.clone(),
-            parallel_mode_enabled_at_submission,
-            delivery,
-            parent_turn_id: parent_turn_id.clone(),
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::PrepareManualPrompt(Box::new(
+                ManualPromptPreparationIntent {
+                    workspace_directory,
+                    raw_prompt: transcript_text.clone(),
+                    parent_thread_id,
+                    parent_turn_id: parent_turn_id.clone(),
+                },
+            )));
+        let admission = outcome.events.iter().find_map(|event| match event {
+            AppEvent::ManualPromptPreparationAdmissionResolved(admission) => {
+                Some(admission.clone())
+            }
+            _ => None,
         });
-        if parallel_mode_enabled_at_submission {
-            self.show_supersession_overlay();
-            self.record_parallel_supervisor_event(
-                PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
-                format!(
-                    "operator prompt submitted / chars: {}",
-                    transcript_text.chars().count()
-                ),
-            );
-            self.record_parallel_supervisor_event(
-                "Task Intake",
-                "task generation started from the operator prompt.",
-            );
-            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "parallel task intake: preparing operator prompt".to_string(),
-            });
+        match admission {
+            Some(ManualPromptPreparationAdmission::Accepted { correlation }) => {
+                self.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
+                    correlation,
+                    source_input_buffer: operator_prompt,
+                    transcript_text: transcript_text.clone(),
+                    parallel_mode_enabled_at_submission,
+                    delivery,
+                    parent_turn_id,
+                });
+                if parallel_mode_enabled_at_submission {
+                    self.show_supersession_overlay();
+                    self.record_parallel_supervisor_event(
+                        PARALLEL_SUPERVISOR_OPERATOR_ACTOR,
+                        format!(
+                            "operator prompt submitted / chars: {}",
+                            transcript_text.chars().count()
+                        ),
+                    );
+                    self.record_parallel_supervisor_event(
+                        "Task Intake",
+                        "task generation started from the operator prompt.",
+                    );
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: "parallel task intake: preparing operator prompt".to_string(),
+                    });
+                }
+            }
+            Some(ManualPromptPreparationAdmission::RejectedActive { .. }) | None => {}
         }
-        self.dispatch_core_command(AppCommand::PrepareManualPrompt(Box::new(
-            ManualPromptPreparationRequest {
-                correlation,
-                raw_prompt: transcript_text,
-                parent_thread_id,
-                parent_turn_id,
-            },
-        )));
+        // Install adapter-local prompt metadata before applying a completion
+        // from the immediate manual preparation executor.
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn apply_manual_prompt_preparation(
@@ -619,33 +635,10 @@ impl NativeTuiApp {
         self.queue_overlay_ui_state.set_feedback(status_text);
     }
 
-    fn next_manual_prompt_preparation_correlation(
-        &mut self,
-        workspace_directory: String,
-    ) -> ManualPromptCorrelation {
-        self.next_manual_prompt_preparation_request_id = self
-            .next_manual_prompt_preparation_request_id
-            .wrapping_add(1)
-            .max(1);
-        self.manual_prompt_preparation_generation = self
-            .manual_prompt_preparation_generation
-            .wrapping_add(1)
-            .max(1);
-        ManualPromptCorrelation {
-            request_id: self.next_manual_prompt_preparation_request_id,
-            generation: self.manual_prompt_preparation_generation,
-            workspace_directory,
-        }
-    }
-
     pub(super) fn cancel_manual_prompt_preparation_for_identity_transition(&mut self) {
         self.pending_manual_prompt_preparation = None;
         self.turn_steer_confirmation = None;
         self.pending_turn_steer = None;
-        self.manual_prompt_preparation_generation = self
-            .manual_prompt_preparation_generation
-            .wrapping_add(1)
-            .max(1);
         self.dispatch_core_command(AppCommand::CancelManualPromptPreparation);
     }
 
@@ -664,14 +657,12 @@ impl NativeTuiApp {
         &self,
         pending: &PendingManualPromptPreparation,
     ) -> bool {
-        if pending.correlation.generation != self.manual_prompt_preparation_generation
-            || pending.correlation.workspace_directory != self.planning_workspace_directory()
-        {
+        if pending.correlation.workspace_directory != self.planning_workspace_directory() {
             return false;
         }
         match &self.conversation_state {
             ConversationState::Ready(conversation) => {
-                conversation.input_buffer.trim() == pending.transcript_text
+                conversation.input_buffer == pending.source_input_buffer
             }
             ConversationState::Loading | ConversationState::Failed(_) => false,
         }
@@ -1018,6 +1009,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
@@ -1196,10 +1188,16 @@ mod tests {
         app: &mut NativeTuiApp,
         transcript_text: &str,
     ) -> ManualPromptCorrelation {
-        let correlation =
-            app.next_manual_prompt_preparation_correlation(app.planning_workspace_directory());
+        static NEXT_FIXTURE_CORRELATION: AtomicU64 = AtomicU64::new(1);
+        let generation = NEXT_FIXTURE_CORRELATION.fetch_add(1, Ordering::Relaxed);
+        let correlation = ManualPromptCorrelation {
+            request_id: generation,
+            generation,
+            workspace_directory: app.planning_workspace_directory(),
+        };
         app.pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
             correlation: correlation.clone(),
+            source_input_buffer: transcript_text.to_string(),
             transcript_text: transcript_text.to_string(),
             parallel_mode_enabled_at_submission: app.parallel_mode_enabled(),
             delivery: ManualPromptDelivery::StartTurn,
@@ -1385,6 +1383,20 @@ mod tests {
         assert!(!ready_conversation(&pending_app).startup_submit_armed);
         assert_eq!(ready_conversation(&pending_app).input_buffer, "");
         assert_eq!(ready_conversation(&pending_app).messages.len(), 1);
+    }
+
+    #[test]
+    fn manual_preparation_tracks_raw_draft_and_submits_trimmed_transcript() {
+        let workspace = TempWorkspace::new("turn-submit-manual-whitespace");
+        let mut app = make_test_app(&workspace);
+        set_input(&mut app, "  ship it  ");
+
+        app.submit_manual_prompt_from_text("  ship it  ".to_string());
+
+        let conversation = ready_conversation(&app);
+        assert_eq!(conversation.input_buffer, "");
+        assert_eq!(conversation.messages.len(), 1);
+        assert_eq!(conversation.messages[0].text, "ship it");
     }
 
     #[test]
@@ -1685,17 +1697,10 @@ mod tests {
         set_input(&mut app, "ship it");
 
         app.submit_manual_prompt_from_text("ship it".to_string());
-        let first_request_sequence = app.next_manual_prompt_preparation_request_id;
-        let first_generation = app.manual_prompt_preparation_generation;
 
         app.start_turn_submission();
 
         assert!(app.pending_manual_prompt_preparation.is_none());
-        assert_eq!(
-            app.next_manual_prompt_preparation_request_id,
-            first_request_sequence
-        );
-        assert_eq!(app.manual_prompt_preparation_generation, first_generation);
         assert_eq!(ready_conversation(&app).status_text, "starting turn");
     }
 
@@ -1792,7 +1797,6 @@ mod tests {
         let mut app = make_test_app(&first_workspace);
         set_input(&mut app, "ship it");
         let correlation = arm_manual_prompt_preparation(&mut app, "ship it");
-        let previous_generation = app.manual_prompt_preparation_generation;
 
         app.sync_draft_shell_workspace(second_workspace.path_str());
         let switched_status = ready_conversation(&app).status_text.clone();
@@ -1801,7 +1805,6 @@ mod tests {
             second_workspace.path_str()
         );
         assert!(app.pending_manual_prompt_preparation.is_none());
-        assert!(app.manual_prompt_preparation_generation > previous_generation);
 
         app.dispatch_conversation_input(ConversationInputEvent::TextInserted {
             text: " now".to_string(),

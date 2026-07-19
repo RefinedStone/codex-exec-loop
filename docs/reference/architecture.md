@@ -47,6 +47,11 @@ clearing the editor or appending transcript history, then commits that local pro
 core emits an accepted admission. An active submission produces an explicit rejection event and no
 worker effect, so adapter and core state cannot diverge into a phantom "starting turn".
 
+Manual prompt preparation follows the same admission rule. The TUI sends a correlation-free intent
+and binds its editor, delivery, and parallel-mode context only after core accepts it. Core assigns
+the correlation, permits one preparation at a time, and drops stale or duplicate completions. The
+TUI still verifies the accepted workspace and unchanged draft before applying the prepared result.
+
 Active-turn steering uses the same authority boundary. Core admits only an exact active
 submission/thread/turn identity, assigns a correlation rooted in that submission, starts one
 provider worker, and drops stale completions. The TUI owns only the confirmation modal and the

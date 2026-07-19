@@ -1,12 +1,13 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
-    CoreEffectCompletion, CoreInput, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
+    CoreEffectCompletion, CoreInput, ManualPromptPreparationAdmission,
+    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
     SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
     TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
     TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
-use crate::domain::planning::ManualPromptCorrelation;
+use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreDispatchOutcome {
@@ -38,6 +39,7 @@ pub struct CoreController {
     deferred_conversation_load: Option<(String, String)>,
     next_parallel_peek_load_generation: u64,
     active_parallel_peek_load: Option<ParallelPeekLoadCorrelation>,
+    next_manual_prompt_preparation_generation: u64,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
@@ -63,6 +65,7 @@ impl CoreController {
             deferred_conversation_load: None,
             next_parallel_peek_load_generation: 1,
             active_parallel_peek_load: None,
+            next_manual_prompt_preparation_generation: 1,
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
@@ -176,18 +179,45 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
-            CoreInput::Command(AppCommand::PrepareManualPrompt(request)) => {
-                if self.in_flight_manual_prompt_preparation.is_some() {
+            CoreInput::Command(AppCommand::PrepareManualPrompt(intent)) => {
+                if let Some(active_correlation) = &self.in_flight_manual_prompt_preparation {
                     return CoreDispatchOutcome {
-                        events: Vec::new(),
+                        events: vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                            ManualPromptPreparationAdmission::RejectedActive {
+                                active_correlation: active_correlation.clone(),
+                            },
+                        )],
                         effects: Vec::new(),
                         snapshot: self.snapshot(),
                     };
                 }
-                self.in_flight_manual_prompt_preparation = Some(request.correlation.clone());
+                let generation = take_generation(
+                    &mut self.next_manual_prompt_preparation_generation,
+                    "manual prompt preparation",
+                );
+                let ManualPromptPreparationIntent {
+                    workspace_directory,
+                    raw_prompt,
+                    parent_thread_id,
+                    parent_turn_id,
+                } = *intent;
+                let correlation = ManualPromptCorrelation {
+                    request_id: generation,
+                    generation,
+                    workspace_directory,
+                };
+                let request = ManualPromptRequest {
+                    correlation: correlation.clone(),
+                    raw_prompt,
+                    parent_thread_id,
+                    parent_turn_id,
+                };
+                self.in_flight_manual_prompt_preparation = Some(correlation.clone());
                 CoreDispatchOutcome {
-                    events: Vec::new(),
-                    effects: vec![CoreEffect::PrepareManualPrompt(request)],
+                    events: vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                        ManualPromptPreparationAdmission::Accepted { correlation },
+                    )],
+                    effects: vec![CoreEffect::PrepareManualPrompt(Box::new(request))],
                     snapshot: self.snapshot(),
                 }
             }
@@ -768,9 +798,6 @@ impl Default for CoreController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::service::manual_prompt_preparation::{
-        ManualPromptPreparationRequest, ManualPromptPreparationResult,
-    };
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
         ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
@@ -791,15 +818,30 @@ mod tests {
         ConversationItemLifecycleSource, ConversationItemOutcome,
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
-    use crate::domain::planning::TurnSnapshotCapture;
+    use crate::domain::planning::{ManualPromptOutcome, ManualPromptRequest, TurnSnapshotCapture};
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
     use crate::domain::session_summary::SessionSummary;
 
-    fn manual_prompt_correlation() -> crate::domain::planning::ManualPromptCorrelation {
-        crate::domain::planning::ManualPromptCorrelation {
-            request_id: 1,
-            generation: 1,
-            workspace_directory: "/tmp/workspace".to_string(),
+    fn manual_prompt_intent(
+        workspace_directory: &str,
+        raw_prompt: &str,
+    ) -> ManualPromptPreparationIntent {
+        ManualPromptPreparationIntent {
+            workspace_directory: workspace_directory.to_string(),
+            raw_prompt: raw_prompt.to_string(),
+            parent_thread_id: None,
+            parent_turn_id: None,
+        }
+    }
+
+    fn manual_prompt_correlation(
+        generation: u64,
+        workspace_directory: &str,
+    ) -> ManualPromptCorrelation {
+        ManualPromptCorrelation {
+            request_id: generation,
+            generation,
+            workspace_directory: workspace_directory.to_string(),
         }
     }
 
@@ -1828,18 +1870,30 @@ mod tests {
     #[test]
     fn prepare_manual_prompt_returns_core_effect_without_state_revision() {
         let mut controller = CoreController::new();
-        let request = ManualPromptPreparationRequest {
-            correlation: manual_prompt_correlation(),
+        let intent = ManualPromptPreparationIntent {
+            workspace_directory: "/tmp/workspace".to_string(),
             raw_prompt: "ship it".to_string(),
             parent_thread_id: Some("thread-1".to_string()),
             parent_turn_id: Some("turn-1".to_string()),
         };
+        let correlation = manual_prompt_correlation(1, "/tmp/workspace");
+        let request = ManualPromptRequest {
+            correlation: correlation.clone(),
+            raw_prompt: intent.raw_prompt.clone(),
+            parent_thread_id: intent.parent_thread_id.clone(),
+            parent_turn_id: intent.parent_turn_id.clone(),
+        };
 
         let outcome = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
-            Box::new(request.clone()),
+            Box::new(intent),
         )));
 
-        assert!(outcome.events.is_empty());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                ManualPromptPreparationAdmission::Accepted { correlation },
+            )]
+        );
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::PrepareManualPrompt(Box::new(request))]
@@ -1850,37 +1904,49 @@ mod tests {
     #[test]
     fn manual_prompt_preparation_dispatch_and_completion_are_exactly_once() {
         let mut controller = CoreController::new();
-        let correlation = manual_prompt_correlation();
-        let request = ManualPromptPreparationRequest {
-            correlation: correlation.clone(),
-            raw_prompt: "ship it".to_string(),
-            parent_thread_id: None,
-            parent_turn_id: None,
-        };
+        let intent = manual_prompt_intent("/tmp/workspace", "ship it");
+        let correlation = manual_prompt_correlation(1, "/tmp/workspace");
 
         let first = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
-            Box::new(request.clone()),
+            Box::new(intent.clone()),
         )));
         let duplicate = controller.handle_input(CoreInput::Command(
-            AppCommand::PrepareManualPrompt(Box::new(request)),
+            AppCommand::PrepareManualPrompt(Box::new(intent)),
         ));
-        let mut other_correlation = correlation.clone();
-        other_correlation.request_id += 1;
         let overlapping = controller.handle_input(CoreInput::Command(
-            AppCommand::PrepareManualPrompt(Box::new(ManualPromptPreparationRequest {
-                correlation: other_correlation.clone(),
-                raw_prompt: "other".to_string(),
-                parent_thread_id: None,
-                parent_turn_id: None,
-            })),
+            AppCommand::PrepareManualPrompt(Box::new(manual_prompt_intent("/tmp/other", "other"))),
         ));
 
         assert_eq!(first.effects.len(), 1);
+        assert_eq!(
+            first.events,
+            vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                ManualPromptPreparationAdmission::Accepted {
+                    correlation: correlation.clone(),
+                },
+            )]
+        );
         assert!(duplicate.effects.is_empty());
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                ManualPromptPreparationAdmission::RejectedActive {
+                    active_correlation: correlation.clone(),
+                },
+            )]
+        );
         assert!(overlapping.effects.is_empty());
+        assert_eq!(
+            overlapping.events,
+            vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                ManualPromptPreparationAdmission::RejectedActive {
+                    active_correlation: correlation.clone(),
+                },
+            )]
+        );
 
-        let stale_result = Box::new(ManualPromptPreparationResult::Rejected {
-            correlation: other_correlation.clone(),
+        let stale_result = Box::new(ManualPromptOutcome::Rejected {
+            correlation: manual_prompt_correlation(99, "/tmp/other"),
             transcript_text: "other".to_string(),
             runtime_projection: Box::new(PlanningRuntimeProjection::invalid("stale")),
             reason: "stale".to_string(),
@@ -1890,8 +1956,8 @@ mod tests {
         ));
         assert!(stale.events.is_empty());
 
-        let matching_result = Box::new(ManualPromptPreparationResult::Rejected {
-            correlation,
+        let matching_result = Box::new(ManualPromptOutcome::Rejected {
+            correlation: correlation.clone(),
             transcript_text: "ship it".to_string(),
             runtime_projection: Box::new(PlanningRuntimeProjection::invalid("blocked")),
             reason: "blocked".to_string(),
@@ -1911,28 +1977,33 @@ mod tests {
         assert!(duplicate_completion.events.is_empty());
 
         let next = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
-            Box::new(ManualPromptPreparationRequest {
-                correlation: other_correlation,
-                raw_prompt: "other".to_string(),
-                parent_thread_id: None,
-                parent_turn_id: None,
-            }),
+            Box::new(manual_prompt_intent("/tmp/other", "other")),
         )));
-        assert_eq!(next.effects.len(), 1);
+        let next_correlation = manual_prompt_correlation(2, "/tmp/other");
+        assert_eq!(
+            next.events,
+            vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                ManualPromptPreparationAdmission::Accepted {
+                    correlation: next_correlation.clone(),
+                },
+            )]
+        );
+        assert!(matches!(
+            next.effects.as_slice(),
+            [CoreEffect::PrepareManualPrompt(request)]
+                if request.correlation == next_correlation
+        ));
     }
 
     #[test]
     fn cancelling_manual_prompt_preparation_reopens_dispatch_and_drops_late_completion() {
         let mut controller = CoreController::new();
-        let first_correlation = manual_prompt_correlation();
-        let first_request = ManualPromptPreparationRequest {
-            correlation: first_correlation.clone(),
-            raw_prompt: "old workspace prompt".to_string(),
-            parent_thread_id: None,
-            parent_turn_id: None,
-        };
+        let first_correlation = manual_prompt_correlation(1, "/tmp/workspace");
         let _ = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
-            Box::new(first_request),
+            Box::new(manual_prompt_intent(
+                "/tmp/workspace",
+                "old workspace prompt",
+            )),
         )));
 
         let cancelled = controller.handle_input(CoreInput::Command(
@@ -1942,29 +2013,34 @@ mod tests {
         assert!(cancelled.effects.is_empty());
         assert!(controller.in_flight_manual_prompt_preparation.is_none());
 
-        let mut second_correlation = first_correlation.clone();
-        second_correlation.request_id += 1;
-        second_correlation.generation += 1;
-        second_correlation.workspace_directory = "/tmp/other-workspace".to_string();
+        let second_correlation = manual_prompt_correlation(2, "/tmp/other-workspace");
         let second = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
-            Box::new(ManualPromptPreparationRequest {
-                correlation: second_correlation.clone(),
-                raw_prompt: "new workspace prompt".to_string(),
-                parent_thread_id: None,
-                parent_turn_id: None,
-            }),
+            Box::new(manual_prompt_intent(
+                "/tmp/other-workspace",
+                "new workspace prompt",
+            )),
         )));
-        assert_eq!(second.effects.len(), 1);
+        assert_eq!(
+            second.events,
+            vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                ManualPromptPreparationAdmission::Accepted {
+                    correlation: second_correlation.clone(),
+                },
+            )]
+        );
+        assert!(matches!(
+            second.effects.as_slice(),
+            [CoreEffect::PrepareManualPrompt(request)]
+                if request.correlation == second_correlation
+        ));
 
         let late = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::ManualPromptPrepared(Box::new(
-                ManualPromptPreparationResult::Rejected {
-                    correlation: first_correlation,
-                    transcript_text: "old workspace prompt".to_string(),
-                    runtime_projection: Box::new(PlanningRuntimeProjection::invalid("stale")),
-                    reason: "late completion".to_string(),
-                },
-            )),
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(ManualPromptOutcome::Rejected {
+                correlation: first_correlation,
+                transcript_text: "old workspace prompt".to_string(),
+                runtime_projection: Box::new(PlanningRuntimeProjection::invalid("stale")),
+                reason: "late completion".to_string(),
+            })),
         ));
         assert!(late.events.is_empty());
         assert_eq!(
@@ -1973,14 +2049,12 @@ mod tests {
         );
 
         let current = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::ManualPromptPrepared(Box::new(
-                ManualPromptPreparationResult::Rejected {
-                    correlation: second_correlation,
-                    transcript_text: "new workspace prompt".to_string(),
-                    runtime_projection: Box::new(PlanningRuntimeProjection::invalid("blocked")),
-                    reason: "current completion".to_string(),
-                },
-            )),
+            CoreEffectCompletion::ManualPromptPrepared(Box::new(ManualPromptOutcome::Rejected {
+                correlation: second_correlation,
+                transcript_text: "new workspace prompt".to_string(),
+                runtime_projection: Box::new(PlanningRuntimeProjection::invalid("blocked")),
+                reason: "current completion".to_string(),
+            })),
         ));
         assert!(matches!(
             current.events.as_slice(),
@@ -2801,16 +2875,11 @@ mod tests {
     #[test]
     fn manual_prompt_preparation_completion_defers_projection_until_tui_accepts_correlation() {
         let mut controller = CoreController::new();
-        let correlation = manual_prompt_correlation();
+        let correlation = manual_prompt_correlation(1, "/tmp/workspace");
         let _ = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
-            Box::new(ManualPromptPreparationRequest {
-                correlation: correlation.clone(),
-                raw_prompt: "ship it".to_string(),
-                parent_thread_id: None,
-                parent_turn_id: None,
-            }),
+            Box::new(manual_prompt_intent("/tmp/workspace", "ship it")),
         )));
-        let result = Box::new(ManualPromptPreparationResult::Rejected {
+        let result = Box::new(ManualPromptOutcome::Rejected {
             correlation,
             transcript_text: "ship it".to_string(),
             runtime_projection: Box::new(PlanningRuntimeProjection::invalid(

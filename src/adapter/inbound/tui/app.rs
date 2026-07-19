@@ -258,6 +258,7 @@ struct ManualIntakeSubmitContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingManualPromptPreparation {
     correlation: ManualPromptCorrelation,
+    source_input_buffer: String,
     transcript_text: String,
     parallel_mode_enabled_at_submission: bool,
     delivery: ManualPromptDelivery,
@@ -353,8 +354,6 @@ struct NativeTuiApp {
     reviews_overlay_ui_state: reviews_overlay_ui::ReviewsOverlayUiState,
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
-    next_manual_prompt_preparation_request_id: u64,
-    manual_prompt_preparation_generation: u64,
     prompt_input_revision: u64,
     turn_steer_confirmation: Option<TurnSteerUiIntent>,
     pending_turn_steer: Option<PendingTurnSteerUiIntent>,

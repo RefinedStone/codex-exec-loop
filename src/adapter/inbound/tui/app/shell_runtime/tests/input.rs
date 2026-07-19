@@ -156,6 +156,7 @@ fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
             generation: 1,
             workspace_directory,
         },
+        source_input_buffer: "apply this once".to_string(),
         transcript_text: "apply this once".to_string(),
         parallel_mode_enabled_at_submission: false,
         delivery: ManualPromptDelivery::QueueOnly,
