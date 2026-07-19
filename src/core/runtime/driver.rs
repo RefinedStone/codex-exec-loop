@@ -108,13 +108,13 @@ mod tests {
         AppEvent, ApprovalDecisionAdmission, ApprovalDecisionCorrelation, CoreEffectCompletion,
         CorePromptOrigin, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
         ManualPromptPreparationIntent, PlanningRuntimeRefreshCorrelation,
-        QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
-        QueueMutationCorrelation, QueueMutationIntent, QueueMutationKind, QueueMutationResult,
-        QueueMutationTarget, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
-        StartupAttachmentSnapshot, StartupCheckCorrelation, StartupDiagnosticSnapshot,
-        StartupReadySnapshot, StartupSnapshot, StopRequestAdmission, StopRequestAttempt,
-        StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
-        TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+        PlanningRuntimeRefreshSnapshot, QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot,
+        QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
+        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterLoadCorrelation,
+        ReviewCenterSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
+        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, StopRequestAdmission,
+        StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
+        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::{
@@ -238,9 +238,9 @@ mod tests {
             Some(CoreInput::EffectCompleted(
                 CoreEffectCompletion::PlanningRuntimeLoaded {
                     correlation,
-                    result: Ok(Box::new(
+                    result: Ok(Box::new(PlanningRuntimeRefreshSnapshot::new(
                         crate::domain::planning::RuntimeProjection::invalid("loaded"),
-                    )),
+                    ))),
                 },
             ))
         }
@@ -884,6 +884,10 @@ mod tests {
         let (_tx, rx) = core_input_channel();
         let mut runtime = CoreRuntime::new(ImmediatePlanningRuntimeExecutor, rx);
         let correlation = PlanningRuntimeRefreshCorrelation::new(1, "/tmp/workspace");
+        let doctor = PlanningRuntimeRefreshSnapshot::new(
+            crate::domain::planning::RuntimeProjection::invalid("loaded"),
+        )
+        .doctor;
 
         let outcome = runtime.dispatch_command(AppCommand::RefreshPlanningRuntime {
             workspace_directory: "/tmp/workspace".to_string(),
@@ -897,7 +901,7 @@ mod tests {
                 },
                 AppEvent::PlanningRuntimeRefreshed {
                     correlation: correlation.clone(),
-                    error: None,
+                    result: Ok(doctor),
                 },
             ]
         );

@@ -116,6 +116,8 @@ mod planning_init_overlay_ui;
 mod planning_overlay_shell_command;
 #[path = "app/planning_reset_shell_command.rs"]
 mod planning_reset_shell_command;
+#[path = "app/planning_runtime_refresh_ui.rs"]
+mod planning_runtime_refresh_ui;
 #[path = "app/planning_shell_command.rs"]
 mod planning_shell_command;
 #[path = "app/planning_worker_debug_preview.rs"]
@@ -217,6 +219,10 @@ use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
     PlanningInitOverlayUiState, PlanningInitRuntimeRefreshIntent,
+};
+use planning_runtime_refresh_ui::{
+    PlanningRuntimeRefreshOperation, PlanningRuntimeRefreshUiCompletion,
+    PlanningRuntimeRefreshUiState,
 };
 use progressive_activity_overlay_ui::{
     ProgressiveActivityDiffContinuation, ProgressiveActivityDiffCursor,
@@ -364,6 +370,7 @@ struct NativeTuiApp {
     parallel_supervisor_event_log: ParallelSupervisorEventLog,
     pending_manual_prompt_preparation: Option<PendingManualPromptPreparation>,
     prompt_input_revision: u64,
+    planning_ui_intent_revision: u64,
     turn_steer_confirmation: Option<TurnSteerUiIntent>,
     pending_turn_steer: Option<PendingTurnSteerUiIntent>,
     parallel_mode_control_plane:
@@ -380,6 +387,7 @@ struct NativeTuiApp {
     auto_follow_overlay_ui_state: AutoFollowOverlayUiState,
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
+    planning_runtime_refresh_ui_state: PlanningRuntimeRefreshUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
     application: NativeTuiApplicationHandle,
     core_runtime: CoreRuntime<CoreEffectRunner>,

@@ -1447,6 +1447,7 @@ impl NativeTuiApp {
             parallel_supervisor_event_log: super::ParallelSupervisorEventLog::default(),
             pending_manual_prompt_preparation: None,
             prompt_input_revision: 0,
+            planning_ui_intent_revision: 0,
             turn_steer_confirmation: None,
             pending_turn_steer: None,
             parallel_mode_control_plane,
@@ -1463,6 +1464,7 @@ impl NativeTuiApp {
             directions_maintenance_overlay_ui_state:
                 super::DirectionsMaintenanceOverlayUiState::default(),
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
+            planning_runtime_refresh_ui_state: super::PlanningRuntimeRefreshUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
             application,
             core_runtime,
@@ -1511,6 +1513,10 @@ impl NativeTuiApp {
         self.selected_session_index = state.selected_session_index;
     }
 
+    pub(super) fn advance_planning_ui_intent_revision(&mut self) {
+        self.planning_ui_intent_revision = self.planning_ui_intent_revision.wrapping_add(1).max(1);
+    }
+
     pub(super) fn dispatch_shell_chrome(&mut self, event: ShellChromeEvent) {
         let previous_overlay = self.shell_overlay;
         let directions_suspended_for_approval = previous_overlay
@@ -1518,6 +1524,9 @@ impl NativeTuiApp {
             && matches!(&event, ShellChromeEvent::ApprovalOverlayShown);
         let reduction = reduce_shell_chrome(self.take_shell_chrome_state(), event);
         self.apply_shell_chrome_state(reduction.state);
+        if previous_overlay != self.shell_overlay {
+            self.advance_planning_ui_intent_revision();
+        }
         if previous_overlay == ShellOverlay::Reviews && self.shell_overlay != ShellOverlay::Reviews
         {
             self.reviews_overlay_ui_state.reset();
@@ -1651,14 +1660,14 @@ impl NativeTuiApp {
                 {
                     pending.correlation = correlation.clone();
                 }
-                if self.shell_overlay == ShellOverlay::PlanningInit
-                    && correlation.workspace_directory == self.planning_workspace_directory()
-                {
-                    self.planning_init_overlay_ui_state
-                        .rebind_runtime_refresh(correlation);
-                }
+                self.planning_runtime_refresh_ui_state
+                    .rebind(correlation);
             }
-            AppEvent::PlanningRuntimeRefreshed { correlation, error } => {
+            AppEvent::PlanningRuntimeRefreshed {
+                correlation,
+                result,
+            } => {
+                let presentation_revision = self.planning_ui_intent_revision;
                 let pending_resume = if self
                     .pending_resumed_session_planning_refresh
                     .as_ref()
@@ -1671,13 +1680,43 @@ impl NativeTuiApp {
                 if let Some(pending) = pending_resume
                     && correlation.workspace_directory == self.planning_workspace_directory()
                 {
-                    if let Some(error) = error.as_deref() {
-                        self.surface_resumed_session_planning_error_if_unchanged(&pending, error);
-                    } else {
-                        self.surface_resumed_session_planning_context_if_unchanged(&pending);
+                    match &result {
+                        Ok(_) => {
+                            self.surface_resumed_session_planning_context_if_unchanged(&pending)
+                        }
+                        Err(error) => self
+                            .surface_resumed_session_planning_error_if_unchanged(&pending, error),
                     }
                 }
-                self.apply_planning_init_runtime_projection_refresh(correlation, error.as_deref());
+                if correlation.workspace_directory == self.planning_workspace_directory() {
+                    match self
+                        .planning_runtime_refresh_ui_state
+                        .apply_completion(correlation.clone(), presentation_revision, result)
+                    {
+                        super::PlanningRuntimeRefreshUiCompletion::Applied {
+                            operation,
+                            result,
+                        } => self.apply_planning_runtime_refresh_completion(operation, result),
+                        super::PlanningRuntimeRefreshUiCompletion::Superseded { operation } => {
+                            self.discard_superseded_planning_runtime_refresh(operation)
+                        }
+                        super::PlanningRuntimeRefreshUiCompletion::Rejected => {}
+                    }
+                } else if self
+                    .planning_runtime_refresh_ui_state
+                    .cancel(&correlation)
+                    .is_some()
+                    && self.shell_overlay == ShellOverlay::PlanningInit
+                {
+                    self.close_shell_overlay();
+                    self.dispatch_conversation_input(
+                        super::ConversationInputEvent::StatusMessageShown {
+                            status_text:
+                                "planning setup closed because its workspace context changed"
+                                    .to_string(),
+                        },
+                    );
+                }
             }
             AppEvent::PlanningRuntimeRefreshCancelled { correlation } => {
                 if self
@@ -1688,8 +1727,9 @@ impl NativeTuiApp {
                     self.pending_resumed_session_planning_refresh = None;
                 }
                 if self
-                    .planning_init_overlay_ui_state
-                    .cancel_runtime_refresh(&correlation)
+                    .planning_runtime_refresh_ui_state
+                    .cancel(&correlation)
+                    .is_some()
                     && self.shell_overlay == ShellOverlay::PlanningInit
                 {
                     self.close_shell_overlay();
@@ -1999,6 +2039,7 @@ impl NativeTuiApp {
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
         self.apply_conversation_lifecycle_state(reduction.state);
+        self.advance_planning_ui_intent_revision();
         for effect in reduction.effects {
             self.execute_conversation_lifecycle_effect(effect);
         }
@@ -2047,6 +2088,7 @@ impl NativeTuiApp {
             )
         });
         self.conversation_state = ConversationState::ready(reduction.state);
+        self.advance_planning_ui_intent_revision();
         if !requests_turn_submission && !self.conversation_has_running_turn() {
             self.turn_steer_confirmation = None;
         }
@@ -2075,6 +2117,7 @@ impl NativeTuiApp {
         };
         let reduction = reduce_conversation_input(conversation, event);
         self.conversation_state = ConversationState::ready(reduction.state);
+        self.advance_planning_ui_intent_revision();
         if mutates_input_buffer {
             self.prompt_input_revision = self.prompt_input_revision.wrapping_add(1).max(1);
         }
@@ -2187,6 +2230,7 @@ impl NativeTuiApp {
         };
         let reduction = reduce_auto_follow_controls(conversation, event);
         self.conversation_state = ConversationState::ready(reduction.state);
+        self.advance_planning_ui_intent_revision();
         if reduction.close_max_auto_turns_editor {
             self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
         }

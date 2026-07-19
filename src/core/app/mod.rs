@@ -12,6 +12,7 @@ pub mod effect;
 pub mod event;
 pub mod github_review_poll;
 pub mod manual_prompt;
+pub mod planning_runtime;
 pub mod projection;
 pub mod queue;
 pub mod request;
@@ -43,6 +44,10 @@ pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput, SessionRenameAcceptedSnapshot};
 pub use github_review_poll::GithubReviewPollCorrelation;
 pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparationIntent};
+pub(crate) use planning_runtime::PlanningRuntimeCoordinator;
+pub use planning_runtime::{
+    PlanningDoctorSnapshot, PlanningDoctorSnapshotState, PlanningRuntimeRefreshSnapshot,
+};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
 pub use queue::{
     QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,

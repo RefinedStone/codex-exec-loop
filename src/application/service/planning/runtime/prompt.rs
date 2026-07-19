@@ -93,16 +93,44 @@ impl PlanningPromptService {
          * validation failure, queue construction failure를 같은 projection surface에서 설명해야
          * 하기 때문이다.
          */
-        self.authority_seed_service
-            .ensure_default_authority(workspace_dir)?;
-        let workspace_record = self
+        let mut workspace_record = self
             .planning_workspace_port
             .load_planning_workspace_files(workspace_dir)?;
+        self.authority_seed_service
+            .ensure_default_authority_with_workspace(workspace_dir, &mut workspace_record)?;
+        self.build_runtime_projection(workspace_dir, workspace_record)
+    }
+
+    /*
+     * Core readback inspection differs from normal runtime loading only for an
+     * absent workspace: absence must remain read-only and uninitialized rather
+     * than seeding the default scaffold. Present workspaces still receive the
+     * same idempotent authority repair, using the already loaded record.
+     */
+    pub fn inspect_runtime_projection(
+        &self,
+        workspace_dir: &str,
+    ) -> Result<PlanningRuntimeProjection> {
+        let mut workspace_record = self
+            .planning_workspace_port
+            .load_planning_workspace_files(workspace_dir)?;
+        if !workspace_record.has_any_files() {
+            return Ok(PlanningRuntimeProjection::uninitialized());
+        }
+        self.authority_seed_service
+            .ensure_default_authority_with_workspace(workspace_dir, &mut workspace_record)?;
+        self.build_runtime_projection(workspace_dir, workspace_record)
+    }
+
+    fn build_runtime_projection(
+        &self,
+        workspace_dir: &str,
+        workspace_record: PlanningWorkspaceLoadRecord,
+    ) -> Result<PlanningRuntimeProjection> {
         let workspace_present = workspace_record.has_any_files();
         if !workspace_present {
             return Ok(PlanningRuntimeProjection::uninitialized());
         }
-
         // runtime validation은 task-ledger 파일이 아니라 accepted DB authority를 사용한다.
         // 다만 validator의 입력 계약은 file-shaped workspace bundle이므로 여기서 adapter처럼
         // 두 authority plane을 한 구조로 묶는다.
@@ -317,25 +345,16 @@ mod tests {
     };
     use anyhow::{Result, anyhow};
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[derive(Debug, Clone, Copy)]
-    enum ClearAuthorityOnSecondLoad {
-        Task,
-        Direction,
-    }
 
     #[derive(Debug)]
     struct PromptTestWorkspacePort {
         record: Mutex<PlanningWorkspaceLoadRecord>,
         optional_files: Mutex<BTreeMap<String, String>>,
         persist_commits: bool,
-        load_count: Mutex<usize>,
-        clear_on_second_load: Option<(
-            Arc<NoopPlanningTaskRepositoryPort>,
-            ClearAuthorityOnSecondLoad,
-        )>,
+        load_count: Arc<AtomicUsize>,
     }
 
     impl PromptTestWorkspacePort {
@@ -344,8 +363,7 @@ mod tests {
                 record: Mutex::new(PlanningWorkspaceLoadRecord::default()),
                 optional_files: Mutex::new(BTreeMap::new()),
                 persist_commits: false,
-                load_count: Mutex::new(0),
-                clear_on_second_load: None,
+                load_count: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -356,8 +374,7 @@ mod tests {
                 }),
                 optional_files: Mutex::new(BTreeMap::new()),
                 persist_commits: true,
-                load_count: Mutex::new(0),
-                clear_on_second_load: None,
+                load_count: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -369,13 +386,8 @@ mod tests {
             self
         }
 
-        fn clear_authority_on_second_load(
-            mut self,
-            repository: Arc<NoopPlanningTaskRepositoryPort>,
-            authority: ClearAuthorityOnSecondLoad,
-        ) -> Self {
-            self.clear_on_second_load = Some((repository, authority));
-            self
+        fn load_count(&self) -> Arc<AtomicUsize> {
+            self.load_count.clone()
         }
     }
 
@@ -415,25 +427,9 @@ mod tests {
 
         fn load_planning_workspace_files(
             &self,
-            workspace_dir: &str,
+            _workspace_dir: &str,
         ) -> Result<PlanningWorkspaceLoadRecord> {
-            let mut load_count = self
-                .load_count
-                .lock()
-                .expect("workspace load count should not be poisoned");
-            *load_count += 1;
-            if *load_count == 2
-                && let Some((repository, authority)) = &self.clear_on_second_load
-            {
-                match authority {
-                    ClearAuthorityOnSecondLoad::Task => {
-                        repository.clear_task_authority_snapshot(workspace_dir)?;
-                    }
-                    ClearAuthorityOnSecondLoad::Direction => {
-                        repository.clear_direction_authority_snapshot(workspace_dir)?;
-                    }
-                }
-            }
+            self.load_count.fetch_add(1, Ordering::SeqCst);
             Ok(self
                 .record
                 .lock()
@@ -677,16 +673,18 @@ mod tests {
     }
 
     #[test]
-    fn runtime_projection_reports_uninitialized_when_seeded_workspace_still_has_no_operator_files()
-    {
+    fn runtime_inspection_reads_an_absent_workspace_once_without_seeding() {
         let workspace = unique_workspace("uninitialized");
         let repository = Arc::new(NoopPlanningTaskRepositoryPort);
-        let service = prompt_service(PromptTestWorkspacePort::absent_non_persistent(), repository);
+        let workspace_port = PromptTestWorkspacePort::absent_non_persistent();
+        let load_count = workspace_port.load_count();
+        let service = prompt_service(workspace_port, repository);
 
         let projection = service
-            .load_runtime_projection(&workspace)
+            .inspect_runtime_projection(&workspace)
             .expect("uninitialized projection should be recoverable");
 
+        assert_eq!(load_count.load(Ordering::SeqCst), 1);
         assert_eq!(
             projection.workspace_status,
             PlanningRuntimeWorkspaceStatus::Uninitialized
@@ -696,8 +694,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_projection_reports_task_authority_that_disappears_after_seed() {
-        let workspace = unique_workspace("missing-task-authority");
+    fn runtime_inspection_reads_a_present_workspace_once() {
+        let workspace = unique_workspace("present-one-read");
         let repository = Arc::new(NoopPlanningTaskRepositoryPort);
         let directions = directions("");
         let task_authority = empty_task_authority();
@@ -708,49 +706,20 @@ mod tests {
             &task_authority,
             &empty_queue_projection(),
         );
-        let workspace_port = PromptTestWorkspacePort::with_result_output("# Result Output")
-            .clear_authority_on_second_load(repository.clone(), ClearAuthorityOnSecondLoad::Task);
+        let workspace_port = PromptTestWorkspacePort::with_result_output(
+            "# Result Output\n\n- Report completed work.\n",
+        );
+        let load_count = workspace_port.load_count();
         let service = prompt_service(workspace_port, repository);
 
-        let error = service
-            .load_runtime_projection(&workspace)
-            .expect_err("missing task authority should be reported as an error");
+        let projection = service
+            .inspect_runtime_projection(&workspace)
+            .expect("present runtime inspection should succeed");
 
-        assert!(
-            error
-                .to_string()
-                .contains("planning task authority is unavailable")
-        );
-    }
-
-    #[test]
-    fn runtime_projection_reports_direction_authority_that_disappears_after_seed() {
-        let workspace = unique_workspace("missing-direction-authority");
-        let repository = Arc::new(NoopPlanningTaskRepositoryPort);
-        let directions = directions("");
-        let task_authority = empty_task_authority();
-        seed_authority(
-            repository.as_ref(),
-            &workspace,
-            &directions,
-            &task_authority,
-            &empty_queue_projection(),
-        );
-        let workspace_port = PromptTestWorkspacePort::with_result_output("# Result Output")
-            .clear_authority_on_second_load(
-                repository.clone(),
-                ClearAuthorityOnSecondLoad::Direction,
-            );
-        let service = prompt_service(workspace_port, repository);
-
-        let error = service
-            .load_runtime_projection(&workspace)
-            .expect_err("missing direction authority should be reported as an error");
-
-        assert!(
-            error
-                .to_string()
-                .contains("planning direction authority is unavailable")
+        assert_eq!(load_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            projection.workspace_status,
+            PlanningRuntimeWorkspaceStatus::ReadyNoTask
         );
     }
 

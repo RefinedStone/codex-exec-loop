@@ -615,6 +615,7 @@ impl NativeTuiApp {
             conversation.status_text = feedback.clone();
             conversation.append_status_message(feedback);
         }
+        self.advance_planning_ui_intent_revision();
     }
 
     pub(super) fn reconcile_latest_queue_receipt_with_authority(

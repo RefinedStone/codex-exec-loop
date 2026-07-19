@@ -9,8 +9,9 @@ use super::{
 };
 use super::{
     ConversationLoadCorrelation, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
-    PlanningRuntimeRefreshCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    PlanningDoctorSnapshot, PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
@@ -96,7 +97,7 @@ pub enum CoreEffectCompletion {
     },
     PlanningRuntimeLoaded {
         correlation: PlanningRuntimeRefreshCorrelation,
-        result: Result<Box<RuntimeProjection>, String>,
+        result: Result<Box<PlanningRuntimeRefreshSnapshot>, String>,
     },
     QueueMutationCompleted {
         correlation: QueueMutationCorrelation,
@@ -178,7 +179,7 @@ pub enum AppEvent {
     },
     PlanningRuntimeRefreshed {
         correlation: PlanningRuntimeRefreshCorrelation,
-        error: Option<String>,
+        result: Result<PlanningDoctorSnapshot, String>,
     },
     PlanningRuntimeRefreshCancelled {
         correlation: PlanningRuntimeRefreshCorrelation,

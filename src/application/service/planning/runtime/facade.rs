@@ -121,6 +121,14 @@ impl PlanningRuntimeFacadeService {
             })
     }
 
+    pub fn inspect_runtime_projection(
+        &self,
+        workspace_directory: &str,
+    ) -> Result<PlanningRuntimeProjection> {
+        self.planning_prompt_service
+            .inspect_runtime_projection(workspace_directory)
+    }
+
     // manual prompt는 user-authored prompt만 main-session으로 넘긴다. planning context와 task mutation 규칙은
     // hidden intake/planning worker 경로의 입력으로만 쓰고, main prompt에는 주입하지 않는다.
     pub fn build_manual_prompt(&self, operator_prompt: &str) -> Option<String> {

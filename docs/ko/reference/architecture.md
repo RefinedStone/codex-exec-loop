@@ -125,6 +125,22 @@ Private SQLite store가 권한을 가집니다. Planning workspace file은 운�
 prompt, staged draft, export, 복구 근거입니다. 승인 mutation은 revision-aware validation을 통과하고,
 hidden worker output은 SQL이나 보호된 planning file을 직접 쓰지 않습니다.
 
+Planning setup, Planning Doctor, reset 실패 복구는 기존 Core planning-runtime refresh effect 하나를
+공유합니다. Application inspection use case 하나가 workspace 존재·부재 모두에서 aggregate workspace
+record를 정확히 한 번 읽고 runtime projection과 Core 소유 doctor snapshot을 함께 반환하므로 TUI는
+workspace를 두 번째로 검사하지 않습니다. Core는 planning-runtime coordinator 하나에서 generation과
+active correlation을 소유합니다. 정확한 correlated effect completion만 coordinator를 완료할 수 있고,
+post-turn이나 generic projection writer는 init, doctor, reset-recovery 결과를 대신할 수 없습니다.
+같은 workspace의 더 최신 writer는 진행 중 read를 명시적으로 supersede하고 replacement inspection을
+예약하므로, 이전 성공 read가 writer projection을 덮거나 operation을 완료할 수 없습니다.
+TUI는 정확한 operation, operation 시작 시점의 presentation revision,
+`Idle | Loading | Ready | Failed` 상태만 보관합니다. Replacement inspection 재바인드는
+correlation만 바꾸고 최초 revision을 보존합니다. Stale, duplicate, ABA, 닫힌 overlay, workspace
+drift, 더 최신 UI intent completion은 setup 분기나 status를 바꿀 수 없습니다. Inspection 실패는
+workspace 부재와 구분되고, reset 복구는 reset error와 inspection error를 모두 보존합니다.
+Destructive reset과 draft staging mutation은 별도 동기 경로로 남으며, 이번 slice는 readback과
+recovery inspection만 TUI input thread 밖으로 옮깁니다.
+
 TUI Queue overlay를 열면 먼저 shell chrome을 반영한 뒤 core load command를 dispatch합니다. Core는
 workspace와 active thread identity에 단조 증가 generation을 부여하고 최신 요청으로 이전 요청을
 대체하며 stale 또는 중복 completion을 버립니다. Composition은 coherent application read를 실행하고
