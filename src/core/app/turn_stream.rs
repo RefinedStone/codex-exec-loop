@@ -120,6 +120,10 @@ impl TurnStreamState {
             && self.active_turn_id.as_deref() == Some(turn_id)
     }
 
+    pub const fn has_active_turn(&self) -> bool {
+        self.active_turn_id.is_some()
+    }
+
     pub fn matches_pending_approval(&self, approval_id: &str) -> bool {
         self.pending_approval_id.as_deref() == Some(approval_id)
     }

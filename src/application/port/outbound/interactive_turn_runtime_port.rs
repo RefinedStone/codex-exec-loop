@@ -29,7 +29,8 @@ pub trait InteractiveTurnRuntimePort: Send + Sync {
     fn load_conversation_snapshot(&self, thread_id: &str) -> Result<ConversationSnapshot>;
 
     // 현재 runtime이 관리하는 모든 interactive session에 중단을 요청한다.
-    // TUI controller는 사용자 명령을 이 메서드 하나로 전달하고, adapter는 app-server connection/turn interrupt 구현을 소유한다.
+    // Core effect를 실행하는 composition이 이 메서드를 호출하고, adapter는 app-server
+    // connection/turn interrupt broadcast 구현을 소유한다.
     fn request_stop_all_sessions(&self) -> Result<()>;
 
     fn resolve_approval_request(

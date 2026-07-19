@@ -45,6 +45,16 @@ editor를 지우거나 transcript history를 추가하지 않고, core가 accept
 로컬 projection을 확정합니다. 활성 submission이 있으면 core는 명시적 rejection event를 내보내고
 worker effect를 만들지 않으므로 adapter와 core가 가짜 `starting turn` 상태로 갈라지지 않습니다.
 
+Runtime stop admission도 core가 소유합니다. `:stop`은 TUI에서 auto-follow와 parallel automation을
+즉시 중지한 뒤 correlation 없는 command를 보냅니다. Core가 단조 증가 stop generation을 발급하고,
+활성 turn submission이 있으면 그 identity에 귀속하며, 요청 하나만 승인하고 stale 또는 중복
+completion을 버립니다. Composition은 기존 `request_stop_all_sessions` 신호를 직렬로 broadcast합니다.
+`TurnStarted` 전에 성공한 요청은 정확히 correlation된 첫 start 뒤 한 번만 재동기화합니다. Provider
+호출 오류는 admission을 다시 열지만 fail-closed interrupt stream notice는 정확한 retry, terminal,
+conversation 전이 전까지 gate를 열지 않습니다. Outbound 신호는 의도적으로 global이므로 Core
+correlation은 admission과 lifecycle을 제어하지만 `:stop`을 받는 runtime session 범위를 좁히지는
+않습니다.
+
 Manual prompt preparation도 같은 admission 규칙을 사용합니다. TUI는 correlation 없는 intent를
 보내고 core가 승인한 뒤에만 editor, delivery, parallel-mode 문맥을 결합합니다. Core가 correlation을
 발급하고 preparation 하나만 허용하며 stale 또는 중복 completion을 버립니다. TUI는 승인된

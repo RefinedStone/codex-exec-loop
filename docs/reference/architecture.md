@@ -47,6 +47,16 @@ clearing the editor or appending transcript history, then commits that local pro
 core emits an accepted admission. An active submission produces an explicit rejection event and no
 worker effect, so adapter and core state cannot diverge into a phantom "starting turn".
 
+Runtime stop admission is also core-owned. `:stop` still pauses auto-follow and parallel automation
+in the TUI immediately, then sends a correlation-free command. Core assigns a monotonic stop
+generation, roots it in the active turn submission when one exists, admits one request at a time,
+and drops stale or duplicate completions. Composition serially broadcasts the existing
+`request_stop_all_sessions` signal. A successful request made before `TurnStarted` is synchronized
+exactly once after the first correlated start; a provider-call error reopens admission, while a
+fail-closed interrupt stream notice does not reopen it before an exact retry, terminal, or
+conversation transition. The outbound signal remains intentionally global, so Core correlation
+governs admission and lifecycle but does not narrow which runtime sessions receive `:stop`.
+
 Manual prompt preparation follows the same admission rule. The TUI sends a correlation-free intent
 and binds its editor, delivery, and parallel-mode context only after core accepts it. Core assigns
 the correlation, permits one preparation at a time, and drops stale or duplicate completions. The
