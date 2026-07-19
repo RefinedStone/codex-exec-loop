@@ -1094,13 +1094,13 @@ mod tests {
     #[test]
     fn tui_startup_projection_rejects_stale_success_and_failure() {
         let mut app = test_helpers::test_native_tui_app();
-        let latest = StartupCheckCorrelation::new(2);
-        app.pending_startup_check = Some(latest);
+        let latest = StartupCheckCorrelation::new(2, "/tmp/latest");
+        app.pending_startup_check = Some(latest.clone());
         app.startup_state = StartupState::Loading;
         app.session_state = SessionState::Idle;
 
         app.apply_correlated_startup_snapshot(
-            StartupCheckCorrelation::new(1),
+            StartupCheckCorrelation::new(1, "/tmp/stale"),
             StartupSnapshot::Ready(test_startup_ready_snapshot("/tmp/stale")),
         );
         assert!(matches!(app.startup_state, StartupState::Loading));
@@ -1117,7 +1117,7 @@ mod tests {
         let latest_state = app.startup_state.clone();
 
         app.apply_correlated_startup_snapshot(
-            StartupCheckCorrelation::new(1),
+            StartupCheckCorrelation::new(1, "/tmp/stale"),
             StartupSnapshot::Failed {
                 message: "stale failure".to_string(),
             },
@@ -1837,6 +1837,7 @@ impl NativeTuiApp {
             StartupSnapshot::Loading => {
                 if self
                     .pending_startup_check
+                    .as_ref()
                     .is_some_and(|pending| pending.generation > correlation.generation)
                 {
                     return;
@@ -1845,13 +1846,13 @@ impl NativeTuiApp {
                 self.startup_state = StartupState::Loading;
             }
             StartupSnapshot::Idle => {
-                if self.pending_startup_check == Some(correlation) {
+                if self.pending_startup_check.as_ref() == Some(&correlation) {
                     self.pending_startup_check = None;
                     self.startup_state = StartupState::Idle;
                 }
             }
             StartupSnapshot::Ready(ready) => {
-                if self.pending_startup_check != Some(correlation) {
+                if self.pending_startup_check.as_ref() != Some(&correlation) {
                     return;
                 }
                 self.pending_startup_check = None;
@@ -1864,7 +1865,7 @@ impl NativeTuiApp {
                 self.resolve_startup_submit_queue();
             }
             StartupSnapshot::Failed { message } => {
-                if self.pending_startup_check != Some(correlation) {
+                if self.pending_startup_check.as_ref() != Some(&correlation) {
                     return;
                 }
                 self.pending_startup_check = None;
@@ -1981,7 +1982,9 @@ impl NativeTuiApp {
     fn execute_shell_chrome_effect(&mut self, effect: ShellChromeEffect) {
         match effect {
             ShellChromeEffect::RunStartupChecks => {
-                self.dispatch_core_command(AppCommand::RunStartupChecks);
+                self.dispatch_core_command(AppCommand::RunStartupChecks {
+                    workspace_directory: self.planning_workspace_directory(),
+                });
             }
             ShellChromeEffect::LoadSessionCatalog {
                 limit,

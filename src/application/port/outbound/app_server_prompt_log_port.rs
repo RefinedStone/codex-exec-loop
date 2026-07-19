@@ -218,6 +218,20 @@ pub trait AppServerPromptLogPort: Send + Sync {
     ) -> Result<AppServerPromptInteractionSnapshot>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppServerPromptLogMaintenanceMode {
+    PurgeExpired,
+    ClearAll,
+}
+
+pub trait AppServerPromptLogMaintenancePort: Send + Sync {
+    fn maintain_app_server_prompt_logs(
+        &self,
+        workspace_dir: &str,
+        mode: AppServerPromptLogMaintenanceMode,
+    ) -> Result<()>;
+}
+
 #[derive(Debug, Default)]
 pub struct NoopAppServerPromptLogPort;
 

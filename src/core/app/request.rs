@@ -1,13 +1,17 @@
 use crate::domain::recent_sessions::SessionRenameRequest;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupCheckCorrelation {
     pub generation: u64,
+    pub workspace_directory: String,
 }
 
 impl StartupCheckCorrelation {
-    pub fn new(generation: u64) -> Self {
-        Self { generation }
+    pub fn new(generation: u64, workspace_directory: impl Into<String>) -> Self {
+        Self {
+            generation,
+            workspace_directory: workspace_directory.into(),
+        }
     }
 }
 

@@ -42,6 +42,20 @@ and post-turn evaluation use this flow. Parallel mutation remains application-ow
 through `ParallelModeControlPlaneHandle`; core may copy the projection but must not own a second
 parallel runtime.
 
+Native TUI startup also owns prompt-log privacy maintenance through this effect path. Production
+composition injects a typed maintenance port into `StartupService` but performs no SQLite purge or
+clear while building the app. The startup command captures a monotonic generation and the exact
+requested workspace; the existing Core startup worker runs maintenance first and then startup
+checks for that same workspace. Capture enabled selects retention purge, while capture disabled
+selects full clear. A maintenance error or panic becomes a fixed, redacted, non-fatal startup
+warning. A startup provider panic becomes one redacted failure completion with the same
+correlation. Sensitive Core worker scopes share one permanent delegating panic hook: marked worker
+panics emit only a fixed redacted observation, while ordinary panics continue through the prior
+hook. Core accepts only the active generation/workspace pair, so stale A→B→A results and
+duplicate completions cannot settle a newer request. App construction, `prepare_runtime`, and the
+first draw remain eligible while maintenance or the startup probe is blocked. CLI, Admin,
+Telegram, and other non-TUI compositions retain their existing synchronous maintenance semantics.
+
 Turn submission admission is core-owned and single-flight. The TUI stages prompt intent without
 clearing the editor or appending transcript history, then commits that local projection only after
 core emits an accepted admission. An active submission produces an explicit rejection event and no

@@ -48,10 +48,16 @@ fn prepare_runtime(mut app: NativeTuiApp) -> ShellRuntime {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
 
+    use super::super::ratatui_frontend::prepare_runtime_for_due_draw;
     use super::*;
     use crate::adapter::inbound::tui::shell_chrome::StartupState;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::app_server_prompt_log_port::{
+        AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort,
+    };
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::application::port::outbound::startup_probe_port::{
@@ -148,12 +154,19 @@ mod tests {
     }
 
     fn make_test_app() -> NativeTuiApp {
+        let codex_port = Arc::new(FakeAppServerPort);
+        make_test_app_with_startup_service(StartupService::new(codex_port.clone()), codex_port)
+    }
+
+    fn make_test_app_with_startup_service(
+        startup_service: StartupService,
+        codex_port: Arc<FakeAppServerPort>,
+    ) -> NativeTuiApp {
         /*
          * Test construction mirrors the production service shape but swaps external boundaries:
          * fake app-server, noop parallel worker, test parallel-mode service, and local filesystem
          * planning workspace. That keeps prepare_runtime tests about shell startup sequencing.
          */
-        let codex_port = Arc::new(FakeAppServerPort);
         let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
         );
@@ -167,11 +180,32 @@ mod tests {
         let parallel_mode_binding =
             NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
         NativeTuiApp::new(
-            StartupService::new(codex_port.clone()),
+            startup_service,
             SessionService::new(codex_port.clone()),
             ConversationService::new(codex_port),
             parallel_mode_binding,
         )
+    }
+
+    struct GatedPromptLogMaintenancePort {
+        entered: mpsc::SyncSender<(String, AppServerPromptLogMaintenanceMode)>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl AppServerPromptLogMaintenancePort for GatedPromptLogMaintenancePort {
+        fn maintain_app_server_prompt_logs(
+            &self,
+            workspace_dir: &str,
+            mode: AppServerPromptLogMaintenanceMode,
+        ) -> Result<()> {
+            let _ = self.entered.send((workspace_dir.to_string(), mode));
+            self.release
+                .lock()
+                .expect("maintenance release mutex should not be poisoned")
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|error| anyhow::anyhow!("maintenance gate failed: {error}"))?;
+            Ok(())
+        }
     }
 
     #[test]
@@ -187,5 +221,48 @@ mod tests {
 
         assert!(!runtime.should_quit());
         assert!(matches!(runtime.app().startup_state, StartupState::Loading));
+    }
+
+    #[test]
+    fn gated_prompt_log_maintenance_does_not_block_build_prepare_or_first_draw() {
+        const GATE_DURATION: Duration = Duration::from_millis(650);
+        const NONBLOCKING_DEADLINE: Duration = Duration::from_millis(300);
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let maintenance = Arc::new(GatedPromptLogMaintenancePort {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        });
+        let codex_port = Arc::new(FakeAppServerPort);
+
+        let started = Instant::now();
+        let app = make_test_app_with_startup_service(
+            StartupService::new(codex_port.clone()).with_prompt_log_maintenance(
+                maintenance,
+                AppServerPromptLogMaintenanceMode::ClearAll,
+            ),
+            codex_port,
+        );
+        let mut runtime = prepare_runtime(app);
+        assert!(
+            started.elapsed() < NONBLOCKING_DEADLINE,
+            "app construction and prepare_runtime must return before gated maintenance completes"
+        );
+
+        let (workspace_directory, mode) = entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("startup worker should enter prompt-log maintenance");
+        assert!(!workspace_directory.trim().is_empty());
+        assert_eq!(mode, AppServerPromptLogMaintenanceMode::ClearAll);
+        assert!(
+            prepare_runtime_for_due_draw(&mut runtime, || Ok(None))
+                .expect("first draw preparation should remain available")
+        );
+
+        std::thread::sleep(GATE_DURATION);
+        runtime.poll_background_messages();
+        assert!(matches!(runtime.app().startup_state, StartupState::Loading));
+
+        let _ = release_tx.send(());
     }
 }

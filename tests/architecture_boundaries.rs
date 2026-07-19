@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -744,13 +745,13 @@ fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch()
         .expect("stop request worker should have a bounded source body");
     assert!(
         manual_worker.contains("thread::spawn(move ||")
-            && manual_worker.contains("catch_unwind(AssertUnwindSafe(")
+            && manual_worker.contains("catch_redacted_worker_unwind(")
             && manual_worker.contains("service.prepare_guarded(request, &|| permit.is_active())"),
         "manual preparation must run behind its cancellation and panic boundary"
     );
     assert!(
         stop_worker.contains("thread::spawn(move ||")
-            && stop_worker.contains("catch_unwind(AssertUnwindSafe(")
+            && stop_worker.contains("catch_redacted_worker_unwind(")
             && stop_worker.contains("if !permit.is_active()")
             && stop_worker.contains("conversation_service.request_stop_all_sessions()"),
         "stop provider execution must run behind its lifecycle and panic boundary"
@@ -1035,6 +1036,132 @@ fn tui_startup_checks_enter_through_core_runtime() {
         "TUI startup checks must be dispatched through core runtime, not StartupService directly",
         &["src/adapter/inbound/tui/app/app_runtime.rs"],
         &[".run_checks(", "NativeTuiStartupHandle"],
+    );
+}
+
+#[test]
+fn native_tui_prompt_log_maintenance_runs_only_inside_the_startup_worker() {
+    const FORBIDDEN_SYNCHRONOUS_MAINTENANCE_CALLS: &[&str] = &[
+        "maintain_prompt_logs_best_effort",
+        "maintain_app_server_prompt_logs",
+        "clear_app_server_prompt_interaction_records",
+        "purge_expired_app_server_prompt_interaction_records",
+    ];
+
+    let production = fs::read_to_string("src/composition/production.rs")
+        .expect("production composition source should load");
+    let native_builder_calls =
+        reachable_callable_expression_names(&production, "build_native_tui_application_services");
+    for forbidden in FORBIDDEN_SYNCHRONOUS_MAINTENANCE_CALLS {
+        assert!(
+            !native_builder_calls.iter().any(|call| call == forbidden),
+            "native TUI production builder must not perform direct prompt-log storage maintenance: {forbidden}"
+        );
+    }
+    assert!(
+        native_builder_calls
+            .iter()
+            .any(|call| call == "build_shared_ports_for_prompt_logging")
+            && native_builder_calls
+                .iter()
+                .any(|call| call == "with_prompt_log_maintenance"),
+        "native TUI production builder must inject maintenance into StartupService"
+    );
+
+    let shell_entrypoint = fs::read_to_string("src/adapter/inbound/tui/app/shell_entrypoint.rs")
+        .expect("TUI shell entrypoint source should load");
+    let shell_entrypoint_calls = production_call_expression_names(&shell_entrypoint);
+    for forbidden in FORBIDDEN_SYNCHRONOUS_MAINTENANCE_CALLS {
+        assert!(
+            !shell_entrypoint_calls.iter().any(|call| call == forbidden),
+            "TUI entrypoints must not perform direct prompt-log storage maintenance: {forbidden}"
+        );
+    }
+
+    let runner = fs::read_to_string("src/composition/core_effect_runner.rs")
+        .expect("core effect runner source should load");
+    let startup_worker_calls =
+        named_function_call_expression_names(&runner, "spawn_startup_checks");
+    assert!(
+        startup_worker_calls.iter().any(|call| call == "spawn")
+            && startup_worker_calls
+                .iter()
+                .any(|call| call == "guarded_startup_checks_completion"),
+        "prompt-log maintenance and startup checks must be admitted through the background startup worker"
+    );
+
+    let startup_service = fs::read_to_string("src/application/service/startup_service.rs")
+        .expect("startup service source should load");
+    let startup_checks_calls = named_function_call_expression_names(&startup_service, "run_checks");
+    assert!(
+        startup_checks_calls
+            .iter()
+            .any(|call| call == "run_checks_with_local_prerequisites"),
+        "production startup checks must use the orchestration path covered by the maintenance/probe order test"
+    );
+    let guarded_startup_calls =
+        named_function_call_expression_names(&runner, "guarded_startup_checks_completion");
+    assert!(
+        guarded_startup_calls
+            .iter()
+            .any(|call| call == "catch_redacted_worker_unwind"),
+        "startup provider execution must use the shared redacted worker panic boundary"
+    );
+}
+
+#[test]
+fn rust_call_graph_guard_ignores_text_but_follows_indirect_helpers() {
+    let text_only_source = r#"
+        fn entry() {
+            // maintain_prompt_logs_best_effort();
+            let _example = "maintain_prompt_logs_best_effort()";
+        }
+    "#;
+    assert!(
+        !reachable_callable_expression_names(text_only_source, "entry")
+            .iter()
+            .any(|call| call == "maintain_prompt_logs_best_effort")
+    );
+
+    let indirect_source = r#"
+        fn entry() {
+            shared_ports();
+        }
+
+        fn shared_ports() {
+            privacy_helper();
+        }
+
+        fn privacy_helper() {
+            maintain_prompt_logs_best_effort();
+        }
+    "#;
+    assert!(
+        reachable_callable_expression_names(indirect_source, "entry")
+            .iter()
+            .any(|call| call == "maintain_prompt_logs_best_effort"),
+        "call graph inspection must catch synchronous maintenance hidden behind a shared-port helper"
+    );
+
+    let method_and_alias_source = r#"
+        struct SharedPorts;
+
+        impl SharedPorts {
+            fn prepare(&self) {
+                let cleanup = maintain_prompt_logs_best_effort;
+                cleanup();
+            }
+        }
+
+        fn entry() {
+            SharedPorts.prepare();
+        }
+    "#;
+    assert!(
+        reachable_callable_expression_names(method_and_alias_source, "entry")
+            .iter()
+            .any(|call| call == "maintain_prompt_logs_best_effort"),
+        "call graph inspection must catch maintenance reached through a method and function alias"
     );
 }
 
@@ -3408,6 +3535,175 @@ fn assert_no_forbidden_references_in_paths(
         "architecture boundary violations:\n{}",
         format_violations(&violations)
     );
+}
+
+fn production_call_expression_names(source: &str) -> Vec<String> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut visitor = CallExpressionVisitor::default();
+    visitor.visit_file(&syntax);
+    normalized_call_names(visitor.names)
+}
+
+fn named_function_call_expression_names(source: &str, function_name: &str) -> Vec<String> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut visitor = CallExpressionVisitor::default();
+    let mut match_count = 0;
+
+    for item in &syntax.items {
+        match item {
+            syn::Item::Fn(function)
+                if function.sig.ident == function_name && !item_is_test_only(item) =>
+            {
+                match_count += 1;
+                visitor.visit_block(&function.block);
+            }
+            syn::Item::Impl(item_impl) if !item_is_test_only(item) => {
+                for impl_item in &item_impl.items {
+                    let syn::ImplItem::Fn(function) = impl_item else {
+                        continue;
+                    };
+                    if function.sig.ident == function_name
+                        && !impl_item_attributes(impl_item).is_some_and(attributes_are_test_only)
+                    {
+                        match_count += 1;
+                        visitor.visit_block(&function.block);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        match_count, 1,
+        "architecture source should define one production function named {function_name}"
+    );
+    normalized_call_names(visitor.names)
+}
+
+fn reachable_callable_expression_names(source: &str, entrypoint: &str) -> Vec<String> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut callables = HashMap::<String, Vec<&syn::Block>>::new();
+    for item in &syntax.items {
+        match item {
+            syn::Item::Fn(function) if !item_is_test_only(item) => {
+                callables
+                    .entry(function.sig.ident.to_string())
+                    .or_default()
+                    .push(&function.block);
+            }
+            syn::Item::Impl(item_impl) if !item_is_test_only(item) => {
+                for impl_item in &item_impl.items {
+                    let syn::ImplItem::Fn(function) = impl_item else {
+                        continue;
+                    };
+                    if !impl_item_attributes(impl_item).is_some_and(attributes_are_test_only) {
+                        callables
+                            .entry(function.sig.ident.to_string())
+                            .or_default()
+                            .push(&function.block);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        callables.contains_key(entrypoint),
+        "architecture source should define production entrypoint {entrypoint}"
+    );
+
+    let mut visited = HashSet::new();
+    let mut calls = Vec::new();
+    collect_reachable_callable_expressions(entrypoint, &callables, &mut visited, &mut calls);
+    normalized_call_names(calls)
+}
+
+fn collect_reachable_callable_expressions(
+    callable_name: &str,
+    callables: &HashMap<String, Vec<&syn::Block>>,
+    visited: &mut HashSet<String>,
+    calls: &mut Vec<String>,
+) {
+    let blocks = callables
+        .get(callable_name)
+        .unwrap_or_else(|| panic!("reachable callable {callable_name} should exist"));
+    for (index, block) in blocks.iter().enumerate() {
+        if !visited.insert(format!("{callable_name}#{index}")) {
+            continue;
+        }
+        let mut visitor = CallExpressionVisitor::default();
+        visitor.visit_block(block);
+        let CallExpressionVisitor {
+            names,
+            callable_candidates,
+        } = visitor;
+        calls.extend(names);
+
+        for candidate in callable_candidates {
+            if callables.contains_key(&candidate) {
+                collect_reachable_callable_expressions(&candidate, callables, visited, calls);
+            }
+        }
+    }
+}
+
+fn normalized_call_names(mut names: Vec<String>) -> Vec<String> {
+    names.sort();
+    names.dedup();
+    names
+}
+
+#[derive(Default)]
+struct CallExpressionVisitor {
+    names: Vec<String>,
+    callable_candidates: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for CallExpressionVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_impl_item(self, item);
+    }
+
+    fn visit_expr_call(&mut self, expression: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(function_path) = expression.func.as_ref()
+            && let Some(segment) = function_path.path.segments.last()
+        {
+            let name = segment.ident.to_string();
+            self.names.push(name.clone());
+            self.callable_candidates.push(name);
+        }
+        visit::visit_expr_call(self, expression);
+    }
+
+    fn visit_expr_method_call(&mut self, expression: &'ast syn::ExprMethodCall) {
+        let name = expression.method.to_string();
+        self.names.push(name.clone());
+        self.callable_candidates.push(name);
+        visit::visit_expr_method_call(self, expression);
+    }
+
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        if let Some(segment) = expression.path.segments.last() {
+            let name = segment.ident.to_string();
+            self.names.push(name.clone());
+            self.callable_candidates.push(name);
+        }
+        visit::visit_expr_path(self, expression);
+    }
 }
 
 fn rust_crate_references(source: &str) -> Vec<CrateReference> {

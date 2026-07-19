@@ -51,6 +51,7 @@ use crate::core::runtime::CoreEffectExecutor;
 use crate::core::runtime::CoreInputSender;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
+use crate::panic_observation::catch_redacted_worker_unwind;
 
 #[derive(Clone)]
 pub struct CoreEffectRunner {
@@ -178,7 +179,10 @@ impl CoreEffectRunner {
         let startup_service = self.startup_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
-            let completion = startup_checks_completion(correlation, startup_service.run_checks());
+            let completion =
+                guarded_startup_checks_completion(correlation, |workspace_directory| {
+                    startup_service.run_checks(workspace_directory)
+                });
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -503,9 +507,9 @@ impl CoreEffectRunner {
             let generation = request.correlation.generation;
             let panic_correlation = request.correlation.clone();
             let panic_transcript = request.raw_prompt.trim().to_string();
-            let result = catch_unwind(AssertUnwindSafe(|| {
+            let result = catch_redacted_worker_unwind(|| {
                 service.prepare_guarded(request, &|| permit.is_active())
-            }))
+            })
             .unwrap_or_else(|_| {
                 crate::domain::planning::ManualPromptOutcome::Rejected {
                     correlation: panic_correlation,
@@ -532,14 +536,14 @@ impl CoreEffectRunner {
         let input_sender = self.input_sender.clone();
         let workers = self.stop_request_workers.clone();
         thread::spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(|| {
+            let result = catch_redacted_worker_unwind(|| {
                 if !permit.is_active() {
                     return Err(anyhow::anyhow!(
                         "stop request was superseded before provider execution"
                     ));
                 }
                 conversation_service.request_stop_all_sessions()
-            }))
+            })
             .map_err(|_| anyhow::anyhow!("stop request worker panicked"))
             .and_then(|result| result);
             workers.finish(correlation.generation, &permit);
@@ -664,6 +668,16 @@ fn planning_workspace_reset_snapshot(
         rewritten_paths: result.rewritten_paths,
         removed_paths: result.removed_paths,
     }
+}
+
+fn guarded_startup_checks_completion(
+    correlation: StartupCheckCorrelation,
+    run_checks: impl FnOnce(&str) -> Result<StartupDiagnostics>,
+) -> CoreEffectCompletion {
+    let workspace_directory = correlation.workspace_directory.clone();
+    let result = catch_redacted_worker_unwind(|| run_checks(&workspace_directory))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("startup checks panicked")));
+    startup_checks_completion(correlation, result)
 }
 
 fn session_catalog_completion(
@@ -1021,12 +1035,16 @@ fn conversation_ready_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
     use crate::adapter::outbound::github::GithubAutomationAdapter;
+    use crate::application::port::outbound::app_server_prompt_log_port::{
+        AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort,
+    };
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
@@ -1051,8 +1069,8 @@ mod tests {
         ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
         PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
         PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, QueueMutationKind,
-        QueueMutationTarget, StopRequestAdmission, TurnStreamEvent, TurnSubmissionAdmission,
-        TurnSubmissionCorrelation, TurnSubmissionRequest,
+        QueueMutationTarget, StartupSnapshot, StopRequestAdmission, TurnStreamEvent,
+        TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
     };
     use crate::core::runtime::{CoreRuntime, core_input_channel};
     use crate::domain::conversation::{
@@ -1070,6 +1088,12 @@ mod tests {
 
     const NONBLOCKING_DISPATCH_TIMEOUT: Duration = Duration::from_secs(1);
     const WORKER_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
+    const SENSITIVE_MAINTENANCE_PANIC_PAYLOAD: &str = "raw maintenance provider prompt payload";
+    const SENSITIVE_STARTUP_PANIC_PAYLOAD: &str = "raw startup provider prompt payload";
+    const STARTUP_PANIC_CHILD_ENV: &str = "AKRA_STARTUP_PANIC_OBSERVATION_CHILD";
+    const STARTUP_PANIC_TEST_NAME: &str = "composition::core_effect_runner::tests::startup_provider_panic_stderr_is_redacted_in_isolated_process";
+    const NORMAL_PANIC_PAYLOAD: &str = "ordinary panic remains observable";
+    const STARTUP_COMPLETION_MARKER: &str = "AKRA_STARTUP_COMPLETION_ONCE";
 
     struct OneShotGate {
         armed: AtomicBool,
@@ -1237,6 +1261,26 @@ mod tests {
         }
     }
 
+    struct PanickingStartupProbePort;
+
+    impl StartupProbePort for PanickingStartupProbePort {
+        fn load_startup_context(&self) -> Result<AppServerStartupContext> {
+            panic!("{SENSITIVE_STARTUP_PANIC_PAYLOAD}");
+        }
+    }
+
+    struct PanickingPromptLogMaintenancePort;
+
+    impl AppServerPromptLogMaintenancePort for PanickingPromptLogMaintenancePort {
+        fn maintain_app_server_prompt_logs(
+            &self,
+            _workspace_dir: &str,
+            _mode: AppServerPromptLogMaintenanceMode,
+        ) -> Result<()> {
+            panic!("{SENSITIVE_MAINTENANCE_PANIC_PAYLOAD}");
+        }
+    }
+
     impl StartupProbePort for GatedRuntimePort {
         fn load_startup_context(&self) -> Result<AppServerStartupContext> {
             Ok(AppServerStartupContext {
@@ -1314,6 +1358,20 @@ mod tests {
         runtime_port: Arc<GatedRuntimePort>,
         input_sender: CoreInputSender,
     ) -> CoreEffectRunner {
+        test_effect_runner_with_startup_service(
+            StartupService::new(runtime_port.clone()),
+            planning_workspace,
+            runtime_port,
+            input_sender,
+        )
+    }
+
+    fn test_effect_runner_with_startup_service(
+        startup_service: StartupService,
+        planning_workspace: Arc<dyn PlanningWorkspacePort>,
+        runtime_port: Arc<GatedRuntimePort>,
+        input_sender: CoreInputSender,
+    ) -> CoreEffectRunner {
         let planning = PlanningServices::from_ports(
             planning_workspace,
             Arc::new(NoopPlanningAuthorityPort::default()),
@@ -1326,7 +1384,7 @@ mod tests {
             Arc::new(GitParallelModeRuntimeAdapter::new()),
         ));
         CoreEffectRunner::new(
-            StartupService::new(runtime_port.clone()),
+            startup_service,
             SessionService::new(runtime_port.clone()),
             ConversationService::new(runtime_port),
             planning.clone(),
@@ -1418,7 +1476,7 @@ mod tests {
     }
 
     fn startup_correlation() -> StartupCheckCorrelation {
-        StartupCheckCorrelation::new(7)
+        StartupCheckCorrelation::new(7, "/tmp/workspace")
     }
 
     fn session_catalog_correlation() -> SessionCatalogLoadCorrelation {
@@ -2216,6 +2274,172 @@ mod tests {
                 })),
             }
         );
+    }
+
+    #[test]
+    fn startup_provider_panic_maps_to_one_exact_redacted_completion() {
+        let correlation = StartupCheckCorrelation::new(9, "/tmp/workspace-a");
+        let mut observed_workspace = String::new();
+
+        let completion =
+            guarded_startup_checks_completion(correlation.clone(), |workspace_directory| {
+                observed_workspace = workspace_directory.to_string();
+                std::panic::panic_any(());
+            });
+
+        assert_eq!(observed_workspace, "/tmp/workspace-a");
+        assert_eq!(
+            completion,
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation,
+                result: Err("startup checks panicked".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn startup_provider_panic_stderr_is_redacted_in_isolated_process() {
+        match std::env::var(STARTUP_PANIC_CHILD_ENV).as_deref() {
+            Ok(mode @ ("maintenance" | "startup")) => {
+                run_panicking_startup_worker_child(mode);
+                return;
+            }
+            Ok("normal") => {
+                assert!(catch_redacted_worker_unwind(|| ()).is_ok());
+                panic!("{NORMAL_PANIC_PAYLOAD}");
+            }
+            _ => {}
+        }
+
+        let executable = std::env::current_exe().expect("test executable should resolve");
+        for mode in ["maintenance", "startup"] {
+            let redacted_output = Command::new(&executable)
+                .args(["--exact", STARTUP_PANIC_TEST_NAME, "--nocapture"])
+                .env(STARTUP_PANIC_CHILD_ENV, mode)
+                .output()
+                .expect("redacted startup panic child should run");
+            assert!(
+                redacted_output.status.success(),
+                "redacted startup panic child should complete successfully"
+            );
+            let redacted_stdout =
+                String::from_utf8(redacted_output.stdout).expect("child stdout should be UTF-8");
+            let redacted_stderr =
+                String::from_utf8(redacted_output.stderr).expect("child stderr should be UTF-8");
+            assert_eq!(
+                redacted_stdout.matches(STARTUP_COMPLETION_MARKER).count(),
+                1
+            );
+            for sensitive_payload in [
+                SENSITIVE_MAINTENANCE_PANIC_PAYLOAD,
+                SENSITIVE_STARTUP_PANIC_PAYLOAD,
+            ] {
+                assert!(!redacted_stdout.contains(sensitive_payload));
+                assert!(!redacted_stderr.contains(sensitive_payload));
+            }
+            assert_eq!(
+                redacted_stderr
+                    .matches(crate::panic_observation::REDACTED_WORKER_PANIC_MESSAGE)
+                    .count(),
+                1
+            );
+        }
+
+        let normal_output = Command::new(executable)
+            .args(["--exact", STARTUP_PANIC_TEST_NAME, "--nocapture"])
+            .env(STARTUP_PANIC_CHILD_ENV, "normal")
+            .output()
+            .expect("ordinary panic child should run");
+        assert!(
+            !normal_output.status.success(),
+            "ordinary panic child should fail through the delegated hook"
+        );
+        let normal_stderr =
+            String::from_utf8(normal_output.stderr).expect("child stderr should be UTF-8");
+        assert!(normal_stderr.contains(NORMAL_PANIC_PAYLOAD));
+        assert!(!normal_stderr.contains(crate::panic_observation::REDACTED_WORKER_PANIC_MESSAGE));
+    }
+
+    fn run_panicking_startup_worker_child(mode: &str) {
+        let workspace_directory = "/tmp/workspace-redacted";
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let startup_service = match mode {
+            "maintenance" => StartupService::new(runtime_port.clone()).with_prompt_log_maintenance(
+                Arc::new(PanickingPromptLogMaintenancePort),
+                AppServerPromptLogMaintenanceMode::ClearAll,
+            ),
+            "startup" => StartupService::new(Arc::new(PanickingStartupProbePort)),
+            _ => unreachable!("isolated child mode should be validated by the parent test"),
+        }
+        .with_test_local_startup_prerequisites(workspace_directory);
+        let (unused_gate, _unused_entered, _unused_release) = one_shot_gate();
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: unused_gate,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+        });
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner_with_startup_service(
+            startup_service,
+            planning_workspace,
+            runtime_port,
+            input_sender,
+        );
+        let mut runtime = CoreRuntime::new(runner, input_receiver);
+
+        let admission = runtime.dispatch_command(AppCommand::RunStartupChecks {
+            workspace_directory: workspace_directory.to_string(),
+        });
+        assert!(matches!(
+            admission.events.as_slice(),
+            [AppEvent::StartupChanged {
+                snapshot: StartupSnapshot::Loading,
+                ..
+            }]
+        ));
+
+        let deadline = Instant::now() + WORKER_COMPLETION_TIMEOUT;
+        let completion = loop {
+            if let Some(outcome) = runtime.poll_pending_input() {
+                break outcome;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "startup worker completion should return before the deadline"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        match mode {
+            "maintenance" => assert!(matches!(
+                completion.events.as_slice(),
+                [AppEvent::StartupChanged {
+                    snapshot: StartupSnapshot::Ready(ready),
+                    ..
+                }] if ready.warnings == [
+                    "app-server prompt-log privacy maintenance panicked; startup continued"
+                ]
+            )),
+            "startup" => assert!(matches!(
+                completion.events.as_slice(),
+                [AppEvent::StartupChanged {
+                    snapshot: StartupSnapshot::Failed { message },
+                    ..
+                }] if message == "startup checks panicked"
+            )),
+            _ => unreachable!("isolated child mode should be validated by the parent test"),
+        }
+
+        let quiet_deadline = Instant::now() + Duration::from_millis(100);
+        let mut received_completion_inputs = 1;
+        while Instant::now() < quiet_deadline {
+            if runtime.poll_pending_input().is_some() {
+                received_completion_inputs += 1;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(received_completion_inputs, 1);
+        println!("{STARTUP_COMPLETION_MARKER}");
     }
 
     #[test]

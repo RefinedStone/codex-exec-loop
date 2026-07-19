@@ -35,6 +35,8 @@ pub(crate) mod shutdown;
 // git_subprocess는 host-owned Git 명령의 repository/config/environment 격리를 강제한다.
 pub(crate) mod git_execution_guard;
 pub(crate) mod git_subprocess;
+// panic_observation은 민감 작업 worker의 panic payload만 가리고 일반 panic은 기존 hook으로 위임한다.
+pub(crate) mod panic_observation;
 // subprocess는 외부 CLI 경계의 non-interactive timeout 실행을 모은 crate-private helper다.
 pub(crate) mod subprocess;
 // trusted executable resolution pins host-owned tools before any repository-controlled PATH entry can run.
