@@ -35,7 +35,11 @@ pub use event::{AppEvent, CoreEffectCompletion, CoreInput, SessionRenameAccepted
 pub use github_review_poll::GithubReviewPollCorrelation;
 pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparationIntent};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
-pub use queue::{QueueAuthorityLoadError, QueueAuthoritySnapshot};
+pub use queue::{
+    QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
+    QueueMutationCorrelation, QueueMutationIntent, QueueMutationKind, QueueMutationResult,
+    QueueMutationTarget,
+};
 pub use request::{
     ConversationLoadCorrelation, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
     ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,

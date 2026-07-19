@@ -1,8 +1,9 @@
 use super::{
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, GithubReviewPollCorrelation,
-    ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
-    TurnSteerCorrelation, TurnSubmissionCorrelation, TurnSubmissionRequest,
+    ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation, TurnSteerCorrelation, TurnSubmissionCorrelation,
+    TurnSubmissionRequest,
 };
 use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::github_review::GithubPullRequestPollState;
@@ -33,6 +34,9 @@ pub enum CoreEffect {
     },
     LoadQueueAuthority {
         correlation: QueueAuthorityLoadCorrelation,
+    },
+    ExecuteQueueMutation {
+        correlation: QueueMutationCorrelation,
     },
     PrepareManualPrompt(Box<ManualPromptRequest>),
     SubmitTurn {

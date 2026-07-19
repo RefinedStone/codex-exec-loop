@@ -33,7 +33,6 @@ use crate::core::runtime::{CoreRuntime, core_input_channel};
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::operator_alert::OperatorAlert;
 
-use super::queue_overlay_ui::QueueMutationWorkerResult;
 use super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowOverlayUiState,
     ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
@@ -73,7 +72,6 @@ pub(super) enum BackgroundMessage {
         event: ConversationStreamEvent,
     },
     ConversationRuntimeNotice(String),
-    QueueMutationCompleted(Box<QueueMutationWorkerResult>),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(Box<ParallelModeControlPlaneBackgroundEvent>),
@@ -1220,6 +1218,7 @@ impl NativeTuiPlanningHandle {
         &self.services.runtime
     }
 
+    #[cfg(test)]
     pub(super) fn queue(&self) -> &crate::application::service::planning::PlanningQueueUseCases {
         &self.services.queue
     }
@@ -1508,6 +1507,15 @@ impl NativeTuiApp {
                 {
                     self.start_queue_overlay_authority_load();
                 }
+            }
+            AppEvent::QueueMutationStarted { correlation } => {
+                self.apply_queue_mutation_started(correlation);
+            }
+            AppEvent::QueueMutationCompleted {
+                correlation,
+                result,
+            } => {
+                self.apply_queue_mutation_completion(correlation, *result);
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnSteerAdmissionResolved(_) => {}

@@ -166,9 +166,6 @@ impl ShellRuntime {
                     self.app
                         .dispatch_core_input(CoreInput::ConversationRuntimeNotice(notice));
                 }
-                BackgroundMessage::QueueMutationCompleted(result) => {
-                    self.app.apply_queue_mutation_completion(*result);
-                }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
                 }

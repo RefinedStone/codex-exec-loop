@@ -10,7 +10,10 @@ use super::{
     ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
     StartupCheckCorrelation,
 };
-use super::{QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot};
+use super::{
+    QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
+    QueueMutationCorrelation, QueueMutationResult,
+};
 use super::{StartupReadySnapshot, StartupSnapshot};
 use super::{TurnSteerAdmission, TurnSteerCorrelation};
 use super::{
@@ -80,6 +83,10 @@ pub enum CoreEffectCompletion {
         correlation: QueueAuthorityLoadCorrelation,
         result: Result<Box<QueueAuthoritySnapshot>, QueueAuthorityLoadError>,
     },
+    QueueMutationCompleted {
+        correlation: QueueMutationCorrelation,
+        result: Box<QueueMutationResult>,
+    },
     TurnSteered {
         correlation: TurnSteerCorrelation,
         result: Result<ConversationTurnSteerReceipt, String>,
@@ -134,6 +141,13 @@ pub enum AppEvent {
     QueueAuthorityLoaded {
         correlation: QueueAuthorityLoadCorrelation,
         result: Result<Box<QueueAuthoritySnapshot>, QueueAuthorityLoadError>,
+    },
+    QueueMutationStarted {
+        correlation: QueueMutationCorrelation,
+    },
+    QueueMutationCompleted {
+        correlation: QueueMutationCorrelation,
+        result: Box<QueueMutationResult>,
     },
     ManualPromptPreparationAdmissionResolved(ManualPromptPreparationAdmission),
     TurnSubmissionAdmissionResolved(TurnSubmissionAdmission),

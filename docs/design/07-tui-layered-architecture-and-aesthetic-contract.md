@@ -141,8 +141,9 @@ the fixed Akra theme.
   destructive-action tokens to the same authority snapshot. Correlation generation, workspace,
   active-thread, or visible planning-revision drift must invalidate that snapshot and trigger a
   correlated reload.
-- Queue remove and undo actions must expose their pending operation ID and suppress duplicate
-  destructive keyboard and mouse actions until a matching background completion is consumed.
+- Queue remove and undo actions must enter through a core command. Core owns the monotonic
+  generation and single-flight gate; the TUI may expose that accepted generation as pending status
+  but must not mint its own operation ID.
 - The queue mutation gate must outlive Queue overlay chrome. Closing the overlay may reset local
   selection, feedback, and hit areas, but must not discard an in-flight mutation or apply an
   uncorrelated completion.
@@ -150,9 +151,11 @@ the fixed Akra theme.
   results require an authoritative refresh before the exact operation and workspace/thread context
   may settle visible state.
 - `PlanningQueueUseCases` must own the cancellation transaction: submit the cancellation, then
-  perform coherent runtime and queue-authority readback after either success or failure. The TUI
-  Queue controller owns background scheduling plus operation/context correlation and settlement; it
-  must not compose the cancellation and readback service calls.
+  perform coherent runtime and queue-authority readback after either success or failure.
+  Composition runs that transaction as a core effect and maps its completion into core-owned DTOs.
+  The TUI Queue controller owns only remove/undo presentation and projects settlement from the
+  accepted core correlation; it must not schedule the worker or compose cancellation and readback
+  service calls.
 - Selected rows must use `AkraTheme::selected()` and `AkraTheme::list_highlight_symbol()` or the
   option-line helpers that wrap them.
 - Key footers must use `AkraTheme::key_line`.

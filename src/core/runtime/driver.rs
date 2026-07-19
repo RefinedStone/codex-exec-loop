@@ -103,10 +103,11 @@ mod tests {
         AppEvent, ApprovalDecisionAdmission, ApprovalDecisionCorrelation, CoreEffectCompletion,
         CorePromptOrigin, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
         ManualPromptPreparationIntent, QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot,
-        ReviewCenterLoadCorrelation, ReviewCenterSnapshot, StartupAttachmentSnapshot,
-        StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
-        TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission,
-        TurnSubmissionRequest,
+        QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
+        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterLoadCorrelation,
+        ReviewCenterSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
+        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSteerAdmission,
+        TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::{
@@ -117,7 +118,7 @@ mod tests {
         GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestPollState,
         GithubPullRequestTarget,
     };
-    use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
+    use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest, TaskStatus};
 
     #[test]
     fn core_input_channel_applies_backpressure_and_reports_disconnect() {
@@ -214,6 +215,34 @@ mod tests {
                         planning_revision: 0,
                         tasks: Vec::new(),
                     })),
+                },
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediateQueueMutationExecutor;
+
+    impl CoreEffectExecutor for ImmediateQueueMutationExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::ExecuteQueueMutation { correlation } = effect else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::QueueMutationCompleted {
+                    correlation,
+                    result: Box::new(QueueMutationResult {
+                        mutation: Ok(QueueMutationCommitSnapshot {
+                            committed_planning_revision: 8,
+                            committed_task_ids: vec!["task-1".to_string()],
+                        }),
+                        authority: Ok(QueueAuthoritySnapshot {
+                            runtime_projection:
+                                crate::domain::planning::RuntimeProjection::uninitialized(),
+                            planning_revision: 8,
+                            tasks: Vec::new(),
+                        }),
+                    }),
                 },
             ))
         }
@@ -799,6 +828,71 @@ mod tests {
                     result: Ok(Box::new(snapshot)),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn immediate_queue_mutation_effect_is_started_before_completed_and_reopens_the_gate() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediateQueueMutationExecutor, rx);
+        let intent = QueueMutationIntent {
+            workspace_directory: "/tmp/workspace".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+            kind: QueueMutationKind::RemoveSelected,
+            expected_planning_revision: 7,
+            targets: vec![QueueMutationTarget {
+                task_id: "task-1".to_string(),
+                expected_status: TaskStatus::Ready,
+                expected_updated_at: "2026-07-19T00:00:00Z".to_string(),
+            }],
+            receipt_at_start: None,
+        };
+        let first_correlation = QueueMutationCorrelation::new(1, intent.clone());
+
+        let first =
+            runtime.dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent.clone())));
+
+        assert_eq!(
+            first.effects,
+            vec![CoreEffect::ExecuteQueueMutation {
+                correlation: first_correlation.clone(),
+            }]
+        );
+        assert!(matches!(
+            first.events.as_slice(),
+            [
+                AppEvent::QueueMutationStarted {
+                    correlation: started,
+                },
+                AppEvent::QueueMutationCompleted {
+                    correlation: completed,
+                    result,
+                },
+            ] if started == &first_correlation
+                && completed == &first_correlation
+                && matches!(
+                    &result.mutation,
+                    Ok(QueueMutationCommitSnapshot {
+                        committed_planning_revision: 8,
+                        committed_task_ids,
+                    }) if committed_task_ids == &["task-1".to_string()]
+                )
+                && matches!(
+                    &result.authority,
+                    Ok(QueueAuthoritySnapshot {
+                        planning_revision: 8,
+                        ..
+                    })
+                )
+        ));
+
+        let second =
+            runtime.dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent.clone())));
+        assert_eq!(
+            second.effects,
+            vec![CoreEffect::ExecuteQueueMutation {
+                correlation: QueueMutationCorrelation::new(2, intent),
+            }]
         );
     }
 

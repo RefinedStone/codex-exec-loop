@@ -1,8 +1,4 @@
 use super::*;
-#[cfg(test)]
-use crate::application::service::planning::{
-    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
-};
 use crate::core::app::{
     AppCommand, AppEvent, ApprovalDecisionAdmission, TurnSteerAdmission, TurnSteerCorrelation,
 };
@@ -1215,7 +1211,9 @@ mod tests {
         PlanningTaskToolRequest,
     };
     use crate::core::app::{
-        QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, StartupReadySnapshot,
+        QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
+        QueueMutationCorrelation, QueueMutationIntent, QueueMutationResult, QueueMutationTarget,
+        StartupReadySnapshot,
     };
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
@@ -1558,20 +1556,68 @@ mod tests {
 
     fn take_next_queue_mutation_completion(
         app: &mut NativeTuiApp,
-    ) -> queue_overlay_ui::QueueMutationWorkerResult {
-        let message = app
-            .rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("queue mutation worker should complete");
-        let BackgroundMessage::QueueMutationCompleted(completion) = message else {
-            panic!("expected queue mutation completion, got {message:?}");
-        };
-        *completion
+    ) -> (QueueMutationCorrelation, QueueMutationResult) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Some(outcome) = app.core_runtime.poll_pending_input() {
+                for event in outcome.events {
+                    match event {
+                        AppEvent::QueueMutationCompleted {
+                            correlation,
+                            result,
+                        } => return (correlation, *result),
+                        event => app.apply_core_event(event),
+                    }
+                }
+            }
+            std::thread::yield_now();
+        }
+        panic!("queue mutation core effect should complete");
     }
 
     fn apply_next_queue_mutation_completion(app: &mut NativeTuiApp) {
-        let completion = take_next_queue_mutation_completion(app);
-        app.apply_queue_mutation_completion(completion);
+        let (correlation, completion) = take_next_queue_mutation_completion(app);
+        app.apply_queue_mutation_completion(correlation, completion);
+    }
+
+    fn test_queue_mutation_correlation(
+        generation: u64,
+        context: queue_overlay_ui::QueueMutationContext,
+        kind: queue_overlay_ui::QueueMutationKind,
+        expected_planning_revision: i64,
+        targets: Vec<QueueMutationTarget>,
+        receipt_at_start: Option<PlanningQueueMutationReceipt>,
+    ) -> QueueMutationCorrelation {
+        QueueMutationCorrelation::new(
+            generation,
+            QueueMutationIntent {
+                workspace_directory: context.workspace_directory,
+                active_thread_id: context.active_thread_id,
+                kind,
+                expected_planning_revision,
+                targets,
+                receipt_at_start,
+            },
+        )
+    }
+
+    fn record_test_queue_mutation(
+        app: &mut NativeTuiApp,
+        kind: queue_overlay_ui::QueueMutationKind,
+        expected_planning_revision: i64,
+        targets: Vec<QueueMutationTarget>,
+        receipt_at_start: Option<PlanningQueueMutationReceipt>,
+    ) -> QueueMutationCorrelation {
+        let correlation = test_queue_mutation_correlation(
+            1,
+            app.current_queue_mutation_context(),
+            kind,
+            expected_planning_revision,
+            targets,
+            receipt_at_start,
+        );
+        app.apply_queue_mutation_started(correlation.clone());
+        correlation
     }
 
     fn apply_next_queue_overlay_authority_load(app: &mut NativeTuiApp) {
@@ -2389,19 +2435,16 @@ mod tests {
         );
 
         app.cancel_selected_queue_task();
-        let completion = take_next_queue_mutation_completion(&mut app);
-        assert_eq!(completion.operation.request.expected_planning_revision, 7);
-        assert_eq!(completion.operation.request.targets.len(), 1);
+        let (correlation, _) = take_next_queue_mutation_completion(&mut app);
+        assert_eq!(correlation.intent.expected_planning_revision, 7);
+        assert_eq!(correlation.intent.targets.len(), 1);
+        assert_eq!(correlation.intent.targets[0].task_id, "task-displayed");
         assert_eq!(
-            completion.operation.request.targets[0].task_id,
-            "task-displayed"
-        );
-        assert_eq!(
-            completion.operation.request.targets[0].expected_status,
+            correlation.intent.targets[0].expected_status,
             TaskStatus::Ready
         );
         assert_eq!(
-            completion.operation.request.targets[0].expected_updated_at,
+            correlation.intent.targets[0].expected_updated_at,
             "2026-04-10T00:00:00Z"
         );
     }
@@ -3003,7 +3046,7 @@ mod tests {
         release_mutation
             .send(())
             .expect("gated mutation should be released");
-        let completion = take_next_queue_mutation_completion(&mut app);
+        let (correlation, completion) = take_next_queue_mutation_completion(&mut app);
         let after = app
             .application
             .planning()
@@ -3029,14 +3072,11 @@ mod tests {
             Some(TaskStatus::Cancelled)
         );
         app.tui_language = TuiLanguage::Korean;
-        app.apply_queue_mutation_completion(completion);
+        app.apply_queue_mutation_completion(correlation, completion);
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(repository.mutation_count(), 1);
-        assert!(matches!(
-            app.rx.recv_timeout(Duration::from_millis(100)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
+        assert!(app.core_runtime.poll_pending_input().is_none());
         assert_eq!(
             app.planning_runtime_projection_snapshot()
                 .planning_revision(),
@@ -3074,33 +3114,26 @@ mod tests {
     #[test]
     fn queue_mutation_completion_does_not_cross_conversation_context() {
         let mut app = test_native_tui_app();
-        let context = app.current_queue_mutation_context();
-        let operation = app
-            .queue_mutation_ui_state
-            .begin(
-                context.clone(),
-                queue_overlay_ui::QueueMutationKind::RemoveSelected,
-                PlanningQueueCancellationRequest {
-                    workspace_directory: context.workspace_directory,
-                    expected_planning_revision: 3,
-                    targets: Vec::new(),
-                },
-                None,
-            )
-            .expect("queue operation should enter pending state");
+        let correlation = record_test_queue_mutation(
+            &mut app,
+            queue_overlay_ui::QueueMutationKind::RemoveSelected,
+            3,
+            Vec::new(),
+            None,
+        );
         let projection_before = app.planning_runtime_projection_snapshot();
         ready_conversation_mut(&mut app).thread_id = "replacement-thread".to_string();
         ready_conversation_mut(&mut app).status_text = "replacement context ready".to_string();
 
-        app.apply_queue_mutation_completion(queue_overlay_ui::QueueMutationWorkerResult {
-            operation,
-            mutation: Err("old context mutation failed".to_string()),
-            authority: Err(
-                queue_overlay_ui::QueueMutationAuthorityRefreshError::AuthorityUnavailable(
+        app.apply_queue_mutation_completion(
+            correlation,
+            QueueMutationResult {
+                mutation: Err("old context mutation failed".to_string()),
+                authority: Err(QueueAuthorityLoadError::AuthorityUnavailable(
                     "old context refresh failed".to_string(),
-                ),
-            ),
-        });
+                )),
+            },
+        );
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(status_text(&app), "replacement context ready");
@@ -3118,35 +3151,27 @@ mod tests {
         let visible_projection =
             PlanningRuntimeProjection::uninitialized().with_planning_revision(Some(11));
         app.sync_ready_conversation_planning_runtime_projection(visible_projection.clone());
-        let context = app.current_queue_mutation_context();
-        let operation = app
-            .queue_mutation_ui_state
-            .begin(
-                context.clone(),
-                queue_overlay_ui::QueueMutationKind::RemoveSelected,
-                PlanningQueueCancellationRequest {
-                    workspace_directory: context.workspace_directory,
-                    expected_planning_revision: 9,
-                    targets: Vec::new(),
-                },
-                None,
-            )
-            .expect("queue operation should enter pending state");
+        let correlation = record_test_queue_mutation(
+            &mut app,
+            queue_overlay_ui::QueueMutationKind::RemoveSelected,
+            9,
+            Vec::new(),
+            None,
+        );
         app.tui_language = TuiLanguage::Korean;
 
-        app.apply_queue_mutation_completion(queue_overlay_ui::QueueMutationWorkerResult {
-            operation,
-            mutation: Err("stale worker result".to_string()),
-            authority: Ok(queue_overlay_ui::QueueMutationAuthoritySnapshot {
-                runtime_projection: PlanningRuntimeProjection::uninitialized()
-                    .with_planning_revision(Some(10)),
-                queue_authority:
-                    crate::application::service::planning::PlanningQueueAuthoritySnapshot {
-                        planning_revision: 10,
-                        tasks: Vec::new(),
-                    },
-            }),
-        });
+        app.apply_queue_mutation_completion(
+            correlation,
+            QueueMutationResult {
+                mutation: Err("stale worker result".to_string()),
+                authority: Ok(QueueAuthoritySnapshot {
+                    runtime_projection: PlanningRuntimeProjection::uninitialized()
+                        .with_planning_revision(Some(10)),
+                    planning_revision: 10,
+                    tasks: Vec::new(),
+                }),
+            },
+        );
 
         assert_eq!(
             app.planning_runtime_projection_snapshot(),
@@ -3164,17 +3189,14 @@ mod tests {
     fn queue_mutation_settlement_reconciles_a_receipt_created_while_pending() {
         let mut app = test_native_tui_app();
         let context = app.current_queue_mutation_context();
-        let operation = queue_overlay_ui::QueueMutationOperation {
-            operation_id: 1,
-            context: context.clone(),
-            kind: queue_overlay_ui::QueueMutationKind::RemoveSelected,
-            request: PlanningQueueCancellationRequest {
-                workspace_directory: context.workspace_directory,
-                expected_planning_revision: 4,
-                targets: Vec::new(),
-            },
-            receipt_at_start: None,
-        };
+        let correlation = test_queue_mutation_correlation(
+            1,
+            context,
+            queue_overlay_ui::QueueMutationKind::RemoveSelected,
+            4,
+            Vec::new(),
+            None,
+        );
         let receipt_created_while_pending = PlanningQueueMutationReceipt {
             completed_turn_id: "turn-created-while-pending".to_string(),
             planning_revision: 4,
@@ -3197,9 +3219,9 @@ mod tests {
             ready_conversation_mut(&mut app).latest_queue_mutation_receipt =
                 Some(receipt_created_while_pending.clone());
             if settle {
-                app.settle_correlated_queue_receipt(&operation, &authority);
+                app.settle_correlated_queue_receipt(&correlation, &authority);
             } else {
-                app.reconcile_correlated_queue_receipt(&operation, &authority);
+                app.reconcile_correlated_queue_receipt(&correlation, &authority);
             }
 
             let reconciled = ready_conversation(&app)
@@ -3229,36 +3251,26 @@ mod tests {
             }],
         };
         ready_conversation_mut(&mut app).latest_queue_mutation_receipt = Some(receipt.clone());
-        let context = app.current_queue_mutation_context();
-        let operation = app
-            .queue_mutation_ui_state
-            .begin(
-                context.clone(),
-                queue_overlay_ui::QueueMutationKind::UndoLatestRegistration,
-                PlanningQueueCancellationRequest {
-                    workspace_directory: context.workspace_directory,
-                    expected_planning_revision: 3,
-                    targets: vec![PlanningQueueCancellationTarget {
-                        task_id: "task-refresh-failure".to_string(),
-                        expected_status: TaskStatus::Ready,
-                        expected_updated_at: "2026-07-16T00:00:00Z".to_string(),
-                    }],
-                },
-                Some(receipt.clone()),
-            )
-            .expect("queue operation should enter pending state");
+        let correlation = record_test_queue_mutation(
+            &mut app,
+            queue_overlay_ui::QueueMutationKind::UndoLatestRegistration,
+            3,
+            vec![QueueMutationTarget {
+                task_id: "task-refresh-failure".to_string(),
+                expected_status: TaskStatus::Ready,
+                expected_updated_at: "2026-07-16T00:00:00Z".to_string(),
+            }],
+            Some(receipt.clone()),
+        );
         let projection_before = app.planning_runtime_projection_snapshot();
-        let completion = queue_overlay_ui::QueueMutationWorkerResult {
-            operation,
+        let completion = QueueMutationResult {
             mutation: Err("guard release failed".to_string()),
-            authority: Err(
-                queue_overlay_ui::QueueMutationAuthorityRefreshError::AuthorityUnavailable(
-                    "snapshot unavailable".to_string(),
-                ),
-            ),
+            authority: Err(QueueAuthorityLoadError::AuthorityUnavailable(
+                "snapshot unavailable".to_string(),
+            )),
         };
 
-        app.apply_queue_mutation_completion(completion.clone());
+        app.apply_queue_mutation_completion(correlation.clone(), completion.clone());
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(
@@ -3279,36 +3291,29 @@ mod tests {
         );
         assert!(status_text(&app).contains("op-1 is unresolved"));
         let message_count = ready_conversation(&app).messages.len();
-        app.apply_queue_mutation_completion(completion);
+        app.apply_queue_mutation_completion(correlation, completion);
         assert_eq!(ready_conversation(&app).messages.len(), message_count);
     }
 
     #[test]
     fn queue_mutation_refresh_failure_uses_the_selected_language_across_surfaces() {
         let mut app = test_native_tui_app();
-        let context = app.current_queue_mutation_context();
-        let operation = app
-            .queue_mutation_ui_state
-            .begin(
-                context.clone(),
-                queue_overlay_ui::QueueMutationKind::RemoveSelected,
-                PlanningQueueCancellationRequest {
-                    workspace_directory: context.workspace_directory,
-                    expected_planning_revision: 3,
-                    targets: Vec::new(),
-                },
-                None,
-            )
-            .expect("queue operation should enter pending state");
+        let correlation = record_test_queue_mutation(
+            &mut app,
+            queue_overlay_ui::QueueMutationKind::RemoveSelected,
+            3,
+            Vec::new(),
+            None,
+        );
         app.tui_language = TuiLanguage::Korean;
 
-        app.apply_queue_mutation_completion(queue_overlay_ui::QueueMutationWorkerResult {
-            operation,
-            mutation: Err("변이 실패".to_string()),
-            authority: Err(
-                queue_overlay_ui::QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable,
-            ),
-        });
+        app.apply_queue_mutation_completion(
+            correlation,
+            QueueMutationResult {
+                mutation: Err("변이 실패".to_string()),
+                authority: Err(QueueAuthorityLoadError::RuntimeProjectionUnavailable),
+            },
+        );
 
         let feedback = app
             .queue_overlay_ui_state
@@ -3330,20 +3335,13 @@ mod tests {
     fn queue_mutation_input_feedback_uses_the_selected_language() {
         let mut app = test_native_tui_app();
         app.tui_language = TuiLanguage::Korean;
-        let context = app.current_queue_mutation_context();
-        let operation = app
-            .queue_mutation_ui_state
-            .begin(
-                context.clone(),
-                queue_overlay_ui::QueueMutationKind::RemoveSelected,
-                PlanningQueueCancellationRequest {
-                    workspace_directory: context.workspace_directory,
-                    expected_planning_revision: 3,
-                    targets: Vec::new(),
-                },
-                None,
-            )
-            .expect("queue operation should enter pending state");
+        let correlation = record_test_queue_mutation(
+            &mut app,
+            queue_overlay_ui::QueueMutationKind::RemoveSelected,
+            3,
+            Vec::new(),
+            None,
+        );
 
         assert!(!app.undo_latest_queue_registration());
         assert_eq!(
@@ -3352,8 +3350,8 @@ mod tests {
         );
 
         assert_eq!(
-            app.queue_mutation_ui_state.take_matching(&operation),
-            Some(operation)
+            app.queue_mutation_ui_state.take_matching(&correlation),
+            Some(correlation)
         );
         app.queue_mutation_ui_state.require_authority_refresh();
         assert!(!app.undo_latest_queue_registration());

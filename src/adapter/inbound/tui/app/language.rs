@@ -13,9 +13,7 @@ use super::planning_shell_command::{ParsedPlanningShellCommand, parse_planning_s
 use super::progressive_activity_overlay_ui::{
     parse_progressive_activity_card_filter, parse_progressive_activity_detail_kind,
 };
-use super::queue_overlay_ui::{
-    QueueActionBlockReason, QueueMutationAuthorityRefreshError, QueueMutationKind,
-};
+use super::queue_overlay_ui::{QueueActionBlockReason, QueueMutationKind};
 use super::view_selection_overlay_ui::ConversationViewMode;
 use super::{InlineShellCommand, ShellActionAvailability};
 
@@ -208,38 +206,23 @@ impl TuiLanguage {
         self,
         error: &QueueAuthorityLoadError,
     ) -> String {
-        let error = match error {
-            QueueAuthorityLoadError::AuthorityUnavailable(detail) => {
-                QueueMutationAuthorityRefreshError::AuthorityUnavailable(detail.clone())
-            }
-            QueueAuthorityLoadError::RevisionsKeptChanging {
-                projection_revision,
-                authority_revision,
-            } => QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
-                projection_revision: *projection_revision,
-                authority_revision: *authority_revision,
-            },
-            QueueAuthorityLoadError::RuntimeProjectionUnavailable => {
-                QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable
-            }
-        };
-        self.queue_mutation_authority_refresh_error(&error)
+        self.queue_mutation_authority_refresh_error(error)
     }
 
     pub(super) fn queue_mutation_authority_refresh_error(
         self,
-        error: &QueueMutationAuthorityRefreshError,
+        error: &QueueAuthorityLoadError,
     ) -> String {
         match (self, error) {
-            (Self::English, QueueMutationAuthorityRefreshError::AuthorityUnavailable(detail)) => {
+            (Self::English, QueueAuthorityLoadError::AuthorityUnavailable(detail)) => {
                 format!("Queue authority is unavailable: {detail}")
             }
-            (Self::Korean, QueueMutationAuthorityRefreshError::AuthorityUnavailable(detail)) => {
+            (Self::Korean, QueueAuthorityLoadError::AuthorityUnavailable(detail)) => {
                 format!("큐 권한을 사용할 수 없습니다: {detail}")
             }
             (
                 Self::English,
-                QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                QueueAuthorityLoadError::RevisionsKeptChanging {
                     projection_revision,
                     authority_revision,
                 },
@@ -248,18 +231,18 @@ impl TuiLanguage {
             ),
             (
                 Self::Korean,
-                QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                QueueAuthorityLoadError::RevisionsKeptChanging {
                     projection_revision,
                     authority_revision,
                 },
             ) => format!(
                 "새로고침 중 큐 권한이 계속 변경되었습니다 (projection 리비전 {projection_revision}, 권한 리비전 {authority_revision}). 큐를 다시 여세요."
             ),
-            (Self::English, QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable) => {
+            (Self::English, QueueAuthorityLoadError::RuntimeProjectionUnavailable) => {
                 "Queue runtime projection is unavailable after the authority change; reopen the queue."
                     .to_string()
             }
-            (Self::Korean, QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable) => {
+            (Self::Korean, QueueAuthorityLoadError::RuntimeProjectionUnavailable) => {
                 "권한 변경 후 큐 runtime projection을 사용할 수 없습니다. 큐를 다시 여세요."
                     .to_string()
             }
@@ -1577,11 +1560,12 @@ fn language_option_index(language: TuiLanguage) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::app::QueueAuthorityLoadError;
     use crate::domain::recent_sessions::SessionCatalogTier;
 
     use super::{
-        InlineShellCommand, LanguageSelectionOverlayUiState, QueueMutationAuthorityRefreshError,
-        QueueMutationKind, ShellActionAvailability, TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage,
+        InlineShellCommand, LanguageSelectionOverlayUiState, QueueMutationKind,
+        ShellActionAvailability, TUI_LOCALIZED_IMPORTANT_MARKERS, TuiLanguage,
         language_option_index,
     };
 
@@ -1655,7 +1639,7 @@ mod tests {
         );
         assert_eq!(
             TuiLanguage::Korean.queue_mutation_authority_refresh_error(
-                &QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                &QueueAuthorityLoadError::RevisionsKeptChanging {
                     projection_revision: 8,
                     authority_revision: 9,
                 }

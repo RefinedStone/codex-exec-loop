@@ -1,4 +1,4 @@
-use super::{ManualPromptPreparationIntent, TurnSubmissionRequest};
+use super::{ManualPromptPreparationIntent, QueueMutationIntent, TurnSubmissionRequest};
 use crate::domain::conversation::{ConversationApprovalDecision, ConversationTurnSteerRequest};
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::planning::PostTurnRequest;
@@ -34,6 +34,7 @@ pub enum AppCommand {
         workspace_directory: String,
         active_thread_id: Option<String>,
     },
+    SubmitQueueMutation(Box<QueueMutationIntent>),
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
     SubmitTurn(TurnSubmissionRequest),

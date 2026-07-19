@@ -3,10 +3,10 @@ use super::{
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, CoreEffect, CoreEffectCompletion,
     CoreInput, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
     ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
-    TurnStreamEvent, TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission,
-    TurnSubmissionCorrelation,
+    QueueMutationCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
@@ -58,6 +58,8 @@ pub struct CoreController {
     active_review_center_load: Option<ReviewCenterLoadCorrelation>,
     next_queue_authority_load_generation: u64,
     active_queue_authority_load: Option<QueueAuthorityLoadCorrelation>,
+    next_queue_mutation_generation: u64,
+    active_queue_mutation: Option<QueueMutationCorrelation>,
     next_manual_prompt_preparation_generation: u64,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
@@ -94,6 +96,8 @@ impl CoreController {
             active_review_center_load: None,
             next_queue_authority_load_generation: 1,
             active_queue_authority_load: None,
+            next_queue_mutation_generation: 1,
+            active_queue_mutation: None,
             next_manual_prompt_preparation_generation: 1,
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
@@ -254,6 +258,23 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::LoadQueueAuthority { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::SubmitQueueMutation(intent)) => {
+                if self.active_queue_mutation.is_some() {
+                    return self.unchanged_outcome();
+                }
+                let correlation = QueueMutationCorrelation::new(
+                    take_generation(&mut self.next_queue_mutation_generation, "queue mutation"),
+                    *intent,
+                );
+                self.active_queue_mutation = Some(correlation.clone());
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::QueueMutationStarted {
+                        correlation: correlation.clone(),
+                    }],
+                    effects: vec![CoreEffect::ExecuteQueueMutation { correlation }],
                     snapshot: self.snapshot(),
                 }
             }
@@ -611,6 +632,23 @@ impl CoreController {
                 self.active_queue_authority_load = None;
                 CoreDispatchOutcome {
                     events: vec![AppEvent::QueueAuthorityLoaded {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::QueueMutationCompleted {
+                correlation,
+                result,
+            }) => {
+                if self.active_queue_mutation.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.active_queue_mutation = None;
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::QueueMutationCompleted {
                         correlation,
                         result,
                     }],
@@ -1076,9 +1114,10 @@ mod tests {
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
-        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin, QueueAuthoritySnapshot,
-        ReviewCenterSnapshot, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
-        TurnSubmissionRequest,
+        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin, QueueAuthorityLoadError,
+        QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationIntent,
+        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterSnapshot,
+        SessionCatalogReadySnapshot, SessionCatalogSnapshot, TurnSubmissionRequest,
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
@@ -1100,7 +1139,8 @@ mod tests {
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::planning::{
-        ManualPromptOutcome, ManualPromptRequest, RuntimeProjection, TurnSnapshotCapture,
+        ManualPromptOutcome, ManualPromptRequest, RuntimeProjection, TaskStatus,
+        TurnSnapshotCapture,
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
     use crate::domain::session_summary::SessionSummary;
@@ -1184,6 +1224,35 @@ mod tests {
             planning_revision: 0,
             tasks: Vec::new(),
         }
+    }
+
+    fn queue_mutation_intent(
+        workspace_directory: &str,
+        active_thread_id: Option<&str>,
+        kind: QueueMutationKind,
+    ) -> QueueMutationIntent {
+        QueueMutationIntent {
+            workspace_directory: workspace_directory.to_string(),
+            active_thread_id: active_thread_id.map(str::to_string),
+            kind,
+            expected_planning_revision: 7,
+            targets: vec![QueueMutationTarget {
+                task_id: "task-1".to_string(),
+                expected_status: TaskStatus::Ready,
+                expected_updated_at: "2026-07-19T00:00:00Z".to_string(),
+            }],
+            receipt_at_start: None,
+        }
+    }
+
+    fn successful_queue_mutation_result() -> Box<QueueMutationResult> {
+        Box::new(QueueMutationResult {
+            mutation: Ok(QueueMutationCommitSnapshot {
+                committed_planning_revision: 8,
+                committed_task_ids: vec!["task-1".to_string()],
+            }),
+            authority: Ok(empty_queue_authority_snapshot()),
+        })
     }
 
     fn session_rename_correlation(
@@ -1939,6 +2008,96 @@ mod tests {
                 correlation: second_correlation,
             }]
         );
+    }
+
+    #[test]
+    fn queue_mutation_is_single_flight_and_failure_reopens_the_gate() {
+        let mut controller = CoreController::new();
+        let first_intent = queue_mutation_intent(
+            "/tmp/workspace",
+            Some("thread-1"),
+            QueueMutationKind::RemoveSelected,
+        );
+        let second_intent = queue_mutation_intent(
+            "/tmp/workspace",
+            Some("thread-1"),
+            QueueMutationKind::UndoLatestRegistration,
+        );
+        let first_correlation = QueueMutationCorrelation::new(1, first_intent.clone());
+
+        let first = controller.handle_input(CoreInput::Command(AppCommand::SubmitQueueMutation(
+            Box::new(first_intent),
+        )));
+        assert_eq!(
+            first.events,
+            vec![AppEvent::QueueMutationStarted {
+                correlation: first_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            first.effects,
+            vec![CoreEffect::ExecuteQueueMutation {
+                correlation: first_correlation.clone(),
+            }]
+        );
+
+        let blocked = controller.handle_input(CoreInput::Command(AppCommand::SubmitQueueMutation(
+            Box::new(second_intent.clone()),
+        )));
+        assert!(blocked.events.is_empty());
+        assert!(blocked.effects.is_empty());
+
+        let failed_result = Box::new(QueueMutationResult {
+            mutation: Err("mutation failed".to_string()),
+            authority: Err(QueueAuthorityLoadError::AuthorityUnavailable(
+                "refresh failed".to_string(),
+            )),
+        });
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueMutationCompleted {
+                correlation: first_correlation.clone(),
+                result: failed_result.clone(),
+            },
+        ));
+        assert_eq!(
+            failed.events,
+            vec![AppEvent::QueueMutationCompleted {
+                correlation: first_correlation,
+                result: failed_result,
+            }]
+        );
+
+        let retry = controller.handle_input(CoreInput::Command(AppCommand::SubmitQueueMutation(
+            Box::new(second_intent.clone()),
+        )));
+        let retry_correlation = QueueMutationCorrelation::new(2, second_intent);
+        assert_eq!(
+            retry.events,
+            vec![AppEvent::QueueMutationStarted {
+                correlation: retry_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            retry.effects,
+            vec![CoreEffect::ExecuteQueueMutation {
+                correlation: retry_correlation,
+            }]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "queue mutation generation exhausted")]
+    fn queue_mutation_generation_panics_before_it_can_wrap() {
+        let mut controller = CoreController::new();
+        controller.next_queue_mutation_generation = u64::MAX;
+
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitQueueMutation(
+            Box::new(queue_mutation_intent(
+                "/tmp/workspace",
+                Some("thread-1"),
+                QueueMutationKind::RemoveSelected,
+            )),
+        )));
     }
 
     #[test]
@@ -3553,6 +3712,93 @@ mod tests {
                 result,
             }]
         );
+    }
+
+    #[test]
+    fn queue_mutation_completion_requires_the_exact_correlation_once_across_aba() {
+        let mut controller = CoreController::new();
+        let intent = queue_mutation_intent(
+            "/tmp/workspace",
+            Some("thread-1"),
+            QueueMutationKind::RemoveSelected,
+        );
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitQueueMutation(
+            Box::new(intent.clone()),
+        )));
+        let first_correlation = QueueMutationCorrelation::new(1, intent.clone());
+        let result = successful_queue_mutation_result();
+
+        let forged = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueMutationCompleted {
+                correlation: QueueMutationCorrelation::new(
+                    1,
+                    queue_mutation_intent(
+                        "/tmp/workspace",
+                        Some("thread-forged"),
+                        QueueMutationKind::RemoveSelected,
+                    ),
+                ),
+                result: result.clone(),
+            },
+        ));
+        assert!(forged.events.is_empty());
+        assert_eq!(
+            controller.active_queue_mutation,
+            Some(first_correlation.clone())
+        );
+
+        let first = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueMutationCompleted {
+                correlation: first_correlation.clone(),
+                result: result.clone(),
+            },
+        ));
+        assert_eq!(
+            first.events,
+            vec![AppEvent::QueueMutationCompleted {
+                correlation: first_correlation.clone(),
+                result: result.clone(),
+            }]
+        );
+
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitQueueMutation(
+            Box::new(intent.clone()),
+        )));
+        let second_correlation = QueueMutationCorrelation::new(2, intent);
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueMutationCompleted {
+                correlation: first_correlation,
+                result: result.clone(),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(
+            controller.active_queue_mutation,
+            Some(second_correlation.clone())
+        );
+
+        let second = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueMutationCompleted {
+                correlation: second_correlation.clone(),
+                result: result.clone(),
+            },
+        ));
+        assert_eq!(
+            second.events,
+            vec![AppEvent::QueueMutationCompleted {
+                correlation: second_correlation.clone(),
+                result: result.clone(),
+            }]
+        );
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueMutationCompleted {
+                correlation: second_correlation,
+                result,
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
     }
 
     #[test]

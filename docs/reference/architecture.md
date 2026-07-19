@@ -126,21 +126,21 @@ model: loading and failed states remain read-only, while a ready state binds vis
 revision, and destructive-action tokens to one snapshot. Workspace, thread, or visible-revision drift
 starts a new correlated load; redraw and resize paths perform no authority I/O.
 
-TUI queue remove and undo intents open one overlay-independent pending gate. Its adapter correlation
-envelope carries an operation ID, workspace and active-thread identity, plus the cancellation
-request's base planning revision and exact task status/update tokens. The controller does not mutate
-the visible projection optimistically or call the cancellation service on the terminal input path.
-`PlanningQueueUseCases` owns the cancellation transaction: it submits the request, then performs a
-coherent runtime and queue-authority readback after both success and failure. The TUI controller owns
-background scheduling plus operation/context correlation and settlement; only the exact pending
-operation in the same workspace/thread context may reconcile the returned authority into the
-projection. Closing the Queue overlay resets its local selection and feedback but does not discard
-the pending operation, and duplicate destructive intents remain blocked until its completion is
-consumed.
+TUI queue remove and undo intents enter through a core command. Core assigns a monotonically
+increasing generation to the workspace, active-thread identity, base planning revision, and exact
+task status/update tokens, admits only one mutation at a time, and drops stale, duplicate, or ABA
+completions. Composition maps that core-owned intent into `PlanningQueueUseCases`, whose
+cancellation transaction submits the request and performs a coherent runtime and queue-authority
+readback after both success and failure. The TUI controller owns only remove/undo presentation and
+projects settlement from the accepted correlation, including its mutation kind and captured
+receipt; it does not schedule the worker or mint operation IDs. Only the exact accepted correlation
+in the same workspace/thread context may reconcile returned authority into the projection. Closing
+the Queue overlay resets local selection and feedback but does not discard the accepted mutation,
+and duplicate destructive intents remain blocked until Core consumes its completion.
 
-This is TUI settlement correlation, not store-wide idempotency. Operation IDs are not persisted,
+This is process-local Core correlation, not store-wide idempotency. Generations are not persisted,
 do not yet carry repository incarnation, and do not promise exactly-once execution across process
-restart; durable revision and task-token validation remains the application/store boundary's guard.
+restart; durable revision and task-token validation remain the application/store boundary's guard.
 
 `AKRA_HOME` must resolve to a trusted absolute root. SQLite database and sidecar files are private,
 regular, single-link files. Repository identity is bound to a private incarnation marker so a
