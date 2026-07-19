@@ -1,15 +1,17 @@
+use super::github_review_polling_target_is_valid;
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ApprovalDecisionAdmission,
     ApprovalDecisionCorrelation, ApprovalReviewPersistenceCoordinator, ConversationLoadCorrelation,
     CoreEffect, CoreEffectCompletion, CoreInput, DirectionsMaintenanceLoadCorrelation,
-    GithubReviewPollCorrelation, ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
-    ParallelModeProjection, ParallelPeekLoadCorrelation, PlanningRuntimeCoordinator,
-    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCoordinator,
-    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
-    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
-    TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
+    GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
+    ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ParallelModeProjection,
+    ParallelPeekLoadCorrelation, PlanningRuntimeCoordinator, PlanningWorkspaceOperationAdmission,
+    PlanningWorkspaceOperationCoordinator, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
+    SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
+    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
@@ -92,6 +94,10 @@ pub struct CoreController {
     active_turn_steer: Option<ActiveTurnSteer>,
     next_approval_decision_generation: u64,
     active_approval_decision: Option<ActiveApprovalDecision>,
+    next_github_review_polling_setup_generation: u64,
+    github_review_polling_setup_request: Option<GithubReviewPollingSetupRequest>,
+    active_github_review_polling_setup: Option<GithubReviewPollingSetupCorrelation>,
+    github_review_polling_setup_correlation: Option<GithubReviewPollingSetupCorrelation>,
     github_review_poll_target: Option<GithubPullRequestTarget>,
     github_review_poll_cursor: Option<(GithubPullRequestTarget, GithubPullRequestPollState)>,
     next_github_review_poll_generation: u64,
@@ -137,6 +143,10 @@ impl CoreController {
             active_turn_steer: None,
             next_approval_decision_generation: 1,
             active_approval_decision: None,
+            next_github_review_polling_setup_generation: 1,
+            github_review_polling_setup_request: None,
+            active_github_review_polling_setup: None,
+            github_review_polling_setup_correlation: None,
             github_review_poll_target: None,
             github_review_poll_cursor: None,
             next_github_review_poll_generation: 1,
@@ -621,14 +631,40 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
-            CoreInput::Command(AppCommand::ConfigureGithubReviewPolling { target }) => {
-                self.github_review_poll_target = target;
+            CoreInput::Command(AppCommand::SetupGithubReviewPolling(request)) => {
+                if self.github_review_polling_setup_request.as_ref() == Some(&request) {
+                    return self.unchanged_outcome();
+                }
+                let correlation = GithubReviewPollingSetupCorrelation::new(
+                    take_generation(
+                        &mut self.next_github_review_polling_setup_generation,
+                        "GitHub review polling setup",
+                    ),
+                    request.workspace_directory.clone(),
+                );
+                self.github_review_polling_setup_request = Some(request.clone());
+                self.active_github_review_polling_setup = Some(correlation.clone());
+                self.github_review_polling_setup_correlation = None;
+                self.github_review_poll_target = None;
                 self.github_review_poll_cursor = None;
                 self.active_github_review_poll = None;
-                self.unchanged_outcome()
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::GithubReviewPollingSetupStarted {
+                        correlation: correlation.clone(),
+                    }],
+                    effects: vec![CoreEffect::SetupGithubReviewPolling {
+                        correlation,
+                        request,
+                    }],
+                    snapshot: self.snapshot(),
+                }
             }
             CoreInput::Command(AppCommand::PollGithubReview) => {
                 let Some(target) = self.github_review_poll_target.clone() else {
+                    return self.unchanged_outcome();
+                };
+                let Some(setup_correlation) = self.github_review_polling_setup_correlation.clone()
+                else {
                     return self.unchanged_outcome();
                 };
                 if self.active_github_review_poll.is_some() {
@@ -652,6 +688,7 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::PollGithubReview {
+                        setup_correlation,
                         correlation,
                         previous_state,
                     }],
@@ -1045,6 +1082,60 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events,
                     effects,
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(
+                CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                    correlation,
+                    mut result,
+                },
+            ) => {
+                if self.active_github_review_polling_setup.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.active_github_review_polling_setup = None;
+                let Some(request) = self.github_review_polling_setup_request.as_ref() else {
+                    return self.unchanged_outcome();
+                };
+                if request.workspace_directory != correlation.workspace_directory {
+                    return self.unchanged_outcome();
+                }
+                if result.as_ref().is_ok_and(|result| {
+                    matches!(
+                        result,
+                        GithubReviewPollingSetupResult::Active { target }
+                            if !github_review_polling_target_is_valid(target)
+                    )
+                }) {
+                    result =
+                        Err("GitHub review polling setup returned an invalid target".to_string());
+                }
+                if let (
+                    GithubReviewPollingSetupMode::Explicit { target: expected },
+                    Ok(GithubReviewPollingSetupResult::Active { target: actual }),
+                ) = (&request.mode, &result)
+                    && expected != actual
+                {
+                    result =
+                        Err("GitHub review polling setup returned a different target".to_string());
+                }
+                match &result {
+                    Ok(GithubReviewPollingSetupResult::Active { target }) => {
+                        self.github_review_polling_setup_correlation = Some(correlation.clone());
+                        self.github_review_poll_target = Some(target.clone());
+                    }
+                    Ok(GithubReviewPollingSetupResult::Disabled) | Err(_) => {
+                        self.github_review_polling_setup_correlation = None;
+                        self.github_review_poll_target = None;
+                    }
+                }
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::GithubReviewPollingSetupCompleted {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
                     snapshot: self.snapshot(),
                 }
             }
@@ -4370,29 +4461,67 @@ mod tests {
     }
 
     #[test]
-    fn github_review_poll_runs_one_generation_for_the_configured_target() {
+    fn github_review_setup_coalesces_and_completes_before_first_poll() {
         let mut controller = CoreController::new();
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        let configured = controller.handle_input(CoreInput::Command(
-            AppCommand::ConfigureGithubReviewPolling {
-                target: Some(target.clone()),
+        let request = github_review_setup_request("/workspace-a", target.clone());
+        let correlation = GithubReviewPollingSetupCorrelation::new(1, "/workspace-a");
+
+        let setup = controller.handle_input(CoreInput::Command(
+            AppCommand::SetupGithubReviewPolling(request.clone()),
+        ));
+        assert_eq!(
+            setup.events,
+            vec![AppEvent::GithubReviewPollingSetupStarted {
+                correlation: correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            setup.effects,
+            vec![CoreEffect::SetupGithubReviewPolling {
+                correlation: correlation.clone(),
+                request: request.clone(),
+            }]
+        );
+        let duplicate = controller.handle_input(CoreInput::Command(
+            AppCommand::SetupGithubReviewPolling(request),
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+
+        let early_poll = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        assert!(early_poll.events.is_empty());
+        assert!(early_poll.effects.is_empty());
+
+        let completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                correlation: correlation.clone(),
+                result: Ok(GithubReviewPollingSetupResult::Active {
+                    target: target.clone(),
+                }),
             },
         ));
-        assert!(configured.events.is_empty());
-        assert!(configured.effects.is_empty());
+        assert!(matches!(
+            completion.events.as_slice(),
+            [AppEvent::GithubReviewPollingSetupCompleted {
+                correlation: completed,
+                result: Ok(GithubReviewPollingSetupResult::Active { target: completed_target }),
+            }] if completed == &correlation && completed_target == &target
+        ));
 
-        let correlation = GithubReviewPollCorrelation::new(1, target);
         let started = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let poll_correlation = GithubReviewPollCorrelation::new(1, target);
         assert_eq!(
             started.events,
             vec![AppEvent::GithubReviewPollStarted {
-                correlation: correlation.clone(),
+                correlation: poll_correlation.clone(),
             }]
         );
         assert_eq!(
             started.effects,
             vec![CoreEffect::PollGithubReview {
-                correlation,
+                setup_correlation: correlation,
+                correlation: poll_correlation,
                 previous_state: None,
             }]
         );
@@ -4403,14 +4532,87 @@ mod tests {
     }
 
     #[test]
+    fn github_review_setup_aba_rejects_stale_and_duplicate_completions() {
+        let mut controller = CoreController::new();
+        let target_a = GithubPullRequestTarget::new("acme/widgets", 42);
+        let target_b = GithubPullRequestTarget::new("acme/widgets", 43);
+        let a1 = start_github_review_setup(&mut controller, "/workspace-a", target_a.clone());
+        let b2 = start_github_review_setup(&mut controller, "/workspace-b", target_b.clone());
+        let a3 = start_github_review_setup(&mut controller, "/workspace-a", target_a.clone());
+        assert_eq!(a1.generation, 1);
+        assert_eq!(b2.generation, 2);
+        assert_eq!(a3.generation, 3);
+
+        for (correlation, target) in [(a1, target_a.clone()), (b2, target_b)] {
+            let stale = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                    correlation,
+                    result: Ok(GithubReviewPollingSetupResult::Active { target }),
+                },
+            ));
+            assert!(stale.events.is_empty());
+            assert!(stale.effects.is_empty());
+        }
+        complete_github_review_setup(&mut controller, a3.clone(), target_a.clone());
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                correlation: a3.clone(),
+                result: Ok(GithubReviewPollingSetupResult::Disabled),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+
+        let poll = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        assert!(matches!(
+            poll.effects.as_slice(),
+            [CoreEffect::PollGithubReview {
+                setup_correlation,
+                correlation: GithubReviewPollCorrelation { target, .. },
+                previous_state: None,
+            }] if setup_correlation == &a3 && target == &target_a
+        ));
+    }
+
+    #[test]
+    fn github_review_setup_wrong_or_invalid_results_fail_closed() {
+        for (actual, expected_message) in [
+            (
+                GithubPullRequestTarget::new("other/repository", 7),
+                "GitHub review polling setup returned a different target",
+            ),
+            (
+                GithubPullRequestTarget::new("invalid", 0),
+                "GitHub review polling setup returned an invalid target",
+            ),
+        ] {
+            let mut controller = CoreController::new();
+            let expected = GithubPullRequestTarget::new("acme/widgets", 42);
+            let correlation = start_github_review_setup(&mut controller, "/workspace", expected);
+            let completed = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                    correlation,
+                    result: Ok(GithubReviewPollingSetupResult::Active { target: actual }),
+                },
+            ));
+            assert!(matches!(
+                completed.events.as_slice(),
+                [AppEvent::GithubReviewPollingSetupCompleted {
+                    result: Err(message),
+                    ..
+                }] if message == expected_message
+            ));
+            let poll = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+            assert!(poll.events.is_empty());
+            assert!(poll.effects.is_empty());
+        }
+    }
+
+    #[test]
     fn github_review_poll_success_advances_cursor_and_failure_preserves_it() {
         let mut controller = CoreController::new();
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        controller.handle_input(CoreInput::Command(
-            AppCommand::ConfigureGithubReviewPolling {
-                target: Some(target.clone()),
-            },
-        ));
+        let setup_correlation =
+            activate_github_review_setup(&mut controller, "/workspace", target.clone());
         controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
         let first_correlation = GithubReviewPollCorrelation::new(1, target.clone());
         let first_result = github_review_poll_result(&target, "2026-07-19T10:00:00Z");
@@ -4442,6 +4644,7 @@ mod tests {
         assert_eq!(
             second.effects,
             vec![CoreEffect::PollGithubReview {
+                setup_correlation: setup_correlation.clone(),
                 correlation: second_correlation.clone(),
                 previous_state: Some(first_result.next_state.clone()),
             }]
@@ -4464,6 +4667,7 @@ mod tests {
         assert_eq!(
             third.effects,
             vec![CoreEffect::PollGithubReview {
+                setup_correlation,
                 correlation: GithubReviewPollCorrelation::new(3, target),
                 previous_state: Some(first_result.next_state.clone()),
             }]
@@ -4480,73 +4684,11 @@ mod tests {
     }
 
     #[test]
-    fn github_review_poll_reconfigure_starts_a_new_same_target_epoch() {
-        let mut controller = CoreController::new();
-        let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        controller.handle_input(CoreInput::Command(
-            AppCommand::ConfigureGithubReviewPolling {
-                target: Some(target.clone()),
-            },
-        ));
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
-        let first = GithubReviewPollCorrelation::new(1, target.clone());
-        let cursor = github_review_poll_result(&target, "2026-07-19T10:00:00Z");
-        controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::GithubReviewPollCompleted {
-                correlation: first,
-                result: Ok(cursor),
-            },
-        ));
-        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
-        let superseded = GithubReviewPollCorrelation::new(2, target.clone());
-
-        controller.handle_input(CoreInput::Command(
-            AppCommand::ConfigureGithubReviewPolling {
-                target: Some(target.clone()),
-            },
-        ));
-        let current = GithubReviewPollCorrelation::new(3, target.clone());
-        let restarted = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
-        assert_eq!(
-            restarted.effects,
-            vec![CoreEffect::PollGithubReview {
-                correlation: current.clone(),
-                previous_state: None,
-            }]
-        );
-
-        let stale = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::GithubReviewPollCompleted {
-                correlation: superseded,
-                result: Ok(github_review_poll_result(&target, "2026-07-19T10:01:00Z")),
-            },
-        ));
-        assert!(stale.events.is_empty());
-
-        controller.handle_input(CoreInput::Command(
-            AppCommand::ConfigureGithubReviewPolling { target: None },
-        ));
-        let disabled = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
-        assert!(disabled.events.is_empty());
-        assert!(disabled.effects.is_empty());
-        let late = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::GithubReviewPollCompleted {
-                correlation: current,
-                result: Ok(github_review_poll_result(&target, "2026-07-19T10:02:00Z")),
-            },
-        ));
-        assert!(late.events.is_empty());
-    }
-
-    #[test]
     fn github_review_poll_rejects_a_wrong_provider_target_without_losing_cursor() {
         let mut controller = CoreController::new();
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        controller.handle_input(CoreInput::Command(
-            AppCommand::ConfigureGithubReviewPolling {
-                target: Some(target.clone()),
-            },
-        ));
+        let setup_correlation =
+            activate_github_review_setup(&mut controller, "/workspace", target.clone());
         controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
         let previous = github_review_poll_result(&target, "2026-07-19T10:00:00Z");
         controller.handle_input(CoreInput::EffectCompleted(
@@ -4579,6 +4721,7 @@ mod tests {
         assert_eq!(
             retried.effects,
             vec![CoreEffect::PollGithubReview {
+                setup_correlation,
                 correlation: GithubReviewPollCorrelation::new(3, target),
                 previous_state: Some(previous.next_state),
             }]
@@ -4586,14 +4729,87 @@ mod tests {
     }
 
     #[test]
+    fn newer_github_review_setup_invalidates_prior_cursor_target_and_poll() {
+        let mut controller = CoreController::new();
+        let target = GithubPullRequestTarget::new("acme/widgets", 42);
+        activate_github_review_setup(&mut controller, "/workspace-a", target.clone());
+        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let first = GithubReviewPollCorrelation::new(1, target.clone());
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::GithubReviewPollCompleted {
+                correlation: first,
+                result: Ok(github_review_poll_result(&target, "2026-07-19T10:00:00Z")),
+            },
+        ));
+        controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let superseded_poll = GithubReviewPollCorrelation::new(2, target.clone());
+
+        let setup_b = start_github_review_setup(&mut controller, "/workspace-b", target.clone());
+        let poll_before_setup =
+            controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        assert!(poll_before_setup.effects.is_empty());
+        let late_poll = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::GithubReviewPollCompleted {
+                correlation: superseded_poll,
+                result: Ok(github_review_poll_result(&target, "2026-07-19T10:01:00Z")),
+            },
+        ));
+        assert!(late_poll.events.is_empty());
+
+        complete_github_review_setup(&mut controller, setup_b.clone(), target.clone());
+        let restarted = controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        let current_poll = GithubReviewPollCorrelation::new(3, target.clone());
+        assert_eq!(
+            restarted.effects,
+            vec![CoreEffect::PollGithubReview {
+                setup_correlation: setup_b,
+                correlation: current_poll.clone(),
+                previous_state: None,
+            }]
+        );
+
+        let setup_c = start_github_review_setup(&mut controller, "/workspace-c", target.clone());
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                correlation: setup_c,
+                result: Ok(GithubReviewPollingSetupResult::Disabled),
+            },
+        ));
+        let late_current = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::GithubReviewPollCompleted {
+                correlation: current_poll,
+                result: Ok(github_review_poll_result(&target, "2026-07-19T10:02:00Z")),
+            },
+        ));
+        assert!(late_current.events.is_empty());
+        let disabled_poll =
+            controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
+        assert!(disabled_poll.effects.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "GitHub review polling setup generation exhausted")]
+    fn github_review_setup_generation_panics_before_it_can_wrap() {
+        let mut controller = CoreController::new();
+        controller.next_github_review_polling_setup_generation = u64::MAX;
+
+        controller.handle_input(CoreInput::Command(AppCommand::SetupGithubReviewPolling(
+            github_review_setup_request(
+                "/workspace",
+                GithubPullRequestTarget::new("acme/widgets", 42),
+            ),
+        )));
+    }
+
+    #[test]
     #[should_panic(expected = "GitHub review poll generation exhausted")]
     fn github_review_poll_generation_panics_before_it_can_wrap() {
         let mut controller = CoreController::new();
-        controller.handle_input(CoreInput::Command(
-            AppCommand::ConfigureGithubReviewPolling {
-                target: Some(GithubPullRequestTarget::new("acme/widgets", 42)),
-            },
-        ));
+        activate_github_review_setup(
+            &mut controller,
+            "/workspace",
+            GithubPullRequestTarget::new("acme/widgets", 42),
+        );
         controller.next_github_review_poll_generation = u64::MAX;
 
         controller.handle_input(CoreInput::Command(AppCommand::PollGithubReview));
@@ -6405,6 +6621,63 @@ mod tests {
                 seen_events_at_latest_timestamp: Vec::new(),
             },
         })
+    }
+
+    fn github_review_setup_request(
+        workspace_directory: &str,
+        target: GithubPullRequestTarget,
+    ) -> GithubReviewPollingSetupRequest {
+        GithubReviewPollingSetupRequest::new(
+            workspace_directory,
+            GithubReviewPollingSetupMode::Explicit { target },
+        )
+    }
+
+    fn start_github_review_setup(
+        controller: &mut CoreController,
+        workspace_directory: &str,
+        target: GithubPullRequestTarget,
+    ) -> GithubReviewPollingSetupCorrelation {
+        let outcome =
+            controller.handle_input(CoreInput::Command(AppCommand::SetupGithubReviewPolling(
+                github_review_setup_request(workspace_directory, target),
+            )));
+        let [CoreEffect::SetupGithubReviewPolling { correlation, .. }] = outcome.effects.as_slice()
+        else {
+            panic!("setup should emit one typed effect");
+        };
+        correlation.clone()
+    }
+
+    fn complete_github_review_setup(
+        controller: &mut CoreController,
+        correlation: GithubReviewPollingSetupCorrelation,
+        target: GithubPullRequestTarget,
+    ) {
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                correlation,
+                result: Ok(GithubReviewPollingSetupResult::Active { target }),
+            },
+        ));
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [AppEvent::GithubReviewPollingSetupCompleted {
+                result: Ok(GithubReviewPollingSetupResult::Active { .. }),
+                ..
+            }]
+        ));
+    }
+
+    fn activate_github_review_setup(
+        controller: &mut CoreController,
+        workspace_directory: &str,
+        target: GithubPullRequestTarget,
+    ) -> GithubReviewPollingSetupCorrelation {
+        let correlation =
+            start_github_review_setup(controller, workspace_directory, target.clone());
+        complete_github_review_setup(controller, correlation.clone(), target);
+        correlation
     }
 
     fn sample_session_summary(thread_id: &str, name: &str) -> SessionSummary {

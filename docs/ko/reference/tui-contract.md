@@ -52,6 +52,13 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
   helper가 `NativeTuiApp`, service, clock을 다시 읽지 않습니다.
 - 장시간 운영에 필요한 밀도를 우선하고 marketing copy를 넣지 않습니다.
 - 한국어와 wide-character prompt가 주변 layout 계약을 깨지 않아야 합니다.
+- GitHub review setup은 draw와 draw 이후 size 검증이 모두 성공할 때까지
+  `PendingFirstFrame`이어야 합니다. 실패하거나 resize race가 발생한 draw는 setup을 보내지 않고,
+  첫 안정된 frame 전달만 `AppCommand::SetupGithubReviewPolling`을 정확히 한 번 보냅니다. Core는
+  setup generation/workspace 승인과 poll cursor/single-flight를, composition은 Git, credential,
+  discovery, service 구성과 exact-correlation registry를 소유합니다. Poll tick은
+  `AppCommand::PollGithubReview`로 보내며 TUI에는 환경 파싱, poll timing, setup/poll 상태 표현만
+  남습니다.
 
 ### 대화 Markdown과 diff 상세
 

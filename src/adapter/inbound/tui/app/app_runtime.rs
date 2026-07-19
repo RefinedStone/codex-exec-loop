@@ -1380,10 +1380,7 @@ impl NativeTuiApp {
             session_service,
             conversation_service,
             parallel_mode_binding,
-            GithubReviewPollingBootstrap {
-                service: None,
-                state: super::GithubReviewPollingState::Disabled,
-            },
+            GithubReviewPollingBootstrap::disabled(),
         )
     }
 
@@ -1394,11 +1391,55 @@ impl NativeTuiApp {
         parallel_mode_binding: NativeTuiParallelModeBinding,
         github_review_polling: GithubReviewPollingBootstrap,
     ) -> Self {
+        Self::new_with_github_review_polling_and_effect_runner(
+            startup_service,
+            session_service,
+            conversation_service,
+            parallel_mode_binding,
+            github_review_polling,
+            |runner| runner,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_with_github_review_polling_setup_loader(
+        startup_service: StartupService,
+        session_service: SessionService,
+        conversation_service: ConversationService,
+        parallel_mode_binding: NativeTuiParallelModeBinding,
+        github_review_polling: GithubReviewPollingBootstrap,
+        loader: impl Fn(
+                &crate::core::app::GithubReviewPollingSetupRequest,
+            ) -> anyhow::Result<
+                Option<(
+                    crate::domain::github_review::GithubPullRequestTarget,
+                    crate::application::service::github_review_poller_service::GithubReviewPollerService,
+                )>,
+            > + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        Self::new_with_github_review_polling_and_effect_runner(
+            startup_service,
+            session_service,
+            conversation_service,
+            parallel_mode_binding,
+            github_review_polling,
+            |runner| runner.with_github_review_polling_setup_loader(loader),
+        )
+    }
+
+    fn new_with_github_review_polling_and_effect_runner(
+        startup_service: StartupService,
+        session_service: SessionService,
+        conversation_service: ConversationService,
+        parallel_mode_binding: NativeTuiParallelModeBinding,
+        github_review_polling: GithubReviewPollingBootstrap,
+        configure_effect_runner: impl FnOnce(CoreEffectRunner) -> CoreEffectRunner,
+    ) -> Self {
         let GithubReviewPollingBootstrap {
-            service: github_review_poller_service,
             state: github_review_polling_state,
         } = github_review_polling;
-        let github_review_polling_target = github_review_polling_state.configured_target();
         let NativeTuiParallelModeBinding {
             parallel_turns,
             planning_feature,
@@ -1406,7 +1447,7 @@ impl NativeTuiApp {
             runtime_channels,
         } = parallel_mode_binding;
         let (core_input_sender, core_input_receiver) = core_input_channel();
-        let core_effect_runner = CoreEffectRunner::new(
+        let core_effect_runner = configure_effect_runner(CoreEffectRunner::new(
             startup_service.clone(),
             session_service.clone(),
             conversation_service.clone(),
@@ -1414,8 +1455,7 @@ impl NativeTuiApp {
             parallel_turns.clone(),
             PostTurnEvaluationService::new(planning_feature.clone(), parallel_turns.clone()),
             core_input_sender,
-        )
-        .with_github_review_poller_service(github_review_poller_service);
+        ));
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
         let turn_control_truth = conversation_service.runtime_control_truth();
         let application = NativeTuiApplicationHandle::new(planning_feature);
@@ -1488,9 +1528,6 @@ impl NativeTuiApp {
         app.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
-        app.dispatch_core_command(AppCommand::ConfigureGithubReviewPolling {
-            target: github_review_polling_target,
-        });
         app
     }
 
@@ -1610,6 +1647,19 @@ impl NativeTuiApp {
                 result,
             } => {
                 self.apply_parallel_peek_conversation_load(correlation, result);
+            }
+            AppEvent::GithubReviewPollingSetupStarted { correlation } => {
+                self.record_github_review_polling_setup_started(correlation);
+            }
+            AppEvent::GithubReviewPollingSetupCompleted {
+                correlation,
+                result,
+            } => {
+                self.record_github_review_polling_setup_completion(
+                    std::time::Instant::now(),
+                    correlation,
+                    result,
+                );
             }
             AppEvent::GithubReviewPollStarted { correlation } => {
                 self.record_github_review_poll_started(correlation);

@@ -1,27 +1,7 @@
 use super::*;
-use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::domain::github_review::{
     GithubPullRequestActivityKind, GithubPullRequestActivitySnapshot,
 };
-use anyhow::Result;
-use std::sync::{Arc, Mutex};
-
-// The fake port proves bootstrap wiring without reaching GitHub. The call
-// counter catches eager polling during setup, while the cloned snapshot keeps
-// service-load assertions deterministic.
-struct FakeGithubReviewPollerPort {
-    calls: Arc<Mutex<usize>>,
-    snapshot: GithubPullRequestActivitySnapshot,
-}
-impl GithubReviewPollerPort for FakeGithubReviewPollerPort {
-    fn load_pull_request_activity(
-        &self,
-        _target: &GithubPullRequestTarget,
-    ) -> Result<GithubPullRequestActivitySnapshot> {
-        *self.calls.lock().expect("calls mutex poisoned") += 1;
-        Ok(self.snapshot.clone())
-    }
-}
 
 fn poll_correlation(generation: u64) -> GithubReviewPollCorrelation {
     GithubReviewPollCorrelation::new(generation, GithubPullRequestTarget::new("acme/widgets", 42))
@@ -38,77 +18,54 @@ fn start_poll(
     correlation
 }
 
-// Bootstrap has three front doors: explicit PR env, branch auto-discovery, and
-// disabled. Malformed PR identifiers should become setup errors so shell chrome
-// can tell operators what to fix instead of silently turning polling off.
+// Bootstrap is deliberately pure: it parses environment values into a pending
+// setup description and cannot touch Git, credentials, or GitHub.
 #[test]
-fn bootstrap_stays_disabled_without_pull_request_env() {
-    let bootstrap =
-        GithubReviewPollingBootstrap::from_discovery_result(None, || Ok(None), Instant::now());
+fn bootstrap_without_pull_request_env_waits_for_first_frame_discovery() {
+    let bootstrap = GithubReviewPollingBootstrap::from_env_values(None, None);
 
-    assert!(matches!(
-        bootstrap.state,
-        GithubReviewPollingState::Disabled
-    ));
-    assert!(bootstrap.service.is_none());
-}
-
-#[test]
-fn bootstrap_surfaces_invalid_pull_request_value() {
-    let bootstrap = GithubReviewPollingBootstrap::from_env_values(
-        Some("not-a-pr".to_string()),
-        None,
-        || unreachable!("service loader should not run"),
-        Instant::now(),
+    let GithubReviewPollingState::PendingFirstFrame { config } = bootstrap.state else {
+        panic!("expected pending first-frame state");
+    };
+    assert_eq!(config.setup_mode, GithubReviewPollingSetupMode::Discover);
+    assert_eq!(
+        config.interval,
+        Duration::from_secs(DEFAULT_GITHUB_POLL_INTERVAL_SECONDS)
     );
-    match bootstrap.state {
-        GithubReviewPollingState::SetupError { target, message } => {
-            assert!(target.is_none());
-            assert!(message.contains("owner/repo#123"));
-        }
-        other => panic!("expected setup error state, got {other:?}"),
-    }
 }
 
 #[test]
-fn bootstrap_rejects_pull_request_value_with_invalid_repository_shape() {
+fn bootstrap_explicit_target_waits_for_first_frame() {
     let bootstrap = GithubReviewPollingBootstrap::from_env_values(
-        Some("owner/repo/extra#42".to_string()),
-        None,
-        || unreachable!("service loader should not run"),
-        Instant::now(),
-    );
-    match bootstrap.state {
-        GithubReviewPollingState::SetupError { target, message } => {
-            assert!(target.is_none());
-            assert!(message.contains("owner/repo#123"));
-        }
-        other => panic!("expected setup error state, got {other:?}"),
-    }
-}
-
-#[test]
-fn bootstrap_env_edges_cover_empty_values_parse_errors_and_loader_failure() {
-    let disabled = GithubReviewPollingBootstrap::from_env_values(
-        Some("   ".to_string()),
+        Some(" acme/widgets # 42 ".to_string()),
         Some("15".to_string()),
-        || unreachable!("service loader should not run for blank PR env"),
-        Instant::now(),
     );
-    assert!(matches!(disabled.state, GithubReviewPollingState::Disabled));
+    let GithubReviewPollingState::PendingFirstFrame { config } = bootstrap.state else {
+        panic!("expected pending first-frame state");
+    };
+    assert_eq!(
+        config.setup_mode,
+        GithubReviewPollingSetupMode::Explicit {
+            target: GithubPullRequestTarget::new("acme/widgets", 42),
+        }
+    );
+    assert_eq!(config.interval, Duration::from_secs(15));
+}
 
+#[test]
+fn bootstrap_surfaces_parse_errors_without_starting_setup() {
     for (raw_target, expected) in [
+        ("not-a-pr", "owner/repo#123"),
+        ("owner/repo/extra#42", "owner/repo#123"),
         ("acme/widgets#not-a-number", "numeric PR number"),
         ("acme/widgets#0", "greater than zero"),
     ] {
-        let bootstrap = GithubReviewPollingBootstrap::from_env_values(
-            Some(raw_target.to_string()),
-            None,
-            || unreachable!("service loader should not run for invalid target"),
-            Instant::now(),
-        );
+        let bootstrap =
+            GithubReviewPollingBootstrap::from_env_values(Some(raw_target.to_string()), None);
         match bootstrap.state {
-            GithubReviewPollingState::SetupError { target, message } => {
+            GithubReviewPollingState::SetupError {
+                target, message, ..
+            } => {
                 assert!(target.is_none());
                 assert!(message.contains(expected), "{message}");
             }
@@ -119,11 +76,11 @@ fn bootstrap_env_edges_cover_empty_values_parse_errors_and_loader_failure() {
     let bad_interval = GithubReviewPollingBootstrap::from_env_values(
         Some("acme/widgets#42".to_string()),
         Some("abc".to_string()),
-        || unreachable!("service loader should not run for invalid interval"),
-        Instant::now(),
     );
     match bad_interval.state {
-        GithubReviewPollingState::SetupError { target, message } => {
+        GithubReviewPollingState::SetupError {
+            target, message, ..
+        } => {
             assert_eq!(
                 target,
                 Some(GithubPullRequestTarget::new("acme/widgets", 42))
@@ -136,11 +93,11 @@ fn bootstrap_env_edges_cover_empty_values_parse_errors_and_loader_failure() {
     let zero_interval = GithubReviewPollingBootstrap::from_env_values(
         Some("acme/widgets#42".to_string()),
         Some("0".to_string()),
-        || unreachable!("service loader should not run for zero interval"),
-        Instant::now(),
     );
     match zero_interval.state {
-        GithubReviewPollingState::SetupError { target, message } => {
+        GithubReviewPollingState::SetupError {
+            target, message, ..
+        } => {
             assert_eq!(
                 target,
                 Some(GithubPullRequestTarget::new("acme/widgets", 42))
@@ -149,52 +106,42 @@ fn bootstrap_env_edges_cover_empty_values_parse_errors_and_loader_failure() {
         }
         other => panic!("expected setup error state, got {other:?}"),
     }
-
-    let loader_error = GithubReviewPollingBootstrap::from_env_values(
-        Some("acme/widgets#42".to_string()),
-        Some("15".to_string()),
-        || Err(anyhow::anyhow!("github credentials unavailable")),
-        Instant::now(),
-    );
-    match loader_error.state {
-        GithubReviewPollingState::SetupError { target, message } => {
-            assert_eq!(
-                target,
-                Some(GithubPullRequestTarget::new("acme/widgets", 42))
-            );
-            assert_eq!(message, "github credentials unavailable");
-        }
-        other => panic!("expected setup error state, got {other:?}"),
-    }
 }
 
 #[test]
-fn bootstrap_discovery_surfaces_interval_and_loader_errors() {
-    let bad_interval = GithubReviewPollingBootstrap::from_discovery_result(
-        Some("abc".to_string()),
-        || unreachable!("discovery loader should not run for invalid interval"),
-        Instant::now(),
-    );
-    match bad_interval.state {
-        GithubReviewPollingState::SetupError { target, message } => {
-            assert!(target.is_none());
-            assert!(message.contains("positive whole number"), "{message}");
-        }
-        other => panic!("expected setup error state, got {other:?}"),
-    }
+fn state_transitions_pending_to_discovering_to_terminal_outcomes() {
+    let start = Instant::now();
+    let mut state =
+        GithubReviewPollingBootstrap::from_env_values(None, Some("15".to_string())).state;
+    let request = state
+        .setup_request_for_workspace("/workspace-a")
+        .expect("pending state should request setup");
+    assert_eq!(request.mode, GithubReviewPollingSetupMode::Discover);
 
-    let discovery_error = GithubReviewPollingBootstrap::from_discovery_result(
-        None,
-        || Err(anyhow::anyhow!("gh pr lookup failed")),
-        Instant::now(),
+    let correlation = GithubReviewPollingSetupCorrelation::new(1, "/workspace-a");
+    state.record_setup_started(correlation.clone());
+    assert_eq!(state.status_label(), "discovering");
+    assert!(state.setup_request_for_workspace("/workspace-a").is_none());
+
+    state.record_setup_completion(
+        start,
+        GithubReviewPollingSetupCorrelation::new(2, "/workspace-a"),
+        Ok(GithubReviewPollingSetupResult::Disabled),
     );
-    match discovery_error.state {
-        GithubReviewPollingState::SetupError { target, message } => {
-            assert!(target.is_none());
-            assert_eq!(message, "gh pr lookup failed");
-        }
-        other => panic!("expected setup error state, got {other:?}"),
-    }
+    assert_eq!(
+        state.status_label(),
+        "discovering",
+        "stale completion ignored"
+    );
+
+    state.record_setup_completion(
+        start,
+        correlation,
+        Ok(GithubReviewPollingSetupResult::Disabled),
+    );
+    assert_eq!(state.status_label(), "off");
+    assert!(state.setup_request_for_workspace("/workspace-a").is_none());
+    assert!(state.setup_request_for_workspace("/workspace-b").is_some());
 }
 
 // Active polling starts with an immediate request so a freshly opened review
@@ -274,7 +221,10 @@ fn active_state_keeps_last_error_visible() {
 
 #[test]
 fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
-    let mut disabled = GithubReviewPollingState::Disabled;
+    let mut disabled = GithubReviewPollingState::Disabled {
+        config: None,
+        workspace_directory: None,
+    };
     assert_eq!(disabled.status_label(), "off");
     assert!(disabled.recent_change_summary(40).is_none());
     assert!(!disabled.poll_due(Instant::now()));
@@ -286,6 +236,8 @@ fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
     assert_eq!(disabled.status_label(), "off");
 
     let setup_with_target = GithubReviewPollingState::SetupError {
+        config: None,
+        workspace_directory: None,
         target: Some(GithubPullRequestTarget::new("acme/widgets", 42)),
         message: "   credentials are missing and the message should be trimmed   ".to_string(),
     };
@@ -295,6 +247,8 @@ fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
     );
 
     let setup_without_target = GithubReviewPollingState::SetupError {
+        config: None,
+        workspace_directory: None,
         target: None,
         message: "bad env".to_string(),
     };
@@ -538,84 +492,6 @@ fn parse_helpers_accept_trimmed_values_and_truncate_status_details() {
     let truncated = truncate_status_detail(&long);
     assert_eq!(truncated.chars().count(), MAX_STATUS_DETAIL_LENGTH);
     assert!(truncated.ends_with("..."));
-}
-
-// A valid explicit configuration must produce both active state and a service
-// handle. Loading through the handle verifies the outbound boundary is wired,
-// while the call count proves bootstrap itself did not poll early.
-#[test]
-fn bootstrap_creates_service_when_configuration_is_valid() {
-    let calls = Arc::new(Mutex::new(0usize));
-    let target = GithubPullRequestTarget::new("acme/widgets", 42);
-    let snapshot = GithubPullRequestActivitySnapshot {
-        target: target.clone(),
-        title: "Track review state".to_string(),
-        url: "https://example.invalid/pr/42".to_string(),
-        head_branch: "feature/test".to_string(),
-        base_branch: "prerelease".to_string(),
-        events: vec![GithubPullRequestActivityEvent {
-            id: 100,
-            kind: GithubPullRequestActivityKind::Review,
-            submitted_at: "2026-04-08T09:00:00Z".to_string(),
-            author_login: "reviewer".to_string(),
-            body: "Looks good".to_string(),
-            state: Some("COMMENTED".to_string()),
-            url: "https://example.invalid/pr/42#review-100".to_string(),
-            path: None,
-        }],
-    };
-    let bootstrap = GithubReviewPollingBootstrap::from_env_values(
-        Some("acme/widgets#42".to_string()),
-        Some("15".to_string()),
-        || {
-            let port: Arc<dyn GithubReviewPollerPort> = Arc::new(FakeGithubReviewPollerPort {
-                calls: calls.clone(),
-                snapshot: snapshot.clone(),
-            });
-            Ok(GithubReviewPollerService::new(port))
-        },
-        Instant::now(),
-    );
-    let service = bootstrap
-        .service
-        .expect("service should be present for valid config");
-    let snapshot = service
-        .load_snapshot(&target)
-        .expect("snapshot should load through the service");
-    assert_eq!(snapshot.events.len(), 1);
-    assert_eq!(*calls.lock().expect("calls mutex poisoned"), 1);
-}
-
-// Auto-discovery is the no-env path for local review lanes. It should preserve
-// the discovered target and requested interval while returning the same service
-// shape as explicit configuration.
-#[test]
-fn bootstrap_auto_discovers_current_branch_pull_request_when_available() {
-    let target = GithubPullRequestTarget::new("acme/widgets", 42);
-    let bootstrap = GithubReviewPollingBootstrap::from_discovery_result(
-        Some("15".to_string()),
-        || {
-            let port: Arc<dyn GithubReviewPollerPort> = Arc::new(FakeGithubReviewPollerPort {
-                calls: Arc::new(Mutex::new(0usize)),
-                snapshot: GithubPullRequestActivitySnapshot {
-                    target: target.clone(),
-                    title: "Track review state".to_string(),
-                    url: "https://example.invalid/pr/42".to_string(),
-                    head_branch: "feature/test".to_string(),
-                    base_branch: "prerelease".to_string(),
-                    events: Vec::new(),
-                },
-            });
-            Ok(Some((target.clone(), GithubReviewPollerService::new(port))))
-        },
-        Instant::now(),
-    );
-    let GithubReviewPollingState::Active(runtime) = bootstrap.state else {
-        panic!("expected active polling state");
-    };
-    assert_eq!(runtime.config.target, target);
-    assert_eq!(runtime.config.interval, Duration::from_secs(15));
-    assert!(bootstrap.service.is_some());
 }
 
 // Fixtures keep full snapshot events separate from recent changes because the
