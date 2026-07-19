@@ -140,10 +140,11 @@ impl PostTurnEvaluationExecutor {
         completion_report: &ParallelModeOfficialCompletionReport,
     ) -> OfficialCompletionRefreshOutcome {
         if !request.continuation_permit.is_current() {
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection.clone(),
-                runtime_notices: Vec::new(),
-            };
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
+                Vec::new(),
+            );
         }
         let Some(expected_lease) = request.expected_parallel_slot_lease() else {
             let detail =
@@ -154,12 +155,13 @@ impl PostTurnEvaluationExecutor {
                 &detail,
                 current_projection,
             );
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection
                     .clone()
                     .with_auto_follow_pause_reason(&detail),
-                runtime_notices: vec![detail],
-            };
+                vec![detail],
+            );
         };
         let mut runtime_notices = Vec::new();
         let preparation = self
@@ -187,10 +189,11 @@ impl PostTurnEvaluationExecutor {
                             &blocked.failure_detail,
                         )
                 }) else {
-                    return OfficialCompletionRefreshOutcome {
-                        runtime_projection: current_projection.clone(),
+                    return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                        request,
+                        current_projection.clone(),
                         runtime_notices,
-                    };
+                    );
                 };
                 if let Some(notice) = failure_notice {
                     runtime_notices.push(notice);
@@ -216,18 +219,20 @@ impl PostTurnEvaluationExecutor {
                     &blocked.failure_detail,
                     &blocked.failure_projection,
                 );
-                return OfficialCompletionRefreshOutcome {
-                    runtime_projection: blocked.failure_projection,
+                return OfficialCompletionRefreshOutcome::for_planning_workspace(
+                    planning_workspace_directory,
+                    blocked.failure_projection,
                     runtime_notices,
-                };
+                );
             }
             PlanningPostTurnOfficialCompletionPreparation::Ready(prepared) => prepared,
         };
         if !request.continuation_permit.is_current() {
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection.clone(),
-                runtime_notices: Vec::new(),
-            };
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
+                Vec::new(),
+            );
         }
 
         // Supervisor may emit a runtime notice when the reservation moves into
@@ -236,10 +241,11 @@ impl PostTurnEvaluationExecutor {
             self.parallel_mode_turn_service
                 .mark_official_completion_refreshing_for_lease(expected_lease)
         }) else {
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection.clone(),
-                runtime_notices: Vec::new(),
-            };
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
+                Vec::new(),
+            );
         };
         if let Some(notice) = refreshing_notice {
             runtime_notices.push(notice.clone());
@@ -253,10 +259,11 @@ impl PostTurnEvaluationExecutor {
                     &notice,
                     &runtime_projection,
                 );
-                return OfficialCompletionRefreshOutcome {
+                return OfficialCompletionRefreshOutcome::for_planning_workspace(
+                    planning_workspace_directory,
                     runtime_projection,
                     runtime_notices,
-                };
+                );
             }
         }
         event_log::emit_lazy("official_completion_refresh_started", || {
@@ -319,10 +326,11 @@ impl PostTurnEvaluationExecutor {
                             &detail,
                         )
                 }) else {
-                    return OfficialCompletionRefreshOutcome {
-                        runtime_projection: current_projection.clone(),
+                    return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                        request,
+                        current_projection.clone(),
                         runtime_notices,
-                    };
+                    );
                 };
                 if let Some(notice) = failure_notice {
                     runtime_notices.push(notice);
@@ -352,18 +360,20 @@ impl PostTurnEvaluationExecutor {
                     &detail,
                     &failure_projection,
                 );
-                return OfficialCompletionRefreshOutcome {
-                    runtime_projection: failure_projection,
+                return OfficialCompletionRefreshOutcome::for_planning_workspace(
+                    planning_workspace_directory,
+                    failure_projection,
                     runtime_notices,
-                };
+                );
             }
         };
 
         if !request.continuation_permit.is_current() {
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection.clone(),
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
                 runtime_notices,
-            };
+            );
         }
 
         self.record_planning_worker_outcome(PlanningWorkerStatus::RefreshSucceeded, &outcome);
@@ -450,10 +460,11 @@ impl PostTurnEvaluationExecutor {
         }
 
         if !request.continuation_permit.is_current() {
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection.clone(),
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
                 runtime_notices,
-            };
+            );
         }
 
         let finalization = self
@@ -496,10 +507,11 @@ impl PostTurnEvaluationExecutor {
                         failure_detail,
                     )
             }) else {
-                return OfficialCompletionRefreshOutcome {
-                    runtime_projection: current_projection.clone(),
+                return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                    request,
+                    current_projection.clone(),
                     runtime_notices,
-                };
+                );
             };
             if let Some(notice) = failure_notice {
                 runtime_notices.push(notice);
@@ -526,10 +538,11 @@ impl PostTurnEvaluationExecutor {
                 failure_detail,
                 &runtime_projection,
             );
-            return OfficialCompletionRefreshOutcome {
+            return OfficialCompletionRefreshOutcome::for_planning_workspace(
+                planning_workspace_directory,
                 runtime_projection,
                 runtime_notices,
-            };
+            );
         }
 
         // Success copy becomes the supervisor reservation finalization detail. Prefer
@@ -543,18 +556,20 @@ impl PostTurnEvaluationExecutor {
                 self.parallel_mode_turn_service
                     .mark_official_completion_failed_for_lease_with_notice(expected_lease, detail)
             }) else {
-                return OfficialCompletionRefreshOutcome {
-                    runtime_projection: current_projection.clone(),
+                return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                    request,
+                    current_projection.clone(),
                     runtime_notices,
-                };
+                );
             };
             if let Some(notice) = failure_notice {
                 runtime_notices.push(notice);
             }
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: runtime_projection.with_auto_follow_pause_reason(detail),
+            return OfficialCompletionRefreshOutcome::for_planning_workspace(
+                planning_workspace_directory,
+                runtime_projection.with_auto_follow_pause_reason(detail),
                 runtime_notices,
-            };
+            );
         };
         let Some(commit_ready_outcome) = request.continuation_permit.with_current(|| {
             self.parallel_mode_turn_service
@@ -563,10 +578,11 @@ impl PostTurnEvaluationExecutor {
                     &authority_refresh_outcome,
                 )
         }) else {
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection.clone(),
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
                 runtime_notices,
-            };
+            );
         };
         let expected_lease = match commit_ready_outcome {
             ParallelOfficialCompletionFinalizeOutcome::Durable {
@@ -588,10 +604,11 @@ impl PostTurnEvaluationExecutor {
                             &detail,
                         )
                 }) else {
-                    return OfficialCompletionRefreshOutcome {
-                        runtime_projection: current_projection.clone(),
+                    return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                        request,
+                        current_projection.clone(),
                         runtime_notices,
-                    };
+                    );
                 };
                 if let Some(notice) = failure_notice {
                     runtime_notices.push(notice);
@@ -620,10 +637,11 @@ impl PostTurnEvaluationExecutor {
                         ],
                     )
                 });
-                return OfficialCompletionRefreshOutcome {
+                return OfficialCompletionRefreshOutcome::for_planning_workspace(
+                    planning_workspace_directory,
                     runtime_projection,
                     runtime_notices,
-                };
+                );
             }
         };
         let delivery_outcome = self
@@ -644,10 +662,11 @@ impl PostTurnEvaluationExecutor {
                     official_completion_durable_finalization_failure_detail(stage, &notices);
                 runtime_notices.extend(notices);
                 if !request.continuation_permit.is_current() {
-                    return OfficialCompletionRefreshOutcome {
-                        runtime_projection: current_projection.clone(),
+                    return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                        request,
+                        current_projection.clone(),
                         runtime_notices,
-                    };
+                    );
                 }
                 runtime_projection = runtime_projection.with_auto_follow_pause_reason(&detail);
                 self.record_planning_worker_failure(
@@ -673,17 +692,19 @@ impl PostTurnEvaluationExecutor {
                         ],
                     )
                 });
-                return OfficialCompletionRefreshOutcome {
+                return OfficialCompletionRefreshOutcome::for_planning_workspace(
+                    planning_workspace_directory,
                     runtime_projection,
                     runtime_notices,
-                };
+                );
             }
         };
         if !request.continuation_permit.is_current() {
-            return OfficialCompletionRefreshOutcome {
-                runtime_projection: current_projection.clone(),
+            return OfficialCompletionRefreshOutcome::for_turn_workspace(
+                request,
+                current_projection.clone(),
                 runtime_notices,
-            };
+            );
         }
         event_log::emit_lazy("official_completion_refresh_finalized", || {
             post_turn_event_detail(
@@ -708,10 +729,11 @@ impl PostTurnEvaluationExecutor {
             )
         });
 
-        OfficialCompletionRefreshOutcome {
+        OfficialCompletionRefreshOutcome::for_planning_workspace(
+            planning_workspace_directory,
             runtime_projection,
             runtime_notices,
-        }
+        )
     }
 }
 

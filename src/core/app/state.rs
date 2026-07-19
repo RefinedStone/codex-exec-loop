@@ -107,29 +107,41 @@ impl AppState {
         &mut self,
         result: Result<Box<ConversationReadySnapshot>, String>,
     ) {
+        let loaded_successfully = result.is_ok();
         self.conversation = match result {
             Ok(ready) => ConversationState::Ready(ready),
             Err(message) => ConversationState::Failed(message),
         };
+        if loaded_successfully {
+            self.planning_parallel.clear_planning_runtime_projection();
+        }
         self.advance_revision();
     }
 
     pub fn reset_conversation(&mut self) {
         self.conversation = ConversationState::Idle;
+        self.planning_parallel.clear_planning_runtime_projection();
         self.advance_revision();
     }
 
     pub fn apply_planning_runtime_projection(
         &mut self,
+        workspace_directory: String,
         projection: Box<RuntimeProjection>,
     ) -> bool {
         let changed = self
             .planning_parallel
-            .apply_planning_runtime_projection(projection);
+            .apply_planning_runtime_projection(workspace_directory, projection);
         if changed {
             self.advance_revision();
         }
         changed
+    }
+
+    pub fn planning_runtime_workspace_directory(&self) -> Option<&str> {
+        self.planning_parallel
+            .planning_runtime_workspace_directory
+            .as_deref()
     }
 
     pub fn apply_parallel_readiness_projection(
@@ -231,6 +243,29 @@ mod tests {
                 conversation: ConversationSnapshot::Loading,
                 planning_parallel: PlanningParallelProjection::initial(),
             }
+        );
+    }
+
+    #[test]
+    fn resetting_conversation_discards_the_previous_workspace_projection() {
+        let mut state = AppState::new();
+        state.apply_planning_runtime_projection(
+            "/tmp/old".to_string(),
+            Box::new(RuntimeProjection::invalid("old workspace")),
+        );
+
+        state.reset_conversation();
+
+        assert_eq!(
+            *state.snapshot().planning_parallel.planning_runtime,
+            RuntimeProjection::uninitialized()
+        );
+        assert!(
+            state
+                .snapshot()
+                .planning_parallel
+                .planning_runtime_workspace_directory
+                .is_none()
         );
     }
 

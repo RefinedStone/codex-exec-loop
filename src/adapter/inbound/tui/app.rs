@@ -7,7 +7,8 @@ use crate::application::service::parallel_mode::control_plane::ParallelModeContr
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::composition::core_effect_runner::CoreEffectRunner;
 use crate::core::app::{
-    ConversationLoadCorrelation, StartupCheckCorrelation, TurnSteerCorrelation,
+    ConversationLoadCorrelation, PlanningRuntimeRefreshCorrelation, StartupCheckCorrelation,
+    TurnSteerCorrelation,
 };
 use crate::core::runtime::CoreRuntime;
 use crate::domain::conversation::{
@@ -214,7 +215,7 @@ use planning::PlanningWorkerVisibility;
 use planning_draft_editor_ui::PlanningDraftEditorUiState;
 use planning_init_overlay_ui::{
     PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
-    PlanningInitOverlayUiState,
+    PlanningInitOverlayUiState, PlanningInitRuntimeRefreshIntent,
 };
 use progressive_activity_overlay_ui::{
     ProgressiveActivityDiffContinuation, ProgressiveActivityDiffCursor,
@@ -262,6 +263,13 @@ struct PendingManualPromptPreparation {
     parallel_mode_enabled_at_submission: bool,
     delivery: ManualPromptDelivery,
     parent_turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingResumedSessionPlanningRefresh {
+    correlation: PlanningRuntimeRefreshCorrelation,
+    thread_id: String,
+    status_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,6 +368,7 @@ struct NativeTuiApp {
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     conversation_state: ConversationState,
     pending_conversation_load: Option<ConversationLoadCorrelation>,
+    pending_resumed_session_planning_refresh: Option<PendingResumedSessionPlanningRefresh>,
     selected_session_index: usize,
     session_overlay_ui_state: SessionOverlayUiState,
     tui_language: TuiLanguage,

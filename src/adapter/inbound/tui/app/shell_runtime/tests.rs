@@ -695,6 +695,7 @@ fn create_temp_git_repo(prefix: &str) -> String {
 fn post_turn_evaluation_completed_message(
     thread_id: impl Into<String>,
     completed_turn_id: impl Into<String>,
+    runtime_projection_workspace_directory: impl Into<String>,
     runtime_projection: PlanningRuntimeProjection,
     evaluation: PostTurnEvaluationOutcome,
     planning_worker_panel_state: PlanningWorkerPanelState,
@@ -703,6 +704,7 @@ fn post_turn_evaluation_completed_message(
         application_post_turn::PostTurnEvaluationExecution {
             thread_id: thread_id.into(),
             completed_turn_id: completed_turn_id.into(),
+            runtime_projection_workspace_directory: runtime_projection_workspace_directory.into(),
             evaluation: application_post_turn_evaluation_outcome(runtime_projection, evaluation),
             planning_worker_panel_state,
         },
@@ -1001,7 +1003,18 @@ fn resumed_session_status_surfaces_planning_and_queue_context() {
         )))
         .expect("background message should enqueue");
 
-    runtime.poll_background_messages();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        runtime.poll_background_messages();
+        if matches!(
+            &runtime.app().conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.status_text.contains("thread loaded / planning status: ready")
+        ) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
@@ -1274,6 +1287,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     runtime
         .app_mut()
         .sync_core_planning_runtime_projection(expected_projection.clone());
+    let workspace_directory = runtime.app().planning_workspace_directory();
 
     runtime
         .app
@@ -1281,6 +1295,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
         .send(post_turn_evaluation_completed_message(
             "thread-1",
             "turn-1",
+            workspace_directory,
             PlanningRuntimeProjection::invalid("stale projection".to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
@@ -1344,6 +1359,7 @@ fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
         last_response: Some("worker response".to_string()),
         last_host_detail: Some("host detail".to_string()),
     };
+    let workspace_directory = runtime.app().planning_workspace_directory();
 
     runtime
         .app
@@ -1351,6 +1367,7 @@ fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
         .send(post_turn_evaluation_completed_message(
             "thread-1",
             "turn-1",
+            workspace_directory,
             PlanningRuntimeProjection::invalid("blocking projection".to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
@@ -1383,10 +1400,12 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
+    let workspace_directory = runtime.app().planning_workspace_directory();
     let build_message = |notice: &str| {
         post_turn_evaluation_completed_message(
             "thread-1",
             "turn-1",
+            workspace_directory.clone(),
             PlanningRuntimeProjection::invalid(notice.to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),

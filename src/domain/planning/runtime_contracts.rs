@@ -839,6 +839,7 @@ pub enum PostTurnAutoFollowSkipReason {
 pub struct PostTurnExecution {
     pub thread_id: String,
     pub completed_turn_id: String,
+    pub runtime_projection_workspace_directory: String,
     pub evaluation: PostTurnOutcome,
     pub planning_worker_panel_state: PlanningWorkerPanelState,
 }

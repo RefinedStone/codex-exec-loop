@@ -39,11 +39,12 @@ use super::{
     ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
     ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
-    GithubReviewPollingBootstrap, NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE,
-    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
-    ShellOverlay, StartupState, reduce_auto_follow_controls, reduce_auto_follow_overlay_ui,
-    reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
-    reduce_conversation_runtime, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
+    GithubReviewPollingBootstrap, NativeTuiApp, PendingResumedSessionPlanningRefresh,
+    PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState,
+    ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay, StartupState,
+    reduce_auto_follow_controls, reduce_auto_follow_overlay_ui, reduce_conversation_input,
+    reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
+    reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
 
 // Background control-plane and poll results are lower volume than token events,
@@ -1305,10 +1306,6 @@ impl NativeTuiApp {
             workspace_directory.clone(),
             turn_control_truth,
         );
-        let initial_planning_runtime_projection = application
-            .planning()
-            .runtime()
-            .load_runtime_projection_or_invalid(&workspace_directory);
         let mut app = Self {
             shell_overlay: ShellOverlay::Hidden,
             exit_confirmation_state: ExitConfirmationState::Hidden,
@@ -1331,6 +1328,7 @@ impl NativeTuiApp {
             parallel_mode_control_plane,
             conversation_state: ConversationState::ready(initial_conversation),
             pending_conversation_load: None,
+            pending_resumed_session_planning_refresh: None,
             selected_session_index: 0,
             session_overlay_ui_state: SessionOverlayUiState::new(SESSION_PAGE_SIZE),
             tui_language: super::TuiLanguage::default(),
@@ -1358,7 +1356,9 @@ impl NativeTuiApp {
             tx: runtime_channels.tx,
             rx: runtime_channels.rx,
         };
-        app.sync_core_planning_runtime_projection(initial_planning_runtime_projection);
+        app.refresh_ready_conversation_planning_runtime_projection_for_workspace(
+            &workspace_directory,
+        );
         app.dispatch_core_command(AppCommand::ConfigureGithubReviewPolling {
             target: github_review_polling_target,
         });
@@ -1496,6 +1496,63 @@ impl NativeTuiApp {
                     == super::queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::ReloadRequired
                 {
                     self.start_queue_overlay_authority_load();
+                }
+            }
+            AppEvent::PlanningRuntimeRefreshStarted { correlation } => {
+                if let Some(pending) = self.pending_resumed_session_planning_refresh.as_mut()
+                    && pending.correlation.workspace_directory == correlation.workspace_directory
+                {
+                    pending.correlation = correlation.clone();
+                }
+                if self.shell_overlay == ShellOverlay::PlanningInit
+                    && correlation.workspace_directory == self.planning_workspace_directory()
+                {
+                    self.planning_init_overlay_ui_state
+                        .rebind_runtime_refresh(correlation);
+                }
+            }
+            AppEvent::PlanningRuntimeRefreshed { correlation, error } => {
+                let pending_resume = if self
+                    .pending_resumed_session_planning_refresh
+                    .as_ref()
+                    .is_some_and(|pending| pending.correlation == correlation)
+                {
+                    self.pending_resumed_session_planning_refresh.take()
+                } else {
+                    None
+                };
+                if let Some(pending) = pending_resume
+                    && correlation.workspace_directory == self.planning_workspace_directory()
+                {
+                    if let Some(error) = error.as_deref() {
+                        self.surface_resumed_session_planning_error_if_unchanged(&pending, error);
+                    } else {
+                        self.surface_resumed_session_planning_context_if_unchanged(&pending);
+                    }
+                }
+                self.apply_planning_init_runtime_projection_refresh(correlation, error.as_deref());
+            }
+            AppEvent::PlanningRuntimeRefreshCancelled { correlation } => {
+                if self
+                    .pending_resumed_session_planning_refresh
+                    .as_ref()
+                    .is_some_and(|pending| pending.correlation == correlation)
+                {
+                    self.pending_resumed_session_planning_refresh = None;
+                }
+                if self
+                    .planning_init_overlay_ui_state
+                    .cancel_runtime_refresh(&correlation)
+                    && self.shell_overlay == ShellOverlay::PlanningInit
+                {
+                    self.close_shell_overlay();
+                    self.dispatch_conversation_input(
+                        super::ConversationInputEvent::StatusMessageShown {
+                            status_text:
+                                "planning setup closed because its workspace context changed"
+                                    .to_string(),
+                        },
+                    );
                 }
             }
             AppEvent::QueueMutationStarted { correlation } => {
@@ -1666,6 +1723,7 @@ impl NativeTuiApp {
         );
         if matches!(&snapshot, CoreConversationSnapshot::Loading) {
             self.reset_planning_worker_panel_state();
+            self.pending_resumed_session_planning_refresh = None;
         }
         let draft_workspace_directory = self.current_workspace_directory();
         self.dispatch_conversation_lifecycle(
@@ -1677,9 +1735,33 @@ impl NativeTuiApp {
         if !load_finished {
             return;
         }
-        self.refresh_ready_conversation_planning_runtime_projection();
         if loaded_successfully {
-            self.surface_resumed_session_planning_context();
+            let workspace_directory = self.planning_workspace_directory();
+            let resume_status_context = match &self.conversation_state {
+                ConversationState::Ready(conversation) => Some((
+                    conversation.thread_id.clone(),
+                    conversation.status_text.clone(),
+                )),
+                ConversationState::Loading | ConversationState::Failed(_) => None,
+            };
+            if let Some((thread_id, status_text)) = resume_status_context
+                && let Some((correlation, outcome)) =
+                    self.begin_planning_runtime_projection_refresh(&workspace_directory)
+            {
+                // Bind resume copy before an immediate test executor can project completion.
+                self.pending_resumed_session_planning_refresh =
+                    Some(PendingResumedSessionPlanningRefresh {
+                        correlation,
+                        thread_id,
+                        status_text,
+                    });
+                self.apply_core_dispatch_outcome(outcome);
+            } else {
+                self.pending_resumed_session_planning_refresh = None;
+                self.surface_resumed_session_planning_context();
+            }
+        } else {
+            self.pending_resumed_session_planning_refresh = None;
         }
         // A loaded conversation resets follow-up copy because auto-turn affordances
         // belong to the active thread, not the previous shell contents.

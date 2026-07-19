@@ -250,6 +250,33 @@ mod tests {
     }
 
     #[test]
+    fn screen_model_hides_a_planning_projection_from_another_workspace() {
+        let mut app = test_native_tui_app();
+        let projection = PlanningRuntimeProjection::ready(
+            "root prompt".to_string(),
+            "root queue".to_string(),
+            None,
+        );
+        app.sync_ready_conversation_planning_runtime_projection(projection.clone());
+        assert_eq!(
+            ConversationScreenModel::from_app(&app).planning_runtime_projection,
+            projection
+        );
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.cwd = "/tmp/other-workspace".to_string();
+        conversation.draft_workspace_directory = "/tmp/other-workspace".to_string();
+
+        let screen_model = ConversationScreenModel::from_app(&app);
+
+        assert_eq!(
+            screen_model.planning_runtime_projection,
+            PlanningRuntimeProjection::uninitialized()
+        );
+    }
+
+    #[test]
     fn korean_pending_queue_keeps_semantic_priority_in_modal_tail() {
         const WIDTH: u16 = 80;
         const LOW_DETAIL: &str = "낮은상세표시";

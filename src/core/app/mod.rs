@@ -42,9 +42,9 @@ pub use queue::{
     QueueMutationTarget,
 };
 pub use request::{
-    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
-    StartupCheckCorrelation,
+    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
+    QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameCorrelation, StartupCheckCorrelation,
 };
 pub use review_center::{
     ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterSnapshot,

@@ -332,8 +332,35 @@ fn provenance_id_matches(actual: Option<&str>, expected: &str) -> bool {
 }
 #[derive(Debug, Clone)]
 struct OfficialCompletionRefreshOutcome {
+    runtime_projection_workspace_directory: String,
     runtime_projection: PlanningRuntimeProjection,
     runtime_notices: Vec<String>,
+}
+
+impl OfficialCompletionRefreshOutcome {
+    fn for_turn_workspace(
+        request: &PostTurnEvaluationRequest,
+        runtime_projection: PlanningRuntimeProjection,
+        runtime_notices: Vec<String>,
+    ) -> Self {
+        Self {
+            runtime_projection_workspace_directory: request.workspace_directory.clone(),
+            runtime_projection,
+            runtime_notices,
+        }
+    }
+
+    fn for_planning_workspace(
+        planning_workspace_directory: &str,
+        runtime_projection: PlanningRuntimeProjection,
+        runtime_notices: Vec<String>,
+    ) -> Self {
+        Self {
+            runtime_projection_workspace_directory: planning_workspace_directory.to_string(),
+            runtime_projection,
+            runtime_notices,
+        }
+    }
 }
 #[derive(Debug)]
 enum OfficialCompletionCapture {
@@ -453,6 +480,7 @@ impl PostTurnEvaluationExecutor {
         let reconciliation_result = reconciliation_outcome.reconciliation_result;
         let mut runtime_notices = reconciliation_result.notices.clone();
         let mut runtime_projection = reconciliation_outcome.runtime_projection;
+        let mut runtime_projection_workspace_directory = request.workspace_directory.clone();
         let planning_settlement_enabled =
             !context.planning_settlement_paused && request.continuation_permit.is_current();
         if receipt_baseline.is_none() && planning_settlement_enabled {
@@ -504,8 +532,10 @@ impl PostTurnEvaluationExecutor {
                     &runtime_projection,
                     completion_report,
                 );
-                runtime_notices.extend(official_completion_outcome.runtime_notices.clone());
+                runtime_notices.extend(official_completion_outcome.runtime_notices);
                 runtime_projection = official_completion_outcome.runtime_projection;
+                runtime_projection_workspace_directory =
+                    official_completion_outcome.runtime_projection_workspace_directory;
                 true
             } else {
                 false
@@ -604,6 +634,7 @@ impl PostTurnEvaluationExecutor {
         PostTurnEvaluationExecution {
             thread_id: context.thread_id.clone(),
             completed_turn_id: request.completed_turn_id.clone(),
+            runtime_projection_workspace_directory,
             evaluation: PostTurnEvaluationOutcome {
                 provenance: post_turn_decision.provenance,
                 runtime_projection,
@@ -1072,6 +1103,7 @@ fn post_turn_evaluation_timeout_execution(
     PostTurnEvaluationExecution {
         thread_id: context.thread_id.clone(),
         completed_turn_id: request.completed_turn_id.clone(),
+        runtime_projection_workspace_directory: request.workspace_directory.clone(),
         evaluation: PostTurnEvaluationOutcome {
             provenance: PostTurnEvaluationProvenance::new(request.completed_turn_id.clone()),
             runtime_projection: PlanningRuntimeProjection::invalid(message.clone()),
@@ -1107,6 +1139,7 @@ fn post_turn_evaluation_failure_execution(
     PostTurnEvaluationExecution {
         thread_id: context.thread_id.clone(),
         completed_turn_id: request.completed_turn_id.clone(),
+        runtime_projection_workspace_directory: request.workspace_directory.clone(),
         evaluation: PostTurnEvaluationOutcome {
             provenance: PostTurnEvaluationProvenance::new(request.completed_turn_id.clone()),
             runtime_projection: PlanningRuntimeProjection::invalid(message.clone()),
@@ -2593,6 +2626,10 @@ mod tests {
 
             assert_eq!(worker.call_count(), 0);
             assert_eq!(
+                execution.runtime_projection_workspace_directory,
+                workspace.path
+            );
+            assert_eq!(
                 execution.evaluation.action,
                 PostTurnContinuationAction::SkipAutoFollow {
                     reason: PostTurnAutoFollowSkipReason::PlanningBlocked,
@@ -2791,6 +2828,10 @@ mod tests {
                 outcome.runtime_projection.failure_reason(),
                 Some(failure_detail)
             );
+            assert_eq!(
+                outcome.runtime_projection_workspace_directory,
+                blocked_workspace.path
+            );
             assert!(outcome.runtime_notices.iter().any(|notice| {
                 notice.contains("official completion failure state could not be recorded")
             }));
@@ -2887,6 +2928,14 @@ mod tests {
             assert_eq!(
                 executor.planning_worker_panel_state.last_summary.as_deref(),
                 Some("planning worker disabled")
+            );
+            assert_eq!(
+                outcome.runtime_projection_workspace_directory,
+                workspace.path
+            );
+            assert_ne!(
+                outcome.runtime_projection_workspace_directory,
+                request.workspace_directory
             );
             assert_eq!(
                 executor

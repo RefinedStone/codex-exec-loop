@@ -12,6 +12,10 @@ use super::super::super::super::{PlanningInitDetailSelection, PlanningInitModeSe
 use super::super::PlanningInitOverlayView;
 use super::copy::{PlanningExistingWorkspaceCopy, PlanningSimpleReviewCopy};
 
+pub(super) fn build_loading_overlay_view() -> PlanningInitOverlayView {
+    selection::build_loading_overlay_view()
+}
+
 // existing workspace path는 runtime projection에서 만든 copy를 받아 warning/summary/options
 // layout으로 바꾼다. app-level snapshot 선택은 위 layer에서 이미 끝났으므로 여기서는
 // stale data policy를 다시 판단하지 않는다.
@@ -59,6 +63,10 @@ mod tests {
 
     #[test]
     fn mode_and_detail_selection_copy_tracks_focused_route() {
+        let loading = build_loading_overlay_view();
+        assert!(section_text(&loading.header_lines).contains("loading workspace"));
+        assert!(section_text(&loading.key_lines).contains("Esc/Ctrl+C cancels"));
+
         let simple = build_mode_selection_overlay_view(PlanningInitModeSelection::Simple);
         assert!(section_text(&simple.option_lines).contains("simple mode"));
         assert!(section_text(&simple.status_lines).contains("current selection: simple mode"));

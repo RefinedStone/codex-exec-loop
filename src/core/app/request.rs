@@ -108,3 +108,18 @@ impl QueueAuthorityLoadCorrelation {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningRuntimeRefreshCorrelation {
+    pub generation: u64,
+    pub workspace_directory: String,
+}
+
+impl PlanningRuntimeRefreshCorrelation {
+    pub fn new(generation: u64, workspace_directory: impl Into<String>) -> Self {
+        Self {
+            generation,
+            workspace_directory: workspace_directory.into(),
+        }
+    }
+}

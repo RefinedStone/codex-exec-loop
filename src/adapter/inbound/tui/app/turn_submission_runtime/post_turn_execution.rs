@@ -31,7 +31,7 @@ pub(super) struct PostTurnEvaluationRequest {
 
 impl NativeTuiApp {
     pub(super) fn execute_post_turn_evaluation(&mut self, request: PostTurnEvaluationRequest) {
-        let Some(context) = self.ready_post_turn_evaluation_context(&request) else {
+        let Some(context) = self.ready_post_turn_evaluation_context() else {
             return;
         };
         let start_state = self
@@ -53,10 +53,7 @@ impl NativeTuiApp {
         self.dispatch_core_command(AppCommand::EvaluatePostTurn(Box::new(request)));
     }
 
-    fn ready_post_turn_evaluation_context(
-        &self,
-        request: &PostTurnEvaluationRequest,
-    ) -> Option<PostTurnEvaluationContext> {
+    fn ready_post_turn_evaluation_context(&self) -> Option<PostTurnEvaluationContext> {
         let current_runtime_projection = self.planning_runtime_projection_snapshot();
         let planning_workspace_directory = self.planning_workspace_directory();
         let parallel_automation_epoch_id = self
@@ -65,7 +62,7 @@ impl NativeTuiApp {
         match &self.conversation_state {
             ConversationState::Ready(conversation) => Some(post_turn_context_from_conversation(
                 conversation.as_ref(),
-                request,
+                &planning_workspace_directory,
                 current_runtime_projection,
                 self.parallel_mode_enabled(),
                 parallel_automation_epoch_id,
@@ -104,7 +101,7 @@ fn application_post_turn_request(
 
 fn post_turn_context_from_conversation(
     conversation: &ConversationViewModel,
-    request: &PostTurnEvaluationRequest,
+    planning_workspace_directory: &str,
     current_runtime_projection: PlanningRuntimeProjection,
     parallel_mode_enabled: bool,
     parallel_automation_epoch_id: Option<u64>,
@@ -139,7 +136,7 @@ fn post_turn_context_from_conversation(
 
     PostTurnEvaluationContext {
         thread_id: conversation.thread_id.clone(),
-        planning_workspace_directory: request.workspace_directory.clone(),
+        planning_workspace_directory: planning_workspace_directory.to_string(),
         latest_user_message: conversation.latest_user_message_text().map(str::to_string),
         latest_main_reply,
         previous_handoff_task: conversation.last_planning_task_handoff().cloned(),
@@ -273,12 +270,11 @@ mod tests {
 
     #[test]
     fn auto_follow_off_allows_settlement_while_explicit_stop_pauses_it() {
-        let request = request();
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
 
         let disabled = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             false,
             None,
@@ -290,7 +286,7 @@ mod tests {
         conversation.auto_follow_state.set_max_auto_turns(3);
         let enabled = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             false,
             None,
@@ -305,7 +301,7 @@ mod tests {
         conversation.auto_follow_state.reset_for_manual_turn();
         let stopped = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             true,
             None,
@@ -317,7 +313,7 @@ mod tests {
         conversation.auto_follow_state.set_max_auto_turns(3);
         let rearmed = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             false,
             None,
@@ -329,12 +325,11 @@ mod tests {
 
     #[test]
     fn explicit_parallel_mode_enables_only_parallel_post_turn_continuation() {
-        let request = request();
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
 
         let parallel = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             true,
             Some(7),
@@ -350,7 +345,7 @@ mod tests {
             .pause_post_turn_continuation();
         let stopped = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             true,
             None,
@@ -361,7 +356,7 @@ mod tests {
         conversation.rearm_parallel_post_turn_continuation();
         let parallel_rearmed = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             true,
             Some(8),
@@ -380,7 +375,6 @@ mod tests {
     fn post_turn_context_projects_keyword_and_file_change_stop_rules() {
         use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 
-        let request = request();
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         conversation.messages.push(ConversationMessage::new(
             ConversationMessageKind::Agent,
@@ -395,7 +389,7 @@ mod tests {
 
         let default_keyword = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             false,
             None,
@@ -418,7 +412,7 @@ mod tests {
 
         let custom_keyword = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/workspace",
             PlanningRuntimeProjection::uninitialized(),
             false,
             None,
@@ -430,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn resumed_cross_workspace_turn_uses_completed_turn_request_workspace() {
+    fn resumed_cross_workspace_turn_preserves_the_conversation_planning_workspace() {
         let mut request = request();
         request.workspace_directory = "/tmp/active-turn-worktree".to_string();
         let mut conversation =
@@ -441,14 +435,15 @@ mod tests {
 
         let context = post_turn_context_from_conversation(
             &conversation,
-            &request,
+            "/tmp/resumed-session-workspace",
             PlanningRuntimeProjection::uninitialized(),
             false,
             None,
         );
 
         assert_eq!(context.thread_id, "resumed-thread");
-        assert_eq!(
+        assert_eq!(context.planning_workspace_directory, conversation.cwd);
+        assert_ne!(
             context.planning_workspace_directory,
             request.workspace_directory
         );
@@ -456,6 +451,5 @@ mod tests {
             context.planning_workspace_directory,
             conversation.draft_workspace_directory
         );
-        assert_ne!(context.planning_workspace_directory, conversation.cwd);
     }
 }
