@@ -1,13 +1,13 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ApprovalDecisionAdmission,
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, CoreEffect, CoreEffectCompletion,
-    CoreInput, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
-    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
-    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
-    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
-    TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    CoreInput, DirectionsMaintenanceLoadCorrelation, GithubReviewPollCorrelation,
+    ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ParallelPeekLoadCorrelation,
+    PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
+    SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
+    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
@@ -66,6 +66,8 @@ pub struct CoreController {
     active_review_center_load: Option<ReviewCenterLoadCorrelation>,
     next_queue_authority_load_generation: u64,
     active_queue_authority_load: Option<QueueAuthorityLoadCorrelation>,
+    next_directions_maintenance_load_generation: u64,
+    active_directions_maintenance_load: Option<DirectionsMaintenanceLoadCorrelation>,
     next_planning_runtime_refresh_generation: u64,
     active_planning_runtime_refresh: Option<PlanningRuntimeRefreshCorrelation>,
     next_queue_mutation_generation: u64,
@@ -108,6 +110,8 @@ impl CoreController {
             active_review_center_load: None,
             next_queue_authority_load_generation: 1,
             active_queue_authority_load: None,
+            next_directions_maintenance_load_generation: 1,
+            active_directions_maintenance_load: None,
             next_planning_runtime_refresh_generation: 1,
             active_planning_runtime_refresh: None,
             next_queue_mutation_generation: 1,
@@ -288,6 +292,25 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::LoadQueueAuthority { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::LoadDirectionsMaintenance {
+                workspace_directory,
+            }) => {
+                let correlation = DirectionsMaintenanceLoadCorrelation::new(
+                    take_generation(
+                        &mut self.next_directions_maintenance_load_generation,
+                        "directions maintenance load",
+                    ),
+                    workspace_directory,
+                );
+                self.active_directions_maintenance_load = Some(correlation.clone());
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::DirectionsMaintenanceLoadStarted {
+                        correlation: correlation.clone(),
+                    }],
+                    effects: vec![CoreEffect::LoadDirectionsMaintenance { correlation }],
                     snapshot: self.snapshot(),
                 }
             }
@@ -724,6 +747,23 @@ impl CoreController {
                 self.active_queue_authority_load = None;
                 CoreDispatchOutcome {
                     events: vec![AppEvent::QueueAuthorityLoaded {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::DirectionsMaintenanceLoaded {
+                correlation,
+                result,
+            }) => {
+                if self.active_directions_maintenance_load.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.active_directions_maintenance_load = None;
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::DirectionsMaintenanceLoaded {
                         correlation,
                         result,
                     }],
@@ -1372,10 +1412,12 @@ mod tests {
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
-        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin, QueueAuthorityLoadError,
-        QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationIntent,
-        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterSnapshot,
-        SessionCatalogReadySnapshot, SessionCatalogSnapshot, TurnSubmissionRequest,
+        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
+        DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
+        DirectionsSupportingFileStatus, QueueAuthorityLoadError, QueueAuthoritySnapshot,
+        QueueMutationCommitSnapshot, QueueMutationIntent, QueueMutationKind, QueueMutationResult,
+        QueueMutationTarget, ReviewCenterSnapshot, SessionCatalogReadySnapshot,
+        SessionCatalogSnapshot, TurnSubmissionRequest,
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
@@ -1397,7 +1439,7 @@ mod tests {
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::planning::{
-        ManualPromptOutcome, ManualPromptRequest, RuntimeProjection, TaskStatus,
+        ManualPromptOutcome, ManualPromptRequest, QueueIdlePolicy, RuntimeProjection, TaskStatus,
         TurnSnapshotCapture,
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
@@ -1475,6 +1517,30 @@ mod tests {
             workspace_directory,
             active_thread_id.map(str::to_string),
         )
+    }
+
+    fn directions_maintenance_load_correlation(
+        generation: u64,
+        workspace_directory: &str,
+    ) -> DirectionsMaintenanceLoadCorrelation {
+        DirectionsMaintenanceLoadCorrelation::new(generation, workspace_directory)
+    }
+
+    fn directions_maintenance_summary() -> Box<DirectionsMaintenanceSummarySnapshot> {
+        Box::new(DirectionsMaintenanceSummarySnapshot {
+            directions: vec![DirectionsMaintenanceDirectionSnapshot {
+                id: "direction-1".to_string(),
+                title: "Direction 1".to_string(),
+                detail_doc_path: Some("docs/direction-1.md".to_string()),
+                detail_doc_status: DirectionsSupportingFileStatus::Ready,
+            }],
+            missing_detail_doc_count: 0,
+            broken_detail_doc_count: 0,
+            queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+            queue_idle_prompt_path: Some("prompts/review.md".to_string()),
+            queue_idle_prompt_status: DirectionsSupportingFileStatus::Ready,
+            parse_error: None,
+        })
     }
 
     fn planning_runtime_refresh_correlation(
@@ -2293,6 +2359,29 @@ mod tests {
             vec![CoreEffect::LoadQueueAuthority {
                 correlation: second_correlation,
             }]
+        );
+    }
+
+    #[test]
+    fn directions_maintenance_load_dispatches_a_correlated_effect() {
+        let mut controller = CoreController::new();
+        let correlation = directions_maintenance_load_correlation(1, "/tmp/workspace");
+
+        let outcome =
+            controller.handle_input(CoreInput::Command(AppCommand::LoadDirectionsMaintenance {
+                workspace_directory: "/tmp/workspace".to_string(),
+            }));
+
+        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::DirectionsMaintenanceLoadStarted {
+                correlation: correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::LoadDirectionsMaintenance { correlation }]
         );
     }
 
@@ -4625,6 +4714,60 @@ mod tests {
                 result,
             }]
         );
+    }
+
+    #[test]
+    fn directions_maintenance_completion_requires_the_latest_exact_correlation_once_across_aba() {
+        let mut controller = CoreController::new();
+        for workspace_directory in ["/tmp/a", "/tmp/b", "/tmp/a"] {
+            controller.handle_input(CoreInput::Command(AppCommand::LoadDirectionsMaintenance {
+                workspace_directory: workspace_directory.to_string(),
+            }));
+        }
+        let result = Ok(directions_maintenance_summary());
+
+        for correlation in [
+            directions_maintenance_load_correlation(1, "/tmp/a"),
+            directions_maintenance_load_correlation(2, "/tmp/b"),
+            directions_maintenance_load_correlation(3, "/tmp/forged"),
+        ] {
+            let stale = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::DirectionsMaintenanceLoaded {
+                    correlation,
+                    result: result.clone(),
+                },
+            ));
+            assert!(stale.events.is_empty());
+            assert!(stale.effects.is_empty());
+            assert_eq!(stale.snapshot, AppSnapshot::initial());
+        }
+
+        let correlation = directions_maintenance_load_correlation(3, "/tmp/a");
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::DirectionsMaintenanceLoaded {
+                correlation: correlation.clone(),
+                result: result.clone(),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::DirectionsMaintenanceLoaded {
+                correlation: correlation.clone(),
+                result: result.clone(),
+            }]
+        );
+        assert!(accepted.effects.is_empty());
+        assert_eq!(accepted.snapshot, AppSnapshot::initial());
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::DirectionsMaintenanceLoaded {
+                correlation,
+                result,
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+        assert_eq!(duplicate.snapshot, AppSnapshot::initial());
     }
 
     #[test]

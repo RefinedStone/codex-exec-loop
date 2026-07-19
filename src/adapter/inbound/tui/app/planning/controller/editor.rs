@@ -137,6 +137,12 @@ impl NativeTuiApp {
         else {
             return;
         };
+        if !self.directions_editor_workspace_is_current() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "directions editor workspace changed; save blocked / close and reopen maintenance in the current workspace".to_string(),
+            });
+            return;
+        }
         /*
          * Directions save uses the same staged draft namespace as planning-init save,
          * so the active draft name is captured before status copy or validation state
@@ -257,6 +263,12 @@ impl NativeTuiApp {
         else {
             return;
         };
+        if !self.directions_editor_workspace_is_current() {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "directions editor workspace changed; promote blocked / close and reopen maintenance in the current workspace".to_string(),
+            });
+            return;
+        }
         self.planning_draft_editor_ui_state
             .clear_close_confirmation();
         let workspace_directory = self.planning_workspace_directory();
@@ -295,12 +307,11 @@ impl NativeTuiApp {
                      * instead of closing to the shell. That overview is the user's context
                      * for the direction catalog they just edited.
                      */
-                    self.present_directions_maintenance_overview(
-                        format!(
-                            "directions draft promoted / draft: {} / files: {} / planning context refreshed",
+                    self.start_directions_maintenance_overview_load(
+                        Some(format!(
+                            "directions draft promoted / draft: {} / files: {} / planning context refresh requested",
                             result.draft_name, result.promoted_file_count
-                        ),
-                        true,
+                        )),
                     );
                     return;
                 }
@@ -393,7 +404,7 @@ impl NativeTuiApp {
          * centralizes the reset/reload behavior that makes the file list and status
          * lines match the just-saved or just-discarded draft state.
          */
-        self.present_directions_maintenance_overview(status_text, true);
+        self.start_directions_maintenance_overview_load(Some(status_text));
     }
 
     pub(super) fn handle_planning_manual_editor_close_confirmation_key(

@@ -70,6 +70,9 @@ pub enum SessionState {
 pub struct ShellChromeState {
     // shell overlay는 한 번에 하나만 render된다. Hidden은 focus를 transcript 입력으로 돌려보내는 상태다.
     pub shell_overlay: ShellOverlay,
+    // Approval은 비동기 turn event가 여는 우선순위 modal이다. 미저장
+    // Directions editor를 잠시 선점한 경우에만 explicit close에서 돌려준다.
+    pub approval_return_overlay: Option<ShellOverlay>,
     pub exit_confirmation_state: ExitConfirmationState,
     // startup state는 session loading의 gate다. recent session catalog는 validated workspace가 있어야 의미가 있다.
     pub startup_state: StartupState,
@@ -82,6 +85,7 @@ impl ShellChromeState {
     pub fn new() -> Self {
         Self {
             shell_overlay: ShellOverlay::Hidden,
+            approval_return_overlay: None,
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             session_state: SessionState::Idle,
@@ -296,11 +300,19 @@ pub fn reduce_shell_chrome(
         }
         ShellChromeEvent::ApprovalOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
+            if state.shell_overlay == ShellOverlay::DirectionsMaintenance {
+                state.approval_return_overlay = Some(state.shell_overlay);
+            } else if state.shell_overlay != ShellOverlay::Approval {
+                state.approval_return_overlay = None;
+            }
             state.shell_overlay = ShellOverlay::Approval;
         }
         ShellChromeEvent::ApprovalOverlayClosed => {
             if state.shell_overlay == ShellOverlay::Approval {
-                state.shell_overlay = ShellOverlay::Hidden;
+                state.shell_overlay = state
+                    .approval_return_overlay
+                    .take()
+                    .unwrap_or(ShellOverlay::Hidden);
             }
         }
         ShellChromeEvent::StartupOverlayToggled => {
@@ -714,6 +726,25 @@ mod tests {
             ShellChromeEvent::ApprovalOverlayClosed,
         );
         assert_eq!(closed.state.shell_overlay, ShellOverlay::Hidden);
+    }
+    #[test]
+    fn approval_overlay_restores_the_interrupted_overlay() {
+        let mut state = ShellChromeState::new();
+        state.shell_overlay = ShellOverlay::DirectionsMaintenance;
+
+        let shown = reduce_shell_chrome(state, ShellChromeEvent::ApprovalOverlayShown);
+        assert_eq!(shown.state.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(
+            shown.state.approval_return_overlay,
+            Some(ShellOverlay::DirectionsMaintenance)
+        );
+
+        let closed = reduce_shell_chrome(shown.state, ShellChromeEvent::ApprovalOverlayClosed);
+        assert_eq!(
+            closed.state.shell_overlay,
+            ShellOverlay::DirectionsMaintenance
+        );
+        assert_eq!(closed.state.approval_return_overlay, None);
     }
     #[test]
     fn prompt_focus_policy_covers_dialogs_overlays_and_supersession_loading() {

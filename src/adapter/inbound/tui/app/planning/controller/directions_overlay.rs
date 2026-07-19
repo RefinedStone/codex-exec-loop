@@ -13,6 +13,23 @@ impl NativeTuiApp {
      * delegated to the shared draft editor instead of falling through to shell-wide shortcuts.
      */
     pub(crate) fn handle_directions_overlay_key(&mut self, key: event::KeyEvent) -> bool {
+        match self
+            .directions_maintenance_overlay_ui_state
+            .projection_kind()
+        {
+            DirectionsMaintenanceProjectionKind::Loading => return true,
+            DirectionsMaintenanceProjectionKind::Idle
+            | DirectionsMaintenanceProjectionKind::Failed => {
+                if key.code == KeyCode::Char('r') && key.modifiers.is_empty() {
+                    self.start_directions_maintenance_overview_load(Some(
+                        "directions maintenance reload requested".to_string(),
+                    ));
+                }
+                return true;
+            }
+            DirectionsMaintenanceProjectionKind::Ready => {}
+        }
+
         match self.directions_maintenance_overlay_ui_state.step() {
             DirectionsMaintenanceOverlayStep::Overview => match key.code {
                 /*
@@ -87,14 +104,13 @@ impl NativeTuiApp {
                 }
                 /*
                  * Reload replaces the overlay state with a fresh workspace summary from the service.
-                 * present_directions_maintenance_overview already owns loading, visibility, and status
+                 * start_directions_maintenance_overview_load owns loading, visibility, and status
                  * dispatch, so the key handler reuses that entrypoint.
                  */
                 KeyCode::Char('r') if key.modifiers.is_empty() => self
-                    .present_directions_maintenance_overview(
-                        "reloaded directions maintenance".to_string(),
-                        true,
-                    ),
+                    .start_directions_maintenance_overview_load(Some(
+                        "directions maintenance reload requested".to_string(),
+                    )),
                 _ => {}
             },
             DirectionsMaintenanceOverlayStep::DetailDocSelection => match key.code {

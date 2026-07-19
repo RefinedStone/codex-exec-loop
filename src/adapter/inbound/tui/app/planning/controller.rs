@@ -2,14 +2,16 @@ use super::super::planning_draft_editor_ui::{
     PlanningDraftEditorCloseRequest, PlanningDraftEditorCloseRisk,
 };
 use super::super::{
-    ConversationInputEvent, DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, NativeTuiApp,
-    PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
-    PlanningInitRuntimeRefreshIntent, ShellChromeEvent, ShellOverlay,
+    ConversationInputEvent, DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep,
+    DirectionsMaintenanceProjectionKind, NativeTuiApp, PlanningInitDetailSelection,
+    PlanningInitModeSelection, PlanningInitOverlayStep, PlanningInitRuntimeRefreshIntent,
+    ShellChromeEvent, ShellOverlay,
 };
 use crate::application::service::planning::{
     PlanningDoctorReport, PlanningDoctorState, PlanningDraftEditorSession, PlanningResetTarget,
     PlanningWorkspaceResetResult,
 };
+use crate::core::app::{AppCommand, AppEvent};
 use crossterm::event::{self, KeyCode, KeyModifiers};
 type PlanningEditorSessionResult = anyhow::Result<PlanningDraftEditorSession>;
 const PLANNING_RUNTIME_LOADING_STATUS: &str =
@@ -39,10 +41,9 @@ impl NativeTuiApp {
     // Unsupported arguments are surfaced as status rows so command mistakes do
     // not leave partial UI transitions behind.
     pub(in crate::adapter::inbound::tui::app) fn show_directions_maintenance_overlay(&mut self) {
-        self.present_directions_maintenance_overview(
+        self.start_directions_maintenance_overview_load(Some(
             "opened directions maintenance".to_string(),
-            true,
-        );
+        ));
     }
     pub(in crate::adapter::inbound::tui::app) fn handle_directions_shell_command(
         &mut self,
@@ -77,38 +78,44 @@ impl NativeTuiApp {
         }
     }
 
-    // Opening directions maintenance resets any draft editor first. Only one
-    // planning-adjacent overlay owns the editor at a time, otherwise stale
-    // buffers can be saved into the wrong workspace draft.
-    pub(in crate::adapter::inbound::tui::app) fn present_directions_maintenance_overview(
+    // The overlay opens immediately in Loading while Core reads DB/filesystem authority.
+    // Correlation is bound before any background completion can be projected into the TUI.
+    pub(in crate::adapter::inbound::tui::app) fn start_directions_maintenance_overview_load(
         &mut self,
-        status_text: String,
-        ensure_overlay_visible: bool,
+        status_text: Option<String>,
     ) {
         let workspace_directory = self.planning_workspace_directory();
-        match self
-            .application
-            .planning()
-            .workspace()
-            .load_summary(&workspace_directory)
-        {
-            Ok(summary) => {
-                self.directions_maintenance_overlay_ui_state
-                    .open_summary(summary);
-                self.planning_draft_editor_ui_state.reset();
-                if ensure_overlay_visible {
-                    self.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
-                }
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text,
-                });
-            }
-            Err(error) => {
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!("directions maintenance unavailable: {error}"),
-                });
-            }
+        self.planning_draft_editor_ui_state.reset();
+        self.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::LoadDirectionsMaintenance {
+                workspace_directory,
+            });
+        let correlation = outcome.events.iter().find_map(|event| match event {
+            AppEvent::DirectionsMaintenanceLoadStarted { correlation } => Some(correlation.clone()),
+            _ => None,
+        });
+        if let Some(correlation) = correlation {
+            self.directions_maintenance_overlay_ui_state
+                .begin_load(correlation);
         }
+        if let Some(status_text) = status_text {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text,
+            });
+        }
+        self.apply_core_dispatch_outcome(outcome);
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn reconcile_directions_maintenance_context(
+        &mut self,
+    ) -> bool {
+        if !self.directions_maintenance_load_required() {
+            return false;
+        }
+        self.start_directions_maintenance_overview_load(None);
+        true
     }
 
     // Planning init binds one Core-owned runtime refresh to the loading surface.
@@ -521,7 +528,8 @@ impl NativeTuiApp {
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{
-        ConversationState, NativeTuiParallelModeBinding, PendingResumedSessionPlanningRefresh,
+        ConversationState, DirectionsMaintenanceScreenModel, NativeTuiParallelModeBinding,
+        PendingResumedSessionPlanningRefresh,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -536,12 +544,12 @@ mod tests {
     };
     use crate::application::service::conversation_service::ConversationService;
     use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
-    use crate::application::service::planning::{
-        DirectionsMaintenanceDirectionSummary, DirectionsMaintenanceSummary,
-        DirectionsSupportingFileStatus,
-    };
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
+    use crate::core::app::{
+        DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
+        DirectionsSupportingFileStatus,
+    };
     use crate::domain::conversation::{
         ConversationControlSupport, ConversationSnapshot, ConversationTurnOptions,
     };
@@ -681,6 +689,7 @@ mod tests {
         LoadDraft,
         ReplaceDraft,
         ReplaceWorkspace,
+        SlowOptionalLoad,
     }
 
     struct FailingPlanningWorkspacePort {
@@ -770,6 +779,9 @@ mod tests {
             workspace_dir: &str,
             relative_path: &str,
         ) -> anyhow::Result<Option<String>> {
+            if self.failure == PlanningWorkspacePortFailure::SlowOptionalLoad {
+                std::thread::sleep(Duration::from_millis(600));
+            }
             self.inner
                 .load_optional_planning_file(workspace_dir, relative_path)
         }
@@ -838,6 +850,24 @@ mod tests {
         panic!("planning init runtime refresh should complete");
     }
 
+    fn wait_for_directions_maintenance_load(app: &mut NativeTuiApp) {
+        // The non-blocking assertion is made before this wait. Give the worker
+        // enough settlement time under the full suite's process-heavy load.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            app.poll_core_runtime_inputs(16);
+            if app
+                .directions_maintenance_overlay_ui_state
+                .projection_kind()
+                != DirectionsMaintenanceProjectionKind::Loading
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("directions maintenance load should complete");
+    }
+
     fn key(code: KeyCode) -> event::KeyEvent {
         event::KeyEvent::new(code, KeyModifiers::NONE)
     }
@@ -889,9 +919,9 @@ mod tests {
     fn directions_summary(
         detail_doc_status: DirectionsSupportingFileStatus,
         parse_error: Option<&str>,
-    ) -> DirectionsMaintenanceSummary {
-        DirectionsMaintenanceSummary {
-            directions: vec![DirectionsMaintenanceDirectionSummary {
+    ) -> DirectionsMaintenanceSummarySnapshot {
+        DirectionsMaintenanceSummarySnapshot {
+            directions: vec![DirectionsMaintenanceDirectionSnapshot {
                 id: "general-workstream".to_string(),
                 title: "General workstream".to_string(),
                 detail_doc_path: Some(
@@ -1099,15 +1129,51 @@ mod tests {
         app.handle_directions_shell_command(None);
         assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
         assert_eq!(ready_status(&app), "opened directions maintenance");
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .projection_kind(),
+            DirectionsMaintenanceProjectionKind::Loading
+        );
+        wait_for_directions_maintenance_load(&mut app);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .projection_kind(),
+            DirectionsMaintenanceProjectionKind::Ready
+        );
 
         app.handle_queue_shell_command(None);
         assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+    }
 
-        app.close_shell_overlay();
-        app.present_directions_maintenance_overview("directions loaded quietly".to_string(), false);
+    #[test]
+    fn directions_maintenance_open_does_not_wait_for_workspace_io() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-non-blocking");
+        let mut app = make_test_app_with_planning_workspace_port(
+            &workspace,
+            Arc::new(FailingPlanningWorkspacePort::new(
+                PlanningWorkspacePortFailure::SlowOptionalLoad,
+            )),
+        );
 
-        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
-        assert_eq!(ready_status(&app), "directions loaded quietly");
+        let started_at = Instant::now();
+        app.show_directions_maintenance_overlay();
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "overlay open waited for workspace I/O: {elapsed:?}"
+        );
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .projection_kind(),
+            DirectionsMaintenanceProjectionKind::Loading
+        );
+        wait_for_directions_maintenance_load(&mut app);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .projection_kind(),
+            DirectionsMaintenanceProjectionKind::Ready
+        );
     }
 
     #[test]
@@ -1345,11 +1411,20 @@ mod tests {
                 .is_none()
         );
 
-        load_app.present_directions_maintenance_overview("reload directions".to_string(), false);
-        assert!(
-            ready_status(&load_app).starts_with("directions maintenance unavailable: forced "),
-            "status: {}",
-            ready_status(&load_app)
+        load_app.start_directions_maintenance_overview_load(Some(
+            "directions maintenance reload requested".to_string(),
+        ));
+        wait_for_directions_maintenance_load(&mut load_app);
+        assert!(matches!(
+            load_app
+                .directions_maintenance_overlay_ui_state
+                .screen_model(),
+            DirectionsMaintenanceScreenModel::Failed { error, .. }
+                if error.starts_with("forced ")
+        ));
+        assert_eq!(
+            ready_status(&load_app),
+            "directions maintenance reload requested"
         );
 
         let stage_workspace = TempPlanningWorkspace::new("tui-controller-stage-failure");
@@ -1374,6 +1449,7 @@ mod tests {
         );
 
         stage_app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut stage_app);
         stage_app.open_queue_idle_prompt_editor();
         assert!(
             ready_status(&stage_app).starts_with("directions editor failed: forced "),
@@ -1522,6 +1598,7 @@ mod tests {
         let workspace = TempPlanningWorkspace::new("tui-directions-detail-keys");
         let mut app = make_test_app(&workspace);
         app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut app);
 
         assert!(app.handle_directions_overlay_key(key(KeyCode::Char('d'))));
         assert_eq!(
@@ -1578,13 +1655,20 @@ mod tests {
         assert!(app.handle_directions_overlay_key(ctrl_key(KeyCode::Char('s'))));
         assert!(ready_status(&app).contains("directions draft saved / draft: "));
         assert!(app.handle_directions_overlay_key(ctrl_key(KeyCode::Char('p'))));
+        let promoted_status = ready_status(&app).to_string();
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .projection_kind(),
+            DirectionsMaintenanceProjectionKind::Loading
+        );
+        wait_for_directions_maintenance_load(&mut app);
 
         assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
         assert_eq!(
             app.directions_maintenance_overlay_ui_state.step(),
             DirectionsMaintenanceOverlayStep::Overview
         );
-        assert!(ready_status(&app).contains("directions draft promoted / draft: "));
+        assert_eq!(ready_status(&app), promoted_status);
     }
 
     #[test]
@@ -1621,7 +1705,22 @@ mod tests {
         );
 
         assert!(app.handle_directions_overlay_key(key(KeyCode::Char('r'))));
-        assert_eq!(ready_status(&app), "reloaded directions maintenance");
+        assert_eq!(
+            ready_status(&app),
+            "directions maintenance reload requested"
+        );
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .projection_kind(),
+            DirectionsMaintenanceProjectionKind::Loading
+        );
+        assert!(app.handle_directions_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state
+                .projection_kind(),
+            DirectionsMaintenanceProjectionKind::Loading
+        );
+        wait_for_directions_maintenance_load(&mut app);
         assert_eq!(
             app.directions_maintenance_overlay_ui_state.step(),
             DirectionsMaintenanceOverlayStep::Overview
@@ -1751,6 +1850,7 @@ mod tests {
         let workspace = TempPlanningWorkspace::new("tui-directions-detail-promote");
         let mut app = make_test_app(&workspace);
         app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut app);
 
         app.open_directions_detail_doc_editor("general-workstream");
 
@@ -1776,7 +1876,10 @@ mod tests {
 
         app.promote_directions_manual_editor();
 
-        assert!(ready_status(&app).contains("directions draft promoted / draft: "));
+        let promoted_status = ready_status(&app).to_string();
+        assert!(promoted_status.contains("directions draft promoted / draft: "));
+        wait_for_directions_maintenance_load(&mut app);
+        assert_eq!(ready_status(&app), promoted_status);
         assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
         assert_eq!(
             app.directions_maintenance_overlay_ui_state.step(),
@@ -1786,10 +1889,105 @@ mod tests {
     }
 
     #[test]
+    fn directions_editor_preserves_buffers_and_blocks_writes_after_workspace_drift() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-editor-workspace-drift");
+        let mut app = make_test_app(&workspace);
+        app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut app);
+        app.open_directions_detail_doc_editor("general-workstream");
+        app.planning_draft_editor_ui_state.insert_character('!');
+        let draft_name = app
+            .planning_draft_editor_ui_state
+            .draft_name()
+            .expect("directions draft should be open")
+            .to_string();
+
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should have a ready conversation");
+        };
+        conversation.cwd = "/tmp/replacement-workspace".to_string();
+        conversation.draft_workspace_directory = "/tmp/replacement-workspace".to_string();
+
+        assert!(!app.directions_maintenance_load_required());
+        app.save_directions_manual_editor();
+        assert!(ready_status(&app).contains("workspace changed; save blocked"));
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            app.planning_draft_editor_ui_state.draft_name(),
+            Some(draft_name.as_str())
+        );
+
+        app.promote_directions_manual_editor();
+        assert!(ready_status(&app).contains("workspace changed; promote blocked"));
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            app.planning_draft_editor_ui_state.draft_name(),
+            Some(draft_name.as_str())
+        );
+    }
+
+    #[test]
+    fn approval_overlay_suspends_and_restores_dirty_directions_editor() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-editor-approval-suspend");
+        let mut app = make_test_app(&workspace);
+        app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut app);
+        app.open_directions_detail_doc_editor("general-workstream");
+        app.planning_draft_editor_ui_state.insert_character('!');
+        let draft_name = app
+            .planning_draft_editor_ui_state
+            .draft_name()
+            .expect("directions draft should be open")
+            .to_string();
+        let edited_body = app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("directions editor buffer should be selected")
+            .body();
+
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::ManualEditor
+        );
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            app.planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("suspended editor buffer should remain")
+                .body(),
+            edited_body
+        );
+
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::ManualEditor
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state.draft_name(),
+            Some(draft_name.as_str())
+        );
+        assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            app.planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("restored editor buffer should remain")
+                .body(),
+            edited_body
+        );
+    }
+
+    #[test]
     fn directions_manual_editor_close_confirmation_returns_to_overview() {
         let workspace = TempPlanningWorkspace::new("tui-directions-editor-close");
         let mut app = make_test_app(&workspace);
         app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut app);
         app.open_queue_idle_prompt_editor();
 
         assert_eq!(
@@ -1819,12 +2017,15 @@ mod tests {
 
         app.request_close_directions_manual_editor();
         assert!(app.handle_directions_manual_editor_close_confirmation_key(key(KeyCode::Enter)));
+        let closed_status = ready_status(&app).to_string();
+        wait_for_directions_maintenance_load(&mut app);
 
         assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
         assert_eq!(
             app.directions_maintenance_overlay_ui_state.step(),
             DirectionsMaintenanceOverlayStep::Overview
         );
+        assert_eq!(ready_status(&app), closed_status);
         assert!(ready_status(&app).contains("directions editor closed"));
         assert!(app.planning_draft_editor_ui_state.draft_name().is_none());
     }
@@ -1862,8 +2063,11 @@ mod tests {
         let directions_close_workspace = TempPlanningWorkspace::new("tui-directions-clean-close");
         let mut directions_close_app = make_test_app(&directions_close_workspace);
         directions_close_app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut directions_close_app);
         directions_close_app.open_directions_detail_doc_editor("general-workstream");
         directions_close_app.request_close_directions_manual_editor();
+        let closed_status = ready_status(&directions_close_app).to_string();
+        wait_for_directions_maintenance_load(&mut directions_close_app);
 
         assert_eq!(
             directions_close_app.shell_overlay,
@@ -1875,10 +2079,7 @@ mod tests {
                 .step(),
             DirectionsMaintenanceOverlayStep::Overview
         );
-        assert_eq!(
-            ready_status(&directions_close_app),
-            "directions editor closed"
-        );
+        assert_eq!(ready_status(&directions_close_app), closed_status);
 
         let confirmation_workspace = TempPlanningWorkspace::new("tui-editor-confirm-fallthrough");
         let mut confirmation_app = make_test_app(&confirmation_workspace);
@@ -2010,6 +2211,7 @@ mod tests {
             )),
         );
         directions_save_app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut directions_save_app);
         directions_save_app.open_directions_detail_doc_editor("general-workstream");
         directions_save_app.save_directions_manual_editor();
         assert!(
@@ -2049,6 +2251,7 @@ mod tests {
             )),
         );
         directions_promote_app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut directions_promote_app);
         directions_promote_app.open_directions_detail_doc_editor("general-workstream");
         directions_promote_app.promote_directions_manual_editor();
         assert!(

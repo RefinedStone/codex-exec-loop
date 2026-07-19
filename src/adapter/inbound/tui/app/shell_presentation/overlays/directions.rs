@@ -6,11 +6,12 @@ mod copy;
 mod projection;
 
 use super::super::{
-    DirectionsMaintenanceOverlayStep, Line, NativeTuiApp, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT,
-    compact_whitespace_detail,
+    DirectionsMaintenanceOverlayStep, DirectionsMaintenanceScreenModel, Line, NativeTuiApp,
+    QUEUE_INSPECTION_NOTE_DETAIL_LIMIT, compact_whitespace_detail,
 };
 use copy::{
     build_detail_doc_confirm_overlay_view, build_detail_doc_selection_overlay_view,
+    build_failed_overlay_view, build_idle_overlay_view, build_loading_overlay_view,
     build_manual_editor_overlay_view, build_overview_overlay_view,
 };
 use projection::build_detail_doc_selection_projection;
@@ -38,37 +39,45 @@ pub(crate) struct DirectionsMaintenanceOverlayView {
 pub(crate) fn build_directions_maintenance_overlay_view(
     app: &NativeTuiApp,
 ) -> DirectionsMaintenanceOverlayView {
+    let summary = match app.directions_maintenance_overlay_ui_state.screen_model() {
+        DirectionsMaintenanceScreenModel::Idle => return build_idle_overlay_view(),
+        DirectionsMaintenanceScreenModel::Loading {
+            workspace_directory,
+        } => return build_loading_overlay_view(workspace_directory),
+        DirectionsMaintenanceScreenModel::Failed {
+            workspace_directory,
+            error,
+        } => {
+            let error = compact_whitespace_detail(error, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT);
+            return build_failed_overlay_view(workspace_directory, &error);
+        }
+        DirectionsMaintenanceScreenModel::Ready { summary } => summary,
+    };
+
     // The step is the shared state-machine axis between rendering and key handling.
     match app.directions_maintenance_overlay_ui_state.step() {
         // Overview summarizes the service's authority scan and queue-idle prompt health.
         DirectionsMaintenanceOverlayStep::Overview => {
-            let summary = app.directions_maintenance_overlay_ui_state.summary();
             // Missing and broken counts are the operator's quick signal for whether detail-doc repair is needed.
-            let missing_doc_count = summary
-                .map(|summary| summary.missing_detail_doc_count)
-                .unwrap_or_default();
-            let broken_doc_count = summary
-                .map(|summary| summary.broken_detail_doc_count)
-                .unwrap_or_default();
+            let missing_doc_count = summary.missing_detail_doc_count;
+            let broken_doc_count = summary.broken_detail_doc_count;
             // Total count keeps the problem counts anchored to the size of the direction authority set.
-            let total_direction_count =
-                summary.map(|summary| summary.directions.len()).unwrap_or(0);
+            let total_direction_count = summary.directions.len();
             // Queue-idle policy lives in the same maintenance surface because prompt recovery depends on directions.
-            let queue_idle_policy = summary
-                .map(|summary| summary.queue_idle_policy.label().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+            let queue_idle_policy = summary.queue_idle_policy.label().to_string();
             // Paths and parse errors use the queue inspection compaction limit so popup width stays predictable.
             let queue_idle_prompt = summary
-                .and_then(|summary| summary.queue_idle_prompt_path.as_deref())
+                .queue_idle_prompt_path
+                .as_deref()
                 .map(|path| compact_whitespace_detail(path, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT))
                 .unwrap_or_else(|| "<none>".to_string());
             // The service has already classified prompt health; presentation only forwards the label.
-            let queue_idle_prompt_status = summary
-                .map(|summary| summary.queue_idle_prompt_status.label())
-                .unwrap_or("unknown");
+            let queue_idle_prompt_status =
+                projection::supporting_file_status_label(summary.queue_idle_prompt_status);
             // Parse errors stay in status lines so they explain blocked actions without hiding the action menu.
             let parse_error_summary = summary
-                .and_then(|summary| summary.parse_error.as_deref())
+                .parse_error
+                .as_deref()
                 .map(|error| compact_whitespace_detail(error, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT));
 
             build_overview_overlay_view(
@@ -130,8 +139,8 @@ pub(crate) fn build_directions_maintenance_overlay_view(
 mod tests {
     use super::super::super::{AkraTheme, DetailDocConfirmChoice};
     use super::*;
-    use crate::application::service::planning::{
-        DirectionsMaintenanceDirectionSummary, DirectionsSupportingFileStatus,
+    use crate::core::app::{
+        DirectionsMaintenanceDirectionSnapshot, DirectionsSupportingFileStatus,
     };
 
     #[test]
@@ -225,8 +234,8 @@ mod tests {
         title: &str,
         path: Option<&str>,
         status: DirectionsSupportingFileStatus,
-    ) -> DirectionsMaintenanceDirectionSummary {
-        DirectionsMaintenanceDirectionSummary {
+    ) -> DirectionsMaintenanceDirectionSnapshot {
+        DirectionsMaintenanceDirectionSnapshot {
             id: id.to_string(),
             title: title.to_string(),
             detail_doc_path: path.map(str::to_string),

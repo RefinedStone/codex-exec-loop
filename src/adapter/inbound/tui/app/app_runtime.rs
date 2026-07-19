@@ -1308,6 +1308,7 @@ impl NativeTuiApp {
         );
         let mut app = Self {
             shell_overlay: ShellOverlay::Hidden,
+            approval_return_overlay: None,
             exit_confirmation_state: ExitConfirmationState::Hidden,
             startup_state: StartupState::Idle,
             pending_startup_check: None,
@@ -1370,6 +1371,7 @@ impl NativeTuiApp {
     fn take_shell_chrome_state(&mut self) -> ShellChromeState {
         ShellChromeState {
             shell_overlay: self.shell_overlay,
+            approval_return_overlay: self.approval_return_overlay,
             exit_confirmation_state: self.exit_confirmation_state,
             startup_state: std::mem::replace(&mut self.startup_state, StartupState::Idle),
             session_state: std::mem::replace(&mut self.session_state, SessionState::Idle),
@@ -1379,6 +1381,7 @@ impl NativeTuiApp {
 
     fn apply_shell_chrome_state(&mut self, state: ShellChromeState) {
         self.shell_overlay = state.shell_overlay;
+        self.approval_return_overlay = state.approval_return_overlay;
         self.exit_confirmation_state = state.exit_confirmation_state;
         self.startup_state = state.startup_state;
         self.session_state = state.session_state;
@@ -1387,6 +1390,9 @@ impl NativeTuiApp {
 
     pub(super) fn dispatch_shell_chrome(&mut self, event: ShellChromeEvent) {
         let previous_overlay = self.shell_overlay;
+        let directions_suspended_for_approval = previous_overlay
+            == ShellOverlay::DirectionsMaintenance
+            && matches!(&event, ShellChromeEvent::ApprovalOverlayShown);
         let reduction = reduce_shell_chrome(self.take_shell_chrome_state(), event);
         self.apply_shell_chrome_state(reduction.state);
         if previous_overlay == ShellOverlay::Reviews && self.shell_overlay != ShellOverlay::Reviews
@@ -1395,6 +1401,13 @@ impl NativeTuiApp {
         }
         if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue {
             self.queue_overlay_ui_state.reset();
+        }
+        if !directions_suspended_for_approval
+            && previous_overlay == ShellOverlay::DirectionsMaintenance
+            && self.shell_overlay != ShellOverlay::DirectionsMaintenance
+        {
+            self.directions_maintenance_overlay_ui_state.reset();
+            self.planning_draft_editor_ui_state.reset();
         }
         if previous_overlay == ShellOverlay::ParallelPeek
             && self.shell_overlay != ShellOverlay::ParallelPeek
@@ -1496,6 +1509,17 @@ impl NativeTuiApp {
                     == super::queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::ReloadRequired
                 {
                     self.start_queue_overlay_authority_load();
+                }
+            }
+            AppEvent::DirectionsMaintenanceLoadStarted { .. } => {}
+            AppEvent::DirectionsMaintenanceLoaded {
+                correlation,
+                result,
+            } => {
+                if self.apply_directions_maintenance_loaded(correlation, result)
+                    == super::directions_maintenance_ui::DirectionsMaintenanceLoadCompletion::ReloadRequired
+                {
+                    self.start_directions_maintenance_overview_load(None);
                 }
             }
             AppEvent::PlanningRuntimeRefreshStarted { correlation } => {

@@ -7,6 +7,7 @@ pub mod approval;
 pub mod command;
 pub mod controller;
 pub mod conversation;
+pub mod directions;
 pub mod effect;
 pub mod event;
 pub mod github_review_poll;
@@ -31,6 +32,10 @@ pub use conversation::{
     ConversationReadySnapshot, ConversationSnapshot, ConversationState,
     ConversationThreadReviewSnapshot,
 };
+pub use directions::{
+    DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
+    DirectionsSupportingFileStatus,
+};
 pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput, SessionRenameAcceptedSnapshot};
 pub use github_review_poll::GithubReviewPollCorrelation;
@@ -42,9 +47,9 @@ pub use queue::{
     QueueMutationTarget,
 };
 pub use request::{
-    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
-    QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    ConversationLoadCorrelation, DirectionsMaintenanceLoadCorrelation, ParallelPeekLoadCorrelation,
+    PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
 };
 pub use review_center::{
     ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterSnapshot,
