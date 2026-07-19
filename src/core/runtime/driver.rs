@@ -106,8 +106,9 @@ mod tests {
         QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
         QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterLoadCorrelation,
         ReviewCenterSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
-        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSteerAdmission,
-        TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
+        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, StopRequestAdmission,
+        StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
+        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::{
@@ -243,6 +244,28 @@ mod tests {
                             tasks: Vec::new(),
                         }),
                     }),
+                },
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediateStopRequestExecutor;
+
+    impl CoreEffectExecutor for ImmediateStopRequestExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt,
+            } = effect
+            else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::StopRequestAttemptCompleted {
+                    correlation,
+                    attempt,
+                    result: Ok(()),
                 },
             ))
         }
@@ -894,6 +917,81 @@ mod tests {
                 correlation: QueueMutationCorrelation::new(2, intent),
             }]
         );
+    }
+
+    #[test]
+    fn immediate_stop_request_is_admitted_before_completion_and_resynchronizes_after_start() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediateStopRequestExecutor, rx);
+        let turn_submission = TurnSubmissionCorrelation::new(1);
+        runtime.dispatch_command(AppCommand::SubmitTurn(TurnSubmissionRequest {
+            workspace_directory: "/tmp/workspace".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            prompt: "ship it".to_string(),
+            prompt_origin: CorePromptOrigin::Manual,
+            turn_options: Default::default(),
+            slot_lease_handoff: None,
+        }));
+        let correlation = StopRequestCorrelation::new(1, Some(turn_submission));
+
+        let requested = runtime.dispatch_command(AppCommand::RequestStopAllSessions);
+        assert_eq!(
+            requested.events,
+            vec![
+                AppEvent::StopRequestAdmissionResolved(StopRequestAdmission::Accepted {
+                    correlation,
+                }),
+                AppEvent::StopRequestAttemptCompleted {
+                    correlation,
+                    attempt: StopRequestAttempt::Initial,
+                    result: Ok(()),
+                },
+            ]
+        );
+        assert_eq!(
+            requested.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt: StopRequestAttempt::Initial,
+            }]
+        );
+
+        let started = runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+        assert_eq!(
+            started.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+            }]
+        );
+        assert!(matches!(
+            started.events.as_slice(),
+            [
+                AppEvent::TurnStreamSnapshotChanged(_),
+                AppEvent::StopRequestAttemptCompleted {
+                    correlation: completed,
+                    attempt: StopRequestAttempt::AfterTurnStarted,
+                    result: Ok(()),
+                },
+            ] if *completed == correlation
+        ));
+
+        let duplicate = runtime.dispatch_command(AppCommand::RequestStopAllSessions);
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::StopRequestAdmissionResolved(
+                StopRequestAdmission::RejectedActive {
+                    active_correlation: correlation,
+                },
+            )]
+        );
+        assert!(duplicate.effects.is_empty());
     }
 
     #[test]

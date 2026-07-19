@@ -15,6 +15,7 @@ use super::{
     QueueMutationCorrelation, QueueMutationResult,
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
+use super::{StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation};
 use super::{TurnSteerAdmission, TurnSteerCorrelation};
 use super::{
     TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionAdmission, TurnSubmissionCorrelation,
@@ -87,6 +88,11 @@ pub enum CoreEffectCompletion {
         correlation: QueueMutationCorrelation,
         result: Box<QueueMutationResult>,
     },
+    StopRequestAttemptCompleted {
+        correlation: StopRequestCorrelation,
+        attempt: StopRequestAttempt,
+        result: Result<(), String>,
+    },
     TurnSteered {
         correlation: TurnSteerCorrelation,
         result: Result<ConversationTurnSteerReceipt, String>,
@@ -148,6 +154,12 @@ pub enum AppEvent {
     QueueMutationCompleted {
         correlation: QueueMutationCorrelation,
         result: Box<QueueMutationResult>,
+    },
+    StopRequestAdmissionResolved(StopRequestAdmission),
+    StopRequestAttemptCompleted {
+        correlation: StopRequestCorrelation,
+        attempt: StopRequestAttempt,
+        result: Result<(), String>,
     },
     ManualPromptPreparationAdmissionResolved(ManualPromptPreparationAdmission),
     TurnSubmissionAdmissionResolved(TurnSubmissionAdmission),

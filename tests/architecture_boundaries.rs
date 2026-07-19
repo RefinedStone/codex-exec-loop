@@ -1352,6 +1352,29 @@ fn tui_conversation_turn_events_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_stop_requests_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI stop requests must not own provider execution, admission, or TurnStarted resend state",
+        &["src/adapter/inbound/tui"],
+        &[
+            ".request_stop_all_sessions(",
+            "interrupt_request_pending",
+            "mark_interrupt_requested_once",
+            "clear_interrupt_request",
+            "ResendPendingInterrupt",
+        ],
+    );
+    let controller_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_controller.rs"))
+            .expect("shell controller source should be readable");
+    assert!(
+        controller_source
+            .contains("self.dispatch_core_command(AppCommand::RequestStopAllSessions);"),
+        "TUI stop intent must positively enter through AppCommand::RequestStopAllSessions"
+    );
+}
+
+#[test]
 fn tui_active_turn_steering_enters_through_core_runtime() {
     assert_no_forbidden_references_in_paths(
         "TUI active-turn steering must not own a service worker or completion mailbox",

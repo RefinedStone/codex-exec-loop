@@ -79,6 +79,10 @@ the fixed Akra theme.
 - GitHub review polling ticks must dispatch `AppCommand::PollGithubReview`. Core owns the configured
   target, successful cursor, generation, and single-flight completion; composition performs the
   provider call. The TUI owns only discovery, poll timing, and status/recent-change projection.
+- `:stop` and running-turn Ctrl-C must pause local automation first, then dispatch
+  `AppCommand::RequestStopAllSessions`. Core owns stop generation, active-submission correlation,
+  single-flight admission, and the one `TurnStarted` synchronization attempt. The TUI must not keep
+  a second pending-interrupt boolean or call the provider directly.
 
 ### Conversation Markdown And Diff Detail
 

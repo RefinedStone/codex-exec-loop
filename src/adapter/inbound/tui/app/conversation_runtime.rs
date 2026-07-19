@@ -101,10 +101,6 @@ pub(super) enum ConversationRuntimeEffect {
     },
     ShowApprovalOverlay,
     CloseApprovalOverlay,
-    // A Ctrl-C can arrive while turn/start is still in flight. Once TurnStarted
-    // arrives, resend the sticky request so the app-server stream observes a
-    // generation newer than the one sampled before turn/start.
-    ResendPendingInterrupt,
     DispatchOperatorAlert {
         alert: OperatorAlert,
     },
@@ -374,11 +370,7 @@ pub(super) fn reduce_conversation_runtime(
                     // Turn id is later used by TurnCompleted and auto-follow
                     // provenance, so it is recorded as soon as the provider reports
                     // start.
-                    let resend_pending_interrupt = state.interrupt_request_pending;
                     state.record_turn_started(turn_id);
-                    if resend_pending_interrupt {
-                        effects.push(ConversationRuntimeEffect::ResendPendingInterrupt);
-                    }
                 }
                 TurnStreamUpdate::RuntimeEnvelopeObserved {
                     observation,
@@ -545,7 +537,6 @@ pub(super) fn reduce_conversation_runtime(
                     }
                 }
                 TurnStreamUpdate::TurnInterruptRequestFailed { message } => {
-                    state.clear_interrupt_request();
                     state.status_text = message;
                 }
                 TurnStreamUpdate::TurnRetrying {
@@ -555,7 +546,6 @@ pub(super) fn reduce_conversation_runtime(
                     ..
                 } => {
                     if correlation_failure.is_none() {
-                        state.clear_interrupt_request();
                         state.status_text = status_text;
                         state.extend_runtime_notices([format!(
                             "app-server retrying active turn: {}",
@@ -1241,10 +1231,9 @@ mod tests {
     }
 
     #[test]
-    fn submitting_phase_interrupt_is_resent_when_the_turn_id_arrives() {
+    fn turn_started_reducer_does_not_schedule_interrupt_control() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.mark_turn_submitting("/tmp/workspace".to_string());
-        assert!(state.mark_interrupt_requested_once());
 
         let reduction = reduce_conversation_runtime(
             state,
@@ -1254,13 +1243,11 @@ mod tests {
             }),
         );
 
-        assert!(reduction.state.interrupt_request_pending);
-        assert!(
-            reduction
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, ConversationRuntimeEffect::ResendPendingInterrupt))
+        assert_eq!(
+            reduction.state.active_turn_id.as_deref(),
+            Some("turn-after-stop")
         );
+        assert!(reduction.effects.is_empty());
     }
 
     #[test]
@@ -1403,21 +1390,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_interrupt_failure_reopens_stop_request_gate() {
+    fn terminal_interrupt_failure_is_presented_without_tui_admission_state() {
         let mut state = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         state.mark_turn_submitting("/tmp/workspace".to_string());
-        assert!(state.mark_interrupt_requested_once());
 
-        let mut reduction = reduce_conversation_runtime(
+        let reduction = reduce_conversation_runtime(
             state,
             stream_snapshot_event(ConversationStreamEvent::TurnInterruptRequestFailed {
                 message: "interrupt retries exhausted".to_string(),
             }),
         );
 
-        assert!(!reduction.state.interrupt_request_pending);
         assert_eq!(reduction.state.status_text, "interrupt retries exhausted");
-        assert!(reduction.state.mark_interrupt_requested_once());
+        assert!(reduction.effects.is_empty());
     }
 
     #[test]

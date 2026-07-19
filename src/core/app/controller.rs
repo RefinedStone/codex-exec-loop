@@ -5,7 +5,8 @@ use super::{
     ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
     QueueMutationCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
     SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
-    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission,
+    TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
     TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
@@ -37,6 +38,13 @@ struct ActiveApprovalDecision {
     phase: ApprovalDecisionPhase,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ActiveStopRequest {
+    correlation: StopRequestCorrelation,
+    pending_attempt: Option<StopRequestAttempt>,
+    synchronize_after_turn_started: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct CoreController {
     state: AppState,
@@ -64,6 +72,8 @@ pub struct CoreController {
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
+    next_stop_request_generation: u64,
+    active_stop_request: Option<ActiveStopRequest>,
     next_turn_steer_generation: u64,
     active_turn_steer: Option<ActiveTurnSteer>,
     next_approval_decision_generation: u64,
@@ -102,6 +112,8 @@ impl CoreController {
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
+            next_stop_request_generation: 1,
+            active_stop_request: None,
             next_turn_steer_generation: 1,
             active_turn_steer: None,
             next_approval_decision_generation: 1,
@@ -197,6 +209,7 @@ impl CoreController {
                 self.deferred_conversation_load = None;
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.active_stop_request = None;
                 self.active_turn_steer = None;
                 self.active_approval_decision = None;
                 self.guarded_session_rename_stream = None;
@@ -342,6 +355,42 @@ impl CoreController {
                     effects: vec![CoreEffect::SubmitTurn {
                         correlation,
                         request,
+                    }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::RequestStopAllSessions) => {
+                if let Some(active) = self.active_stop_request {
+                    return CoreDispatchOutcome {
+                        events: vec![AppEvent::StopRequestAdmissionResolved(
+                            StopRequestAdmission::RejectedActive {
+                                active_correlation: active.correlation,
+                            },
+                        )],
+                        effects: Vec::new(),
+                        snapshot: self.snapshot(),
+                    };
+                }
+                let correlation = StopRequestCorrelation::new(
+                    take_generation(
+                        &mut self.next_stop_request_generation,
+                        "runtime stop request",
+                    ),
+                    self.active_turn_submission,
+                );
+                self.active_stop_request = Some(ActiveStopRequest {
+                    correlation,
+                    pending_attempt: Some(StopRequestAttempt::Initial),
+                    synchronize_after_turn_started: correlation.turn_submission.is_some()
+                        && !self.turn_stream_state.has_active_turn(),
+                });
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::StopRequestAdmissionResolved(
+                        StopRequestAdmission::Accepted { correlation },
+                    )],
+                    effects: vec![CoreEffect::RequestStopAllSessions {
+                        correlation,
+                        attempt: StopRequestAttempt::Initial,
                     }],
                     snapshot: self.snapshot(),
                 }
@@ -573,6 +622,7 @@ impl CoreController {
                 };
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.active_stop_request = None;
                 self.active_turn_steer = None;
                 self.active_approval_decision = None;
                 self.guarded_session_rename_stream = None;
@@ -653,6 +703,38 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation,
+                attempt,
+                result,
+            }) => {
+                if self.active_stop_request.is_none_or(|active| {
+                    active.correlation != correlation || active.pending_attempt != Some(attempt)
+                }) {
+                    return self.unchanged_outcome();
+                }
+                self.active_stop_request
+                    .as_mut()
+                    .expect("exact active stop request must remain present")
+                    .pending_attempt = None;
+                let failed = result.is_err();
+                if failed || correlation.turn_submission.is_none() {
+                    self.active_stop_request = None;
+                }
+                let mut effects = Vec::new();
+                if !failed {
+                    self.schedule_stop_synchronization_after_turn_started(&mut effects);
+                }
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::StopRequestAttemptCompleted {
+                        correlation,
+                        attempt,
+                        result,
+                    }],
+                    effects,
                     snapshot: self.snapshot(),
                 }
             }
@@ -863,6 +945,7 @@ impl CoreController {
         fallback_workspace_directory: String,
     ) -> CoreDispatchOutcome {
         self.active_turn_submission = None;
+        self.active_stop_request = None;
         self.active_turn_steer = None;
         self.active_approval_decision = None;
         self.guarded_session_rename_stream = None;
@@ -923,6 +1006,7 @@ impl CoreController {
             "turn submission",
         ));
         self.guarded_session_rename_stream = None;
+        self.active_stop_request = None;
         self.active_approval_decision = None;
         self.active_turn_submission = Some(correlation);
         self.turn_stream_state.begin_submission();
@@ -983,7 +1067,19 @@ impl CoreController {
             &stream_snapshot.update,
             TurnStreamUpdate::TurnTerminalIgnored { .. }
         );
+        let turn_started = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnStarted { .. }
+        );
+        let retry_reopens_stop = matches!(
+            &stream_snapshot.update,
+            TurnStreamUpdate::TurnRetrying {
+                correlation_failure: None,
+                ..
+            }
+        );
         let mut events = vec![AppEvent::turn_stream_snapshot_changed(stream_snapshot)];
+        let mut effects = Vec::new();
 
         if rejected_terminal {
             let failed = self
@@ -993,11 +1089,17 @@ impl CoreController {
                         .to_string(),
                 });
             events.push(AppEvent::turn_stream_snapshot_changed(failed));
+            self.clear_stop_request_for_turn(correlation);
             self.active_turn_submission = None;
             self.guarded_session_rename_stream = None;
         } else if closes_submission {
+            self.clear_stop_request_for_turn(correlation);
             self.active_turn_submission = None;
             self.guarded_session_rename_stream = None;
+        } else if retry_reopens_stop {
+            self.clear_stop_request_for_turn(correlation);
+        } else if turn_started {
+            self.schedule_stop_synchronization_after_turn_started(&mut effects);
         }
         if self
             .active_approval_decision
@@ -1014,8 +1116,36 @@ impl CoreController {
 
         CoreDispatchOutcome {
             events,
-            effects: Vec::new(),
+            effects,
             snapshot: self.snapshot(),
+        }
+    }
+
+    fn schedule_stop_synchronization_after_turn_started(&mut self, effects: &mut Vec<CoreEffect>) {
+        let Some(active) = self.active_stop_request.as_mut() else {
+            return;
+        };
+        if !active.synchronize_after_turn_started
+            || active.pending_attempt.is_some()
+            || active.correlation.turn_submission != self.active_turn_submission
+            || !self.turn_stream_state.has_active_turn()
+        {
+            return;
+        }
+        active.synchronize_after_turn_started = false;
+        active.pending_attempt = Some(StopRequestAttempt::AfterTurnStarted);
+        effects.push(CoreEffect::RequestStopAllSessions {
+            correlation: active.correlation,
+            attempt: StopRequestAttempt::AfterTurnStarted,
+        });
+    }
+
+    fn clear_stop_request_for_turn(&mut self, correlation: TurnSubmissionCorrelation) {
+        if self
+            .active_stop_request
+            .is_some_and(|active| active.correlation.turn_submission == Some(correlation))
+        {
+            self.active_stop_request = None;
         }
     }
 
@@ -1144,6 +1274,7 @@ mod tests {
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
     use crate::domain::session_summary::SessionSummary;
+    use crate::domain::turn_terminal::ConversationTurnError;
 
     fn manual_prompt_intent(
         workspace_directory: &str,
@@ -2162,6 +2293,268 @@ mod tests {
             )]
         );
         assert!(second_outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn idle_stop_request_is_single_flight_and_failure_reopens_the_gate() {
+        let mut controller = CoreController::new();
+        let correlation = StopRequestCorrelation::new(1, None);
+
+        let accepted =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::StopRequestAdmissionResolved(
+                StopRequestAdmission::Accepted { correlation },
+            )]
+        );
+        assert_eq!(
+            accepted.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt: StopRequestAttempt::Initial,
+            }]
+        );
+
+        let duplicate =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::StopRequestAdmissionResolved(
+                StopRequestAdmission::RejectedActive {
+                    active_correlation: correlation,
+                },
+            )]
+        );
+        assert!(duplicate.effects.is_empty());
+
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation,
+                attempt: StopRequestAttempt::Initial,
+                result: Err("runtime unavailable".to_string()),
+            },
+        ));
+        assert_eq!(
+            failed.events,
+            vec![AppEvent::StopRequestAttemptCompleted {
+                correlation,
+                attempt: StopRequestAttempt::Initial,
+                result: Err("runtime unavailable".to_string()),
+            }]
+        );
+
+        let retry = controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        let retry_correlation = StopRequestCorrelation::new(2, None);
+        assert_eq!(
+            retry.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation: retry_correlation,
+                attempt: StopRequestAttempt::Initial,
+            }]
+        );
+
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: retry_correlation,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+        let repeated =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        assert_eq!(
+            repeated.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation: StopRequestCorrelation::new(3, None),
+                attempt: StopRequestAttempt::Initial,
+            }]
+        );
+    }
+
+    #[test]
+    fn pre_start_stop_synchronizes_once_and_fail_closed_stream_error_keeps_the_gate() {
+        let mut controller = CoreController::new();
+        let turn_submission = submit_test_turn(&mut controller, Some("thread-1"));
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+        let correlation = StopRequestCorrelation::new(1, Some(turn_submission));
+
+        let requested =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        assert_eq!(
+            requested.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt: StopRequestAttempt::Initial,
+            }]
+        );
+
+        let started = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        assert!(started.effects.is_empty());
+
+        let initial_completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+        assert_eq!(
+            initial_completed.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+            }]
+        );
+
+        let duplicate_started = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        assert!(duplicate_started.effects.is_empty());
+
+        let synchronized = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+                result: Ok(()),
+            },
+        ));
+        assert_eq!(
+            synchronized.events,
+            vec![AppEvent::StopRequestAttemptCompleted {
+                correlation,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+                result: Ok(()),
+            }]
+        );
+
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::TurnInterruptRequestFailed {
+                message: "interrupt retries exhausted".to_string(),
+            },
+        ));
+        let still_blocked =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        assert!(matches!(
+            still_blocked.events.as_slice(),
+            [AppEvent::StopRequestAdmissionResolved(
+                StopRequestAdmission::RejectedActive {
+                    active_correlation,
+                }
+            )] if *active_correlation == correlation
+        ));
+
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::TurnRetrying {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                error: ConversationTurnError::new("retrying", None::<&str>, None),
+            },
+        ));
+        let retried =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        let retry_correlation = StopRequestCorrelation::new(2, Some(turn_submission));
+        assert_eq!(
+            retried.effects,
+            vec![CoreEffect::RequestStopAllSessions {
+                correlation: retry_correlation,
+                attempt: StopRequestAttempt::Initial,
+            }]
+        );
+
+        let retry_initial_completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: retry_correlation,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+        assert!(retry_initial_completed.effects.is_empty());
+
+        let duplicate_started = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        ));
+        assert!(duplicate_started.effects.is_empty());
+    }
+
+    #[test]
+    fn post_start_stop_does_not_resynchronize_and_stale_completion_cannot_cross_aba() {
+        let mut controller = CoreController::new();
+        let first_turn = start_test_turn(&mut controller, "thread-1", "turn-same");
+        let first_stop = StopRequestCorrelation::new(1, Some(first_turn));
+        controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        let first_completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: first_stop,
+                attempt: StopRequestAttempt::Initial,
+                result: Ok(()),
+            },
+        ));
+        assert!(first_completed.effects.is_empty());
+
+        controller.handle_input(test_turn_stream_input(
+            first_turn,
+            TurnStreamEvent::Failed {
+                message: "first turn stopped".to_string(),
+            },
+        ));
+        let second_turn = start_test_turn(&mut controller, "thread-1", "turn-same");
+        let second_stop = StopRequestCorrelation::new(2, Some(second_turn));
+        controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation: first_stop,
+                attempt: StopRequestAttempt::Initial,
+                result: Err("late first completion".to_string()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert!(stale.effects.is_empty());
+
+        let duplicate =
+            controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::StopRequestAdmissionResolved(
+                StopRequestAdmission::RejectedActive {
+                    active_correlation: second_stop,
+                },
+            )]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "runtime stop request generation exhausted")]
+    fn stop_request_generation_panics_before_it_can_wrap() {
+        let mut controller = CoreController::new();
+        controller.next_stop_request_generation = u64::MAX;
+
+        controller.handle_input(CoreInput::Command(AppCommand::RequestStopAllSessions));
     }
 
     #[test]

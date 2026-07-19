@@ -2,8 +2,8 @@ use super::{
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, GithubReviewPollCorrelation,
     ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
     ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
-    StartupCheckCorrelation, TurnSteerCorrelation, TurnSubmissionCorrelation,
-    TurnSubmissionRequest,
+    StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation, TurnSteerCorrelation,
+    TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::github_review::GithubPullRequestPollState;
@@ -42,6 +42,10 @@ pub enum CoreEffect {
     SubmitTurn {
         correlation: TurnSubmissionCorrelation,
         request: TurnSubmissionRequest,
+    },
+    RequestStopAllSessions {
+        correlation: StopRequestCorrelation,
+        attempt: StopRequestAttempt,
     },
     SteerTurn {
         correlation: TurnSteerCorrelation,

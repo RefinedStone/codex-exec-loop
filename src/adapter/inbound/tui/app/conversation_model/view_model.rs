@@ -134,10 +134,6 @@ pub(crate) struct ConversationViewModel {
     pub(crate) active_turn_id: Option<String>,
     pub(crate) active_turn_workspace_directory: Option<String>,
     pub(crate) active_turn_started_at: Option<Instant>,
-    // Set after the shell has forwarded one interrupt for the active turn. It
-    // prevents repeated Ctrl-C/:stop input from incrementing the global runtime
-    // interrupt generation until this turn starts, finishes, or the request fails.
-    pub(crate) interrupt_request_pending: bool,
     pub(crate) planning_repair_state: Option<PlanningRepairState>,
     pub(crate) input_state: ConversationInputState,
     pub(crate) auto_follow_state: AutoFollowState,
@@ -194,7 +190,6 @@ impl ConversationViewModel {
             active_turn_id: None,
             active_turn_workspace_directory: None,
             active_turn_started_at: None,
-            interrupt_request_pending: false,
             planning_repair_state: None,
             input_state: ConversationInputState::DraftReady,
             auto_follow_state: AutoFollowState::new(),
@@ -274,7 +269,6 @@ impl ConversationViewModel {
             active_turn_id: None,
             active_turn_workspace_directory: None,
             active_turn_started_at: None,
-            interrupt_request_pending: false,
             planning_repair_state: None,
             input_state: ConversationInputState::ReadyToContinue,
             auto_follow_state: AutoFollowState::new(),
@@ -491,7 +485,6 @@ impl ConversationViewModel {
     }
     pub(crate) fn mark_turn_submitting(&mut self, workspace_directory: String) {
         self.startup_submit_armed = false;
-        self.interrupt_request_pending = false;
         self.activity_rail_terminal_state = None;
         self.input_state = ConversationInputState::SubmittingTurn;
         self.active_turn_workspace_directory = Some(workspace_directory);
@@ -503,9 +496,6 @@ impl ConversationViewModel {
     pub(crate) fn mark_turn_started(&mut self, turn_id: String) {
         self.active_turn_id = Some(turn_id);
         self.activity_rail_terminal_state = None;
-        // Keep a submitting-phase stop sticky. The runtime reducer resends that
-        // interrupt after the concrete turn id arrives, closing the race where
-        // app-server samples the first stop generation while starting the turn.
         self.input_state = ConversationInputState::StreamingTurn;
         // A recovered start may arrive without a prior submitting phase, so seed the timer here too.
         self.active_turn_started_at.get_or_insert_with(Instant::now);
@@ -520,7 +510,6 @@ impl ConversationViewModel {
         self.active_turn_id = None;
         self.active_turn_workspace_directory = None;
         self.active_turn_started_at = None;
-        self.interrupt_request_pending = false;
         self.pending_approval_request = None;
         self.pending_approval_resolution = None;
         self.approval_detail_scroll_offset = 0;
@@ -602,16 +591,6 @@ impl ConversationViewModel {
             .approval_detail_scroll_offset
             .saturating_add_signed(delta)
             .min(u16::MAX as usize);
-    }
-    pub(crate) fn mark_interrupt_requested_once(&mut self) -> bool {
-        if !self.has_running_turn() || self.interrupt_request_pending {
-            return false;
-        }
-        self.interrupt_request_pending = true;
-        true
-    }
-    pub(crate) fn clear_interrupt_request(&mut self) {
-        self.interrupt_request_pending = false;
     }
     pub(crate) fn finish_turn(
         &mut self,

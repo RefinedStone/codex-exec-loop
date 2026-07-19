@@ -19,6 +19,7 @@ pub mod session;
 pub mod snapshot;
 pub mod startup;
 pub mod state;
+pub mod turn_interrupt;
 pub mod turn_steer;
 pub mod turn_stream;
 pub mod turn_submission;
@@ -55,6 +56,7 @@ pub use startup::{
     StartupState,
 };
 pub use state::AppState;
+pub use turn_interrupt::{StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation};
 pub use turn_steer::{TurnSteerAdmission, TurnSteerCorrelation};
 pub use turn_stream::{
     TurnStreamEvent, TurnStreamProgressiveActivityUpdate, TurnStreamRuntimeEnvelopeRejection,

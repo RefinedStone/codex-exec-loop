@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::app::{
-    AppCommand, AppEvent, ApprovalDecisionAdmission, TurnSteerAdmission, TurnSteerCorrelation,
+    AppCommand, AppEvent, ApprovalDecisionAdmission, StopRequestAdmission, StopRequestAttempt,
+    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
 };
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
@@ -63,17 +64,6 @@ impl NativeTuiApp {
             &self.conversation_state,
             ConversationState::Ready(conversation) if conversation.has_running_turn()
         )
-    }
-    fn mark_active_turn_interrupt_requested_once(&mut self) -> bool {
-        match &mut self.conversation_state {
-            ConversationState::Ready(conversation) => conversation.mark_interrupt_requested_once(),
-            ConversationState::Loading | ConversationState::Failed(_) => false,
-        }
-    }
-    pub(super) fn clear_active_turn_interrupt_request(&mut self) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.clear_interrupt_request();
-        }
     }
     pub(super) fn show_startup_overlay(&mut self) {
         self.dispatch_shell_chrome(ShellChromeEvent::StartupOverlayShown);
@@ -391,26 +381,44 @@ impl NativeTuiApp {
         self.close_parallel_mode_automation_epoch();
         self.invalidate_parallel_mode_supervisor_snapshot();
         // Stop is both a local mode transition and an app-server control request:
-        // disable future automation immediately, then ask the service to
-        // interrupt any running native sessions.
-        let has_running_turn = self.conversation_has_running_turn();
-        if has_running_turn && !self.mark_active_turn_interrupt_requested_once() {
-            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "stop already requested / waiting for the active app-server turn / auto-follow remains disarmed until :turns re-enables it"
-                    .to_string(),
-            });
-            return;
-        }
-        let status_text = match self.application.request_stop_all_sessions() {
-            Ok(()) if has_running_turn => {
+        // disable future automation immediately, then let Core correlate the
+        // global runtime signal with the active turn generation.
+        self.dispatch_core_command(AppCommand::RequestStopAllSessions);
+    }
+    pub(super) fn apply_stop_request_admission(&mut self, admission: StopRequestAdmission) {
+        let status_text = match admission {
+            StopRequestAdmission::Accepted { correlation }
+                if correlation.turn_submission.is_some() =>
+            {
                 "stop requested / active app-server sessions will be interrupted / auto-follow disarmed until :turns re-enables it".to_string()
             }
-            Ok(()) => "stop requested / no active turn is running / auto-follow disarmed until :turns re-enables it".to_string(),
-            Err(error) => {
-                self.clear_active_turn_interrupt_request();
-                format!(
-                    "stop request failed: {error} / auto-follow remains disarmed until :turns re-enables it"
-                )
+            StopRequestAdmission::Accepted { .. } => {
+                "stop requested / no active turn is running / auto-follow disarmed until :turns re-enables it".to_string()
+            }
+            StopRequestAdmission::RejectedActive { .. } => {
+                "stop already requested / waiting for the active app-server turn / auto-follow remains disarmed until :turns re-enables it".to_string()
+            }
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+    pub(super) fn apply_stop_request_attempt_completion(
+        &mut self,
+        _correlation: StopRequestCorrelation,
+        attempt: StopRequestAttempt,
+        result: Result<(), String>,
+    ) {
+        let status_text = match (attempt, result) {
+            (StopRequestAttempt::Initial, Ok(())) => return,
+            (StopRequestAttempt::AfterTurnStarted, Ok(())) => {
+                "stop synchronized / active app-server turn will be interrupted".to_string()
+            }
+            (StopRequestAttempt::Initial, Err(error)) => format!(
+                "stop request failed: {error} / auto-follow remains disarmed until :turns re-enables it"
+            ),
+            (StopRequestAttempt::AfterTurnStarted, Err(error)) => {
+                format!("stop request failed after turn start: {error}")
             }
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -2110,10 +2118,16 @@ mod tests {
             "only an explicit positive :turns command should re-arm automation"
         );
 
-        ready_conversation_mut(&mut app).record_turn_started("turn-1".to_string());
+        let turn_submission = app.core_runtime.begin_test_turn_submission();
+        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: crate::core::app::TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
         app.execute_inline_shell_command_input(command(":stop"));
         assert!(status_text(&app).contains("active app-server sessions"));
-        assert!(ready_conversation(&app).interrupt_request_pending);
         app.execute_inline_shell_command_input(command(":stop"));
         assert!(status_text(&app).contains("stop already requested"));
     }
@@ -2121,20 +2135,33 @@ mod tests {
     #[test]
     fn ctrl_c_interrupts_a_running_turn_once_and_keeps_idle_navigation_semantics() {
         let mut app = test_native_tui_app();
+        let turn_submission = app.core_runtime.begin_test_turn_submission();
         ready_conversation_mut(&mut app).mark_turn_submitting("/tmp/root".to_string());
 
         app.handle_ctrl_c();
-        assert!(ready_conversation(&app).interrupt_request_pending);
-        ready_conversation_mut(&mut app).record_turn_started("turn-ctrl-c".to_string());
-        assert!(ready_conversation(&app).interrupt_request_pending);
+        assert!(status_text(&app).contains("stop requested"));
+        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: crate::core::app::TurnStreamEvent::TurnStarted {
+                turn_id: "turn-ctrl-c".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+        assert!(status_text(&app).contains("stop synchronized"));
         assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
 
         app.handle_ctrl_c();
         assert!(status_text(&app).contains("stop already requested"));
-        assert!(ready_conversation(&app).interrupt_request_pending);
 
+        let _ = app.core_runtime.dispatch_input(
+            crate::core::app::CoreInput::ConversationStreamUpdated {
+                correlation: turn_submission,
+                event: crate::core::app::TurnStreamEvent::Failed {
+                    message: "turn stopped".to_string(),
+                },
+            },
+        );
         ready_conversation_mut(&mut app).mark_turn_finished();
-        assert!(!ready_conversation(&app).interrupt_request_pending);
         app.handle_ctrl_c();
         assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
         assert!(ready_conversation(&app).is_blank_draft());
@@ -3784,7 +3811,7 @@ mod tests {
         assert!(
             app.handle_shell_overlay_key(modified_key(KeyCode::Char('c'), KeyModifiers::CONTROL,))
         );
-        assert!(ready_conversation(&app).interrupt_request_pending);
+        assert!(status_text(&app).contains("stop requested"));
         assert_eq!(
             ready_conversation(&app).pending_approval_decision(),
             Some(crate::domain::conversation::ConversationApprovalDecision::Accept)

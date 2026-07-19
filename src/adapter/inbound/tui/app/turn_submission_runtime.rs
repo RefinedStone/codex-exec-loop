@@ -171,20 +171,6 @@ impl NativeTuiApp {
             ConversationRuntimeEffect::CloseApprovalOverlay => {
                 self.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
             }
-            ConversationRuntimeEffect::ResendPendingInterrupt => {
-                let status_text = match self.application.request_stop_all_sessions() {
-                    Ok(()) => {
-                        "stop synchronized / active app-server turn will be interrupted".to_string()
-                    }
-                    Err(error) => {
-                        self.clear_active_turn_interrupt_request();
-                        format!("stop request failed after turn start: {error}")
-                    }
-                };
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text,
-                });
-            }
             ConversationRuntimeEffect::DispatchOperatorAlert { alert } => {
                 if let Err(error) = self
                     .tx

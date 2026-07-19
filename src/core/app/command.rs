@@ -38,6 +38,7 @@ pub enum AppCommand {
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
     SubmitTurn(TurnSubmissionRequest),
+    RequestStopAllSessions,
     SteerTurn(ConversationTurnSteerRequest),
     SubmitApprovalDecision {
         approval_id: String,

@@ -1154,10 +1154,6 @@ impl NativeTuiApplicationHandle {
         self.conversations.runtime_control_truth()
     }
 
-    pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
-        self.conversations.request_stop_all_sessions()
-    }
-
     pub(super) fn persist_review_center_approval_review_for_workspace(
         &self,
         workspace_dir: &str,
@@ -1181,12 +1177,6 @@ impl NativeTuiConversationHandle {
 
     pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
         self.service.runtime_control_truth()
-    }
-
-    pub(super) fn request_stop_all_sessions(&self) -> Result<(), String> {
-        self.service
-            .request_stop_all_sessions()
-            .map_err(|error| error.to_string())
     }
 
     pub(super) fn persist_review_center_approval_review_for_workspace(
@@ -1516,6 +1506,16 @@ impl NativeTuiApp {
                 result,
             } => {
                 self.apply_queue_mutation_completion(correlation, *result);
+            }
+            AppEvent::StopRequestAdmissionResolved(admission) => {
+                self.apply_stop_request_admission(admission);
+            }
+            AppEvent::StopRequestAttemptCompleted {
+                correlation,
+                attempt,
+                result,
+            } => {
+                self.apply_stop_request_attempt_completion(correlation, attempt, result);
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnSteerAdmissionResolved(_) => {}

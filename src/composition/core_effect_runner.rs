@@ -31,6 +31,7 @@ use crate::core::app::{
     QueueMutationResult, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
     ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
     SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    StopRequestAttempt, StopRequestCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -167,6 +168,14 @@ impl CoreEffectRunner {
                 self.spawn_turn_submission(correlation, request);
                 None
             }
+            CoreEffect::RequestStopAllSessions {
+                correlation,
+                attempt,
+            } => Some(CoreInput::EffectCompleted(stop_request_attempt_completion(
+                correlation,
+                attempt,
+                self.conversation_service.request_stop_all_sessions(),
+            ))),
             CoreEffect::SteerTurn {
                 correlation,
                 request,
@@ -630,6 +639,18 @@ fn queue_mutation_completion(
     }
 }
 
+fn stop_request_attempt_completion(
+    correlation: StopRequestCorrelation,
+    attempt: StopRequestAttempt,
+    result: anyhow::Result<()>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::StopRequestAttemptCompleted {
+        correlation,
+        attempt,
+        result: result.map_err(|error| error.to_string()),
+    }
+}
+
 fn conversation_ready_snapshot(
     snapshot: LoadedConversationThreadSnapshot,
 ) -> ConversationReadySnapshot {
@@ -647,7 +668,7 @@ fn conversation_ready_snapshot(
 mod tests {
     use super::*;
     use crate::application::service::planning::PlanningQueueAuthoritySnapshot;
-    use crate::core::app::{QueueMutationKind, QueueMutationTarget};
+    use crate::core::app::{QueueMutationKind, QueueMutationTarget, TurnSubmissionCorrelation};
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::planning::{
         RuntimeProjection, TaskActor, TaskDefinition, TaskMutationProvenance, TaskStatus,
@@ -1182,6 +1203,24 @@ mod tests {
                     projection_revision: 41,
                     authority_revision: 42,
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn stop_request_attempt_preserves_correlation_phase_and_error() {
+        let correlation = StopRequestCorrelation::new(7, Some(TurnSubmissionCorrelation::new(3)));
+
+        assert_eq!(
+            stop_request_attempt_completion(
+                correlation,
+                StopRequestAttempt::AfterTurnStarted,
+                Err(anyhow::anyhow!("runtime unavailable")),
+            ),
+            CoreEffectCompletion::StopRequestAttemptCompleted {
+                correlation,
+                attempt: StopRequestAttempt::AfterTurnStarted,
+                result: Err("runtime unavailable".to_string()),
             }
         );
     }
