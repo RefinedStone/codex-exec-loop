@@ -97,6 +97,8 @@ pub(crate) struct LanguageSelectionOverlayView {
  * pool capacity, live roster, selected detail, distributor queue, and controls.
  */
 pub(crate) struct SupersessionOverlayView {
+    // Whether the current MUD focus selects an actor/detail panel.
+    pub(crate) selection_visible: bool,
     // Overlay title and current supersession mode.
     pub(crate) header_lines: Vec<Line<'static>>,
     // One-screen summary of orchestration state before detailed panels.

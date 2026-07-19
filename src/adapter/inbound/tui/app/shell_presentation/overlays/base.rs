@@ -10,6 +10,7 @@ use super::super::{
  */
 pub(crate) fn build_startup_banner_lines(
     app: &NativeTuiApp,
+    parallel_mode_enabled: bool,
     max_height: Option<u16>,
 ) -> Option<Vec<Line<'static>>> {
     /*
@@ -22,7 +23,7 @@ pub(crate) fn build_startup_banner_lines(
         ConversationState::Loading | ConversationState::Failed(_) => None,
     };
     if !app.show_startup_ascii_art
-        || !conversation_startup_screen_is_active(app.parallel_mode_enabled(), conversation)
+        || !conversation_startup_screen_is_active(parallel_mode_enabled, conversation)
     {
         return None;
     }

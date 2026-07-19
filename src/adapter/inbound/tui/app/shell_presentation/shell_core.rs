@@ -8,37 +8,189 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlanePresentationProjection;
 use crate::application::service::planning::PlanningRuntimeProjection;
-use crate::core::app::AppSnapshot;
+use crate::core::app::{AppSnapshot, ParallelModeProjection};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::PlanningWorkerPanelState;
 
 use super::super::parallel_presentation_bridge::{
     ParallelModePresentationLoadingStage, pending_parallel_mode_supervisor_snapshot,
 };
+use super::super::parallel_supervisor_events::ParallelSupervisorEventProjection;
 use super::capability_projection::recent_session_status_label;
 use super::{
-    ConversationState, ConversationViewModel, InlineHistoryRenderMode, NativeTuiApp,
-    ParallelPanelStateController, ShellActionAvailability, ShellOverlay, StartupState, TuiLanguage,
+    ConversationState, ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode,
+    NativeTuiApp, ParallelPanelStateController, ShellActionAvailability, ShellOverlay,
+    StartupState, TuiLanguage,
 };
 
 const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::adapter::inbound::tui::app) struct ParallelPanelProjectionSample {
+    parallel_control_plane: ParallelModeControlPlanePresentationProjection,
+    parallel_mode: ParallelModeProjection,
+}
+
+impl ParallelPanelProjectionSample {
+    pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
+        Self {
+            parallel_mode: app.core_runtime.parallel_mode_projection(),
+            parallel_control_plane: app.parallel_mode_control_plane.presentation_projection(),
+        }
+    }
+
+    fn from_conversation_snapshot(
+        core_snapshot: &AppSnapshot,
+        parallel_control_plane: ParallelModeControlPlanePresentationProjection,
+    ) -> Self {
+        Self {
+            parallel_control_plane,
+            parallel_mode: core_snapshot.planning_parallel.parallel_mode.clone(),
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_enabled(&self) -> bool {
+        self.parallel_control_plane.mode_enabled
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_control_effect_in_flight(
+        &self,
+    ) -> bool {
+        self.parallel_control_plane.control_effect_in_flight
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn last_parallel_mode_dispatch_withheld_reason(
+        &self,
+    ) -> Option<&str> {
+        self.parallel_control_plane
+            .last_dispatch_withheld_reason
+            .as_deref()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_readiness_for_workspace(
+        &self,
+        workspace_directory: Option<&str>,
+    ) -> Option<ParallelModeReadinessSnapshot> {
+        self.parallel_mode
+            .readiness
+            .as_deref()
+            .filter(|snapshot| {
+                workspace_directory.is_none_or(|workspace| snapshot.workspace_path == workspace)
+            })
+            .cloned()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_supervisor_for_workspace(
+        &self,
+        workspace_directory: Option<&str>,
+    ) -> Option<ParallelModeSupervisorSnapshot> {
+        self.parallel_mode
+            .supervisor
+            .as_deref()
+            .filter(|snapshot| {
+                workspace_directory.is_none_or(|workspace| snapshot.workspace_path == workspace)
+            })
+            .cloned()
+    }
+}
+
 pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
     core_snapshot: AppSnapshot,
+    parallel_panel: ParallelPanelProjectionSample,
+    parallel_supervisor_events: ParallelSupervisorEventProjection,
+    inline_history_render_mode: InlineHistoryRenderMode,
+    history_insert_mode: HistoryInsertionMode,
     rendered_at: Instant,
     animation_elapsed_millis: u128,
 }
 
 impl ConversationProjectionSample {
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
+        let core_snapshot = app.core_runtime.snapshot();
+        let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();
         Self {
-            core_snapshot: app.core_runtime.snapshot(),
+            parallel_panel: ParallelPanelProjectionSample::from_conversation_snapshot(
+                &core_snapshot,
+                parallel_control_plane,
+            ),
+            core_snapshot,
+            parallel_supervisor_events: app.parallel_supervisor_event_log.projection(),
+            inline_history_render_mode: app.inline_history_render_mode,
+            history_insert_mode: app.history_insert_mode,
             rendered_at: Instant::now(),
             animation_elapsed_millis: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_millis()),
         }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_enabled(&self) -> bool {
+        self.parallel_panel.parallel_mode_enabled()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_control_effect_in_flight(
+        &self,
+    ) -> bool {
+        self.parallel_panel.parallel_mode_control_effect_in_flight()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn last_parallel_mode_dispatch_withheld_reason(
+        &self,
+    ) -> Option<&str> {
+        self.parallel_panel
+            .last_parallel_mode_dispatch_withheld_reason()
+    }
+
+    #[cfg(test)]
+    pub(in crate::adapter::inbound::tui::app) fn parallel_panel_sample(
+        &self,
+    ) -> &ParallelPanelProjectionSample {
+        &self.parallel_panel
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn inline_history_render_mode(
+        &self,
+    ) -> InlineHistoryRenderMode {
+        self.inline_history_render_mode
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn history_insert_mode(
+        &self,
+    ) -> HistoryInsertionMode {
+        self.history_insert_mode
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_supervisor_event_lines(
+        &self,
+    ) -> Vec<Line<'static>> {
+        self.parallel_supervisor_events.live_lines()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_supervisor_event_scrollback_lines_before_live_tail(
+        &self,
+        live_tail_rows: usize,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        self.parallel_supervisor_events
+            .scrollback_lines_before_rendered_live_tail(live_tail_rows, width)
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_readiness_for_workspace(
+        &self,
+        workspace_directory: Option<&str>,
+    ) -> Option<ParallelModeReadinessSnapshot> {
+        self.parallel_panel
+            .parallel_mode_readiness_for_workspace(workspace_directory)
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn parallel_mode_supervisor_for_workspace(
+        &self,
+        workspace_directory: Option<&str>,
+    ) -> Option<ParallelModeSupervisorSnapshot> {
+        self.parallel_panel
+            .parallel_mode_supervisor_for_workspace(workspace_directory)
     }
 }
 
@@ -69,6 +221,8 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) tui_language: TuiLanguage,
     pub(in crate::adapter::inbound::tui::app) parallel_mode_enabled: bool,
     pub(in crate::adapter::inbound::tui::app) parallel_mode_control_effect_in_flight: bool,
+    pub(in crate::adapter::inbound::tui::app) last_parallel_mode_dispatch_withheld_reason:
+        Option<String>,
     pub(in crate::adapter::inbound::tui::app) parallel_mode_loading_prompt_indicator_visible: bool,
     pub(in crate::adapter::inbound::tui::app) parallel_mode_readiness:
         Option<ParallelModeReadinessSnapshot>,
@@ -113,31 +267,13 @@ impl<'a> ConversationScreenModel<'a> {
         } else {
             PlanningRuntimeProjection::uninitialized()
         };
-        let parallel_mode_enabled = app.parallel_mode_control_plane.mode_enabled();
+        let parallel_mode_enabled = sample.parallel_mode_enabled();
         let parallel_mode_control_effect_in_flight =
-            app.parallel_mode_control_plane.control_effect_in_flight();
-        let parallel_mode_readiness = core_snapshot
-            .planning_parallel
-            .parallel_mode
-            .readiness
-            .as_deref()
-            .filter(|snapshot| {
-                workspace_directory
-                    .as_deref()
-                    .is_none_or(|workspace| snapshot.workspace_path == workspace)
-            })
-            .cloned();
-        let current_parallel_mode_supervisor = core_snapshot
-            .planning_parallel
-            .parallel_mode
-            .supervisor
-            .as_deref()
-            .filter(|snapshot| {
-                workspace_directory
-                    .as_deref()
-                    .is_none_or(|workspace| snapshot.workspace_path == workspace)
-            })
-            .cloned();
+            sample.parallel_mode_control_effect_in_flight();
+        let parallel_mode_readiness =
+            sample.parallel_mode_readiness_for_workspace(workspace_directory.as_deref());
+        let current_parallel_mode_supervisor =
+            sample.parallel_mode_supervisor_for_workspace(workspace_directory.as_deref());
         let parallel_panel_visible = app.shell_overlay == ShellOverlay::Supersession
             || (app.shell_overlay == ShellOverlay::Hidden && parallel_mode_enabled);
         let parallel_mode_loading_prompt_indicator_visible = parallel_panel_visible
@@ -196,11 +332,14 @@ impl<'a> ConversationScreenModel<'a> {
             tui_language: app.tui_language,
             parallel_mode_enabled,
             parallel_mode_control_effect_in_flight,
+            last_parallel_mode_dispatch_withheld_reason: sample
+                .last_parallel_mode_dispatch_withheld_reason()
+                .map(str::to_string),
             parallel_mode_loading_prompt_indicator_visible,
             parallel_mode_readiness,
             parallel_mode_supervisor,
             parallel_supervisor_event_lines: if parallel_mode_enabled {
-                app.parallel_supervisor_event_lines()
+                sample.parallel_supervisor_event_lines()
             } else {
                 Vec::new()
             },
@@ -211,7 +350,7 @@ impl<'a> ConversationScreenModel<'a> {
             turn_options_summary: (!app.turn_options.is_default())
                 .then(|| app.turn_options.summary_label()),
             shell_overlay: app.shell_overlay,
-            inline_history_render_mode: app.inline_history_render_mode,
+            inline_history_render_mode: sample.inline_history_render_mode(),
             exit_confirmation_visible,
             turn_steer_confirmation_visible,
             prompt_input_has_focus,
@@ -291,6 +430,7 @@ impl<'a> ConversationScreenModel<'a> {
             tui_language: TuiLanguage::English,
             parallel_mode_enabled: false,
             parallel_mode_control_effect_in_flight: false,
+            last_parallel_mode_dispatch_withheld_reason: None,
             parallel_mode_loading_prompt_indicator_visible: false,
             parallel_mode_readiness: None,
             parallel_mode_supervisor: pending_parallel_mode_supervisor_snapshot(

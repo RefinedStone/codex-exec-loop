@@ -1,12 +1,11 @@
 #[cfg(test)]
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::text::{Line, Span};
 
 use crate::adapter::inbound::tui::supersession_mud::{
-    ParallelModeProgressSummary, SupersessionMudFocusZone, build_supersession_mud_view,
-    parallel_mode_progress_summary,
+    ParallelModeProgressSummary, SupersessionMudFocusZone, SupersessionMudUiState,
+    build_supersession_mud_view, parallel_mode_progress_summary,
 };
 use crate::domain::parallel_mode::{
     ParallelModeDistributorSnapshot, ParallelModePoolBoardSnapshot, ParallelModeSupervisorSnapshot,
@@ -15,7 +14,8 @@ use crate::domain::parallel_mode::{
 use crate::domain::parallel_mode::{ParallelModePoolSlotSnapshot, ParallelModePoolSlotState};
 
 use super::super::super::super::parallel_supervisor_events::parallel_supervisor_snapshot_stream_lines;
-use super::super::super::super::{AkraTheme, ConversationState, NativeTuiApp, TuiLanguage};
+use super::super::super::super::{AkraTheme, TuiLanguage};
+use super::super::super::ConversationScreenModel;
 use super::SupersessionOverlayView;
 
 /* Supersession is the operator board for parallel mode. It intentionally keeps
@@ -23,18 +23,19 @@ use super::SupersessionOverlayView;
  * as separate line groups so the popup can answer "can work start?", "who is
  * running?", and "why is integration blocked?" without requiring navigation.
  */
-pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> SupersessionOverlayView {
-    let readiness_snapshot = app.parallel_mode_readiness_snapshot();
-    let supervisor_snapshot = app.parallel_mode_supervisor_snapshot();
-    let planning_projection = app.planning_runtime_projection_snapshot();
-    let readiness_snapshot_ref = readiness_snapshot.as_ref();
-    let activity_frame = supersession_activity_frame();
-    let mud_view =
-        build_supersession_mud_view(&supervisor_snapshot, &app.supersession_mud_ui_state);
+pub(crate) fn build_supersession_overlay_view(
+    screen_model: &ConversationScreenModel<'_>,
+    mud_ui_state: &SupersessionMudUiState,
+) -> SupersessionOverlayView {
+    let readiness_snapshot = screen_model.parallel_mode_readiness.as_ref();
+    let supervisor_snapshot = &screen_model.parallel_mode_supervisor;
+    let planning_projection = &screen_model.planning_runtime_projection;
+    let activity_frame = supersession_activity_frame(screen_model.animation_elapsed_millis);
+    let mud_view = build_supersession_mud_view(supervisor_snapshot, mud_ui_state);
     let progress = parallel_mode_progress_summary(
-        &supervisor_snapshot,
+        supervisor_snapshot,
         planning_projection.queue_projection(),
-        app.parallel_mode_control_effect_in_flight(),
+        screen_model.parallel_mode_control_effect_in_flight,
     );
     /*
     The core app projection remains the first source for live readiness and
@@ -42,11 +43,16 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     invariants such as queue ordering, pool reconciliation, and official completion
     refresh stay testable outside ratatui rendering.
     */
-    let summary_lines =
-        build_summary_lines(app, readiness_snapshot_ref, &supervisor_snapshot, &progress);
+    let summary_lines = build_summary_lines(
+        screen_model,
+        mud_ui_state,
+        readiness_snapshot,
+        supervisor_snapshot,
+        &progress,
+    );
     let capability_lines = build_distributor_lines_with_mud(
         &supervisor_snapshot.distributor,
-        if app.supersession_mud_ui_state.focused_zone() == SupersessionMudFocusZone::ExitCorridor {
+        if mud_ui_state.focused_zone() == SupersessionMudFocusZone::ExitCorridor {
             &mud_view.distributor_lines
         } else {
             &[]
@@ -55,14 +61,14 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     let pool_lines = build_pool_lines_with_mud(
         &supervisor_snapshot.pool,
         activity_frame,
-        if app.supersession_mud_ui_state.focused_zone() == SupersessionMudFocusZone::RealmMap {
+        if mud_ui_state.focused_zone() == SupersessionMudFocusZone::RealmMap {
             &mud_view.pool_lines
         } else {
             &[]
         },
     );
     let roster_lines = if matches!(
-        app.supersession_mud_ui_state.focused_zone(),
+        mud_ui_state.focused_zone(),
         SupersessionMudFocusZone::RealmMap | SupersessionMudFocusZone::ExitCorridor
     ) {
         mud_view
@@ -76,11 +82,11 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
         build_orchestrator_lines(&supervisor_snapshot.distributor)
     };
     let detail_lines = build_parallel_event_stream_lines(
-        &supervisor_snapshot,
-        app.parallel_supervisor_event_lines(),
-        app.tui_language,
+        supervisor_snapshot,
+        screen_model.parallel_supervisor_event_lines.clone(),
+        screen_model.tui_language,
     );
-    let distributor_lines = match app.supersession_mud_ui_state.focused_zone() {
+    let distributor_lines = match mud_ui_state.focused_zone() {
         SupersessionMudFocusZone::Actors => mud_view.roster_lines,
         SupersessionMudFocusZone::QuestLog => mud_view.detail_lines,
         SupersessionMudFocusZone::RealmMap | SupersessionMudFocusZone::ExitCorridor => Vec::new(),
@@ -89,12 +95,17 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
     .map(Line::from)
     .collect::<Vec<_>>();
     let key_lines = build_command_hint_lines(
-        app.parallel_mode_enabled(),
-        app.parallel_mode_prompt_input_locked(),
-        readiness_snapshot_ref.is_some_and(|snapshot| snapshot.allows_parallel_mode()),
+        screen_model.parallel_mode_enabled,
+        screen_model.parallel_mode_loading_prompt_indicator_visible,
+        readiness_snapshot.is_some_and(|snapshot| snapshot.allows_parallel_mode()),
+    );
+    let selection_visible = matches!(
+        mud_ui_state.focused_zone(),
+        SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog
     );
 
     SupersessionOverlayView {
+        selection_visible,
         header_lines: vec![
             AkraTheme::title_line("Parallel", " / live workspace"),
             Line::styled(
@@ -105,7 +116,7 @@ pub(crate) fn build_supersession_overlay_view(app: &NativeTuiApp) -> Supersessio
                     } else {
                         "Live workspace".to_string()
                     },
-                    if app.parallel_mode_prompt_input_locked() {
+                    if screen_model.parallel_mode_loading_prompt_indicator_visible {
                         "prompt paused while setup completes"
                     } else {
                         "prompt available"
@@ -151,7 +162,8 @@ fn build_command_hint_lines(
 }
 
 fn build_summary_lines(
-    app: &NativeTuiApp,
+    screen_model: &ConversationScreenModel<'_>,
+    mud_ui_state: &SupersessionMudUiState,
     readiness_snapshot: Option<&crate::domain::parallel_mode::ParallelModeReadinessSnapshot>,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     progress: &ParallelModeProgressSummary,
@@ -165,7 +177,12 @@ fn build_summary_lines(
         Span::styled("Parallel", AkraTheme::accent()),
         Span::raw(format!("  {}", progress.compact_line())),
     ])];
-    lines.push(build_current_task_line(app, supervisor_snapshot, progress));
+    lines.push(build_current_task_line(
+        screen_model,
+        mud_ui_state,
+        supervisor_snapshot,
+        progress,
+    ));
     lines.push(Line::styled(
         format!(
             "{}  ·  {}",
@@ -187,7 +204,10 @@ fn build_summary_lines(
             AkraTheme::muted(),
         ));
     }
-    if let Some(reason) = app.last_parallel_mode_dispatch_withheld_reason() {
+    if let Some(reason) = screen_model
+        .last_parallel_mode_dispatch_withheld_reason
+        .as_deref()
+    {
         lines.push(Line::styled(
             format!("Waiting  ·  {reason}"),
             AkraTheme::warning(),
@@ -198,14 +218,14 @@ fn build_summary_lines(
 }
 
 fn build_current_task_line(
-    app: &NativeTuiApp,
+    screen_model: &ConversationScreenModel<'_>,
+    mud_ui_state: &SupersessionMudUiState,
     supervisor_snapshot: &ParallelModeSupervisorSnapshot,
     progress: &ParallelModeProgressSummary,
 ) -> Line<'static> {
-    let handoff = match &app.conversation_state {
-        ConversationState::Ready(conversation) => conversation.last_planning_task_handoff(),
-        ConversationState::Loading | ConversationState::Failed(_) => None,
-    };
+    let handoff = screen_model
+        .ready_conversation()
+        .and_then(|conversation| conversation.last_planning_task_handoff());
     let selected_entry = handoff
         .and_then(|handoff| {
             supervisor_snapshot.roster.entries.iter().find(|entry| {
@@ -219,7 +239,7 @@ fn build_current_task_line(
             supervisor_snapshot
                 .roster
                 .entries
-                .get(app.supersession_mud_ui_state.selected_actor_index())
+                .get(mud_ui_state.selected_actor_index())
         });
 
     if let Some(entry) = selected_entry {
@@ -871,13 +891,9 @@ fn is_pending_distributor(distributor: &ParallelModeDistributorSnapshot) -> bool
             || distributor.head_summary.contains("refreshing"))
 }
 
-fn supersession_activity_frame() -> &'static str {
+fn supersession_activity_frame(animation_elapsed_millis: u128) -> &'static str {
     const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    FRAMES[((millis / 250) as usize) % FRAMES.len()]
+    FRAMES[((animation_elapsed_millis / 250) as usize) % FRAMES.len()]
 }
 
 fn build_orchestrator_lines(distributor: &ParallelModeDistributorSnapshot) -> Vec<Line<'static>> {

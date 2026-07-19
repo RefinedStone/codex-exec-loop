@@ -43,6 +43,14 @@ pub struct ParallelModeControlPlaneEpochSnapshot {
     pub current_epoch_id: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeControlPlanePresentationProjection {
+    pub mode_enabled: bool,
+    pub control_effect_in_flight: bool,
+    pub supervisor_inspection_state: ParallelModeSupervisorInspectionState,
+    pub last_dispatch_withheld_reason: Option<String>,
+}
+
 impl<S> ParallelModeControlPlaneHandle<S>
 where
     S: ParallelModeControlPlaneEventSink,
@@ -101,6 +109,18 @@ where
 
     pub fn mode_enabled(&self) -> bool {
         self.service().mode_enabled()
+    }
+
+    pub fn presentation_projection(&self) -> ParallelModeControlPlanePresentationProjection {
+        let service = self.service();
+        ParallelModeControlPlanePresentationProjection {
+            mode_enabled: service.mode_enabled(),
+            control_effect_in_flight: service.control_effect_in_flight(),
+            supervisor_inspection_state: service.supervisor_inspection_state().clone(),
+            last_dispatch_withheld_reason: service
+                .last_dispatch_withheld_reason()
+                .map(str::to_string),
+        }
     }
 
     pub fn epoch_snapshot(&self) -> ParallelModeControlPlaneEpochSnapshot {

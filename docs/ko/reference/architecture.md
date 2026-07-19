@@ -204,6 +204,12 @@ TUI 변경은 state/reducer, controller/effect, projection/copy, theme/chrome, r
 terminal-adapter 책임을 분리합니다. 시각 token은 `AkraTheme` 뒤에 두고 host scrollback과 live
 viewport에 나뉘는 append-only row 사이에 panel chrome을 삽입하지 않습니다.
 
+같은 terminal transaction은 parallel mode, 진행 중 effect, supervisor inspection, withheld
+reason, event-stream fact도 각각 한 번만 캡처합니다. Supersession row plan,
+host-scrollback/live-tail 분할, prompt lock, animation, draw는 control-plane mutex나 별도 clock을
+다시 읽지 않고 이 immutable projection을 사용합니다. 자주 실행되는 prompt, pulse, scheduler
+검사는 panel 전용 경량 projection을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
+
 Planning worker 진단은 post-turn execution부터 screen model까지 domain
 `PlanningWorkerPanelState`를 그대로 보관합니다. TUI presentation은 adapter 소유 status DTO나
 왕복 mapper 없이 label과 content visibility만 파생합니다.

@@ -2213,7 +2213,11 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
      */
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let startup = shell_presentation::build_startup_overlay_view(&app);
+    let startup_sample = shell_presentation::ConversationProjectionSample::capture(&app);
+    let startup = shell_presentation::build_startup_overlay_view(
+        &app,
+        startup_sample.parallel_mode_enabled(),
+    );
     let sessions = shell_presentation::build_session_overlay_view(&app);
     let help = shell_presentation::build_help_overlay_view(TuiLanguage::English);
     app.show_model_selection_overlay();
@@ -2224,7 +2228,15 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
     let language_selection = shell_presentation::build_language_selection_overlay_view(&app);
     let queue = shell_presentation::build_queue_overlay_view(&app);
     let directions = shell_presentation::build_directions_maintenance_overlay_view(&app);
-    let supersession = shell_presentation::build_supersession_overlay_view(&app);
+    let supersession_sample = shell_presentation::ConversationProjectionSample::capture(&app);
+    let supersession_screen = shell_presentation::ConversationScreenModel::from_app_with_sample(
+        &app,
+        &supersession_sample,
+    );
+    let supersession = shell_presentation::build_supersession_overlay_view(
+        &supersession_screen,
+        &app.supersession_mud_ui_state,
+    );
     app.show_planning_init_overlay();
     let planning = shell_presentation::build_planning_init_overlay_view(&app);
     for title in [
@@ -2273,8 +2285,11 @@ fn exit_confirmation_uses_shared_akra_chrome() {
 fn startup_overlay_surfaces_attachment_mode_and_recovery_anchor() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());
-    let view =
-        crate::adapter::inbound::tui::app::shell_presentation::build_startup_overlay_view(&app);
+    let sample = shell_presentation::ConversationProjectionSample::capture(&app);
+    let view = crate::adapter::inbound::tui::app::shell_presentation::build_startup_overlay_view(
+        &app,
+        sample.parallel_mode_enabled(),
+    );
     let summary = view
         .summary_lines
         .iter()

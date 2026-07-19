@@ -3,11 +3,11 @@ use super::{
     ApprovalDecisionCorrelation, ApprovalReviewPersistenceCoordinator, ConversationLoadCorrelation,
     CoreEffect, CoreEffectCompletion, CoreInput, DirectionsMaintenanceLoadCorrelation,
     GithubReviewPollCorrelation, ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
-    ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation,
-    QueueMutationCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
-    StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission,
-    TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    ParallelModeProjection, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
+    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
+    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
     TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
@@ -138,6 +138,10 @@ impl CoreController {
 
     pub fn snapshot(&self) -> AppSnapshot {
         self.state.snapshot()
+    }
+
+    pub fn parallel_mode_projection(&self) -> ParallelModeProjection {
+        self.state.parallel_mode_projection()
     }
 
     pub fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {

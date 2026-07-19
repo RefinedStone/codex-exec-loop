@@ -66,11 +66,11 @@ enum InlineViewportSync {
 }
 
 impl InlineTerminalSyncPolicy {
-    fn from_app(app: &NativeTuiApp) -> Self {
+    fn from_sample(sample: &ConversationProjectionSample) -> Self {
         Self {
-            render_mode: app.inline_history_render_mode,
-            insert_mode: app.history_insert_mode,
-            parallel_mode_enabled: app.parallel_mode_enabled(),
+            render_mode: sample.inline_history_render_mode(),
+            insert_mode: sample.history_insert_mode(),
+            parallel_mode_enabled: sample.parallel_mode_enabled(),
         }
     }
 
@@ -239,10 +239,8 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     inline_terminal.observe_focus_reacquire(runtime.terminal_focus_reacquire_epoch());
     // Capture render settings before mutating terminal state so one transaction uses
     // a stable compatibility policy snapshot instead of ad hoc env-owned fields.
-    let policy = {
-        let app = runtime.app_mut();
-        InlineTerminalSyncPolicy::from_app(app)
-    };
+    let projection_sample = ConversationProjectionSample::capture(runtime.app_mut());
+    let policy = InlineTerminalSyncPolicy::from_sample(&projection_sample);
     /*
      * Autoresize can itself move the inline viewport. It happens before history
      * flush so the flush logic knows how many visible rows fit in the current
@@ -259,7 +257,13 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     let terminal_size = resize_snapshot.size;
     let physical_terminal_resized = inline_terminal.physical_terminal_resized(resize_snapshot);
     let viewport_area = current_viewport_area(terminal);
-    let projection_sample = ConversationProjectionSample::capture(runtime.app_mut());
+    let sampled_parallel_frame_projection = policy.parallel_mode_enabled.then(|| {
+        InlineConversationFrameProjection::from_app_with_sample(
+            runtime.app_mut(),
+            viewport_area.width,
+            &projection_sample,
+        )
+    });
     let parallel_handoff_conversation_lines =
         if policy.parallel_mode_enabled && policy.host_insert_mode().is_some() {
             parallel_conversation_handoff_projection(runtime.app_mut())
@@ -270,6 +274,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         runtime.app_mut(),
         viewport_area,
         &projection_sample,
+        sampled_parallel_frame_projection.as_ref(),
     );
     let parallel_handoff_pending_lines = parallel_handoff_conversation_lines
         .as_deref()
@@ -314,11 +319,13 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         }
         inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
         inline_terminal.mark_resize_reconciled(resize_snapshot);
-        let frame_projection = InlineConversationFrameProjection::from_app_with_sample(
-            runtime.app_mut(),
-            viewport_area.width,
-            &projection_sample,
-        );
+        let frame_projection = sampled_parallel_frame_projection.unwrap_or_else(|| {
+            InlineConversationFrameProjection::from_app_with_sample(
+                runtime.app_mut(),
+                viewport_area.width,
+                &projection_sample,
+            )
+        });
         let tail_frame_changed = inline_terminal.should_draw_inline_frame(
             &frame_projection,
             viewport_area.width,
@@ -502,11 +509,13 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     inline_terminal.viewport.insert_mode = insert_mode;
     inline_terminal.record_terminal_viewport(terminal_size, viewport_area, cursor_position);
     inline_terminal.mark_resize_reconciled(resize_snapshot);
-    let frame_projection = InlineConversationFrameProjection::from_app_with_sample(
-        runtime.app_mut(),
-        viewport_area.width,
-        &projection_sample,
-    );
+    let frame_projection = sampled_parallel_frame_projection.unwrap_or_else(|| {
+        InlineConversationFrameProjection::from_app_with_sample(
+            runtime.app_mut(),
+            viewport_area.width,
+            &projection_sample,
+        )
+    });
     let tail_frame_changed = inline_terminal.should_draw_inline_frame(
         &frame_projection,
         viewport_area.width,
@@ -589,10 +598,14 @@ fn autoresize_inline_viewport<B: InlineResizeBackend>(
 #[cfg(test)]
 fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
     let sample = ConversationProjectionSample::capture(app);
+    let parallel_frame_projection = sample
+        .parallel_mode_enabled()
+        .then(|| InlineConversationFrameProjection::from_app_with_sample(app, 80, &sample));
     current_inline_history_lines_for_viewport(
         app,
         Rect::new(0, 0, 80, INLINE_VIEWPORT_HEIGHT),
         &sample,
+        parallel_frame_projection.as_ref(),
     )
 }
 
@@ -600,17 +613,22 @@ fn current_inline_history_lines_for_viewport(
     app: &NativeTuiApp,
     viewport_area: Rect,
     sample: &ConversationProjectionSample,
+    parallel_frame_projection: Option<&InlineConversationFrameProjection>,
 ) -> Vec<Line<'static>> {
-    if app.parallel_mode_enabled() {
+    if sample.parallel_mode_enabled() {
         /*
          * Parallel mode owns the main inline body with the supervisor board. The
          * durable host scrollback should receive only append-only event rows so
          * operators can scroll back through past activity without replaying the
          * live panel title or footer chrome.
          */
-        return current_inline_parallel_history_lines(app, viewport_area, sample);
+        return parallel_frame_projection.map_or_else(Vec::new, |projection| {
+            current_inline_parallel_history_lines(viewport_area, sample, projection)
+        });
     }
-    if let Some(startup_banner_lines) = build_startup_banner_lines(app, None) {
+    if let Some(startup_banner_lines) =
+        build_startup_banner_lines(app, sample.parallel_mode_enabled(), None)
+    {
         /*
          * Startup banner wins over conversation history because before the first
          * ready conversation the scrollback should explain boot diagnostics, not
@@ -646,12 +664,13 @@ fn current_inline_history_lines_for_viewport(
 }
 
 fn current_inline_parallel_history_lines(
-    app: &NativeTuiApp,
     viewport_area: Rect,
     sample: &ConversationProjectionSample,
+    frame_projection: &InlineConversationFrameProjection,
 ) -> Vec<Line<'static>> {
-    let live_tail_lines = inline_parallel_event_stream_visible_rows(app, viewport_area, sample);
-    app.parallel_supervisor_event_scrollback_lines_before_live_tail(
+    let live_tail_lines =
+        inline_parallel_event_stream_visible_rows(frame_projection, viewport_area);
+    sample.parallel_supervisor_event_scrollback_lines_before_live_tail(
         live_tail_lines,
         viewport_area.width,
     )

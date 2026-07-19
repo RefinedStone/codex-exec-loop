@@ -3,6 +3,7 @@ use std::collections::{HashSet, VecDeque};
 use chrono::Utc;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModePoolSlotState,
@@ -63,6 +64,28 @@ pub(super) struct ParallelSupervisorEventLog {
     seen_snapshot_stream_events: HashSet<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct ParallelSupervisorEventProjection {
+    live_lines: Vec<Line<'static>>,
+    scrollback_lines: Vec<Line<'static>>,
+}
+
+impl ParallelSupervisorEventProjection {
+    pub(super) fn live_lines(&self) -> Vec<Line<'static>> {
+        self.live_lines.clone()
+    }
+
+    pub(super) fn scrollback_lines_before_rendered_live_tail(
+        &self,
+        live_tail_rows: usize,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        let durable_len =
+            rendered_parallel_event_tail_start_index(&self.scrollback_lines, live_tail_rows, width);
+        self.scrollback_lines[..durable_len].to_vec()
+    }
+}
+
 impl ParallelSupervisorEventLog {
     pub(super) fn push_now(&mut self, actor: impl Into<String>, body: impl Into<String>) {
         self.push(
@@ -95,24 +118,21 @@ impl ParallelSupervisorEventLog {
             .collect()
     }
 
+    pub(super) fn projection(&self) -> ParallelSupervisorEventProjection {
+        ParallelSupervisorEventProjection {
+            live_lines: self.lines(),
+            scrollback_lines: self
+                .scrollback_entries
+                .iter()
+                .map(|entry| entry.line.clone())
+                .collect(),
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn scrollback_lines(&self) -> Vec<Line<'static>> {
         self.scrollback_entries
             .iter()
-            .map(|entry| entry.line.clone())
-            .collect()
-    }
-
-    pub(super) fn scrollback_lines_before_rendered_live_tail(
-        &self,
-        live_tail_rows: usize,
-        width: u16,
-    ) -> Vec<Line<'static>> {
-        let durable_len =
-            rendered_tail_start_index(&self.scrollback_entries, live_tail_rows, width);
-        self.scrollback_entries
-            .iter()
-            .take(durable_len)
             .map(|entry| entry.line.clone())
             .collect()
     }
@@ -477,21 +497,34 @@ fn compact_stream_timestamp_label(timestamp: &str) -> String {
     format!("{hour}:{minute}:{second}")
 }
 
+#[cfg(test)]
 fn rendered_tail_start_index(
     entries: &VecDeque<ParallelSupervisorEventEntry>,
     live_tail_rows: usize,
     width: u16,
 ) -> usize {
-    if entries.is_empty() {
+    let lines = entries
+        .iter()
+        .map(|entry| entry.line.clone())
+        .collect::<Vec<_>>();
+    rendered_parallel_event_tail_start_index(&lines, live_tail_rows, width)
+}
+
+pub(super) fn rendered_parallel_event_tail_start_index(
+    lines: &[Line<'static>],
+    live_tail_rows: usize,
+    width: u16,
+) -> usize {
+    if lines.is_empty() {
         return 0;
     }
     if live_tail_rows == 0 || width == 0 {
-        return entries.len();
+        return lines.len();
     }
 
-    let total_rendered_rows = entries
+    let total_rendered_rows = lines
         .iter()
-        .map(|entry| rendered_line_rows(&entry.line, width))
+        .map(|line| rendered_parallel_event_line_rows(line, width))
         .sum::<usize>();
     let minimum_scroll_offset = total_rendered_rows.saturating_sub(live_tail_rows);
     if minimum_scroll_offset == 0 {
@@ -499,11 +532,18 @@ fn rendered_tail_start_index(
     }
 
     let mut rendered_rows_before_entry = 0usize;
-    for (index, entry) in entries.iter().enumerate() {
+    for (index, line) in lines.iter().enumerate() {
         let rendered_rows_after_entry =
-            rendered_rows_before_entry + rendered_line_rows(&entry.line, width);
+            rendered_rows_before_entry + rendered_parallel_event_line_rows(line, width);
         if minimum_scroll_offset < rendered_rows_after_entry {
-            return index;
+            /*
+             * Ratatui can only scroll by rendered row, but the durable/live
+             * contract splits at logical events. If the viewport boundary lands
+             * inside an event, keep that whole event durable and begin the live
+             * suffix at the next event so no wrapped rows disappear below the
+             * inline panel.
+             */
+            return index + 1;
         }
         if minimum_scroll_offset == rendered_rows_after_entry {
             return index + 1;
@@ -511,16 +551,16 @@ fn rendered_tail_start_index(
         rendered_rows_before_entry = rendered_rows_after_entry;
     }
 
-    entries.len()
+    lines.len()
 }
 
-fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
-    let line_width = line.width();
-    if line_width == 0 {
-        1
-    } else {
-        line_width.div_ceil(width as usize)
+pub(super) fn rendered_parallel_event_line_rows(line: &Line<'_>, width: u16) -> usize {
+    if width == 0 {
+        return 0;
     }
+    Paragraph::new(vec![line.clone()])
+        .wrap(Wrap { trim: false })
+        .line_count(width)
 }
 
 fn truncate_event_text(text: &str, max_chars: usize) -> String {
@@ -544,6 +584,7 @@ impl super::NativeTuiApp {
         self.parallel_supervisor_event_log.push_now(actor, body);
     }
 
+    #[cfg(test)]
     pub(crate) fn parallel_supervisor_event_lines(&self) -> Vec<Line<'static>> {
         self.parallel_supervisor_event_log.lines()
     }
@@ -551,15 +592,6 @@ impl super::NativeTuiApp {
     #[cfg(test)]
     pub(crate) fn parallel_supervisor_event_scrollback_lines(&self) -> Vec<Line<'static>> {
         self.parallel_supervisor_event_log.scrollback_lines()
-    }
-
-    pub(crate) fn parallel_supervisor_event_scrollback_lines_before_live_tail(
-        &self,
-        live_tail_rows: usize,
-        width: u16,
-    ) -> Vec<Line<'static>> {
-        self.parallel_supervisor_event_log
-            .scrollback_lines_before_rendered_live_tail(live_tail_rows, width)
     }
 
     pub(super) fn record_parallel_supervisor_snapshot_for_stream(
@@ -681,7 +713,7 @@ mod tests {
     fn durable_tail_boundary_keeps_wrapped_event_out_of_scrollback_until_complete() {
         let entries = VecDeque::from([
             ParallelSupervisorEventEntry {
-                line: Line::from("alpha beta gamma"),
+                line: Line::from("123456 123456 123456"),
             },
             ParallelSupervisorEventEntry {
                 line: Line::from("tail event"),
@@ -689,9 +721,14 @@ mod tests {
         ]);
 
         assert_eq!(
-            rendered_tail_start_index(&entries, 2, 10),
-            0,
-            "a wrapped event must not be partly durable and partly live"
+            rendered_parallel_event_line_rows(&entries[0].line, 10),
+            3,
+            "event row measurement must match Ratatui word wrapping rather than raw width division"
+        );
+        assert_eq!(
+            rendered_tail_start_index(&entries, 3, 10),
+            1,
+            "an event that does not fully fit in the live suffix must remain durable"
         );
         assert_eq!(
             rendered_tail_start_index(&entries, 1, 10),

@@ -1,3 +1,6 @@
+use super::super::parallel_supervisor_events::{
+    rendered_parallel_event_line_rows, rendered_parallel_event_tail_start_index,
+};
 use super::super::shell_presentation::{
     ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceOverlayView,
     HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
@@ -8,8 +11,7 @@ use super::super::shell_presentation::{
     build_language_selection_overlay_view, build_model_selection_overlay_view,
     build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
     build_planning_init_overlay_view, build_queue_overlay_view, build_reviews_overlay_view,
-    build_session_overlay_view, build_startup_overlay_view, build_supersession_overlay_view,
-    build_view_selection_overlay_view,
+    build_session_overlay_view, build_startup_overlay_view, build_view_selection_overlay_view,
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, ParallelPeekOverlayStep,
@@ -20,7 +22,6 @@ use super::inline_layout::{
     count_rendered_inline_rows, inline_section_height, set_cursor_if_visible, split_inline_section,
     take_panel_body_lines,
 };
-use crate::adapter::inbound::tui::supersession_mud::SupersessionMudFocusZone;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
@@ -59,12 +60,16 @@ pub(super) fn draw_inline_shell_inspection(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
     inspection_area: Rect,
+    parallel_mode_enabled: bool,
+    supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
 ) {
     // The top-level router mirrors ShellOverlay exactly so hidden overlays stay
     // silent and every visible overlay owns a focused inline composition.
     match app.shell_overlay {
         ShellOverlay::Hidden => {}
-        ShellOverlay::Startup => draw_inline_startup_inspection(frame, inspection_area, app),
+        ShellOverlay::Startup => {
+            draw_inline_startup_inspection(frame, inspection_area, app, parallel_mode_enabled)
+        }
         ShellOverlay::Sessions => draw_inline_session_inspection(frame, inspection_area, app),
         ShellOverlay::ModelSelection => {
             draw_inline_model_selection_inspection(frame, inspection_area, app)
@@ -75,9 +80,13 @@ pub(super) fn draw_inline_shell_inspection(
         ShellOverlay::LanguageSelection => {
             draw_inline_language_selection_inspection(frame, inspection_area, app)
         }
-        ShellOverlay::Supersession => {
-            draw_inline_supersession_inspection(frame, inspection_area, app)
-        }
+        ShellOverlay::Supersession => draw_inline_supersession_inspection(
+            frame,
+            inspection_area,
+            supersession_overlay_view
+                .map(|view| *view)
+                .expect("supersession frame projection must own its view"),
+        ),
         ShellOverlay::ParallelPeek => {
             draw_inline_parallel_peek_inspection(frame, inspection_area, app)
         }
@@ -354,9 +363,9 @@ fn wrapped_approval_panel_height(lines: &[Line<'_>], width: u16, minimum: u16) -
 pub(super) fn draw_inline_parallel_mode_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
-    app: &NativeTuiApp,
+    overlay_view: SupersessionOverlayView,
 ) {
-    draw_inline_supersession_inspection(frame, area, app);
+    draw_inline_supersession_inspection(frame, area, overlay_view);
 }
 
 fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
@@ -517,8 +526,13 @@ fn draw_inline_directions_maintenance_inspection(
     render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
     render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_startup_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_startup_overlay_view(app);
+fn draw_inline_startup_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &NativeTuiApp,
+    parallel_mode_enabled: bool,
+) {
+    let overlay_view = build_startup_overlay_view(app, parallel_mode_enabled);
     let StartupOverlayView {
         header_lines,
         summary_lines,
@@ -727,9 +741,13 @@ fn draw_inline_language_selection_inspection(
     render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
     render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_supersession_overlay_view(app);
+fn draw_inline_supersession_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    overlay_view: SupersessionOverlayView,
+) {
     let SupersessionOverlayView {
+        selection_visible,
         header_lines,
         summary_lines,
         capability_lines,
@@ -739,10 +757,6 @@ fn draw_inline_supersession_inspection(frame: &mut Frame<'_>, area: Rect, app: &
         distributor_lines,
         key_lines,
     } = overlay_view;
-    let selection_visible = matches!(
-        app.supersession_mud_ui_state.focused_zone(),
-        SupersessionMudFocusZone::Actors | SupersessionMudFocusZone::QuestLog
-    );
     let orchestrator_lines = if selection_visible {
         let mut lines = distributor_lines;
         lines.extend(roster_lines);
@@ -857,25 +871,12 @@ fn event_boundary_scroll_offset(lines: &[Line<'static>], width: u16, visible_row
         return 0;
     }
 
-    let total_rendered_rows = count_rendered_inline_rows(lines, width);
-    let minimum_scroll_offset = total_rendered_rows.saturating_sub(visible_rows);
-    if minimum_scroll_offset == 0 {
-        return 0;
-    }
-
-    let mut rendered_rows_before_line = 0usize;
-    for line in lines {
-        let rendered_rows_after_line = rendered_rows_before_line + rendered_line_rows(line, width);
-        if minimum_scroll_offset < rendered_rows_after_line {
-            return rendered_rows_before_line.min(u16::MAX as usize) as u16;
-        }
-        if minimum_scroll_offset == rendered_rows_after_line {
-            return rendered_rows_after_line.min(u16::MAX as usize) as u16;
-        }
-        rendered_rows_before_line = rendered_rows_after_line;
-    }
-
-    total_rendered_rows.min(u16::MAX as usize) as u16
+    let live_start = rendered_parallel_event_tail_start_index(lines, visible_rows, width);
+    lines[..live_start]
+        .iter()
+        .map(|line| rendered_parallel_event_line_rows(line, width))
+        .sum::<usize>()
+        .min(u16::MAX as usize) as u16
 }
 
 fn parallel_event_stream_title_visible(lines: &[Line<'static>], width: u16, area: Rect) -> bool {
@@ -896,36 +897,35 @@ fn parallel_event_stream_visible_rows_for_lines(
 }
 
 fn rendered_line_rows(line: &Line<'_>, width: u16) -> usize {
-    let line_width = line.width();
-    if line_width == 0 {
-        1
-    } else {
-        line_width.div_ceil(width.max(1) as usize)
-    }
+    count_rendered_inline_rows(std::slice::from_ref(line), width).max(1)
 }
 
-pub(super) fn parallel_event_stream_visible_rows(app: &NativeTuiApp, area: Rect) -> usize {
-    let overlay_view = build_supersession_overlay_view(app);
-    let SupersessionOverlayView {
-        header_lines,
-        summary_lines,
-        detail_lines,
-        key_lines,
-        ..
-    } = overlay_view;
-    let body_lines = take_panel_body_lines(header_lines);
+pub(super) fn parallel_event_stream_visible_rows(
+    overlay_view: &SupersessionOverlayView,
+    area: Rect,
+) -> usize {
+    let body_lines = overlay_view
+        .header_lines
+        .iter()
+        .skip(1)
+        .cloned()
+        .collect::<Vec<_>>();
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(inline_section_height(&body_lines, 4)),
-            Constraint::Length(inline_section_height(&summary_lines, 7)),
+            Constraint::Length(inline_section_height(&overlay_view.summary_lines, 7)),
             Constraint::Length(10),
             Constraint::Min(8),
-            Constraint::Length(inline_section_height(&key_lines, 4)),
+            Constraint::Length(inline_section_height(&overlay_view.key_lines, 4)),
         ])
         .split(area);
 
-    parallel_event_stream_visible_rows_for_lines(&detail_lines, layout[3].width, layout[3])
+    parallel_event_stream_visible_rows_for_lines(
+        &overlay_view.detail_lines,
+        layout[3].width,
+        layout[3],
+    )
 }
 fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
     let overlay_view = build_queue_overlay_view(app);
@@ -1235,16 +1235,16 @@ mod tests {
 
     #[test]
     fn event_boundary_scroll_offset_keeps_wrapped_event_intact() {
-        let lines = vec![Line::from("alpha beta gamma"), Line::from("tail event")];
+        let lines = vec![Line::from("123456 123456 123456"), Line::from("tail event")];
 
         assert_eq!(
-            event_boundary_scroll_offset(&lines, 10, 2),
-            0,
-            "boundary inside the first wrapped event should keep the whole event live"
+            event_boundary_scroll_offset(&lines, 10, 3),
+            3,
+            "an event that does not fully fit in the live suffix must remain durable"
         );
         assert_eq!(
             event_boundary_scroll_offset(&lines, 10, 1),
-            2,
+            3,
             "boundary exactly after the first wrapped event may start at the next event"
         );
     }

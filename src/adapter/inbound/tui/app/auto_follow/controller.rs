@@ -16,6 +16,7 @@ use std::time::Instant;
  */
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
+use super::super::shell_presentation::ParallelPanelProjectionSample;
 use super::super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, ConversationState,
     DISABLED_AUTO_FOLLOW_MAX_TURNS_TOKEN, NativeTuiApp, PlanningInitOverlayStep, ShellOverlay,
@@ -59,7 +60,17 @@ impl NativeTuiApp {
         self.planning_worker_visibility.shows_debug_details()
     }
 
+    #[cfg(test)]
     pub(crate) fn live_activity_pulse(&self, now: Instant) -> Option<u64> {
+        let sample = ParallelPanelProjectionSample::capture(self);
+        self.live_activity_pulse_with_sample(now, &sample)
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn live_activity_pulse_with_sample(
+        &self,
+        now: Instant,
+        sample: &ParallelPanelProjectionSample,
+    ) -> Option<u64> {
         /*
          * The footer pulse is derived only when a ready conversation has a
          * live activity timestamp. Loading/failed states have no transcript
@@ -78,7 +89,7 @@ impl NativeTuiApp {
             return conversation_pulse;
         }
 
-        if self.parallel_mode_activity_pulse_visible() {
+        if self.parallel_mode_activity_pulse_visible_with_sample(sample) {
             return Some(0);
         }
 
