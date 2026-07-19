@@ -30,6 +30,7 @@ pub(super) struct ShellRuntime {
     frame_scheduler: TuiFrameScheduler,
     terminal_resize_epoch: u64,
     terminal_focus_reacquire_epoch: u64,
+    first_frame_delivered: bool,
     last_live_activity_pulse: Option<u64>,
     background_drain_limited: bool,
 }
@@ -44,6 +45,7 @@ impl ShellRuntime {
             frame_scheduler: TuiFrameScheduler::new(now),
             terminal_resize_epoch: 0,
             terminal_focus_reacquire_epoch: 0,
+            first_frame_delivered: false,
             last_live_activity_pulse: None,
             background_drain_limited: false,
         }
@@ -97,6 +99,20 @@ impl ShellRuntime {
         if transaction_completed && self.quit_after_redraw {
             self.quit_after_redraw = false;
             self.should_quit = true;
+        }
+    }
+
+    pub(super) fn record_successful_frame_delivery(&mut self) {
+        if self.first_frame_delivered {
+            return;
+        }
+        self.first_frame_delivered = true;
+        let workspace_directory = self.app.planning_workspace_directory();
+        if self
+            .app
+            .maybe_start_github_review_polling_setup(&workspace_directory)
+        {
+            self.request_redraw_at(Instant::now());
         }
     }
     pub(super) fn poll_background_messages(&mut self) {
@@ -191,6 +207,12 @@ impl ShellRuntime {
         redraw_requested |= self
             .app
             .poll_core_runtime_inputs(BACKGROUND_MESSAGE_DRAIN_BUDGET);
+        if self.first_frame_delivered {
+            let workspace_directory = self.app.planning_workspace_directory();
+            redraw_requested |= self
+                .app
+                .maybe_start_github_review_polling_setup(&workspace_directory);
+        }
         redraw_requested |= self.app.maybe_start_github_review_poll(now);
         let parallel_presentation_sample = ParallelPanelProjectionSample::capture(&self.app);
         let live_activity_pulse = self

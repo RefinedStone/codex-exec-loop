@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,6 +15,7 @@ use crate::application::service::conversation_service::{
 };
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::manual_prompt_preparation::ManualPromptPreparationService;
+use crate::application::service::parallel_mode::parallel_mode_integration_branch_for_repo;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     DirectionsMaintenanceSummary as ApplicationDirectionsMaintenanceSummary,
@@ -31,24 +33,29 @@ use crate::application::service::post_turn_evaluation::{
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
+use crate::composition::production;
+use crate::core::app::github_review_polling_target_is_valid;
 use crate::core::app::{
     ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation, ConversationLoadCorrelation,
     ConversationReadySnapshot, ConversationThreadReviewSnapshot,
     DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceLoadCorrelation,
     DirectionsMaintenanceSummarySnapshot,
     DirectionsSupportingFileStatus as CoreDirectionsSupportingFileStatus,
-    GithubReviewPollCorrelation, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
-    PlanningRuntimeRefreshSnapshot, PlanningWorkspaceOperationCorrelation,
-    PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, QueueAuthorityLoadCorrelation,
-    QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
-    QueueMutationCorrelation, QueueMutationIntent, QueueMutationResult,
-    ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation,
-    ReviewCenterSnapshot, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation,
+    GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
+    GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult, ParallelPeekLoadCorrelation,
+    PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
+    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetSnapshot,
+    PlanningWorkspaceResetTarget, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
+    QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationCorrelation,
+    QueueMutationIntent, QueueMutationResult, ReviewCenterHistoryEntrySnapshot,
+    ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
+    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
 use crate::core::runtime::CoreInputSender;
+use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogRequest};
 use crate::domain::startup_diagnostics::StartupDiagnostics;
 use crate::panic_observation::catch_redacted_worker_unwind;
@@ -64,7 +71,8 @@ pub struct CoreEffectRunner {
     parallel_mode_turn_service: ParallelModeTurnService,
     manual_prompt_preparation_service: ManualPromptPreparationService,
     post_turn_evaluation_service: PostTurnEvaluationService,
-    github_review_poller_service: Option<GithubReviewPollerService>,
+    github_review_polling_setup_loader: Arc<GithubReviewPollingSetupLoader>,
+    github_review_polling_services: Arc<GithubReviewPollingServiceRegistry>,
     manual_prompt_workers: Arc<EffectExecutionRegistry>,
     stop_request_workers: Arc<EffectExecutionRegistry>,
     input_sender: CoreInputSender,
@@ -94,6 +102,66 @@ impl EffectExecutionPermit {
 #[derive(Default)]
 struct EffectExecutionRegistry {
     permits: Mutex<HashMap<u64, EffectExecutionPermit>>,
+}
+
+type GithubReviewPollingSetupLoader = dyn Fn(
+        &GithubReviewPollingSetupRequest,
+    ) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>>
+    + Send
+    + Sync;
+
+struct GithubReviewPollingServiceEntry {
+    correlation: GithubReviewPollingSetupCorrelation,
+    service: Option<GithubReviewPollerService>,
+}
+
+#[derive(Default)]
+struct GithubReviewPollingServiceRegistry {
+    entry: Mutex<Option<GithubReviewPollingServiceEntry>>,
+}
+
+impl GithubReviewPollingServiceRegistry {
+    fn begin(&self, correlation: GithubReviewPollingSetupCorrelation) {
+        *self
+            .entry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(GithubReviewPollingServiceEntry {
+                correlation,
+                service: None,
+            });
+    }
+
+    fn complete(
+        &self,
+        correlation: &GithubReviewPollingSetupCorrelation,
+        service: Option<GithubReviewPollerService>,
+    ) {
+        let mut entry = self
+            .entry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(current) = entry.as_mut() else {
+            return;
+        };
+        if current.correlation == *correlation {
+            current.service = service;
+        }
+    }
+
+    fn service_for(
+        &self,
+        correlation: &GithubReviewPollingSetupCorrelation,
+    ) -> Option<GithubReviewPollerService> {
+        let entry = self
+            .entry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entry
+            .as_ref()
+            .filter(|entry| entry.correlation == *correlation)
+            .and_then(|entry| entry.service.clone())
+    }
 }
 
 impl EffectExecutionRegistry {
@@ -160,18 +228,25 @@ impl CoreEffectRunner {
             parallel_mode_turn_service,
             manual_prompt_preparation_service,
             post_turn_evaluation_service,
-            github_review_poller_service: None,
+            github_review_polling_setup_loader: Arc::new(load_github_review_polling_setup),
+            github_review_polling_services: Arc::new(GithubReviewPollingServiceRegistry::default()),
             manual_prompt_workers: Arc::new(EffectExecutionRegistry::default()),
             stop_request_workers: Arc::new(EffectExecutionRegistry::default()),
             input_sender,
         }
     }
 
-    pub fn with_github_review_poller_service(
+    #[cfg(test)]
+    pub(crate) fn with_github_review_polling_setup_loader(
         mut self,
-        service: Option<GithubReviewPollerService>,
+        loader: impl Fn(
+            &GithubReviewPollingSetupRequest,
+        ) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
-        self.github_review_poller_service = service;
+        self.github_review_polling_setup_loader = Arc::new(loader);
         self
     }
 
@@ -240,14 +315,29 @@ impl CoreEffectRunner {
                 self.spawn_queue_mutation(correlation);
                 None
             }
+            CoreEffect::SetupGithubReviewPolling {
+                correlation,
+                request,
+            } => {
+                self.github_review_polling_services
+                    .begin(correlation.clone());
+                self.spawn_github_review_polling_setup(correlation, request);
+                None
+            }
             CoreEffect::PollGithubReview {
+                setup_correlation,
                 correlation,
                 previous_state,
             } => {
-                let Some(service) = self.github_review_poller_service.clone() else {
+                let Some(service) = self
+                    .github_review_polling_services
+                    .service_for(&setup_correlation)
+                else {
                     return Some(CoreInput::EffectCompleted(github_review_poll_completion(
                         correlation,
-                        Err(anyhow::anyhow!("github review poller is not configured")),
+                        Err(anyhow::anyhow!(
+                            "github review poller is not configured for the active setup"
+                        )),
                     )));
                 };
                 self.spawn_github_review_poll(service, correlation, previous_state);
@@ -495,6 +585,54 @@ impl CoreEffectRunner {
         });
     }
 
+    fn spawn_github_review_polling_setup(
+        &self,
+        correlation: GithubReviewPollingSetupCorrelation,
+        request: GithubReviewPollingSetupRequest,
+    ) {
+        let loader = self.github_review_polling_setup_loader.clone();
+        let services = self.github_review_polling_services.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let loaded = catch_unwind(AssertUnwindSafe(|| loader(&request)))
+                .map_err(|_| anyhow::anyhow!("GitHub review polling setup worker panicked"))
+                .and_then(|result| result);
+            let result = match loaded {
+                Ok(Some((target, _service))) if !github_review_polling_target_is_valid(&target) => {
+                    services.complete(&correlation, None);
+                    Err("GitHub review polling setup returned an invalid target".to_string())
+                }
+                Ok(Some((target, _service)))
+                    if request
+                        .mode
+                        .explicit_target()
+                        .is_some_and(|expected| expected != &target) =>
+                {
+                    services.complete(&correlation, None);
+                    Err("GitHub review polling setup returned a different target".to_string())
+                }
+                Ok(Some((target, service))) => {
+                    services.complete(&correlation, Some(service));
+                    Ok(GithubReviewPollingSetupResult::Active { target })
+                }
+                Ok(None) => {
+                    services.complete(&correlation, None);
+                    Ok(GithubReviewPollingSetupResult::Disabled)
+                }
+                Err(error) => {
+                    services.complete(&correlation, None);
+                    Err(error.to_string())
+                }
+            };
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                    correlation,
+                    result,
+                },
+            ));
+        });
+    }
+
     fn spawn_manual_prompt_preparation(
         &self,
         request: crate::domain::planning::ManualPromptRequest,
@@ -624,6 +762,27 @@ impl CoreEffectRunner {
 impl CoreEffectExecutor for CoreEffectRunner {
     fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
         CoreEffectRunner::run_effect(self, effect)
+    }
+}
+
+fn load_github_review_polling_setup(
+    request: &GithubReviewPollingSetupRequest,
+) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>> {
+    let workspace = Path::new(&request.workspace_directory);
+    match &request.mode {
+        GithubReviewPollingSetupMode::Explicit { target } => {
+            let service = production::build_github_review_poller_service(workspace)?;
+            Ok(Some((target.clone(), service)))
+        }
+        GithubReviewPollingSetupMode::Discover => {
+            let integration_branch =
+                parallel_mode_integration_branch_for_repo(&request.workspace_directory)
+                    .map_err(anyhow::Error::msg)?;
+            production::discover_github_review_poller_service_for_current_branch(
+                workspace,
+                &integration_branch,
+            )
+        }
     }
 }
 
@@ -1045,6 +1204,7 @@ mod tests {
     use crate::application::port::outbound::app_server_prompt_log_port::{
         AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort,
     };
+    use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
@@ -1392,6 +1552,99 @@ mod tests {
             PostTurnEvaluationService::new(planning, parallel_turns),
             input_sender,
         )
+    }
+
+    struct LabeledGithubReviewPollerPort {
+        title: String,
+        second_load_gate: Option<Arc<OneShotGate>>,
+        load_count: AtomicUsize,
+    }
+
+    impl GithubReviewPollerPort for LabeledGithubReviewPollerPort {
+        fn load_pull_request_activity(
+            &self,
+            target: &GithubPullRequestTarget,
+        ) -> Result<crate::domain::github_review::GithubPullRequestActivitySnapshot> {
+            let load_number = self.load_count.fetch_add(1, Ordering::SeqCst) + 1;
+            if load_number == 2
+                && let Some(gate) = &self.second_load_gate
+            {
+                gate.wait_once();
+            }
+            Ok(
+                crate::domain::github_review::GithubPullRequestActivitySnapshot {
+                    target: target.clone(),
+                    title: self.title.clone(),
+                    url: "https://example.invalid/pull/42".to_string(),
+                    head_branch: "feature".to_string(),
+                    base_branch: "prerelease".to_string(),
+                    events: vec![crate::domain::github_review::GithubPullRequestActivityEvent {
+                        id: 1,
+                        kind: crate::domain::github_review::GithubPullRequestActivityKind::IssueComment,
+                        submitted_at: "2026-07-19T10:00:00Z".to_string(),
+                        author_login: "reviewer".to_string(),
+                        body: "review note".to_string(),
+                        state: None,
+                        url: "https://example.invalid/pull/42#issuecomment-1".to_string(),
+                        path: None,
+                    }],
+                },
+            )
+        }
+    }
+
+    fn github_review_service(label: &str) -> GithubReviewPollerService {
+        GithubReviewPollerService::new(Arc::new(LabeledGithubReviewPollerPort {
+            title: label.to_string(),
+            second_load_gate: None,
+            load_count: AtomicUsize::new(0),
+        }))
+    }
+
+    fn github_review_service_with_second_load_gate(
+        label: &str,
+        gate: Arc<OneShotGate>,
+    ) -> GithubReviewPollerService {
+        GithubReviewPollerService::new(Arc::new(LabeledGithubReviewPollerPort {
+            title: label.to_string(),
+            second_load_gate: Some(gate),
+            load_count: AtomicUsize::new(0),
+        }))
+    }
+
+    fn github_review_test_runtime(
+        loader: impl Fn(
+            &GithubReviewPollingSetupRequest,
+        ) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> CoreRuntime<CoreEffectRunner> {
+        let (planning_gate, _entered, release) = one_shot_gate();
+        release
+            .send(())
+            .expect("unused planning gate should start open");
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: planning_gate,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender)
+            .with_github_review_polling_setup_loader(loader);
+        CoreRuntime::new(runner, input_receiver)
+    }
+
+    fn explicit_github_review_setup(
+        workspace_directory: &str,
+        target: GithubPullRequestTarget,
+    ) -> AppCommand {
+        AppCommand::SetupGithubReviewPolling(GithubReviewPollingSetupRequest::new(
+            workspace_directory,
+            GithubReviewPollingSetupMode::Explicit { target },
+        ))
     }
 
     fn dispatch_while_provider_is_gated(
@@ -2614,6 +2867,194 @@ mod tests {
                 result: Err("github unavailable".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn github_review_setup_worker_panic_returns_one_exact_failure() {
+        let mut runtime = github_review_test_runtime(|_| {
+            panic!("synthetic setup panic");
+        });
+        let target = GithubPullRequestTarget::new("acme/widgets", 42);
+        let correlation = GithubReviewPollingSetupCorrelation::new(1, "/workspace");
+
+        runtime.dispatch_command(explicit_github_review_setup("/workspace", target));
+        let completed = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::GithubReviewPollingSetupCompleted {
+                    correlation: completed,
+                    result: Err(message),
+                }] if completed == &correlation
+                    && message == "GitHub review polling setup worker panicked"
+            )
+        });
+        assert!(matches!(
+            completed.events.as_slice(),
+            [AppEvent::GithubReviewPollingSetupCompleted {
+                correlation: completed,
+                result: Err(message),
+            }] if completed == &correlation
+                && message == "GitHub review polling setup worker panicked"
+        ));
+        assert!(
+            runtime.poll_pending_input().is_none(),
+            "one setup worker must emit exactly one completion"
+        );
+        let poll = runtime.dispatch_command(AppCommand::PollGithubReview);
+        assert!(
+            poll.effects.is_empty(),
+            "panic must leave setup fail-closed"
+        );
+    }
+
+    #[test]
+    fn newer_github_review_setup_replaces_active_service_cursor_and_in_flight_poll() {
+        let (a_poll_gate, a_poll_entered, a_poll_release) = one_shot_gate();
+        let mut runtime = github_review_test_runtime(move |request| {
+            let target = request
+                .mode
+                .explicit_target()
+                .expect("test setup should be explicit")
+                .clone();
+            if request.workspace_directory == "/workspace-a" {
+                return Ok(Some((
+                    target,
+                    github_review_service_with_second_load_gate("service-a", a_poll_gate.clone()),
+                )));
+            }
+            Ok(Some((target, github_review_service("service-b"))))
+        });
+        let target_a = GithubPullRequestTarget::new("acme/widgets", 41);
+        let target_b = GithubPullRequestTarget::new("acme/widgets", 42);
+
+        runtime.dispatch_command(explicit_github_review_setup(
+            "/workspace-a",
+            target_a.clone(),
+        ));
+        let setup_a = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::GithubReviewPollingSetupCompleted {
+                    correlation: GithubReviewPollingSetupCorrelation {
+                        generation: 1,
+                        workspace_directory,
+                    },
+                    result: Ok(GithubReviewPollingSetupResult::Active { target }),
+                }] if workspace_directory == "/workspace-a" && target == &target_a
+            )
+        });
+        assert!(setup_a.effects.is_empty());
+
+        let first_a = runtime.dispatch_command(AppCommand::PollGithubReview);
+        assert!(matches!(
+            first_a.effects.as_slice(),
+            [CoreEffect::PollGithubReview {
+                setup_correlation: GithubReviewPollingSetupCorrelation {
+                    generation: 1,
+                    workspace_directory,
+                },
+                correlation: GithubReviewPollCorrelation {
+                    generation: 1,
+                    target,
+                },
+                previous_state: None,
+            }] if workspace_directory == "/workspace-a" && target == &target_a
+        ));
+        let first_a_completed = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::GithubReviewPollCompleted {
+                    correlation: GithubReviewPollCorrelation {
+                        generation: 1,
+                        target,
+                    },
+                    result: Ok(result),
+                }] if target == &target_a
+                    && result.snapshot.title == "service-a"
+                    && result.next_state.latest_submitted_at.as_deref()
+                        == Some("2026-07-19T10:00:00Z")
+            )
+        });
+        assert!(first_a_completed.effects.is_empty());
+
+        let second_a = runtime.dispatch_command(AppCommand::PollGithubReview);
+        assert!(matches!(
+            second_a.effects.as_slice(),
+            [CoreEffect::PollGithubReview {
+                setup_correlation: GithubReviewPollingSetupCorrelation {
+                    generation: 1,
+                    workspace_directory,
+                },
+                correlation: GithubReviewPollCorrelation {
+                    generation: 2,
+                    target,
+                },
+                previous_state: Some(previous_state),
+            }] if workspace_directory == "/workspace-a"
+                && target == &target_a
+                && previous_state.latest_submitted_at.as_deref()
+                    == Some("2026-07-19T10:00:00Z")
+        ));
+        a_poll_entered
+            .recv_timeout(WORKER_COMPLETION_TIMEOUT)
+            .expect("the second poll for setup A should reach its gate");
+
+        runtime.dispatch_command(explicit_github_review_setup(
+            "/workspace-b",
+            target_b.clone(),
+        ));
+        let setup_b = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::GithubReviewPollingSetupCompleted {
+                    correlation: GithubReviewPollingSetupCorrelation {
+                        generation: 2,
+                        workspace_directory,
+                    },
+                    result: Ok(GithubReviewPollingSetupResult::Active { target }),
+                }] if workspace_directory == "/workspace-b" && target == &target_b
+            )
+        });
+        assert!(setup_b.effects.is_empty());
+
+        a_poll_release
+            .send(())
+            .expect("the in-flight poll for setup A should be released");
+        let stale_a_poll = poll_next(&mut runtime);
+        assert!(
+            stale_a_poll.events.is_empty(),
+            "late poll completion from setup A must be ignored by Core"
+        );
+
+        let started = runtime.dispatch_command(AppCommand::PollGithubReview);
+        assert!(matches!(
+            started.effects.as_slice(),
+            [CoreEffect::PollGithubReview {
+                setup_correlation: GithubReviewPollingSetupCorrelation {
+                    generation: 2,
+                    workspace_directory,
+                },
+                correlation: GithubReviewPollCorrelation { target, .. },
+                previous_state: None,
+            }] if workspace_directory == "/workspace-b" && target == &target_b
+        ));
+        let polled = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::GithubReviewPollCompleted {
+                    result: Ok(result),
+                    ..
+                }] if result.snapshot.title == "service-b"
+            )
+        });
+        assert!(matches!(
+            polled.events.as_slice(),
+            [AppEvent::GithubReviewPollCompleted {
+                result: Ok(result),
+                ..
+            }] if result.snapshot.target == target_b
+                && result.snapshot.title == "service-b"
+        ));
     }
 
     #[test]

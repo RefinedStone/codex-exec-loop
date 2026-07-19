@@ -78,9 +78,13 @@ the fixed Akra theme.
   must not infer priority by parsing localized rendered copy. Queue mutation pending, refresh, and
   undo truth remains pinned across language and modal row budgets, while planning marks only
   projected rows containing an actionable blocker as warnings.
-- GitHub review polling ticks must dispatch `AppCommand::PollGithubReview`. Core owns the configured
-  target, successful cursor, generation, and single-flight completion; composition performs the
-  provider call. The TUI owns only discovery, poll timing, and status/recent-change projection.
+- GitHub review setup must remain `PendingFirstFrame` until a draw and its post-draw size
+  verification both succeed. A failed or resize-raced draw dispatches no setup; the first stable
+  delivery dispatches exactly one `AppCommand::SetupGithubReviewPolling`. Core owns setup
+  generation/workspace admission and polling cursor/single-flight rules. Composition owns Git,
+  credential, discovery, service construction, and the exact-correlation service registry. Polling
+  ticks dispatch `AppCommand::PollGithubReview`; the TUI owns only environment parsing, poll timing,
+  and setup/poll status projection.
 - `:stop` and running-turn Ctrl-C must pause local automation first, then dispatch
   `AppCommand::RequestStopAllSessions`. Core owns stop generation, active-submission correlation,
   single-flight admission, and the one `TurnStarted` synchronization attempt. The TUI must not keep

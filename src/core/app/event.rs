@@ -8,8 +8,9 @@ use super::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
 };
 use super::{
-    ConversationLoadCorrelation, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
-    PlanningDoctorSnapshot, PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
+    ConversationLoadCorrelation, GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
+    GithubReviewPollingSetupResult, ParallelPeekLoadCorrelation, PlanningDoctorSnapshot,
+    PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
     PlanningWorkspaceResetSnapshot, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
     SessionRenameCorrelation, StartupCheckCorrelation,
@@ -125,6 +126,10 @@ pub enum CoreEffectCompletion {
         correlation: ApprovalReviewPersistenceCorrelation,
         result: Result<(), String>,
     },
+    GithubReviewPollingSetupCompleted {
+        correlation: GithubReviewPollingSetupCorrelation,
+        result: Result<GithubReviewPollingSetupResult, String>,
+    },
     GithubReviewPollCompleted {
         correlation: GithubReviewPollCorrelation,
         result: Result<Box<GithubPullRequestPollResult>, String>,
@@ -218,6 +223,13 @@ pub enum AppEvent {
     ApprovalDecisionSubmissionCompleted {
         correlation: ApprovalDecisionCorrelation,
         result: Result<(), String>,
+    },
+    GithubReviewPollingSetupStarted {
+        correlation: GithubReviewPollingSetupCorrelation,
+    },
+    GithubReviewPollingSetupCompleted {
+        correlation: GithubReviewPollingSetupCorrelation,
+        result: Result<GithubReviewPollingSetupResult, String>,
     },
     GithubReviewPollStarted {
         correlation: GithubReviewPollCorrelation,

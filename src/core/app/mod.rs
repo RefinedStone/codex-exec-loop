@@ -43,7 +43,11 @@ pub use directions::{
 };
 pub use effect::CoreEffect;
 pub use event::{AppEvent, CoreEffectCompletion, CoreInput, SessionRenameAcceptedSnapshot};
-pub use github_review_poll::GithubReviewPollCorrelation;
+pub(crate) use github_review_poll::github_review_polling_target_is_valid;
+pub use github_review_poll::{
+    GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
+    GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
+};
 pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparationIntent};
 pub(crate) use planning_runtime::PlanningRuntimeCoordinator;
 pub use planning_runtime::{

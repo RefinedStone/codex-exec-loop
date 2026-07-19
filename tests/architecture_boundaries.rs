@@ -2323,12 +2323,110 @@ fn tui_github_review_polling_enters_through_core_runtime() {
         &["src/adapter/inbound/tui/app.rs"],
         &["github_review_poller_service:"],
     );
+    let polling_path = repo_root().join("src/adapter/inbound/tui/app/github_polling.rs");
     let polling_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/github_polling.rs"))
-            .expect("GitHub polling source should be readable");
+        fs::read_to_string(&polling_path).expect("GitHub polling source should be readable");
+    let polling_references = rust_semantic_references(&polling_source);
     assert!(
-        polling_source.contains(".dispatch_command(AppCommand::PollGithubReview"),
-        "TUI GitHub polling ticks must positively enter through AppCommand::PollGithubReview"
+        polling_references
+            .paths
+            .iter()
+            .any(|path| path.ends_with("AppCommand::SetupGithubReviewPolling"))
+            && polling_references
+                .paths
+                .iter()
+                .any(|path| path.ends_with("AppCommand::PollGithubReview")),
+        "TUI GitHub setup and polling must positively enter through typed Core commands"
+    );
+
+    let forbidden_identifiers = [
+        "GithubReviewPollerService",
+        "GithubReviewPollerAdapter",
+        "GithubAutomationAdapter",
+        "GitParallelModeRuntimeAdapter",
+        "discover_github_review_poller_service_for_current_branch",
+        "build_github_review_poller_service",
+        "parallel_mode_integration_branch_for_repo",
+        "Command",
+    ];
+    let forbidden_paths = ["std::process", "std::thread", "thread::spawn"];
+    for path in [
+        "src/adapter/inbound/tui/app.rs",
+        "src/adapter/inbound/tui/app/app_runtime.rs",
+        "src/adapter/inbound/tui/app/github_polling.rs",
+        "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+        "src/adapter/inbound/tui/app/shell_entrypoint.rs",
+        "src/adapter/inbound/tui/app/shell_runtime.rs",
+    ] {
+        let source_path = repo_root().join(path);
+        let source = fs::read_to_string(&source_path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", source_path.display()));
+        let references = rust_semantic_references(&source);
+        let violations = references
+            .paths
+            .iter()
+            .filter(|reference| {
+                forbidden_identifiers
+                    .iter()
+                    .any(|forbidden| reference.split("::").any(|segment| segment == *forbidden))
+                    || forbidden_paths.iter().any(|forbidden| {
+                        reference == forbidden || reference.starts_with(&format!("{forbidden}::"))
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            violations.is_empty(),
+            "production TUI GitHub flow must not own service, adapter, discovery, process, or thread paths in {path}: {violations:?}"
+        );
+    }
+
+    for path in [
+        "src/adapter/inbound/tui/app/github_polling.rs",
+        "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+        "src/adapter/inbound/tui/app/shell_entrypoint.rs",
+        "src/adapter/inbound/tui/app/shell_runtime.rs",
+    ] {
+        let source = fs::read_to_string(repo_root().join(path)).unwrap();
+        assert!(
+            !rust_semantic_references(&source)
+                .paths
+                .iter()
+                .any(|reference| reference
+                    .split("::")
+                    .any(|segment| segment == "NativeTuiApplicationHandle")),
+            "GitHub setup flow must not receive a raw NativeTuiApplicationHandle in {path}"
+        );
+    }
+}
+
+#[test]
+fn rust_semantic_guard_ignores_comments_strings_and_test_only_items() {
+    let harmless = r#"
+        fn production() {
+            let _ = "GithubReviewPollerService std::thread::spawn";
+            // std::process::Command::new("git");
+        }
+
+        #[cfg(test)]
+        fn test_only() {
+            std::process::Command::new("git");
+            std::thread::spawn(|| {});
+        }
+    "#;
+    let harmless_references = rust_semantic_references(harmless);
+    assert!(
+        harmless_references
+            .paths
+            .iter()
+            .all(|path| !path.starts_with("std::process") && !path.starts_with("std::thread"))
+    );
+
+    let real = r#"fn production() { std::process::Command::new("git"); }"#;
+    assert!(
+        rust_semantic_references(real)
+            .paths
+            .iter()
+            .any(|path| path.starts_with("std::process::Command"))
     );
 }
 
@@ -3718,6 +3816,108 @@ fn rust_crate_references(source: &str) -> Vec<CrateReference> {
     });
     visitor.references.dedup();
     visitor.references
+}
+
+#[derive(Default)]
+struct RustSemanticReferences {
+    paths: Vec<String>,
+}
+
+fn rust_semantic_references(source: &str) -> RustSemanticReferences {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut visitor = RustSemanticReferenceVisitor::default();
+    visitor.visit_file(&syntax);
+    visitor.references.paths.sort();
+    visitor.references.paths.dedup();
+    visitor.references
+}
+
+#[derive(Default)]
+struct RustSemanticReferenceVisitor {
+    references: RustSemanticReferences,
+}
+
+impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_impl_item(self, item);
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if trait_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_trait_item(self, item);
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        if foreign_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_foreign_item(self, item);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        collect_semantic_use_paths(&item.tree, &mut Vec::new(), &mut self.references.paths);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        self.references.paths.push(
+            path.segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::"),
+        );
+        visit::visit_path(self, path);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.references.paths.push(call.method.to_string());
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn collect_semantic_use_paths(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    references: &mut Vec<String>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_semantic_use_paths(&path.tree, prefix, references);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) => {
+            prefix.push(name.ident.to_string());
+            references.push(prefix.join("::"));
+            prefix.pop();
+        }
+        syn::UseTree::Rename(rename) => {
+            prefix.push(rename.ident.to_string());
+            references.push(prefix.join("::"));
+            prefix.pop();
+        }
+        syn::UseTree::Glob(_) => {
+            references.push(prefix.join("::"));
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_semantic_use_paths(item, prefix, references);
+            }
+        }
+    }
 }
 
 #[derive(Default)]

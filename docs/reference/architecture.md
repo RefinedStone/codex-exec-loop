@@ -102,11 +102,17 @@ is correlated to the exact turn, workspace, thread, and review; composition perf
 idempotent Review Center write off the TUI thread. Late failures are shown only while that
 conversation identity is still current, so an older write cannot add an error to a new conversation.
 
-GitHub review polling is core-correlated. Core owns the configured pull-request target, successful
-poll cursor, monotonic generation, and single-flight/stale-completion rules. Reconfiguring polling
-starts a new authority epoch, so an older worker cannot overwrite the new target or cursor.
-Composition executes the poller service. The TUI owns environment and branch discovery, the poll
-interval, and status/recent-change projection only.
+GitHub review setup and polling are core-correlated. Before the first delivered frame, the TUI only
+parses environment values into `PendingFirstFrame`; it performs no Git, credential, process, or
+network discovery. After a draw succeeds and its post-draw size check remains stable, the TUI
+dispatches `SetupGithubReviewPolling` exactly once for that frame epoch. Core owns the monotonic
+setup generation, exact workspace correlation, identical-request coalescing, target admission,
+successful poll cursor, and stale/duplicate completion rules. A newer workspace setup invalidates
+the prior service, target, cursor, and in-flight poll, including A→B→A races. Composition performs
+branch discovery and service construction off the TUI thread and retains one service only for the
+exact accepted setup correlation; a poll cannot use another generation's service. The TUI owns the
+poll interval and `PendingFirstFrame` / `Discovering` / `Active` / `Disabled` / `SetupError`
+presentation only.
 
 Parallel peek loads are core-correlated reads. Core assigns a monotonically increasing generation
 to the requested thread, lets the latest request supersede the previous one, and drops unmatched or

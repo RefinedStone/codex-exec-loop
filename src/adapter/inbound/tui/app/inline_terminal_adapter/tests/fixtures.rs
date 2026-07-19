@@ -17,10 +17,12 @@ use crate::application::port::outbound::startup_probe_port::{
     AppServerStartupContext, StartupProbePort,
 };
 use crate::application::service::conversation_service::ConversationService;
+use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::recent_sessions::{RecentSessions, SessionCatalog};
 
 // Shared app-server fake for inline rendering tests.
@@ -126,12 +128,46 @@ pub(super) fn make_test_app() -> NativeTuiApp {
         );
     let parallel_mode_binding =
         NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
-    let mut app = NativeTuiApp::new(
+    configure_test_app(NativeTuiApp::new(
         StartupService::new(codex_port.clone()),
         SessionService::new(codex_port.clone()),
         ConversationService::new(codex_port),
         parallel_mode_binding,
+    ))
+}
+
+pub(super) fn make_test_app_with_github_review_setup_loader(
+    loader: impl Fn(
+        &crate::core::app::GithubReviewPollingSetupRequest,
+    ) -> Result<Option<(GithubPullRequestTarget, GithubReviewPollerService)>>
+    + Send
+    + Sync
+    + 'static,
+) -> NativeTuiApp {
+    let codex_port = Arc::new(FakeAppServerPort);
+    let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
     );
+    let parallel_mode_control_plane_composition =
+        crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_control_plane_composition(
+            planning,
+        );
+    let parallel_mode_binding =
+        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
+    configure_test_app(NativeTuiApp::new_with_github_review_polling_setup_loader(
+        StartupService::new(codex_port.clone()),
+        SessionService::new(codex_port.clone()),
+        ConversationService::new(codex_port),
+        parallel_mode_binding,
+        super::super::super::github_polling::GithubReviewPollingBootstrap::from_env_values(
+            Some("acme/widgets#42".to_string()),
+            Some("30".to_string()),
+        ),
+        loader,
+    ))
+}
+
+fn configure_test_app(mut app: NativeTuiApp) -> NativeTuiApp {
     // Inline rendering fixtures assume the app opens on an editable draft; fail loudly if constructor semantics change.
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start with a ready draft conversation");

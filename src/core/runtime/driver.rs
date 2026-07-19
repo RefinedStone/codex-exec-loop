@@ -106,7 +106,9 @@ mod tests {
     use super::*;
     use crate::core::app::{
         AppEvent, ApprovalDecisionAdmission, ApprovalDecisionCorrelation, CoreEffectCompletion,
-        CorePromptOrigin, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
+        CorePromptOrigin, GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
+        GithubReviewPollingSetupMode, GithubReviewPollingSetupRequest,
+        GithubReviewPollingSetupResult, ManualPromptPreparationAdmission,
         ManualPromptPreparationIntent, PlanningRuntimeRefreshCorrelation,
         PlanningRuntimeRefreshSnapshot, QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot,
         QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
@@ -318,30 +320,48 @@ mod tests {
 
     impl CoreEffectExecutor for ImmediateGithubReviewPollExecutor {
         fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
-            let CoreEffect::PollGithubReview { correlation, .. } = effect else {
-                return None;
-            };
-            let target = correlation.target.clone();
-            Some(CoreInput::EffectCompleted(
-                CoreEffectCompletion::GithubReviewPollCompleted {
+            match effect {
+                CoreEffect::SetupGithubReviewPolling {
                     correlation,
-                    result: Ok(Box::new(GithubPullRequestPollResult {
-                        snapshot: GithubPullRequestActivitySnapshot {
-                            target,
-                            title: "Review poll".to_string(),
-                            url: "https://github.com/acme/widgets/pull/42".to_string(),
-                            head_branch: "feature".to_string(),
-                            base_branch: "prerelease".to_string(),
-                            events: Vec::new(),
+                    request,
+                } => {
+                    let target = request
+                        .mode
+                        .explicit_target()
+                        .expect("test setup should be explicit")
+                        .clone();
+                    Some(CoreInput::EffectCompleted(
+                        CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+                            correlation,
+                            result: Ok(GithubReviewPollingSetupResult::Active { target }),
                         },
-                        changes: Vec::new(),
-                        next_state: GithubPullRequestPollState {
-                            latest_submitted_at: Some("2026-07-19T10:00:00Z".to_string()),
-                            seen_events_at_latest_timestamp: Vec::new(),
+                    ))
+                }
+                CoreEffect::PollGithubReview { correlation, .. } => {
+                    let target = correlation.target.clone();
+                    Some(CoreInput::EffectCompleted(
+                        CoreEffectCompletion::GithubReviewPollCompleted {
+                            correlation,
+                            result: Ok(Box::new(GithubPullRequestPollResult {
+                                snapshot: GithubPullRequestActivitySnapshot {
+                                    target,
+                                    title: "Review poll".to_string(),
+                                    url: "https://github.com/acme/widgets/pull/42".to_string(),
+                                    head_branch: "feature".to_string(),
+                                    base_branch: "prerelease".to_string(),
+                                    events: Vec::new(),
+                                },
+                                changes: Vec::new(),
+                                next_state: GithubPullRequestPollState {
+                                    latest_submitted_at: Some("2026-07-19T10:00:00Z".to_string()),
+                                    seen_events_at_latest_timestamp: Vec::new(),
+                                },
+                            })),
                         },
-                    })),
-                },
-            ))
+                    ))
+                }
+                _ => None,
+            }
         }
     }
 
@@ -633,9 +653,15 @@ mod tests {
         let (_tx, rx) = core_input_channel();
         let mut runtime = CoreRuntime::new(ImmediateGithubReviewPollExecutor, rx);
         let target = GithubPullRequestTarget::new("acme/widgets", 42);
-        runtime.dispatch_command(AppCommand::ConfigureGithubReviewPolling {
-            target: Some(target.clone()),
-        });
+        let setup_correlation = GithubReviewPollingSetupCorrelation::new(1, "/workspace");
+        runtime.dispatch_command(AppCommand::SetupGithubReviewPolling(
+            GithubReviewPollingSetupRequest::new(
+                "/workspace",
+                GithubReviewPollingSetupMode::Explicit {
+                    target: target.clone(),
+                },
+            ),
+        ));
         let correlation = GithubReviewPollCorrelation::new(1, target.clone());
 
         let outcome = runtime.dispatch_command(AppCommand::PollGithubReview);
@@ -643,6 +669,7 @@ mod tests {
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::PollGithubReview {
+                setup_correlation: setup_correlation.clone(),
                 correlation: correlation.clone(),
                 previous_state: None,
             }]
@@ -666,12 +693,13 @@ mod tests {
         assert!(matches!(
             next.effects.as_slice(),
             [CoreEffect::PollGithubReview {
+                setup_correlation: next_setup,
                 correlation: GithubReviewPollCorrelation { generation: 2, .. },
                 previous_state: Some(GithubPullRequestPollState {
                     latest_submitted_at: Some(latest),
                     ..
                 }),
-            }] if latest == "2026-07-19T10:00:00Z"
+            }] if next_setup == &setup_correlation && latest == "2026-07-19T10:00:00Z"
         ));
     }
 

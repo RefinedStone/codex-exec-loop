@@ -1,6 +1,5 @@
 #[cfg(test)]
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::Result;
 
@@ -23,9 +22,7 @@ fn build_default_app() -> NativeTuiApp {
     let services = production::build_native_tui_application_services();
     let parallel_mode_binding =
         NativeTuiParallelModeBinding::from_composition(services.parallel_mode_control_plane);
-    let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    let github_review_polling =
-        GithubReviewPollingBootstrap::from_environment(&repo_root, Instant::now());
+    let github_review_polling = GithubReviewPollingBootstrap::from_environment();
     NativeTuiApp::new_with_github_review_polling(
         services.startup_service,
         services.session_service,
@@ -49,7 +46,7 @@ fn prepare_runtime(mut app: NativeTuiApp) -> ShellRuntime {
 mod tests {
     use anyhow::Result;
     use std::sync::{Mutex, mpsc};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::super::ratatui_frontend::prepare_runtime_for_due_draw;
     use super::*;

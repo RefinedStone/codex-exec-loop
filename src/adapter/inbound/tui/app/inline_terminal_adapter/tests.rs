@@ -16,7 +16,10 @@ use crate::adapter::inbound::tui::app::{
     PlanningWorkerVisibility, ProgressiveActivityDetailKind,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
+use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
+use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
+use crate::domain::github_review::{GithubPullRequestActivitySnapshot, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
     ParallelModeAgentSessionDetailSnapshot, ParallelModeAgentSessionHistoryEntry,
@@ -34,6 +37,9 @@ use std::cell::Cell as StdCell;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 fn projected_live_transcript_lines(app: &NativeTuiApp) -> Vec<ratatui::text::Line<'static>> {
@@ -72,7 +78,131 @@ fn inline_state_should_draw(
 mod fixtures;
 #[path = "tests/history_flush.rs"]
 mod history_flush;
-use self::fixtures::make_test_app;
+use self::fixtures::{make_test_app, make_test_app_with_github_review_setup_loader};
+
+struct FirstFrameGithubReviewPollerPort;
+
+impl GithubReviewPollerPort for FirstFrameGithubReviewPollerPort {
+    fn load_pull_request_activity(
+        &self,
+        target: &GithubPullRequestTarget,
+    ) -> anyhow::Result<GithubPullRequestActivitySnapshot> {
+        Ok(GithubPullRequestActivitySnapshot {
+            target: target.clone(),
+            title: "First-frame review".to_string(),
+            url: "https://example.invalid/acme/widgets/pull/42".to_string(),
+            head_branch: "feature".to_string(),
+            base_branch: "prerelease".to_string(),
+            events: Vec::new(),
+        })
+    }
+}
+
+#[test]
+fn github_setup_starts_once_only_after_the_first_successful_frame() {
+    let setup_calls = Arc::new(AtomicUsize::new(0));
+    let calls = setup_calls.clone();
+    let (setup_started_tx, setup_started_rx) = mpsc::sync_channel(1);
+    let mut app = make_test_app_with_github_review_setup_loader(move |request| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        setup_started_tx
+            .send(())
+            .expect("setup start signal should have a receiver");
+        thread::sleep(Duration::from_millis(650));
+        let target = request
+            .mode
+            .explicit_target()
+            .expect("fixture setup should be explicit")
+            .clone();
+        Ok(Some((
+            target,
+            GithubReviewPollerService::new(Arc::new(FirstFrameGithubReviewPollerPort)),
+        )))
+    });
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::ViewportReplay),
+    )
+    .expect("inline terminal should initialize");
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .resize_on_next_flush(48, 10);
+    assert!(
+        !draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("resize-raced first draw should return cleanly")
+    );
+    assert_eq!(
+        setup_calls.load(Ordering::SeqCst),
+        0,
+        "a failed draw must not start setup"
+    );
+
+    let first_success_started = Instant::now();
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("next stable draw should succeed")
+    );
+    assert!(
+        first_success_started.elapsed() < Duration::from_millis(300),
+        "first successful frame must not wait for the 650ms setup provider"
+    );
+    setup_started_rx
+        .recv_timeout(Duration::from_millis(300))
+        .expect("successful frame should start setup");
+    assert_eq!(setup_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        runtime.app().github_review_polling_state,
+        super::super::github_polling::GithubReviewPollingState::Discovering { .. }
+    ));
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('x'),
+        KeyModifiers::NONE,
+    )));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("fixture should keep a ready conversation");
+    };
+    assert_eq!(conversation.input_buffer, "x");
+    assert!(
+        runtime.take_redraw_request(),
+        "input and setup-start state must remain redrawable while setup is blocked"
+    );
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("input redraw should succeed while setup is blocked")
+    );
+    assert_eq!(
+        setup_calls.load(Ordering::SeqCst),
+        1,
+        "later successful draws must not duplicate setup"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline
+        && matches!(
+            runtime.app().github_review_polling_state,
+            super::super::github_polling::GithubReviewPollingState::Discovering { .. }
+        )
+    {
+        runtime.poll_background_messages();
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(matches!(
+        runtime.app().github_review_polling_state,
+        super::super::github_polling::GithubReviewPollingState::Active(_)
+    ));
+}
 
 // Host history sync must insert only committed transcript rows; live agent
 // deltas stay in the active tail until the turn is completed.

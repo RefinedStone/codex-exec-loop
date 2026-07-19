@@ -92,10 +92,17 @@ targeted assertion을 둡니다.
 | Overlay | open/close 시 stale tail 제거와 정상 redraw |
 | Parallel stream | 초기 status row 유지, host scrollback에 panel chrome 없음, titleless live tail |
 | Fallback | standard/fallback insertion 모두 viewport state 유지 |
+| GitHub review setup | 실패한 draw는 setup 0회, 첫 안정 frame 뒤 정확히 1회, 650ms provider 차단 중 첫 frame 300ms 미만과 입력/redraw 유지, setup completion 뒤 첫 poll |
 
 Host scrollback과 live viewport로 나뉘는 stream 사이에 panel title을 넣지 않습니다.
 `InlineTitledPanel`, `InlineScrolledPanel`, `InlineAppendOnlyStream` typed surface를 사용하고 parallel
 stream은 dedicated renderer로 진입합니다.
+
+GitHub setup 변경은 Core controller/effect-runner test로 generation/workspace exact match,
+동일 요청 coalescing, A→B→A, stale/duplicate completion, panic과 잘못된 target의 fail-closed 처리,
+다른 setup generation service의 poll 차단을 함께 검증합니다. Architecture guard는 Rust AST를
+사용해 production TUI의 service/adapter/discovery/process/thread 소유를 막고 comment, string,
+`#[cfg(test)]` 항목이 검사 결과를 오염시키지 않음을 별도로 증명합니다.
 
 ## Manual capture
 

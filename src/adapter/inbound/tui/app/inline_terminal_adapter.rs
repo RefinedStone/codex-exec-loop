@@ -197,6 +197,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     if acknowledge_viewport_handoff_after_draw {
         acknowledge_transcript_handoff_after_delivery(runtime, true);
     }
+    runtime.record_successful_frame_delivery();
     Ok(true)
 }
 
