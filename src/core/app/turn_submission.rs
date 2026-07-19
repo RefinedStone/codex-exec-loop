@@ -1,6 +1,8 @@
 use crate::domain::conversation::ConversationTurnOptions;
 use crate::domain::planning::ParallelTurnHandoff;
 
+use super::StopRequestCorrelation;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TurnSubmissionCorrelation {
     pub generation: u64,
@@ -19,6 +21,9 @@ pub enum TurnSubmissionAdmission {
     },
     RejectedActive {
         active_correlation: TurnSubmissionCorrelation,
+    },
+    RejectedStopPending {
+        stop_correlation: StopRequestCorrelation,
     },
 }
 

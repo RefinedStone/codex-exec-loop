@@ -56,11 +56,21 @@ exactly once after the first correlated start; a provider-call error reopens adm
 fail-closed interrupt stream notice does not reopen it before an exact retry, terminal, or
 conversation transition. The outbound signal remains intentionally global, so Core correlation
 governs admission and lifecycle but does not narrow which runtime sessions receive `:stop`.
+Provider execution runs outside command dispatch. If a turn or conversation transition invalidates
+an in-flight attempt, Core invalidates the worker permit and keeps the stop lease until its exact
+completion; new turn admission and a newly requested conversation load wait for that settlement.
+This ordering prevents a delayed global broadcast from interrupting work admitted after the stop
+request. A provider panic returns as the same correlated failure completion instead of wedging the
+lease.
 
 Manual prompt preparation follows the same admission rule. The TUI sends a correlation-free intent
 and binds its editor, delivery, and parallel-mode context only after core accepts it. Core assigns
 the correlation, permits one preparation at a time, and drops stale or duplicate completions. The
 TUI still verifies the accepted workspace and unchanged draft before applying the prepared result.
+Cancellation invalidates the background worker permit but retains the physical single-flight lease
+until exact settlement. Preparation rechecks that permit after blocking reads and immediately
+before bootstrap stage, promotion, and task-intake commit, so an invalidated A→B→A request cannot
+overlap a newer mutation. Worker panic is reduced to an exact rejected completion.
 
 Active-turn steering uses the same authority boundary. Core admits only an exact active
 submission/thread/turn identity, assigns a correlation rooted in that submission, starts one

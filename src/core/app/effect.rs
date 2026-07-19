@@ -46,6 +46,9 @@ pub enum CoreEffect {
         correlation: QueueMutationCorrelation,
     },
     PrepareManualPrompt(Box<ManualPromptRequest>),
+    CancelManualPromptPreparation {
+        correlation: crate::domain::planning::ManualPromptCorrelation,
+    },
     SubmitTurn {
         correlation: TurnSubmissionCorrelation,
         request: TurnSubmissionRequest,
@@ -53,6 +56,9 @@ pub enum CoreEffect {
     RequestStopAllSessions {
         correlation: StopRequestCorrelation,
         attempt: StopRequestAttempt,
+    },
+    InvalidateStopRequest {
+        correlation: StopRequestCorrelation,
     },
     SteerTurn {
         correlation: TurnSteerCorrelation,

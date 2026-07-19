@@ -54,11 +54,20 @@ completion을 버립니다. Composition은 기존 `request_stop_all_sessions` �
 conversation 전이 전까지 gate를 열지 않습니다. Outbound 신호는 의도적으로 global이므로 Core
 correlation은 admission과 lifecycle을 제어하지만 `:stop`을 받는 runtime session 범위를 좁히지는
 않습니다.
+Provider 실행은 command dispatch 밖에서 수행합니다. 진행 중인 attempt를 turn 또는 conversation
+전이가 무효화하면 Core는 worker permit을 무효화하되 정확한 completion까지 stop lease를 유지합니다.
+그 settlement 전에는 새 turn admission을 거부하고 새 conversation load를 지연하여, 늦은 global
+broadcast가 stop 요청 뒤 승인된 새 작업을 중단하지 못하게 합니다. Provider panic도 같은 correlation의
+실패 completion으로 환원되어 lease를 영구 점유하지 않습니다.
 
 Manual prompt preparation도 같은 admission 규칙을 사용합니다. TUI는 correlation 없는 intent를
 보내고 core가 승인한 뒤에만 editor, delivery, parallel-mode 문맥을 결합합니다. Core가 correlation을
 발급하고 preparation 하나만 허용하며 stale 또는 중복 completion을 버립니다. TUI는 승인된
 workspace와 변경되지 않은 draft를 확인한 뒤 prepared result를 적용합니다.
+취소는 background worker permit을 무효화하지만 physical single-flight lease는 정확한 settlement까지
+유지합니다. Preparation은 blocking read 뒤와 bootstrap stage, promote, task-intake commit 직전에
+permit을 다시 확인하므로 무효화된 A→B→A 요청이 새 mutation과 겹치지 않습니다. Worker panic은
+정확히 correlation된 rejected completion으로 환원됩니다.
 
 활성 turn steer도 같은 권한 경계를 사용합니다. Core는 정확히 일치하는 활성
 submission/thread/turn identity만 승인하고, 해당 submission에 귀속된 correlation을 발급해 provider

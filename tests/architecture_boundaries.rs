@@ -706,6 +706,58 @@ fn core_runtime_worker_modules_stay_private_to_effect_boundary() {
 }
 
 #[test]
+fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch() {
+    let runner = fs::read_to_string("src/composition/core_effect_runner.rs")
+        .expect("core effect runner source should load");
+    let run_effect = runner
+        .split_once("pub fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {")
+        .and_then(|(_, body)| body.split_once("pub fn spawn_session_catalog_load("))
+        .map(|(body, _)| body)
+        .expect("core effect dispatch should have a bounded source body");
+
+    assert!(
+        run_effect.contains("self.spawn_manual_prompt_preparation(*request, permit);")
+            && run_effect
+                .contains("self.spawn_stop_request_attempt(correlation, attempt, permit);"),
+        "manual prompt preparation and stop requests must dispatch their background workers"
+    );
+    assert!(
+        run_effect.contains("CoreEffect::CancelManualPromptPreparation { correlation }")
+            && run_effect.contains("CoreEffect::InvalidateStopRequest { correlation }")
+            && run_effect.contains(".invalidate(correlation.generation);"),
+        "manual cancellation and stop lifecycle invalidation must reach the worker permits"
+    );
+    assert!(
+        !run_effect.contains(".prepare(") && !run_effect.contains(".request_stop_all_sessions("),
+        "core effect dispatch must not execute manual preparation or stop provider I/O inline"
+    );
+
+    let manual_worker = runner
+        .split_once("fn spawn_manual_prompt_preparation(")
+        .and_then(|(_, body)| body.split_once("fn spawn_stop_request_attempt("))
+        .map(|(body, _)| body)
+        .expect("manual preparation worker should have a bounded source body");
+    let stop_worker = runner
+        .split_once("fn spawn_stop_request_attempt(")
+        .and_then(|(_, body)| body.split_once("pub fn spawn_approval_decision_submission("))
+        .map(|(body, _)| body)
+        .expect("stop request worker should have a bounded source body");
+    assert!(
+        manual_worker.contains("thread::spawn(move ||")
+            && manual_worker.contains("catch_unwind(AssertUnwindSafe(")
+            && manual_worker.contains("service.prepare_guarded(request, &|| permit.is_active())"),
+        "manual preparation must run behind its cancellation and panic boundary"
+    );
+    assert!(
+        stop_worker.contains("thread::spawn(move ||")
+            && stop_worker.contains("catch_unwind(AssertUnwindSafe(")
+            && stop_worker.contains("if !permit.is_active()")
+            && stop_worker.contains("conversation_service.request_stop_all_sessions()"),
+        "stop provider execution must run behind its lifecycle and panic boundary"
+    );
+}
+
+#[test]
 fn core_layer_does_not_bypass_parallel_control_plane_gate() {
     // Parallel mode already has an application single-writer gate. Core may eventually
     // expose a projection of that state, but it must not own the raw service, host

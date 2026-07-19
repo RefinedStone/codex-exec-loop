@@ -42,6 +42,14 @@ impl ManualPromptIntakeService {
         &self,
         request: ManualPromptIntakeRequest,
     ) -> ManualPromptIntakeOutcome {
+        self.prepare_manual_turn_guarded(request, &|| true)
+    }
+
+    pub(crate) fn prepare_manual_turn_guarded(
+        &self,
+        request: ManualPromptIntakeRequest,
+        is_current: &dyn Fn() -> bool,
+    ) -> ManualPromptIntakeOutcome {
         let transcript_text = request.raw_prompt.trim().to_string();
         if transcript_text.is_empty() {
             return ManualPromptIntakeOutcome::Rejected {
@@ -56,7 +64,7 @@ impl ManualPromptIntakeService {
             })
         });
 
-        let outcome = self.commit_prompt_as_task(&request, &transcript_text);
+        let outcome = self.commit_prompt_as_task(&request, &transcript_text, is_current);
         match &outcome {
             ManualPromptIntakeOutcome::TaskCommitted {
                 committed_task_id,
@@ -87,7 +95,11 @@ impl ManualPromptIntakeService {
         &self,
         request: &ManualPromptIntakeRequest,
         transcript_text: &str,
+        is_current: &dyn Fn() -> bool,
     ) -> ManualPromptIntakeOutcome {
+        if !is_current() {
+            return cancelled_manual_intake();
+        }
         let intake_request = PlanningTaskIntakeRequest {
             workspace_directory: request.workspace_directory.clone(),
             raw_prompt: transcript_text.to_string(),
@@ -107,6 +119,9 @@ impl ManualPromptIntakeService {
                 };
             }
         };
+        if !is_current() {
+            return cancelled_manual_intake();
+        }
         let commit = match self.task_intake.commit_task_intake_with_task(&proposal) {
             Ok(commit) => commit,
             Err(error) => {
@@ -141,6 +156,12 @@ impl ManualPromptIntakeService {
             Ok(proposal) => Ok(proposal),
             Err(_) => self.task_intake.prepare_task_intake(request),
         }
+    }
+}
+
+fn cancelled_manual_intake() -> ManualPromptIntakeOutcome {
+    ManualPromptIntakeOutcome::Rejected {
+        reason: "manual prompt preparation was cancelled".to_string(),
     }
 }
 
@@ -198,7 +219,7 @@ mod tests {
     use std::process::Command;
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
@@ -465,6 +486,63 @@ mod tests {
                 .filter(|task| task.id == committed_task_id)
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn cancelled_manual_intake_never_commits_the_prepared_task() {
+        let workspace_dir = create_temp_git_repo("manual-intake-cancel-before-commit");
+        let workspace = Arc::new(FilesystemPlanningWorkspaceAdapter::new());
+        let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let bootstrap_planning = PlanningServices::from_ports(
+            workspace.clone(),
+            authority.clone(),
+            authority.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        bootstrap_planning_workspace(&bootstrap_planning, &workspace_dir);
+        let current = Arc::new(AtomicBool::new(true));
+        let cancelling_repository = Arc::new(CancellingBeforeCommitTaskRepositoryPort {
+            inner: authority.clone(),
+            current: current.clone(),
+            commit_count: AtomicUsize::new(0),
+        });
+        let planning = PlanningServices::from_ports(
+            workspace,
+            authority.clone(),
+            cancelling_repository.clone(),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        let prompt = "Do not commit this cancelled task";
+
+        let outcome = planning.runtime.prepare_manual_prompt_intake_guarded(
+            ManualPromptIntakeRequest {
+                workspace_directory: workspace_dir.clone(),
+                raw_prompt: prompt.to_string(),
+                legacy_source_turn_id: None,
+                parent_thread_id: None,
+                parent_turn_id: None,
+            },
+            &|| current.load(Ordering::SeqCst),
+        );
+
+        assert_eq!(
+            outcome,
+            ManualPromptIntakeOutcome::Rejected {
+                reason: "manual prompt preparation was cancelled".to_string(),
+            }
+        );
+        assert_eq!(cancelling_repository.commit_count.load(Ordering::SeqCst), 0);
+        let snapshot = authority
+            .load_task_authority_snapshot(&workspace_dir)
+            .expect("task authority should load")
+            .expect("task authority should exist");
+        assert!(
+            snapshot
+                .task_authority
+                .tasks
+                .iter()
+                .all(|task| task.title != prompt)
         );
     }
 
@@ -752,6 +830,57 @@ mod tests {
         inner: Arc<SqlitePlanningAuthorityAdapter>,
         interception: TaskCommitInterception,
         intercepted: AtomicBool,
+    }
+
+    struct CancellingBeforeCommitTaskRepositoryPort {
+        inner: Arc<SqlitePlanningAuthorityAdapter>,
+        current: Arc<AtomicBool>,
+        commit_count: AtomicUsize,
+    }
+
+    impl PlanningTaskRepositoryPort for CancellingBeforeCommitTaskRepositoryPort {
+        fn load_direction_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+        ) -> anyhow::Result<Option<PlanningDirectionAuthoritySnapshot>> {
+            self.inner.load_direction_authority_snapshot(workspace_dir)
+        }
+
+        fn commit_direction_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+            commit: PlanningDirectionAuthorityCommit<'_>,
+        ) -> anyhow::Result<PlanningTaskAuthorityCommitResult> {
+            self.inner
+                .commit_direction_authority_snapshot(workspace_dir, commit)
+        }
+
+        fn clear_direction_authority_snapshot(&self, workspace_dir: &str) -> anyhow::Result<()> {
+            self.inner.clear_direction_authority_snapshot(workspace_dir)
+        }
+
+        fn load_task_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+        ) -> anyhow::Result<Option<PlanningTaskAuthoritySnapshot>> {
+            let snapshot = self.inner.load_task_authority_snapshot(workspace_dir);
+            self.current.store(false, Ordering::SeqCst);
+            snapshot
+        }
+
+        fn commit_task_authority_snapshot(
+            &self,
+            workspace_dir: &str,
+            commit: PlanningTaskAuthorityCommit<'_>,
+        ) -> anyhow::Result<PlanningTaskAuthorityCommitResult> {
+            self.commit_count.fetch_add(1, Ordering::SeqCst);
+            self.inner
+                .commit_task_authority_snapshot(workspace_dir, commit)
+        }
+
+        fn clear_task_authority_snapshot(&self, workspace_dir: &str) -> anyhow::Result<()> {
+            self.inner.clear_task_authority_snapshot(workspace_dir)
+        }
     }
 
     impl InterceptingTaskRepositoryPort {
