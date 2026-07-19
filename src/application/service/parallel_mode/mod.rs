@@ -834,21 +834,78 @@ impl ParallelModeService {
         mode_enabled: bool,
         readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
     ) -> ParallelModeSupervisorSnapshot {
+        self.reconcile_supervisor_snapshot_with_permit(
+            workspace_dir,
+            mode_enabled,
+            readiness_snapshot,
+            None,
+        )
+        .expect("unguarded supervisor reconciliation cannot reject an automation permit")
+    }
+
+    pub(crate) fn reconcile_supervisor_snapshot_guarded(
+        &self,
+        workspace_dir: &str,
+        mode_enabled: bool,
+        readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+        permit: &ParallelModeAutomationPermit,
+    ) -> Result<ParallelModeSupervisorSnapshot, String> {
+        self.reconcile_supervisor_snapshot_with_permit(
+            workspace_dir,
+            mode_enabled,
+            readiness_snapshot,
+            Some(permit),
+        )
+    }
+
+    fn reconcile_supervisor_snapshot_with_permit(
+        &self,
+        workspace_dir: &str,
+        mode_enabled: bool,
+        readiness_snapshot: Option<&ParallelModeReadinessSnapshot>,
+        permit: Option<&ParallelModeAutomationPermit>,
+    ) -> Result<ParallelModeSupervisorSnapshot, String> {
+        if permit.is_some_and(|permit| !permit.is_active()) {
+            return Err("parallel supervisor reconciliation belongs to an inactive epoch".into());
+        }
         if mode_enabled
             && readiness_snapshot.is_some_and(ParallelModeReadinessSnapshot::allows_parallel_mode)
             && let Ok(mutation_lock) =
                 acquire_pool_mutation_lock(self.planning_authority.as_ref(), workspace_dir)
-            && let Ok(target) = self.fetch_fresh_pool_integration_target(workspace_dir)
         {
-            let _ = reconcile_pool_board_and_context_with_target_locked(
-                self.planning_authority.as_ref(),
-                self.parallel_runtime.as_ref(),
-                workspace_dir,
-                &target,
-                &mutation_lock,
-            );
+            if permit.is_some_and(|permit| !permit.is_active()) {
+                return Err(
+                    "parallel supervisor reconciliation belongs to an inactive epoch".into(),
+                );
+            }
+            if let Ok(target) = self.fetch_fresh_pool_integration_target(workspace_dir) {
+                let reconcile = || {
+                    reconcile_pool_board_and_context_with_target_locked(
+                        self.planning_authority.as_ref(),
+                        self.parallel_runtime.as_ref(),
+                        workspace_dir,
+                        &target,
+                        &mutation_lock,
+                    )
+                };
+                if let Some(permit) = permit {
+                    /*
+                     * Linearize the final mutation with epoch cancellation. Cancellation
+                     * remains immediate during lock/target preflight; once reconcile is
+                     * accepted, Disable waits for that bounded mutation to finish.
+                     */
+                    if permit.with_active_commit(reconcile).is_none() {
+                        return Err(
+                            "parallel supervisor reconciliation belongs to an inactive epoch"
+                                .into(),
+                        );
+                    }
+                } else {
+                    let _ = reconcile();
+                }
+            }
         }
-        self.build_supervisor_snapshot(workspace_dir, mode_enabled, readiness_snapshot)
+        Ok(self.build_supervisor_snapshot(workspace_dir, mode_enabled, readiness_snapshot))
     }
 
     #[tracing::instrument(level = "trace", skip(self))]

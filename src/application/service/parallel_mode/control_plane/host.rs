@@ -11,7 +11,7 @@ use super::controller::ParallelModeControlPlaneService;
 use super::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlanePresentationEvent,
-    ParallelModePostTurnQueueContinuationOutcome,
+    ParallelModePostTurnQueueContinuationOutcome, ParallelModeSupervisorInspectionState,
 };
 
 struct ParallelModeControlPlaneHost<S>
@@ -121,6 +121,10 @@ where
 
     pub fn control_effect_in_flight(&self) -> bool {
         self.service().control_effect_in_flight()
+    }
+
+    pub fn supervisor_inspection_state(&self) -> ParallelModeSupervisorInspectionState {
+        self.service().supervisor_inspection_state().clone()
     }
 
     #[cfg(test)]

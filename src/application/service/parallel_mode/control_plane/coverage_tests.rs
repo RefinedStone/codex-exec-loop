@@ -17,8 +17,8 @@ use crate::domain::parallel_mode::{
     ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
     ParallelModeSupervisorSnapshot,
 };
-use std::sync::{Arc, mpsc};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -112,6 +112,89 @@ impl GithubAutomationPort for ReadyGithubAutomationPort {
     }
 }
 
+struct GatedGithubAutomationPort {
+    entered_tx: mpsc::Sender<()>,
+    release_rx: Mutex<mpsc::Receiver<()>>,
+}
+
+impl GithubAutomationPort for GatedGithubAutomationPort {
+    fn inspect_capabilities(&self, repo_root: &str) -> GithubAutomationCapabilities {
+        let _ = self.entered_tx.send(());
+        let _ = self
+            .release_rx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .recv_timeout(Duration::from_secs(2));
+        ReadyGithubAutomationPort.inspect_capabilities(repo_root)
+    }
+
+    fn remote_branch_names_for_prefix_for_delivery_target(
+        &self,
+        repo_root: &str,
+        push_remote: &str,
+        credential_redacted_push_url: &str,
+        branch_prefix: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        ReadyGithubAutomationPort.remote_branch_names_for_prefix_for_delivery_target(
+            repo_root,
+            push_remote,
+            credential_redacted_push_url,
+            branch_prefix,
+        )
+    }
+
+    fn push_branch(
+        &self,
+        repo_root: &str,
+        branch_name: &str,
+        force_with_lease: bool,
+    ) -> anyhow::Result<()> {
+        ReadyGithubAutomationPort.push_branch(repo_root, branch_name, force_with_lease)
+    }
+
+    fn ensure_pull_request(
+        &self,
+        repo_root: &str,
+        base_branch: &str,
+        head_branch: &str,
+        title: &str,
+        body: &str,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        ReadyGithubAutomationPort.ensure_pull_request(
+            repo_root,
+            base_branch,
+            head_branch,
+            title,
+            body,
+        )
+    }
+
+    fn inspect_pull_request(
+        &self,
+        repo_root: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<GithubAutomationPullRequest> {
+        ReadyGithubAutomationPort.inspect_pull_request(repo_root, pr_number)
+    }
+
+    fn push_integration_branch(
+        &self,
+        repo_root: &str,
+        branch_name: &str,
+        expected_old_commit_sha: &str,
+    ) -> anyhow::Result<()> {
+        ReadyGithubAutomationPort.push_integration_branch(
+            repo_root,
+            branch_name,
+            expected_old_commit_sha,
+        )
+    }
+
+    fn close_pull_request(&self, repo_root: &str, pr_number: u64) -> anyhow::Result<()> {
+        ReadyGithubAutomationPort.close_pull_request(repo_root, pr_number)
+    }
+}
+
 fn ready_capability(key: ParallelModeCapabilityKey) -> ParallelModeCapabilitySnapshot {
     ParallelModeCapabilitySnapshot::new(key, ParallelModeCapabilityState::Ready, "ready", None)
 }
@@ -127,9 +210,16 @@ fn unique_workspace(label: &str) -> String {
 fn test_parallel_mode_service(
     authority: Arc<SqlitePlanningAuthorityAdapter>,
 ) -> ParallelModeService {
+    test_parallel_mode_service_with_github(authority, Arc::new(ReadyGithubAutomationPort))
+}
+
+fn test_parallel_mode_service_with_github(
+    authority: Arc<SqlitePlanningAuthorityAdapter>,
+    github_automation: Arc<dyn GithubAutomationPort>,
+) -> ParallelModeService {
     ParallelModeService::new(
         authority,
-        Arc::new(ReadyGithubAutomationPort),
+        github_automation,
         Arc::new(GitParallelModeRuntimeAdapter::new()),
     )
 }
@@ -147,8 +237,18 @@ fn test_control_plane_handle() -> (
     ParallelModeControlPlaneHandle<CapturingControlPlaneEventSink>,
     mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
 ) {
+    test_control_plane_handle_with_github(Arc::new(ReadyGithubAutomationPort))
+}
+
+fn test_control_plane_handle_with_github(
+    github_automation: Arc<dyn GithubAutomationPort>,
+) -> (
+    ParallelModeControlPlaneHandle<CapturingControlPlaneEventSink>,
+    mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
+) {
     let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());
-    let parallel_mode_service = test_parallel_mode_service(authority.clone());
+    let parallel_mode_service =
+        test_parallel_mode_service_with_github(authority.clone(), github_automation);
     let planning = test_planning_services(authority);
     let (tx, rx) = mpsc::channel();
     let effect_runner = ParallelModeControlPlaneEffectRunner::new(
@@ -241,6 +341,15 @@ fn recv_background_event(
         .expect("control plane background event should be sent")
 }
 
+fn loading_inspection_correlation(
+    handle: &ParallelModeControlPlaneHandle<CapturingControlPlaneEventSink>,
+) -> ParallelModeSupervisorInspectionCorrelation {
+    match handle.supervisor_inspection_state() {
+        ParallelModeSupervisorInspectionState::Loading { correlation, .. } => correlation,
+        state => panic!("expected loading supervisor inspection, got {state:?}"),
+    }
+}
+
 fn recv_orchestrator_wake_completed(
     rx: &mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
 ) -> ParallelModeControlPlaneBackgroundEvent {
@@ -314,10 +423,13 @@ fn worker_event(
 fn utility_effect_ids_inspection_and_reset_tick_signature_cover_process_edges() {
     assert_eq!(
         ParallelModeControlPlaneEffect::InspectSupervisor {
-            workspace_directory: WORKSPACE.to_string(),
+            correlation: ParallelModeSupervisorInspectionCorrelation::new(
+                1,
+                WORKSPACE.to_string(),
+                None,
+            ),
             mode_enabled: false,
             reconcile_pool: false,
-            show_status: true,
         }
         .effect_id(),
         None
@@ -367,10 +479,13 @@ fn utility_effect_ids_inspection_and_reset_tick_signature_cover_process_edges() 
     assert_eq!(
         inspected.effects,
         vec![ParallelModeControlPlaneEffect::InspectSupervisor {
-            workspace_directory: WORKSPACE.to_string(),
+            correlation: ParallelModeSupervisorInspectionCorrelation::new(
+                1,
+                WORKSPACE.to_string(),
+                None,
+            ),
             mode_enabled: false,
             reconcile_pool: false,
-            show_status: true,
         }]
     );
 
@@ -389,6 +504,169 @@ fn utility_effect_ids_inspection_and_reset_tick_signature_cover_process_edges() 
     );
     runtime.reset_orchestrator_tick_signature();
     assert!(runtime.store().last_orchestrator_tick_signature.is_none());
+}
+
+#[test]
+fn inspection_queues_exact_parallel_entry_instead_of_downgrading_enable_to_refresh() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    open_epoch(&mut runtime);
+    let inspected = runtime.handle(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: WORKSPACE.to_string(),
+        reconcile_pool: false,
+        show_status: false,
+    });
+    let correlation = match inspected.effects.as_slice() {
+        [ParallelModeControlPlaneEffect::InspectSupervisor { correlation, .. }] => {
+            correlation.clone()
+        }
+        effects => panic!("inspection should start immediately, got {effects:?}"),
+    };
+
+    let enabled = runtime.handle(ParallelModeControlPlaneCommand::Enable {
+        workspace_directory: WORKSPACE.to_string(),
+    });
+    assert!(enabled.effects.is_empty());
+    assert!(enabled.events.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlaneEvent::ModeEnabled { epoch_id: 1, .. }
+    )));
+    assert!(!enabled.events.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlaneEvent::SupervisorRefreshQueued
+    )));
+    let enabled_again = runtime.handle(ParallelModeControlPlaneCommand::Enable {
+        workspace_directory: WORKSPACE.to_string(),
+    });
+    assert!(enabled_again.effects.is_empty());
+    assert!(!enabled_again.events.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlaneEvent::SupervisorRefreshQueued
+    )));
+
+    let completed = runtime.handle(
+        ParallelModeControlPlaneCommand::SupervisorInspectionCompleted {
+            correlation,
+            succeeded: true,
+        },
+    );
+    assert!(matches!(
+        completed.effects.as_slice(),
+        [ParallelModeControlPlaneEffect::EnterParallelMode {
+            epoch_id: 1,
+            mode_was_enabled: false,
+            initial_pool_reset_required: true,
+            ..
+        }]
+    ));
+    assert!(completed.events.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlaneEvent::SupervisorInspectionCompleted {
+            projection_current: false,
+            ..
+        }
+    )));
+    assert!(completed.effects.iter().all(|effect| !matches!(
+        effect,
+        ParallelModeControlPlaneEffect::RefreshSupervisor { .. }
+    )));
+}
+
+#[test]
+fn stronger_inspection_intent_runs_after_passive_inspection_completes() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    runtime.force_mode_for_test(WORKSPACE, true);
+    let passive = runtime.handle(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: WORKSPACE.to_string(),
+        reconcile_pool: false,
+        show_status: false,
+    });
+    let passive_correlation = match passive.effects.as_slice() {
+        [
+            ParallelModeControlPlaneEffect::InspectSupervisor {
+                correlation,
+                reconcile_pool: false,
+                ..
+            },
+        ] => correlation.clone(),
+        effects => panic!("passive inspection should start, got {effects:?}"),
+    };
+
+    let stronger = runtime.handle(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: WORKSPACE.to_string(),
+        reconcile_pool: true,
+        show_status: true,
+    });
+    assert!(stronger.events.is_empty());
+    assert!(stronger.effects.is_empty());
+
+    let completed = runtime.handle(
+        ParallelModeControlPlaneCommand::SupervisorInspectionCompleted {
+            correlation: passive_correlation.clone(),
+            succeeded: true,
+        },
+    );
+    let stronger_correlation = match completed.effects.as_slice() {
+        [
+            ParallelModeControlPlaneEffect::InspectSupervisor {
+                correlation,
+                mode_enabled: true,
+                reconcile_pool: true,
+            },
+        ] => correlation,
+        effects => panic!("stronger inspection should run next, got {effects:?}"),
+    };
+    assert!(stronger_correlation.operation_id > passive_correlation.operation_id);
+    assert!(completed.events.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlaneEvent::SupervisorInspectionStarted {
+            correlation,
+            show_status: true,
+        } if correlation == stronger_correlation
+    )));
+}
+
+#[test]
+fn inspection_epoch_binding_and_completion_validate_the_exact_workspace() {
+    let mut passive_runtime = ParallelModeControlPlaneRuntime::new();
+    passive_runtime.force_epoch_for_test("/active", 7);
+    let passive = passive_runtime.handle(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: "/inspected".to_string(),
+        reconcile_pool: false,
+        show_status: false,
+    });
+    let passive_correlation = match passive.effects.as_slice() {
+        [ParallelModeControlPlaneEffect::InspectSupervisor { correlation, .. }] => correlation,
+        effects => panic!("passive workspace inspection should start, got {effects:?}"),
+    };
+    assert_eq!(passive_correlation.epoch_id, None);
+
+    let mut active_runtime = ParallelModeControlPlaneRuntime::new();
+    active_runtime.force_epoch_for_test("/first", 7);
+    let active = active_runtime.handle(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: "/first".to_string(),
+        reconcile_pool: false,
+        show_status: false,
+    });
+    let active_correlation = match active.effects.as_slice() {
+        [ParallelModeControlPlaneEffect::InspectSupervisor { correlation, .. }] => {
+            correlation.clone()
+        }
+        effects => panic!("active workspace inspection should start, got {effects:?}"),
+    };
+    assert_eq!(active_correlation.epoch_id, Some(7));
+
+    active_runtime.force_epoch_for_test("/second", 7);
+    let stale = active_runtime.handle(
+        ParallelModeControlPlaneCommand::SupervisorInspectionCompleted {
+            correlation: active_correlation,
+            succeeded: true,
+        },
+    );
+    assert!(matches!(
+        stale.events.as_slice(),
+        [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
+            if reason == "parallel supervisor inspection context is stale"
+    ));
 }
 
 #[test]
@@ -1504,15 +1782,33 @@ fn effect_runner_spawns_traceable_refresh_tick_and_blocked_entry_events() {
 
 #[test]
 fn controller_inspect_supervisor_reconciles_pool_when_requested() {
-    let (handle, _rx) = test_control_plane_handle();
+    let (handle, rx) = test_control_plane_handle();
     let workspace = unique_workspace("inspect-reconcile");
     handle.force_mode_for_test(&workspace, true);
 
-    let presented = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+    let loading = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
         workspace_directory: workspace.clone(),
         reconcile_pool: true,
         show_status: true,
     });
+
+    assert!(matches!(
+        handle.supervisor_inspection_state(),
+        ParallelModeSupervisorInspectionState::Loading { .. }
+    ));
+    assert!(loading.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
+            if status_text.starts_with("parallel readiness refresh: loading")
+    )));
+    let completed = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("inspection worker should report completion");
+    let presented = handle.handle_background_event(completed);
+    assert!(matches!(
+        handle.supervisor_inspection_state(),
+        ParallelModeSupervisorInspectionState::Ready { .. }
+    ));
 
     assert!(presented.iter().any(|event| matches!(
         event,
@@ -1533,4 +1829,318 @@ fn controller_inspect_supervisor_reconciles_pool_when_requested() {
         ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text.starts_with("parallel readiness refreshed / state:")
     )));
+}
+
+#[test]
+fn enabling_during_passive_inspection_preserves_projection_until_entry_completes() {
+    let (handle, _rx) = test_control_plane_handle();
+    let workspace = unique_workspace("inspect-enable-transition");
+    let previous_readiness = ready_readiness(&workspace);
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::OpenEpoch {
+        workspace_directory: workspace.clone(),
+    });
+    handle.force_readiness_snapshot_for_test(previous_readiness.clone());
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace.clone(),
+        reconcile_pool: false,
+        show_status: true,
+    });
+    let correlation = loading_inspection_correlation(&handle);
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::Enable {
+        workspace_directory: workspace.clone(),
+    });
+
+    let presented = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            correlation,
+            result: Ok(ParallelModeSupervisorInspectionSnapshot {
+                readiness_snapshot: ready_readiness(&workspace),
+                supervisor_snapshot: Box::new(supervisor_snapshot(&workspace)),
+            }),
+        },
+    );
+
+    assert_eq!(
+        handle.readiness_snapshot_for_test(),
+        Some(previous_readiness)
+    );
+    assert!(matches!(
+        handle.supervisor_inspection_state(),
+        ParallelModeSupervisorInspectionState::Idle
+    ));
+    assert!(handle.control_effect_in_flight());
+    assert!(!presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged { .. }
+            | ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged { .. }
+    )));
+    assert!(!presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
+            if status_text.starts_with("parallel readiness refreshed / state:")
+    )));
+}
+
+#[test]
+fn epochless_passive_inspection_does_not_replace_active_readiness_cache() {
+    let (handle, _rx) = test_control_plane_handle();
+    let inspected_workspace = unique_workspace("epochless-inspection");
+    let active_readiness = ready_readiness("/active-readiness-cache");
+    handle.force_readiness_snapshot_for_test(active_readiness.clone());
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: inspected_workspace.clone(),
+        reconcile_pool: false,
+        show_status: false,
+    });
+    let correlation = loading_inspection_correlation(&handle);
+    assert_eq!(correlation.epoch_id, None);
+
+    let presented = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            correlation,
+            result: Ok(ParallelModeSupervisorInspectionSnapshot {
+                readiness_snapshot: ready_readiness(&inspected_workspace),
+                supervisor_snapshot: Box::new(supervisor_snapshot(&inspected_workspace)),
+            }),
+        },
+    );
+
+    assert_eq!(handle.readiness_snapshot_for_test(), Some(active_readiness));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
+            workspace_directory,
+            ..
+        } if workspace_directory == &inspected_workspace
+    )));
+}
+
+#[test]
+fn supervisor_inspection_returns_loading_before_the_io_worker_is_released() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let github = Arc::new(GatedGithubAutomationPort {
+        entered_tx,
+        release_rx: Mutex::new(release_rx),
+    });
+    let (handle, background_rx) = test_control_plane_handle_with_github(github);
+    let workspace = env!("CARGO_MANIFEST_DIR").to_string();
+
+    let started_at = Instant::now();
+    let loading = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace,
+        reconcile_pool: false,
+        show_status: true,
+    });
+    let command_elapsed = started_at.elapsed();
+
+    assert!(
+        command_elapsed < Duration::from_millis(750),
+        "inspection command held the control-plane mutex for {command_elapsed:?}"
+    );
+    assert!(handle.control_effect_in_flight());
+    assert!(matches!(
+        handle.supervisor_inspection_state(),
+        ParallelModeSupervisorInspectionState::Loading { .. }
+    ));
+    assert!(loading.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
+            if status_text.starts_with("parallel readiness refresh: loading")
+    )));
+    let correlation = loading_inspection_correlation(&handle);
+    assert!(
+        handle
+            .handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+                workspace_directory: correlation.workspace_directory.clone(),
+                reconcile_pool: false,
+                show_status: true,
+            })
+            .is_empty(),
+        "a duplicate inspection must be gated while the worker is in flight"
+    );
+    assert_eq!(loading_inspection_correlation(&handle), correlation);
+    entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("inspection worker should reach the gated GitHub capability read");
+    release_tx
+        .send(())
+        .expect("inspection worker release should be delivered");
+    let completed = recv_background_event(&background_rx);
+    let presented = handle.handle_background_event(completed);
+    assert!(matches!(
+        handle.supervisor_inspection_state(),
+        ParallelModeSupervisorInspectionState::Ready { .. }
+    ));
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged { .. }
+    )));
+}
+
+#[test]
+fn disabling_before_inspection_io_is_released_rejects_reconciliation_permit() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let github = Arc::new(GatedGithubAutomationPort {
+        entered_tx,
+        release_rx: Mutex::new(release_rx),
+    });
+    let (handle, background_rx) = test_control_plane_handle_with_github(github);
+    let workspace = env!("CARGO_MANIFEST_DIR").to_string();
+    handle.force_mode_for_test(&workspace, true);
+    let epoch_id = handle
+        .current_epoch_id_for_workspace(&workspace)
+        .expect("forced mode should activate an epoch");
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace.clone(),
+        reconcile_pool: true,
+        show_status: true,
+    });
+    entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("inspection worker should reach the gated capability read");
+
+    let disable_started_at = Instant::now();
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: workspace.clone(),
+    });
+    assert!(
+        disable_started_at.elapsed() < Duration::from_millis(750),
+        "epoch cancellation must not wait for the inspection I/O worker"
+    );
+    assert!(!handle.automation_epoch_is_active(&workspace, epoch_id));
+
+    release_tx
+        .send(())
+        .expect("inspection worker release should be delivered");
+    let completed = recv_background_event(&background_rx);
+    assert!(matches!(
+        &completed,
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            result: Err(error),
+            ..
+        } if error.contains("inactive epoch")
+    ));
+    assert!(handle.handle_background_event(completed).is_empty());
+}
+
+#[test]
+fn failed_supervisor_inspection_preserves_projections_and_can_retry() {
+    let (handle, _rx) = test_control_plane_handle();
+    let workspace = unique_workspace("inspect-failure");
+    let previous_readiness = ready_readiness(&workspace);
+    handle.force_mode_for_test(&workspace, true);
+    handle.force_readiness_snapshot_for_test(previous_readiness.clone());
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace.clone(),
+        reconcile_pool: false,
+        show_status: true,
+    });
+    let first = loading_inspection_correlation(&handle);
+
+    let failed = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            correlation: first.clone(),
+            result: Err("gated inspection failed".to_string()),
+        },
+    );
+
+    assert_eq!(
+        handle.readiness_snapshot_for_test(),
+        Some(previous_readiness)
+    );
+    assert!(matches!(
+        handle.supervisor_inspection_state(),
+        ParallelModeSupervisorInspectionState::Failed {
+            correlation,
+            error,
+        } if correlation == first && error == "gated inspection failed"
+    ));
+    assert!(failed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
+            if status_text.contains("press Ctrl+R to retry")
+    )));
+    assert!(!failed.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged { .. }
+            | ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged { .. }
+    )));
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace,
+        reconcile_pool: false,
+        show_status: true,
+    });
+    let retry = loading_inspection_correlation(&handle);
+    assert!(retry.operation_id > first.operation_id);
+}
+
+#[test]
+fn supervisor_inspection_rejects_stale_duplicate_workspace_and_epoch_completions() {
+    let (handle, _rx) = test_control_plane_handle();
+    let workspace = unique_workspace("inspect-stale");
+    handle.force_epoch_for_test(&workspace, 7);
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace.clone(),
+        reconcile_pool: false,
+        show_status: false,
+    });
+    let stale = loading_inspection_correlation(&handle);
+    assert_eq!(stale.epoch_id, Some(7));
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: workspace.clone(),
+    });
+    handle.force_epoch_for_test(&workspace, 8);
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+        workspace_directory: workspace.clone(),
+        reconcile_pool: false,
+        show_status: false,
+    });
+    let current = loading_inspection_correlation(&handle);
+    assert_eq!(current.epoch_id, Some(8));
+    assert!(current.operation_id > stale.operation_id);
+
+    let stale_events = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            correlation: stale,
+            result: Err("stale epoch".to_string()),
+        },
+    );
+    assert!(stale_events.is_empty());
+    assert_eq!(loading_inspection_correlation(&handle), current);
+
+    let mut forged = current.clone();
+    forged.workspace_directory = unique_workspace("forged-inspect-workspace");
+    let forged_events = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            correlation: forged,
+            result: Err("forged workspace".to_string()),
+        },
+    );
+    assert!(forged_events.is_empty());
+    assert_eq!(loading_inspection_correlation(&handle), current);
+
+    let failed = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            correlation: current.clone(),
+            result: Err("current failure".to_string()),
+        },
+    );
+    assert!(!failed.is_empty());
+    let duplicate = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+            correlation: current,
+            result: Err("duplicate".to_string()),
+        },
+    );
+    assert!(duplicate.is_empty());
+    assert!(matches!(
+        handle.supervisor_inspection_state(),
+        ParallelModeSupervisorInspectionState::Failed { error, .. }
+            if error == "current failure"
+    ));
 }

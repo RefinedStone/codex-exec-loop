@@ -1222,6 +1222,7 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
         KeyCode::Char('r'),
         KeyModifiers::CONTROL,
     )));
+    assert!(runtime.app().parallel_mode_control_effect_in_flight());
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
@@ -1229,8 +1230,30 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
     assert!(
         conversation
             .status_text
+            .starts_with("parallel readiness refresh: loading")
+    );
+    for _ in 0..250 {
+        runtime.poll_background_messages();
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("expected ready conversation state");
+        };
+        if conversation
+            .status_text
+            .starts_with("parallel readiness refreshed / state:")
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert!(
+        conversation
+            .status_text
             .starts_with("parallel readiness refreshed / state:")
     );
+    assert!(!runtime.app().parallel_mode_control_effect_in_flight());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }

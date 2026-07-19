@@ -724,6 +724,49 @@ fn core_layer_does_not_bypass_parallel_control_plane_gate() {
 }
 
 #[test]
+fn parallel_supervisor_inspection_never_runs_inline_under_the_control_plane_mutex() {
+    assert_no_forbidden_references_in_paths(
+        "parallel supervisor inspection must dispatch a worker before touching filesystem, Git, or SQLite state",
+        &["src/application/service/parallel_mode/control_plane/controller.rs"],
+        &[
+            ".inspect_supervisor(",
+            ".load_runtime_projection_or_invalid(",
+            ".inspect_readiness(",
+            ".build_supervisor_snapshot(",
+            ".reconcile_supervisor_snapshot(",
+        ],
+    );
+
+    let runner =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
+            .expect("parallel control-plane effect runner source should load");
+    let inspection_worker = runner
+        .split_once("pub fn spawn_supervisor_inspection(")
+        .and_then(|(_, body)| body.split_once("pub fn spawn_orchestrator_tick("))
+        .map(|(body, _)| body)
+        .expect("parallel supervisor inspection worker should have a bounded source body");
+    assert!(
+        runner.contains("pub fn spawn_supervisor_inspection(")
+            && inspection_worker.contains(".reconcile_supervisor_snapshot_guarded(")
+            && inspection_worker.contains(
+                "ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted",
+            ),
+        "parallel supervisor inspection must reconcile through an epoch guard and complete through the background worker event path"
+    );
+    assert!(
+        !inspection_worker.contains(".reconcile_supervisor_snapshot("),
+        "the async inspection worker must not call the unguarded reconciliation path"
+    );
+    let parallel_service = fs::read_to_string("src/application/service/parallel_mode/mod.rs")
+        .expect("parallel mode service source should load");
+    assert!(
+        parallel_service.contains("fn reconcile_supervisor_snapshot_guarded(")
+            && parallel_service.contains("permit.with_active_commit(reconcile)"),
+        "the guarded inspection reconcile must linearize its final pool mutation with epoch cancellation"
+    );
+}
+
+#[test]
 fn tui_startup_checks_enter_through_core_runtime() {
     // Static guard for the startup migration: TUI may request startup checks, but execution belongs
     // to CoreRuntime/CoreEffectRunner so completion re-enters core before TUI state changes.

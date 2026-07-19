@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
+use std::{panic, panic::AssertUnwindSafe};
 
 use serde_json::Value;
 
@@ -21,12 +22,19 @@ use crate::domain::parallel_mode::{
 };
 
 use super::{
-    ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake,
+    ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffectId,
+    ParallelModeControlPlaneWake, ParallelModeSupervisorInspectionCorrelation,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelModeControlPlaneLoadingStage {
     ReconcilingPool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParallelModeSupervisorInspectionSnapshot {
+    pub readiness_snapshot: ParallelModeReadinessSnapshot,
+    pub supervisor_snapshot: Box<ParallelModeSupervisorSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +58,10 @@ pub enum ParallelModeControlPlaneBackgroundEvent {
         initial_pool_reset_completed: bool,
         has_actionable_queue_head: bool,
         orchestrator_tick_signature: Option<String>,
+    },
+    SupervisorInspectionCompleted {
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        result: Result<ParallelModeSupervisorInspectionSnapshot, String>,
     },
     SupervisorSnapshotRefreshed {
         workspace_directory: String,
@@ -204,6 +216,72 @@ where
                     effect_id,
                     orchestrator_tick_signature,
                     supervisor_snapshot: Box::new(supervisor_snapshot),
+                },
+            );
+        });
+    }
+
+    pub fn spawn_supervisor_inspection(
+        &self,
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        mode_enabled: bool,
+        reconcile_pool: bool,
+    ) {
+        let parallel_mode_service = self.parallel_mode_service.clone();
+        let planning = self.planning.clone();
+        let event_sink = self.event_sink.clone();
+        let automation_guard = self.automation_guard.clone();
+
+        thread::spawn(move || {
+            let workspace_directory = correlation.workspace_directory.clone();
+            let automation_permit = correlation
+                .epoch_id
+                .map(|epoch_id| automation_guard.permit(&workspace_directory, epoch_id));
+            let result = panic::catch_unwind(AssertUnwindSafe(
+                || -> Result<ParallelModeSupervisorInspectionSnapshot, String> {
+                    if automation_permit
+                        .as_ref()
+                        .is_some_and(|permit| !permit.is_active())
+                    {
+                        return Err(
+                            "parallel supervisor inspection belongs to an inactive epoch"
+                                .to_string(),
+                        );
+                    }
+                    let planning_projection = planning
+                        .runtime
+                        .load_runtime_projection_or_invalid(&workspace_directory);
+                    let readiness_snapshot = parallel_mode_service
+                        .inspect_readiness(&workspace_directory, &planning_projection);
+                    let supervisor_snapshot = if reconcile_pool {
+                        let permit = automation_permit.as_ref().ok_or_else(|| {
+                            "parallel supervisor reconciliation has no automation epoch".to_string()
+                        })?;
+                        parallel_mode_service.reconcile_supervisor_snapshot_guarded(
+                            &workspace_directory,
+                            mode_enabled,
+                            Some(&readiness_snapshot),
+                            permit,
+                        )?
+                    } else {
+                        parallel_mode_service.build_supervisor_snapshot(
+                            &workspace_directory,
+                            mode_enabled,
+                            Some(&readiness_snapshot),
+                        )
+                    };
+                    Ok(ParallelModeSupervisorInspectionSnapshot {
+                        readiness_snapshot,
+                        supervisor_snapshot: Box::new(supervisor_snapshot),
+                    })
+                },
+            ))
+            .map_err(|_| "parallel supervisor inspection failed unexpectedly".to_string())
+            .and_then(|result| result);
+            event_sink.send_control_plane_event(
+                ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+                    correlation,
+                    result,
                 },
             );
         });
@@ -537,39 +615,6 @@ where
         let _ = self
             .parallel_mode_service
             .cancel_dispatch_commands(workspace_directory, reason);
-    }
-
-    pub fn inspect_supervisor(
-        &self,
-        workspace_directory: &str,
-        mode_enabled: bool,
-        reconcile_pool: bool,
-    ) -> (
-        ParallelModeReadinessSnapshot,
-        ParallelModeSupervisorSnapshot,
-    ) {
-        let planning_projection = self
-            .planning
-            .runtime
-            .load_runtime_projection_or_invalid(workspace_directory);
-        let readiness_snapshot = self
-            .parallel_mode_service
-            .inspect_readiness(workspace_directory, &planning_projection);
-        let supervisor_snapshot = if reconcile_pool {
-            self.parallel_mode_service.reconcile_supervisor_snapshot(
-                workspace_directory,
-                mode_enabled,
-                Some(&readiness_snapshot),
-            )
-        } else {
-            self.parallel_mode_service.build_supervisor_snapshot(
-                workspace_directory,
-                mode_enabled,
-                Some(&readiness_snapshot),
-            )
-        };
-
-        (readiness_snapshot, supervisor_snapshot)
     }
 
     pub fn continue_post_turn_queue_command(

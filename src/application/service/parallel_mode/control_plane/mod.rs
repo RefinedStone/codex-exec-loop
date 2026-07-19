@@ -25,6 +25,7 @@ pub(crate) use effect_runner::parallel_mode_distributor_tick_signature;
 pub use effect_runner::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneEffectRunner,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneLoadingStage,
+    ParallelModeSupervisorInspectionSnapshot,
 };
 pub use host::{ParallelModeControlPlaneEpochSnapshot, ParallelModeControlPlaneHandle};
 
@@ -46,6 +47,45 @@ pub struct ParallelModeControlPlaneEffectId {
 impl ParallelModeControlPlaneEffectId {
     fn new(sequence: u64, kind: ParallelModeControlPlaneEffectKind) -> Self {
         Self { sequence, kind }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeSupervisorInspectionCorrelation {
+    pub operation_id: u64,
+    pub workspace_directory: String,
+    pub epoch_id: Option<u64>,
+}
+
+impl ParallelModeSupervisorInspectionCorrelation {
+    fn new(operation_id: u64, workspace_directory: String, epoch_id: Option<u64>) -> Self {
+        Self {
+            operation_id,
+            workspace_directory,
+            epoch_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParallelModeSupervisorInspectionState {
+    Idle,
+    Loading {
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        show_status: bool,
+    },
+    Ready {
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+    },
+    Failed {
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        error: String,
+    },
+}
+
+impl ParallelModeSupervisorInspectionState {
+    pub fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading { .. })
     }
 }
 
@@ -89,6 +129,10 @@ pub enum ParallelModeControlPlaneCommand {
         workspace_directory: String,
         reconcile_pool: bool,
         show_status: bool,
+    },
+    SupervisorInspectionCompleted {
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        succeeded: bool,
     },
     RefreshSupervisor {
         workspace_directory: String,
@@ -190,6 +234,15 @@ pub enum ParallelModeControlPlaneEvent {
     ModeDisabled {
         workspace_directory: String,
     },
+    SupervisorInspectionStarted {
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        show_status: bool,
+    },
+    SupervisorInspectionCompleted {
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        succeeded: bool,
+        projection_current: bool,
+    },
     SupervisorRefreshQueued,
     OrchestratorWakeQueued {
         trigger: ParallelModeAutomationTrigger,
@@ -257,10 +310,9 @@ pub enum ParallelModeControlPlaneEffect {
         epoch_id: u64,
     },
     InspectSupervisor {
-        workspace_directory: String,
+        correlation: ParallelModeSupervisorInspectionCorrelation,
         mode_enabled: bool,
         reconcile_pool: bool,
-        show_status: bool,
     },
     RunOrchestrator {
         effect_id: ParallelModeControlPlaneEffectId,
@@ -346,8 +398,35 @@ pub struct ParallelModeControlPlaneRuntimeStore {
     projection_ready: bool,
     pending_supervisor_refresh: bool,
     pending_orchestrator_wake: Option<ParallelModeControlPlaneWake>,
+    pending_parallel_entry: Option<ParallelModePendingEntry>,
     last_orchestrator_tick_signature: Option<String>,
+    supervisor_inspection_in_flight: Option<ParallelModeSupervisorInspectionInFlight>,
+    pending_supervisor_inspection: Option<ParallelModeSupervisorInspectionIntent>,
+    next_supervisor_inspection_operation_id: u64,
     next_effect_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModePendingEntry {
+    workspace_directory: String,
+    epoch_id: u64,
+    mode_was_enabled: bool,
+    initial_pool_reset_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModeSupervisorInspectionIntent {
+    workspace_directory: String,
+    reconcile_pool: bool,
+    show_status: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModeSupervisorInspectionInFlight {
+    correlation: ParallelModeSupervisorInspectionCorrelation,
+    mode_enabled: bool,
+    reconcile_pool: bool,
+    show_status: bool,
 }
 
 struct ParallelModeEntryCompletion {
@@ -376,7 +455,11 @@ impl Default for ParallelModeControlPlaneRuntimeStore {
             projection_ready: false,
             pending_supervisor_refresh: false,
             pending_orchestrator_wake: None,
+            pending_parallel_entry: None,
             last_orchestrator_tick_signature: None,
+            supervisor_inspection_in_flight: None,
+            pending_supervisor_inspection: None,
+            next_supervisor_inspection_operation_id: 1,
             next_effect_sequence: 1,
         }
     }
@@ -504,6 +587,10 @@ impl ParallelModeControlPlaneRuntime {
                 show_status,
                 &mut outcome,
             ),
+            ParallelModeControlPlaneCommand::SupervisorInspectionCompleted {
+                correlation,
+                succeeded,
+            } => self.supervisor_inspection_completed(correlation, succeeded, &mut outcome),
             ParallelModeControlPlaneCommand::RefreshSupervisor {
                 workspace_directory,
             } => self.refresh_supervisor(workspace_directory, &mut outcome),
@@ -635,6 +722,9 @@ impl ParallelModeControlPlaneRuntime {
                 &mut outcome,
             ),
         }
+        if !self.start_pending_parallel_entry_if_idle(&mut outcome) {
+            self.start_pending_supervisor_inspection_if_idle(&mut outcome);
+        }
         outcome
     }
 
@@ -724,7 +814,7 @@ impl ParallelModeControlPlaneRuntime {
         workspace_directory: String,
         reconcile_pool: bool,
         show_status: bool,
-        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+        _outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
         let decision = ParallelModeControlPlaneAggregate::supervisor_inspection(
             self.store.mode_enabled,
@@ -732,14 +822,83 @@ impl ParallelModeControlPlaneRuntime {
             &workspace_directory,
             reconcile_pool,
         );
-        outcome
-            .effects
-            .push(ParallelModeControlPlaneEffect::InspectSupervisor {
-                workspace_directory,
-                mode_enabled: decision.mode_enabled,
-                reconcile_pool: decision.reconcile_pool,
-                show_status,
-            });
+        let epoch_id = self.supervisor_inspection_epoch_for_workspace(&workspace_directory);
+        if let Some(in_flight) = self.store.supervisor_inspection_in_flight.as_ref() {
+            let same_context = in_flight.correlation.workspace_directory == workspace_directory
+                && in_flight.correlation.epoch_id == epoch_id;
+            let requests_stronger_inspection = decision.reconcile_pool && !in_flight.reconcile_pool
+                || show_status && !in_flight.show_status;
+            if same_context && !requests_stronger_inspection {
+                return;
+            }
+        }
+
+        let intent = ParallelModeSupervisorInspectionIntent {
+            workspace_directory,
+            reconcile_pool,
+            show_status,
+        };
+        if let Some(pending) = self.store.pending_supervisor_inspection.as_mut()
+            && pending.workspace_directory == intent.workspace_directory
+        {
+            pending.reconcile_pool |= intent.reconcile_pool;
+            pending.show_status |= intent.show_status;
+        } else {
+            self.store.pending_supervisor_inspection = Some(intent);
+        }
+    }
+
+    fn supervisor_inspection_completed(
+        &mut self,
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        succeeded: bool,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let Some(in_flight) = self
+            .store
+            .supervisor_inspection_in_flight
+            .as_ref()
+            .filter(|in_flight| in_flight.correlation == correlation)
+        else {
+            self.stale_command(
+                correlation.workspace_directory,
+                correlation.epoch_id.unwrap_or(0),
+                "unknown parallel supervisor inspection",
+                outcome,
+            );
+            return;
+        };
+        let projection_current = in_flight.mode_enabled
+            == ParallelModeControlPlaneAggregate::mode_enabled_for_workspace(
+                self.store.mode_enabled,
+                self.store.workspace_directory.as_deref(),
+                &correlation.workspace_directory,
+            );
+        if !self.supervisor_inspection_context_is_current(&correlation) {
+            self.store.supervisor_inspection_in_flight = None;
+            self.store.pending_supervisor_inspection = None;
+            self.stale_command(
+                correlation.workspace_directory,
+                correlation.epoch_id.unwrap_or(0),
+                "parallel supervisor inspection context is stale",
+                outcome,
+            );
+            return;
+        }
+        self.store.supervisor_inspection_in_flight = None;
+        outcome.events.push(
+            ParallelModeControlPlaneEvent::SupervisorInspectionCompleted {
+                correlation,
+                succeeded,
+                projection_current,
+            },
+        );
+        if let (Some(workspace_directory), Some(epoch_id)) = (
+            self.store.workspace_directory.clone(),
+            self.store.current_epoch_id,
+        ) {
+            self.continue_after_effect_completed(workspace_directory, epoch_id, outcome);
+        }
     }
 
     fn refresh_supervisor(
@@ -1082,10 +1241,31 @@ impl ParallelModeControlPlaneRuntime {
                     });
             }
             ParallelModeEffectStartDecision::QueueUntilIdle => {
-                outcome
-                    .events
-                    .push(ParallelModeControlPlaneEvent::SupervisorRefreshQueued);
-                self.store.pending_supervisor_refresh = true;
+                if self.store.supervisor_inspection_in_flight.is_some()
+                    || self.store.pending_supervisor_inspection.is_some()
+                {
+                    let pending_entry = ParallelModePendingEntry {
+                        workspace_directory,
+                        epoch_id,
+                        mode_was_enabled,
+                        initial_pool_reset_required,
+                    };
+                    if let Some(pending) = self.store.pending_parallel_entry.as_mut()
+                        && pending.workspace_directory == pending_entry.workspace_directory
+                        && pending.epoch_id == pending_entry.epoch_id
+                    {
+                        pending.mode_was_enabled &= pending_entry.mode_was_enabled;
+                        pending.initial_pool_reset_required |=
+                            pending_entry.initial_pool_reset_required;
+                    } else {
+                        self.store.pending_parallel_entry = Some(pending_entry);
+                    }
+                } else {
+                    outcome
+                        .events
+                        .push(ParallelModeControlPlaneEvent::SupervisorRefreshQueued);
+                    self.store.pending_supervisor_refresh = true;
+                }
             }
         }
     }
@@ -1404,6 +1584,9 @@ impl ParallelModeControlPlaneRuntime {
         epoch_id: u64,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
+        if self.start_pending_parallel_entry_if_idle(outcome) {
+            return;
+        }
         match ParallelModeControlPlaneAggregate::effect_completion_follow_up(
             self.store.pending_supervisor_refresh,
         ) {
@@ -1536,6 +1719,7 @@ impl ParallelModeControlPlaneRuntime {
             || self.store.supervisor_refresh_in_flight.is_some()
             || self.store.orchestrator_wake_in_flight.is_some()
             || self.store.orchestrator_tick_in_flight.is_some()
+            || self.store.supervisor_inspection_in_flight.is_some()
     }
 
     fn clear_process_effect_state(&mut self) {
@@ -1543,10 +1727,106 @@ impl ParallelModeControlPlaneRuntime {
         self.store.supervisor_refresh_in_flight = None;
         self.store.orchestrator_wake_in_flight = None;
         self.store.orchestrator_tick_in_flight = None;
+        self.store.supervisor_inspection_in_flight = None;
+        self.store.pending_supervisor_inspection = None;
+        self.store.pending_parallel_entry = None;
         self.store.projection_ready = false;
         self.store.pending_supervisor_refresh = false;
         self.store.pending_orchestrator_wake = None;
         self.store.last_orchestrator_tick_signature = None;
+    }
+
+    fn supervisor_inspection_context_is_current(
+        &self,
+        correlation: &ParallelModeSupervisorInspectionCorrelation,
+    ) -> bool {
+        self.supervisor_inspection_epoch_for_workspace(&correlation.workspace_directory)
+            == correlation.epoch_id
+    }
+
+    fn supervisor_inspection_epoch_for_workspace(&self, workspace_directory: &str) -> Option<u64> {
+        (self.store.workspace_directory.as_deref() == Some(workspace_directory))
+            .then_some(self.store.current_epoch_id)
+            .flatten()
+    }
+
+    fn start_pending_parallel_entry_if_idle(
+        &mut self,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) -> bool {
+        if self.has_in_flight_effect() {
+            return false;
+        }
+        let Some(entry) = self.store.pending_parallel_entry.take() else {
+            return false;
+        };
+        if self.store.workspace_directory.as_deref() != Some(&entry.workspace_directory)
+            || self.store.current_epoch_id != Some(entry.epoch_id)
+        {
+            self.stale_command(
+                entry.workspace_directory,
+                entry.epoch_id,
+                "pending parallel entry belongs to a stale epoch",
+                outcome,
+            );
+            return false;
+        }
+        self.start_parallel_entry(
+            entry.workspace_directory,
+            entry.epoch_id,
+            entry.mode_was_enabled,
+            entry.initial_pool_reset_required,
+            outcome,
+        );
+        true
+    }
+
+    fn start_pending_supervisor_inspection_if_idle(
+        &mut self,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        if self.has_in_flight_effect() {
+            return;
+        }
+        let Some(intent) = self.store.pending_supervisor_inspection.take() else {
+            return;
+        };
+        let decision = ParallelModeControlPlaneAggregate::supervisor_inspection(
+            self.store.mode_enabled,
+            self.store.workspace_directory.as_deref(),
+            &intent.workspace_directory,
+            intent.reconcile_pool,
+        );
+        let operation_id = self.store.next_supervisor_inspection_operation_id;
+        self.store.next_supervisor_inspection_operation_id = operation_id
+            .checked_add(1)
+            .expect("parallel supervisor inspection operation id exhausted");
+        let epoch_id = self.supervisor_inspection_epoch_for_workspace(&intent.workspace_directory);
+        let correlation = ParallelModeSupervisorInspectionCorrelation::new(
+            operation_id,
+            intent.workspace_directory,
+            epoch_id,
+        );
+        self.store.supervisor_inspection_in_flight =
+            Some(ParallelModeSupervisorInspectionInFlight {
+                correlation: correlation.clone(),
+                mode_enabled: decision.mode_enabled,
+                reconcile_pool: decision.reconcile_pool,
+                show_status: intent.show_status,
+            });
+        outcome
+            .events
+            .push(ParallelModeControlPlaneEvent::SupervisorInspectionStarted {
+                correlation: correlation.clone(),
+                show_status: intent.show_status,
+            });
+        outcome
+            .effects
+            .push(ParallelModeControlPlaneEffect::InspectSupervisor {
+                correlation,
+                mode_enabled: decision.mode_enabled,
+                reconcile_pool: decision.reconcile_pool,
+            });
     }
 
     fn next_effect_id(
