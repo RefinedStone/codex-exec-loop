@@ -1,6 +1,7 @@
 use super::{
-    AppSnapshot, ConversationReadySnapshot, ConversationState, PlanningParallelProjection,
-    SessionCatalogReadySnapshot, SessionCatalogState, StartupReadySnapshot, StartupState,
+    AppSnapshot, ConversationReadySnapshot, ConversationState, ParallelModeProjection,
+    PlanningParallelProjection, SessionCatalogReadySnapshot, SessionCatalogState,
+    StartupReadySnapshot, StartupState,
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::RuntimeProjection;
@@ -34,6 +35,10 @@ impl AppState {
             conversation: self.conversation.snapshot(),
             planning_parallel: self.planning_parallel.clone(),
         }
+    }
+
+    pub fn parallel_mode_projection(&self) -> ParallelModeProjection {
+        self.planning_parallel.parallel_mode.clone()
     }
 
     pub fn mark_startup_loading(&mut self) {

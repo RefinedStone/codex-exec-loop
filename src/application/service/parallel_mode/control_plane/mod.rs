@@ -27,7 +27,10 @@ pub use effect_runner::{
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneLoadingStage,
     ParallelModeSupervisorInspectionSnapshot,
 };
-pub use host::{ParallelModeControlPlaneEpochSnapshot, ParallelModeControlPlaneHandle};
+pub use host::{
+    ParallelModeControlPlaneEpochSnapshot, ParallelModeControlPlaneHandle,
+    ParallelModeControlPlanePresentationProjection,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

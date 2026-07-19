@@ -32,6 +32,7 @@ use super::parallel_presentation_bridge::{
     ParallelModePresentationLoadingStage, parallel_mode_presentation_actions,
     pending_parallel_mode_supervisor_snapshot,
 };
+use super::shell_presentation::ParallelPanelProjectionSample;
 use super::{
     ConversationInputEvent, ConversationRuntimeEvent, ConversationState, NativeTuiApp,
     ParallelPanelStateController, ParallelPanelUiEvent, ParallelPanelUiState,
@@ -109,6 +110,7 @@ impl NativeTuiApp {
     pub(crate) fn parallel_mode_readiness_snapshot(&self) -> Option<ParallelModeReadinessSnapshot> {
         self.current_parallel_mode_readiness_projection()
     }
+    #[cfg(test)]
     pub(crate) fn parallel_mode_control_effect_in_flight(&self) -> bool {
         self.parallel_mode_control_plane.control_effect_in_flight()
     }
@@ -165,10 +167,6 @@ impl NativeTuiApp {
     ) -> Option<ParallelModeAutomationTrigger> {
         self.parallel_mode_control_plane.last_automation_trigger()
     }
-    pub(crate) fn last_parallel_mode_dispatch_withheld_reason(&self) -> Option<String> {
-        self.parallel_mode_control_plane
-            .last_dispatch_withheld_reason()
-    }
     pub(crate) fn parallel_mode_supervisor_snapshot(&self) -> ParallelModeSupervisorSnapshot {
         let workspace_directory = self.planning_workspace_directory();
         if let Some(snapshot) = self.current_parallel_mode_supervisor_projection() {
@@ -216,29 +214,53 @@ impl NativeTuiApp {
             .map(|snapshot| *snapshot)
     }
 
+    #[cfg(test)]
     pub(crate) fn parallel_mode_activity_pulse_visible(&self) -> bool {
-        ParallelPanelStateController::activity_pulse_visible(&self.parallel_panel_ui_state())
+        let sample = ParallelPanelProjectionSample::capture(self);
+        self.parallel_mode_activity_pulse_visible_with_sample(&sample)
     }
 
     pub(crate) fn parallel_mode_prompt_input_locked(&self) -> bool {
-        ParallelPanelStateController::prompt_input_locked(&self.parallel_panel_ui_state())
+        let sample = ParallelPanelProjectionSample::capture(self);
+        self.parallel_mode_prompt_input_locked_with_sample(&sample)
     }
 
-    fn parallel_panel_ui_state(&self) -> ParallelPanelUiState {
-        let overlay_event = if self.parallel_mode_panel_visible() {
+    pub(super) fn parallel_mode_activity_pulse_visible_with_sample(
+        &self,
+        sample: &ParallelPanelProjectionSample,
+    ) -> bool {
+        ParallelPanelStateController::activity_pulse_visible(&self.parallel_panel_ui_state(sample))
+    }
+
+    pub(super) fn parallel_mode_prompt_input_locked_with_sample(
+        &self,
+        sample: &ParallelPanelProjectionSample,
+    ) -> bool {
+        ParallelPanelStateController::prompt_input_locked(&self.parallel_panel_ui_state(sample))
+    }
+
+    fn parallel_panel_ui_state(
+        &self,
+        sample: &ParallelPanelProjectionSample,
+    ) -> ParallelPanelUiState {
+        let mode_enabled = sample.parallel_mode_enabled();
+        let overlay_event = if self.parallel_mode_panel_visible(mode_enabled) {
             ParallelPanelUiEvent::OverlayShown
         } else {
             ParallelPanelUiEvent::OverlayHidden
         };
         let mut events = vec![
             overlay_event,
-            ParallelPanelUiEvent::ModeSet(self.parallel_mode_enabled()),
+            ParallelPanelUiEvent::ModeSet(mode_enabled),
             ParallelPanelUiEvent::SupervisorSnapshotChanged(
-                self.current_parallel_mode_supervisor_projection()
+                sample
+                    .parallel_mode_supervisor_for_workspace(Some(
+                        &self.planning_workspace_directory(),
+                    ))
                     .map(Box::new),
             ),
         ];
-        if let Some(reason) = self.last_parallel_mode_dispatch_withheld_reason() {
+        if let Some(reason) = sample.last_parallel_mode_dispatch_withheld_reason() {
             events.push(ParallelPanelUiEvent::StatusShown(format!(
                 "parallel mode: dispatch withheld / {reason}"
             )));
@@ -246,9 +268,9 @@ impl NativeTuiApp {
         ParallelPanelStateController::project(events)
     }
 
-    fn parallel_mode_panel_visible(&self) -> bool {
+    fn parallel_mode_panel_visible(&self, mode_enabled: bool) -> bool {
         self.shell_overlay == ShellOverlay::Supersession
-            || (self.shell_overlay == ShellOverlay::Hidden && self.parallel_mode_enabled())
+            || (self.shell_overlay == ShellOverlay::Hidden && mode_enabled)
     }
 
     pub(super) fn invalidate_parallel_mode_supervisor_snapshot(&mut self) {
@@ -480,9 +502,13 @@ impl NativeTuiApp {
         self.apply_parallel_mode_control_plane_command(command);
     }
 
-    pub(super) fn tick_parallel_mode_control_plane(&mut self, now: Instant) -> bool {
+    pub(super) fn tick_parallel_mode_control_plane(
+        &mut self,
+        now: Instant,
+        sample: &ParallelPanelProjectionSample,
+    ) -> bool {
         let workspace_directory = self.planning_workspace_directory();
-        let activity_pulse_visible = self.parallel_mode_activity_pulse_visible();
+        let activity_pulse_visible = self.parallel_mode_activity_pulse_visible_with_sample(sample);
         let events =
             self.parallel_mode_control_plane
                 .tick(now, workspace_directory, activity_pulse_visible);
@@ -491,8 +517,20 @@ impl NativeTuiApp {
 
     #[cfg(test)]
     pub(super) fn parallel_mode_supervisor_refresh_due_for_test(&self, now: Instant) -> bool {
-        self.parallel_mode_control_plane
-            .supervisor_refresh_due(now, self.parallel_mode_activity_pulse_visible())
+        let sample = ParallelPanelProjectionSample::capture(self);
+        self.parallel_mode_supervisor_refresh_due_with_sample_for_test(now, &sample)
+    }
+
+    #[cfg(test)]
+    pub(super) fn parallel_mode_supervisor_refresh_due_with_sample_for_test(
+        &self,
+        now: Instant,
+        sample: &ParallelPanelProjectionSample,
+    ) -> bool {
+        self.parallel_mode_control_plane.supervisor_refresh_due(
+            now,
+            self.parallel_mode_activity_pulse_visible_with_sample(sample),
+        )
     }
 
     fn sync_core_parallel_mode_readiness_projection(

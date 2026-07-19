@@ -1712,6 +1712,15 @@ fn parallel_live_tail_continues_scrollback_without_inline_title() {
         "the terminal history should read as one continuous event stream without an inserted title:\n{}",
         frame.terminal_history_text
     );
+    for index in 0..48 {
+        let marker = format!("tail-title-event-{index:02}");
+        assert_eq!(
+            frame.terminal_history_text.matches(&marker).count(),
+            1,
+            "the sampled scrollback/live split must retain each event exactly once: {marker}\n{}",
+            frame.terminal_history_text
+        );
+    }
 }
 
 #[test]
@@ -2064,7 +2073,7 @@ fn direct_frame_recorder_keeps_parallel_status_rows_across_runtime_redraw() {
 #[test]
 fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary() {
     let mut terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
     let mut app = make_test_app();
     app.show_startup_ascii_art = false;
     app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
@@ -2123,6 +2132,18 @@ fn direct_frame_recorder_catches_wrapped_parallel_stream_split_at_live_boundary(
         "host scrollback should never receive live panel chrome:\n{}",
         runtime_tail_frame.host_scrollback_text
     );
+    for sequence in 2..=12 {
+        let marker = format!("runtime write marker {sequence:02}");
+        assert_eq!(
+            runtime_tail_frame
+                .terminal_history_text
+                .matches(&marker)
+                .count(),
+            1,
+            "Ratatui word wrapping must not duplicate or drop a logical event at the sampled split: {marker}\n{}",
+            runtime_tail_frame.terminal_history_text
+        );
+    }
 }
 
 #[test]
@@ -2335,8 +2356,8 @@ fn long_runtime_feed_entry(
         "slot-1@2026-05-19T02:30:35.874316+00:00",
         61,
         format!(
-            "runtime session detail stored / session: slot-1@2026-05-19T02:30:35.874316+00:00 / {}",
-            summary.into()
+            "{} / runtime session detail stored / session: slot-1@2026-05-19T02:30:35.874316+00:00",
+            summary.into(),
         ),
         format!("2026-05-19T02:30:{sequence:02}+00:00"),
     )
@@ -3342,7 +3363,7 @@ fn hidden_inline_tail_skips_redundant_frame_draws() {
 }
 
 #[test]
-fn reused_projection_sample_keeps_core_and_clock_facts_stable() {
+fn reused_projection_sample_keeps_parallel_frame_facts_stable_after_handle_mutation() {
     let mut app = make_test_app();
     app.set_parallel_mode_enabled_for_test(true);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
@@ -3359,6 +3380,7 @@ fn reused_projection_sample_keeps_core_and_clock_facts_stable() {
         )
     };
 
+    app.set_parallel_mode_enabled_for_test(false);
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
         vec![inline_runtime_feed_entry(2, "new event")],
     )));
@@ -3368,11 +3390,32 @@ fn reused_projection_sample_keeps_core_and_clock_facts_stable() {
         assert_eq!(reused.rendered_at, sampled_rendered_at);
         assert_eq!(reused.animation_elapsed_millis, sampled_animation_millis);
         assert_eq!(reused.parallel_mode_supervisor, sampled_supervisor);
+        assert!(reused.parallel_mode_enabled);
     }
+    let sampled_frame = InlineConversationFrameProjection::from_app_with_sample(&app, 80, &sample);
+    assert!(sampled_frame.parallel_mode_enabled);
+    let sampled_parallel_view = sampled_frame
+        .supersession_overlay_view
+        .expect("sampled enabled mode must retain one owned supervisor view");
+    let sampled_header = sampled_parallel_view
+        .header_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let sampled_keys = sampled_parallel_view
+        .key_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(sampled_header.contains("prompt available"));
+    assert!(sampled_keys.contains("Ctrl+P off"));
 
     let fresh = ConversationScreenModel::from_app(&app);
     assert!(fresh.core_revision > sampled_revision);
     assert_ne!(fresh.parallel_mode_supervisor, sampled_supervisor);
+    assert!(!fresh.parallel_mode_enabled);
 }
 
 #[test]

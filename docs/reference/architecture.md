@@ -224,6 +224,12 @@ queue, GitHub, transcript, layout, animation, and prompt-focus helpers do not re
 `NativeTuiApp` or application service handles. Conversation semantic state stores messages, not
 cached Ratatui `Line` values.
 
+The same transaction captures parallel mode, in-flight effect, supervisor inspection, withheld
+reason, and event-stream facts once. Supersession row planning, host-scrollback/live-tail splitting,
+prompt lock, animation, and drawing consume that immutable projection instead of reacquiring the
+control-plane mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks
+share a panel-only projection and do not clone transcript or event-stream rows.
+
 The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft. When the editor
 is closed, status and review presentation read the canonical policy from the conversation model;
 the adapter does not retain or reverse-sync a second budget value.

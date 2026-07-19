@@ -8,6 +8,9 @@ use super::{
     BACKGROUND_MESSAGE_DRAIN_BUDGET, BackgroundMessage, ConversationState, ShellOverlay,
     TERMINAL_RESIZE_RETRY_DELAY, TuiFrameScheduler, make_test_runtime,
 };
+use crate::adapter::inbound::tui::app::shell_presentation::{
+    ConversationProjectionSample, ConversationScreenModel,
+};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
     ParallelModePoolBoardSnapshot, ParallelModePoolSlotSnapshot, ParallelModePoolSlotState,
@@ -275,6 +278,86 @@ fn blocked_supersession_pool_refreshes_periodically() {
             .parallel_mode_supervisor_refresh_due_for_test(now)
     );
     assert!(runtime.app().live_activity_pulse(now).is_some());
+}
+
+#[test]
+fn sampled_parallel_panel_state_aligns_prompt_pulse_and_tick_refresh() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    runtime.app_mut().shell_overlay = ShellOverlay::Supersession;
+    runtime.app_mut().set_parallel_mode_enabled_for_test(true);
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory.clone(),
+            ParallelModePoolBoardSnapshot::new(
+                0,
+                "loading: supervisor refresh",
+                "loading",
+                Vec::new(),
+            ),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "loading"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "loading"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "loading", "loading"),
+            Some("loading 3/3: board refresh".to_string()),
+        )));
+    let sample = ConversationProjectionSample::capture(runtime.app());
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory,
+            ParallelModePoolBoardSnapshot::new(0, "/tmp/pool", "idle", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(Vec::new(), "no active agents"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "no detail"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        )));
+    let screen = ConversationScreenModel::from_app_with_sample(runtime.app(), &sample);
+
+    assert!(screen.parallel_mode_loading_prompt_indicator_visible);
+    assert!(
+        runtime
+            .app()
+            .parallel_mode_prompt_input_locked_with_sample(sample.parallel_panel_sample())
+    );
+    assert!(
+        runtime
+            .app()
+            .parallel_mode_activity_pulse_visible_with_sample(sample.parallel_panel_sample())
+    );
+    let now = Instant::now();
+    assert_eq!(
+        runtime
+            .app()
+            .live_activity_pulse_with_sample(now, sample.parallel_panel_sample()),
+        Some(0)
+    );
+    assert!(
+        runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_with_sample_for_test(
+                now,
+                sample.parallel_panel_sample(),
+            )
+    );
+    assert!(
+        !runtime.app().parallel_mode_prompt_input_locked(),
+        "a fresh lightweight sample should observe the non-loading replacement"
+    );
+    runtime
+        .app_mut()
+        .tick_parallel_mode_control_plane(now, sample.parallel_panel_sample());
+    assert!(
+        !runtime
+            .app()
+            .parallel_mode_supervisor_refresh_due_with_sample_for_test(
+                now,
+                sample.parallel_panel_sample(),
+            ),
+        "the tick must consume the same active panel sample and record its supervisor refresh"
+    );
 }
 
 #[test]

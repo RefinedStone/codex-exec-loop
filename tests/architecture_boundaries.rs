@@ -1236,6 +1236,146 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
 }
 
 #[test]
+fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
+    assert_no_forbidden_references_in_paths(
+        "TUI parallel presentation and rendering must not reread mutable control-plane state",
+        &[
+            "src/adapter/inbound/tui/app/shell_presentation",
+            "src/adapter/inbound/tui/app/shell_rendering.rs",
+            "src/adapter/inbound/tui/app/shell_rendering",
+            "src/adapter/inbound/tui/app/inline_terminal_adapter.rs",
+        ],
+        &[
+            ".mode_enabled()",
+            ".control_effect_in_flight()",
+            "build_supersession_overlay_view(app",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "Supersession presentation must consume the sampled animation clock",
+        &[
+            "src/adapter/inbound/tui/app/shell_presentation/overlays",
+            "src/adapter/inbound/tui/app/shell_rendering.rs",
+            "src/adapter/inbound/tui/app/shell_rendering",
+        ],
+        &["SystemTime::now"],
+    );
+
+    let host_source = fs::read_to_string(
+        repo_root().join("src/application/service/parallel_mode/control_plane/host.rs"),
+    )
+    .expect("parallel control-plane host source should load");
+    for required in [
+        "pub struct ParallelModeControlPlanePresentationProjection",
+        "pub fn presentation_projection(&self)",
+        "let service = self.service();",
+        "supervisor_inspection_state: service.supervisor_inspection_state().clone()",
+        "last_dispatch_withheld_reason: service",
+    ] {
+        assert!(
+            host_source.contains(required),
+            "one host mutex acquisition must capture every parallel presentation fact: {required}"
+        );
+    }
+
+    let sample_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
+    )
+    .expect("conversation projection sample source should load");
+    for required in [
+        "pub(in crate::adapter::inbound::tui::app) struct ParallelPanelProjectionSample",
+        "parallel_control_plane: ParallelModeControlPlanePresentationProjection",
+        "parallel_mode: app.core_runtime.parallel_mode_projection()",
+        "parallel_panel: ParallelPanelProjectionSample",
+        "let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();",
+        "parallel_supervisor_events: app.parallel_supervisor_event_log.projection()",
+    ] {
+        assert!(
+            sample_source.contains(required),
+            "ConversationProjectionSample must own the parallel frame fact: {required}"
+        );
+    }
+
+    let terminal_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+    )
+    .expect("inline terminal adapter source should load");
+    for required in [
+        "InlineTerminalSyncPolicy::from_sample(&projection_sample)",
+        "sampled_parallel_frame_projection",
+        "sample.parallel_supervisor_event_scrollback_lines_before_live_tail(",
+    ] {
+        assert!(
+            terminal_source.contains(required),
+            "parallel policy, history, and frame drawing must share one sample: {required}"
+        );
+    }
+
+    let rendering_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
+            .expect("shell rendering source should load");
+    for required in [
+        "supersession_overlay_view: Option<Box<SupersessionOverlayView>>",
+        "inline_inspection::parallel_event_stream_visible_rows(view, layout[0])",
+        "parallel frame projection must own the supervisor view",
+    ] {
+        assert!(
+            rendering_source.contains(required),
+            "Supersession row planning and drawing must consume one owned view: {required}"
+        );
+    }
+
+    let runtime_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
+            .expect("shell runtime source should load");
+    for required in [
+        "let parallel_presentation_sample = ParallelPanelProjectionSample::capture(&self.app);",
+        ".live_activity_pulse_with_sample(now, &parallel_presentation_sample)",
+        ".tick_parallel_mode_control_plane(now, &parallel_presentation_sample)",
+    ] {
+        assert!(
+            runtime_source.contains(required),
+            "pulse and tick must agree on one sampled parallel panel state: {required}"
+        );
+    }
+    assert!(
+        !runtime_source.contains("ConversationProjectionSample::capture"),
+        "the 100ms scheduler must not clone the full conversation and event-stream sample"
+    );
+    for path in [
+        "src/adapter/inbound/tui/app/parallel_mode.rs",
+        "src/adapter/inbound/tui/app/auto_follow/controller.rs",
+    ] {
+        let source = fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        assert!(
+            !source.contains("ConversationProjectionSample::capture"),
+            "prompt and pulse checks must use the lightweight parallel panel sample: {path}"
+        );
+    }
+
+    let event_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/parallel_supervisor_events.rs"),
+    )
+    .expect("parallel event source should load");
+    let inspection_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
+    )
+    .expect("inline inspection source should load");
+    for required in [
+        "rendered_parallel_event_line_rows",
+        "rendered_parallel_event_tail_start_index",
+    ] {
+        for source in [&event_source, &inspection_source] {
+            assert!(
+                source.contains(required),
+                "scrollback splitting and live rendering must share Ratatui word-wrap boundary helper: {required}"
+            );
+        }
+    }
+}
+
+#[test]
 fn tui_tail_compaction_uses_typed_priority_without_parsing_localized_copy() {
     let source = fs::read_to_string(repo_root().join(
         "src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs",

@@ -12,6 +12,7 @@ use crate::core::app::CoreInput;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::app_runtime::TUI_BACKGROUND_CHANNEL_CAPACITY;
+use super::shell_presentation::ParallelPanelProjectionSample;
 use super::{BackgroundMessage, InputCursorMovement, NativeTuiApp, ShellChromeEvent};
 
 const BACKGROUND_MESSAGE_DRAIN_BUDGET: usize = 128;
@@ -191,12 +192,17 @@ impl ShellRuntime {
             .app
             .poll_core_runtime_inputs(BACKGROUND_MESSAGE_DRAIN_BUDGET);
         redraw_requested |= self.app.maybe_start_github_review_poll(now);
-        let live_activity_pulse = self.app.live_activity_pulse(now);
+        let parallel_presentation_sample = ParallelPanelProjectionSample::capture(&self.app);
+        let live_activity_pulse = self
+            .app
+            .live_activity_pulse_with_sample(now, &parallel_presentation_sample);
         if live_activity_pulse != self.last_live_activity_pulse {
             redraw_requested = true;
         }
         self.last_live_activity_pulse = live_activity_pulse;
-        redraw_requested |= self.app.tick_parallel_mode_control_plane(now);
+        redraw_requested |= self
+            .app
+            .tick_parallel_mode_control_plane(now, &parallel_presentation_sample);
         redraw_requested |= self.app.reconcile_directions_maintenance_context();
         redraw_requested |= self.app.reconcile_reviews_overlay_authority_context();
         redraw_requested |= self.app.reconcile_queue_overlay_authority_context();

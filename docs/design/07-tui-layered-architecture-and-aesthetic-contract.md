@@ -58,9 +58,11 @@ the fixed Akra theme.
   render-clock values in `ConversationProjectionSample`. The pre-history outer flow layout and the
   final tail/live/cache projection consume that same sample. UI-local facts may be reread after a
   handoff acknowledgement.
-- Overlay-specific documents and their internal live-stream row plans remain separate projection
-  boundaries until they receive an owned screen model; they are not covered by the conversation
-  sample's consistency guarantee.
+- Supersession is covered by that consistency guarantee: the sample owns one control-plane
+  presentation projection and one event-stream projection, while row planning and drawing consume
+  the same owned overlay view. Other overlay-specific documents remain separate projection
+  boundaries until they receive an owned screen model. High-frequency prompt, pulse, and scheduler
+  checks share a panel-only sample so they do not clone transcript or event-stream rows.
 - One `ConversationScreenModel` derived from that sample must own the local UI facts for a frame.
   Tail copy, live transcript copy, cursor layout, and frame-cache comparison consume that same
   immutable projection; presentation helpers must not reread `NativeTuiApp`, call services, or

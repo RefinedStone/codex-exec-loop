@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use super::shell_presentation::{
-    ConversationProjectionSample, ConversationScreenModel, InlineTailView,
-    build_inline_live_transcript_lines, build_inline_tail_view,
+    ConversationProjectionSample, ConversationScreenModel, InlineTailView, SupersessionOverlayView,
+    build_inline_live_transcript_lines, build_inline_tail_view, build_supersession_overlay_view,
 };
 use super::*;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -39,6 +39,7 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) exit_confirmation_visible: bool,
     pub(super) turn_steer_confirmation_visible: bool,
     pub(super) parallel_supervisor_event_lines: Vec<Line<'static>>,
+    pub(super) supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
 }
 
 impl InlineConversationFrameProjection {
@@ -54,10 +55,23 @@ impl InlineConversationFrameProjection {
         sample: &ConversationProjectionSample,
     ) -> Self {
         let screen_model = ConversationScreenModel::from_app_with_sample(app, sample);
-        Self::from_screen_model(&screen_model, content_width)
+        let supersession_overlay_view = (screen_model.shell_overlay == ShellOverlay::Supersession
+            || (screen_model.shell_overlay == ShellOverlay::Hidden
+                && screen_model.parallel_mode_enabled))
+            .then(|| {
+                Box::new(build_supersession_overlay_view(
+                    &screen_model,
+                    &app.supersession_mud_ui_state,
+                ))
+            });
+        Self::from_screen_model(&screen_model, content_width, supersession_overlay_view)
     }
 
-    fn from_screen_model(screen_model: &ConversationScreenModel<'_>, content_width: u16) -> Self {
+    fn from_screen_model(
+        screen_model: &ConversationScreenModel<'_>,
+        content_width: u16,
+        supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
+    ) -> Self {
         Self {
             core_revision: screen_model.core_revision,
             tail_view: build_inline_tail_view(screen_model, content_width),
@@ -70,6 +84,7 @@ impl InlineConversationFrameProjection {
             exit_confirmation_visible: screen_model.exit_confirmation_visible,
             turn_steer_confirmation_visible: screen_model.turn_steer_confirmation_visible,
             parallel_supervisor_event_lines: screen_model.parallel_supervisor_event_lines.clone(),
+            supersession_overlay_view,
         }
     }
 }
@@ -115,22 +130,21 @@ pub(super) fn prepare_projected_render_state(
 }
 
 pub(super) fn inline_parallel_event_stream_visible_rows(
-    app: &NativeTuiApp,
+    projection: &InlineConversationFrameProjection,
     frame_area: Rect,
-    sample: &ConversationProjectionSample,
 ) -> usize {
-    if !app.parallel_mode_enabled() && app.shell_overlay != ShellOverlay::Supersession {
+    if !projection.parallel_mode_enabled && projection.shell_overlay != ShellOverlay::Supersession {
         return 0;
     }
 
-    // The sample stabilizes the conversation tail and outer flow layout. The
-    // inspection document and its internal stream row plan remain a separate
-    // projection boundary until overlay rendering owns an immutable screen model.
-    let projection =
-        InlineConversationFrameProjection::from_app_with_sample(app, frame_area.width, sample);
     let layout =
-        build_inline_terminal_flow_layout(&projection, frame_area, &projection.tail_view.lines);
-    inline_inspection::parallel_event_stream_visible_rows(app, layout[0])
+        build_inline_terminal_flow_layout(projection, frame_area, &projection.tail_view.lines);
+    projection
+        .supersession_overlay_view
+        .as_deref()
+        .map_or(0, |view| {
+            inline_inspection::parallel_event_stream_visible_rows(view, layout[0])
+        })
 }
 
 #[cfg(test)]
@@ -143,7 +157,7 @@ pub(super) fn draw_projected(
     frame: &mut Frame<'_>,
     app: &mut NativeTuiApp,
     mode: ShellFrontendMode,
-    projection: InlineConversationFrameProjection,
+    mut projection: InlineConversationFrameProjection,
 ) {
     // 현재 native shell renderer는 하나뿐이지만, mode 인자를 유지해 app runtime과 shell frontend 추상화를 한 경계에서 묶는다.
     let _ = mode;
@@ -159,13 +173,26 @@ pub(super) fn draw_projected(
     let renders_parallel_viewport_handoff = projection.renders_parallel_viewport_handoff;
     let turn_steer_confirmation_visible = projection.turn_steer_confirmation_visible;
     let exit_confirmation_visible = projection.exit_confirmation_visible;
+    let supersession_overlay_view = projection.supersession_overlay_view.take();
 
     draw_inline_conversation_shell(frame, app, projection, &layout);
     // inline inspection은 base shell 뒤에 그려 overlay가 고정된 prompt/status tail은 두고 상단 body만 대체하게 한다.
     if shell_overlay != ShellOverlay::Hidden {
-        draw_inline_shell_inspection(frame, app, layout[0]);
+        draw_inline_shell_inspection(
+            frame,
+            app,
+            layout[0],
+            parallel_mode_enabled,
+            supersession_overlay_view,
+        );
     } else if parallel_mode_enabled && !renders_parallel_viewport_handoff {
-        draw_inline_parallel_mode_inspection(frame, layout[0], app);
+        draw_inline_parallel_mode_inspection(
+            frame,
+            layout[0],
+            supersession_overlay_view
+                .map(|view| *view)
+                .expect("parallel frame projection must own the supervisor view"),
+        );
     }
     if turn_steer_confirmation_visible {
         draw_turn_steer_confirmation(frame, app);

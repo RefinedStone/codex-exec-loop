@@ -9,10 +9,13 @@ use super::{SessionOverlayView, StartupOverlayView};
 
 // Startup popup은 app startup diagnostics를 renderer-facing section snapshot으로 낮춘다.
 // renderer는 이 DTO만 보고 header/summary/checks/warnings/footer panel을 그리며 app state를 다시 읽지 않는다.
-pub(crate) fn build_startup_overlay_view(app: &NativeTuiApp) -> StartupOverlayView {
+pub(crate) fn build_startup_overlay_view(
+    app: &NativeTuiApp,
+    parallel_mode_enabled: bool,
+) -> StartupOverlayView {
     // 같은 Ctrl+o shortcut이라도 parallel mode에서는 recent sessions가 아니라 supersession board로 향한다.
     // footer copy를 여기서 계산해 rendering layer가 navigation policy를 추측하지 않게 한다.
-    let ctrl_o_label = if app.parallel_mode_enabled() {
+    let ctrl_o_label = if parallel_mode_enabled {
         "Ctrl+o: supersession board"
     } else {
         "Ctrl+o: recent sessions"
