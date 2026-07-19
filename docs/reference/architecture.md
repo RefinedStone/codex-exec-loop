@@ -156,9 +156,23 @@ operation plus a presentation revision captured when that operation starts. Rebi
 inspection changes only its correlation and preserves that initial revision. Stale, duplicate, ABA,
 closed-overlay, workspace-drifted, or newer-UI-intent completions cannot choose a setup branch or
 replace status. Inspection failures remain distinct from an absent workspace, and reset recovery
-preserves both the reset error and any inspection error. Destructive reset and draft-staging
-mutations remain separate synchronous paths; this slice moves only readback and recovery inspection
-off the TUI input thread.
+preserves both the reset error and any inspection error.
+
+Destructive TUI reset uses a separate Core-owned planning-workspace operation coordinator. Core
+assigns a monotonic correlation containing the generation, exact workspace, and reset target.
+Repeating that exact reset coalesces onto the active correlation without starting another worker;
+any different reset is reported as busy. Composition executes the reset off the TUI input thread
+and converts a provider panic into the exact correlated error completion. Only that exact
+completion settles the coordinator, and Core also converts a success snapshot whose target differs
+from the correlation into an error. Stale, duplicate, workspace-drifted, target-drifted, and ABA
+completions cannot present a result. For an exact completion whose workspace is current, the TUI
+always pauses post-turn continuation and refreshes the Core runtime projection, including after an
+A-to-B-to-A workspace round trip. Its separate presentation revision gates only status and overlay
+changes: a newer UI intent keeps its copy while authority/runtime reconciliation still runs.
+Closing or changing an overlay does not cancel the destructive operation. Until the remaining
+stage/open/save/promote paths move behind Core, they retain their direct application calls but are
+rejected with visible busy status while reset is active. This is an active-operation gate, not a
+deferred queue, actor, or cancellation abstraction.
 
 Opening the TUI Queue overlay first applies shell chrome, then dispatches a core load command. Core
 assigns a monotonically increasing generation to the workspace and active-thread identity, lets the

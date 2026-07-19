@@ -707,6 +707,8 @@ pub struct NoopPlanningAuthorityPort {
     clear_parallel_runtime_projections_error: Option<&'static str>,
     clear_parallel_runtime_projections_for_tasks_error: Option<&'static str>,
     apply_parallel_pool_reset_report_error: Option<&'static str>,
+    admin_authority_guard_events: Option<Arc<Mutex<Vec<String>>>>,
+    admin_authority_guard_release_error: Option<&'static str>,
 }
 
 #[cfg(test)]
@@ -770,6 +772,16 @@ impl NoopPlanningAuthorityPort {
 
     pub fn with_apply_parallel_pool_reset_report_error(mut self, message: &'static str) -> Self {
         self.apply_parallel_pool_reset_report_error = Some(message);
+        self
+    }
+
+    pub fn with_admin_authority_guard_events(mut self, events: Arc<Mutex<Vec<String>>>) -> Self {
+        self.admin_authority_guard_events = Some(events);
+        self
+    }
+
+    pub fn with_admin_authority_guard_release_error(mut self, message: &'static str) -> Self {
+        self.admin_authority_guard_release_error = Some(message);
         self
     }
 }
@@ -966,18 +978,33 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
 
     fn acquire_admin_authority_mutation_guard(
         &self,
-        _workspace_dir: &str,
-        _owner_token: &str,
-        _action: &str,
+        workspace_dir: &str,
+        owner_token: &str,
+        action: &str,
     ) -> Result<()> {
+        if let Some(events) = &self.admin_authority_guard_events {
+            events
+                .lock()
+                .map_err(|_| anyhow!("admin authority guard event lock is poisoned"))?
+                .push(format!("acquire|{workspace_dir}|{action}|{owner_token}"));
+        }
         Ok(())
     }
 
     fn release_admin_authority_mutation_guard(
         &self,
-        _workspace_dir: &str,
-        _owner_token: &str,
+        workspace_dir: &str,
+        owner_token: &str,
     ) -> Result<()> {
+        if let Some(events) = &self.admin_authority_guard_events {
+            events
+                .lock()
+                .map_err(|_| anyhow!("admin authority guard event lock is poisoned"))?
+                .push(format!("release|{workspace_dir}|{owner_token}"));
+        }
+        if let Some(message) = self.admin_authority_guard_release_error {
+            anyhow::bail!(message);
+        }
         Ok(())
     }
 

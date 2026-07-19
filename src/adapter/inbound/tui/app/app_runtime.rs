@@ -1466,6 +1466,8 @@ impl NativeTuiApp {
                 super::DirectionsMaintenanceOverlayUiState::default(),
             planning_init_overlay_ui_state: PlanningInitOverlayUiState::default(),
             planning_runtime_refresh_ui_state: super::PlanningRuntimeRefreshUiState::default(),
+            planning_workspace_operation_ui_state:
+                super::PlanningWorkspaceOperationUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
             application,
             core_runtime,
@@ -1742,6 +1744,15 @@ impl NativeTuiApp {
                         },
                     );
                 }
+            }
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(admission) => {
+                self.apply_planning_workspace_operation_admission(admission);
+            }
+            AppEvent::PlanningWorkspaceResetCompleted {
+                correlation,
+                result,
+            } => {
+                self.apply_planning_workspace_reset_completion(correlation, result);
             }
             AppEvent::QueueMutationStarted { correlation } => {
                 self.apply_queue_mutation_started(correlation);
@@ -2211,7 +2222,8 @@ impl NativeTuiApp {
 
     pub(super) fn dispatch_auto_follow_controls(&mut self, event: AutoFollowControlEvent) {
         let invalidates_prior_requests = match &event {
-            AutoFollowControlEvent::AutoFollowPaused => true,
+            AutoFollowControlEvent::AutoFollowPaused
+            | AutoFollowControlEvent::PlanningAuthorityMutationSettled => true,
             // Budget edits affect the eventual auto-prompt decision, but the
             // in-flight planning settlement still owns queue/receipt completion.
             AutoFollowControlEvent::MaxAutoTurnsUpdated { .. } => false,

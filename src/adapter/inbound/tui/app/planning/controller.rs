@@ -5,14 +5,26 @@ use super::super::{
     ConversationInputEvent, DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep,
     DirectionsMaintenanceProjectionKind, NativeTuiApp, PlanningInitDetailSelection,
     PlanningInitModeSelection, PlanningInitOverlayStep, PlanningInitRuntimeRefreshIntent,
-    PlanningRuntimeRefreshOperation, ShellChromeEvent, ShellOverlay,
+    PlanningRuntimeRefreshOperation, PlanningWorkspaceOperationUiSettlement, ShellChromeEvent,
+    ShellOverlay,
 };
-use crate::application::service::planning::{
-    PlanningDraftEditorSession, PlanningResetTarget, PlanningWorkspaceResetResult,
+use crate::application::service::planning::{PlanningDraftEditorSession, PlanningResetTarget};
+use crate::core::app::{
+    AppCommand, AppEvent, PlanningDoctorSnapshot, PlanningDoctorSnapshotState,
+    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
+    PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
 };
-use crate::core::app::{AppCommand, AppEvent, PlanningDoctorSnapshot, PlanningDoctorSnapshotState};
 use crossterm::event::{self, KeyCode, KeyModifiers};
 type PlanningEditorSessionResult = anyhow::Result<PlanningDraftEditorSession>;
+
+fn core_planning_reset_target(target: PlanningResetTarget) -> PlanningWorkspaceResetTarget {
+    match target {
+        PlanningResetTarget::Queue => PlanningWorkspaceResetTarget::Queue,
+        PlanningResetTarget::Directions => PlanningWorkspaceResetTarget::Directions,
+        PlanningResetTarget::All => PlanningWorkspaceResetTarget::All,
+    }
+}
+
 mod directions_overlay;
 mod editor;
 mod planning_init_overlay;
@@ -361,25 +373,96 @@ impl NativeTuiApp {
             });
             return;
         }
+        let intent = PlanningWorkspaceResetIntent::new(
+            self.planning_workspace_directory(),
+            core_planning_reset_target(parsed.target),
+        );
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::ResetPlanningWorkspace(intent));
+        self.apply_core_dispatch_outcome(outcome);
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_planning_workspace_operation_admission(
+        &mut self,
+        admission: PlanningWorkspaceOperationAdmission,
+    ) {
+        match admission {
+            PlanningWorkspaceOperationAdmission::Started { correlation } => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!(
+                        "planning reset in progress / target: {}",
+                        correlation.reset_target.label()
+                    ),
+                });
+                self.planning_workspace_operation_ui_state
+                    .begin(correlation, self.planning_ui_intent_revision);
+            }
+            PlanningWorkspaceOperationAdmission::Coalesced { correlation } => {
+                if self
+                    .planning_workspace_operation_ui_state
+                    .active_correlation()
+                    != Some(&correlation)
+                {
+                    self.planning_workspace_operation_ui_state
+                        .begin(correlation, self.planning_ui_intent_revision);
+                }
+            }
+            PlanningWorkspaceOperationAdmission::Busy {
+                active_correlation,
+                requested,
+            } => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!(
+                        "planning workspace busy / active reset: {} / requested reset: {} / wait for the active operation to finish",
+                        active_correlation.reset_target.label(),
+                        requested.target.label(),
+                    ),
+                });
+            }
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_planning_workspace_reset_completion(
+        &mut self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningWorkspaceResetSnapshot>, String>,
+    ) {
         let workspace_directory = self.planning_workspace_directory();
-        match self
-            .application
-            .planning()
-            .workspace()
-            .reset_workspace(&workspace_directory, parsed.target)
-        {
+        let settlement = self.planning_workspace_operation_ui_state.settle(
+            &correlation,
+            &workspace_directory,
+            self.planning_ui_intent_revision,
+        );
+        if matches!(
+            settlement,
+            PlanningWorkspaceOperationUiSettlement::Rejected
+                | PlanningWorkspaceOperationUiSettlement::WorkspaceSuperseded
+        ) {
+            return;
+        }
+        let apply_presentation = settlement == PlanningWorkspaceOperationUiSettlement::Applied;
+        self.pause_post_turn_continuation_after_authority_mutation();
+
+        match result {
             Ok(result) => {
-                self.pause_post_turn_continuation();
                 self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
                     &workspace_directory,
                 );
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: planning_reset_status_text(&result),
-                });
+                if apply_presentation {
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: planning_reset_status_text(&result),
+                    });
+                }
             }
-            Err(error) => {
-                let reset_error = error.to_string();
-                let Some((correlation, outcome)) =
+            Err(reset_error) => {
+                if !apply_presentation {
+                    self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
+                        &workspace_directory,
+                    );
+                    return;
+                }
+                let Some((refresh_correlation, outcome)) =
                     self.begin_planning_runtime_projection_refresh(&workspace_directory)
                 else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -390,7 +473,7 @@ impl NativeTuiApp {
                     return;
                 };
                 self.planning_runtime_refresh_ui_state.begin(
-                    correlation,
+                    refresh_correlation,
                     PlanningRuntimeRefreshOperation::ResetRecovery { reset_error },
                     self.planning_ui_intent_revision,
                 );
@@ -399,10 +482,30 @@ impl NativeTuiApp {
         }
     }
 
+    pub(super) fn planning_workspace_operation_blocks_direct_mutation(&mut self) -> bool {
+        let Some(active) = self
+            .planning_workspace_operation_ui_state
+            .active_correlation()
+            .cloned()
+        else {
+            return false;
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: format!(
+                "planning workspace busy / reset {} is still in progress",
+                active.reset_target.label()
+            ),
+        });
+        true
+    }
+
     // Simple mode stages a low-ceremony draft and keeps validation attached to
     // the review step. Promotion later reuses that validation state so blocked
     // drafts remain inspectable through the same overlay.
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         let workspace_directory = self.planning_workspace_directory();
         let status_text = match self
             .application
@@ -432,6 +535,9 @@ impl NativeTuiApp {
         });
     }
     pub(super) fn open_simple_mode_planning_editor(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         let Some(draft_name) = self
             .planning_init_overlay_ui_state
             .simple_review()
@@ -450,6 +556,9 @@ impl NativeTuiApp {
         );
     }
     pub(super) fn promote_simple_mode_planning_draft(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         let Some(draft_name) = self
             .planning_init_overlay_ui_state
             .simple_review()
@@ -789,6 +898,7 @@ mod tests {
     #[derive(Clone)]
     struct PlanningWorkspaceLoadObservation {
         load_count: Arc<AtomicUsize>,
+        completed_load_count: Arc<AtomicUsize>,
         slow: Arc<AtomicBool>,
         fail: Arc<AtomicBool>,
         target_workspace: Arc<Mutex<Option<String>>>,
@@ -798,6 +908,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 load_count: Arc::new(AtomicUsize::new(0)),
+                completed_load_count: Arc::new(AtomicUsize::new(0)),
                 slow: Arc::new(AtomicBool::new(false)),
                 fail: Arc::new(AtomicBool::new(false)),
                 target_workspace: Arc::new(Mutex::new(None)),
@@ -806,6 +917,7 @@ mod tests {
 
         fn reset_and_enable(&self, workspace_directory: &str, fail: bool) {
             self.load_count.store(0, Ordering::SeqCst);
+            self.completed_load_count.store(0, Ordering::SeqCst);
             self.fail.store(fail, Ordering::SeqCst);
             *self
                 .target_workspace
@@ -889,24 +1001,35 @@ mod tests {
             &self,
             workspace_dir: &str,
         ) -> anyhow::Result<PlanningWorkspaceLoadRecord> {
-            if let Some(observation) = &self.load_observation
-                && observation
+            let observation = self.load_observation.as_ref().filter(|observation| {
+                observation
                     .target_workspace
                     .lock()
                     .expect("workspace observation target should not be poisoned")
                     .as_deref()
                     .is_none_or(|target| target == workspace_dir)
-            {
+            });
+            if let Some(observation) = observation {
                 observation.load_count.fetch_add(1, Ordering::SeqCst);
                 if observation.slow.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(600));
                 }
                 if observation.fail.load(Ordering::SeqCst) {
+                    observation
+                        .completed_load_count
+                        .fetch_add(1, Ordering::SeqCst);
                     anyhow::bail!("forced observed workspace inspection failure");
                 }
             }
-            self.fail_if(PlanningWorkspacePortFailure::LoadWorkspace)?;
-            self.inner.load_planning_workspace_files(workspace_dir)
+            let result = self
+                .fail_if(PlanningWorkspacePortFailure::LoadWorkspace)
+                .and_then(|()| self.inner.load_planning_workspace_files(workspace_dir));
+            if let Some(observation) = observation {
+                observation
+                    .completed_load_count
+                    .fetch_add(1, Ordering::SeqCst);
+            }
+            result
         }
 
         fn load_planning_workspace_candidate_files(
@@ -1019,6 +1142,22 @@ mod tests {
         panic!("planning runtime refresh should complete");
     }
 
+    fn wait_for_planning_workspace_operation(app: &mut NativeTuiApp) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            app.poll_core_runtime_inputs(16);
+            if app
+                .planning_workspace_operation_ui_state
+                .active_correlation()
+                .is_none()
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("planning workspace operation should complete");
+    }
+
     fn wait_for_observed_loads_to_settle(
         app: &mut NativeTuiApp,
         observation: &PlanningWorkspaceLoadObservation,
@@ -1039,6 +1178,36 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         panic!("initial planning runtime loads should settle");
+    }
+
+    fn wait_for_observed_load_completions(
+        app: &mut NativeTuiApp,
+        observation: &PlanningWorkspaceLoadObservation,
+        expected: usize,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut completed_at = None;
+        while Instant::now() < deadline {
+            app.poll_core_runtime_inputs(16);
+            if observation.completed_load_count.load(Ordering::SeqCst) >= expected {
+                let completed_at = completed_at.get_or_insert_with(Instant::now);
+                if completed_at.elapsed() >= Duration::from_millis(25) {
+                    app.poll_core_runtime_inputs(16);
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("expected {expected} planning workspace load completions");
+    }
+
+    fn post_turn_continuation_is_paused(app: &NativeTuiApp) -> bool {
+        match &app.conversation_state {
+            ConversationState::Ready(conversation) => conversation
+                .auto_follow_state
+                .post_turn_continuation_paused(),
+            ConversationState::Loading | ConversationState::Failed(_) => false,
+        }
     }
 
     fn wait_for_directions_maintenance_load(app: &mut NativeTuiApp) {
@@ -1735,6 +1904,11 @@ mod tests {
         fs::remove_dir_all(workspace.path()).expect("seeded planning fixture should be removable");
         fs::create_dir_all(workspace.path()).expect("planning fixture should be recreated");
         app.handle_reset_shell_command(Some("queue"));
+        assert_eq!(
+            ready_status(&app),
+            "planning reset in progress / target: queue"
+        );
+        wait_for_planning_workspace_operation(&mut app);
         wait_for_planning_runtime_refresh(&mut app);
         assert!(ready_status(&app).contains("planning reset failed:"));
         assert!(ready_status(&app).contains("planning workspace: missing"));
@@ -1748,9 +1922,15 @@ mod tests {
         success_app.handle_reset_shell_command(Some("queue"));
         assert_eq!(
             ready_status(&success_app),
+            "planning reset in progress / target: queue"
+        );
+        wait_for_planning_workspace_operation(&mut success_app);
+        assert_eq!(
+            ready_status(&success_app),
             "planning reset applied / target: queue / rewritten: 0 / removed: 0"
         );
         success_app.handle_reset_shell_command(Some("directions confirm"));
+        wait_for_planning_workspace_operation(&mut success_app);
         assert!(
             ready_status(&success_app).starts_with("planning reset applied / target: directions")
         );
@@ -1769,6 +1949,7 @@ mod tests {
         observation.reset_and_enable(failure_workspace.path_str(), true);
 
         failure_app.handle_reset_shell_command(Some("all confirm"));
+        wait_for_planning_workspace_operation(&mut failure_app);
         wait_for_planning_runtime_refresh(&mut failure_app);
         assert!(
             ready_status(&failure_app).starts_with("planning reset failed: forced "),
@@ -1781,6 +1962,131 @@ mod tests {
             )
         );
         assert_eq!(failure_app.shell_overlay, ShellOverlay::Hidden);
+    }
+
+    #[test]
+    fn successful_reset_refreshes_runtime_under_newer_busy_status_without_blocking_dispatch() {
+        let workspace = TempPlanningWorkspace::new("tui-reset-non-blocking-busy");
+        let mut seed_app = make_test_app(&workspace);
+        seed_app.open_first_run_planning_simple_review();
+        wait_for_planning_init_refresh(&mut seed_app);
+        seed_app.promote_simple_mode_planning_draft();
+
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+
+        let started_at = Instant::now();
+        app.handle_reset_shell_command(Some("queue"));
+        let elapsed = started_at.elapsed();
+        let first = app
+            .planning_workspace_operation_ui_state
+            .active_correlation()
+            .cloned()
+            .expect("reset should remain active while workspace I/O is slow");
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "reset dispatch waited for 600ms workspace I/O: {elapsed:?}"
+        );
+
+        app.handle_reset_shell_command(Some("queue"));
+        assert_eq!(
+            app.planning_workspace_operation_ui_state
+                .active_correlation(),
+            Some(&first)
+        );
+        app.handle_reset_shell_command(Some("all confirm"));
+        assert!(ready_status(&app).starts_with("planning workspace busy / active reset: queue"));
+
+        app.stage_simple_mode_planning_init_draft();
+        assert_eq!(
+            ready_status(&app),
+            "planning workspace busy / reset queue is still in progress"
+        );
+        wait_for_planning_workspace_operation(&mut app);
+        wait_for_observed_load_completions(&mut app, &observation, 2);
+
+        assert_eq!(observation.load_count.load(Ordering::SeqCst), 2);
+        assert!(
+            app.planning_workspace_operation_ui_state
+                .active_correlation()
+                .is_none()
+        );
+        assert!(post_turn_continuation_is_paused(&app));
+        assert_eq!(
+            ready_status(&app),
+            "planning workspace busy / reset queue is still in progress",
+            "late reset completion must refresh authority state without overwriting the newer busy presentation"
+        );
+    }
+
+    #[test]
+    fn failed_reset_refreshes_runtime_and_preserves_newer_status_presentation() {
+        let workspace = TempPlanningWorkspace::new("tui-reset-failure-newer-status");
+        let mut seed_app = make_test_app(&workspace);
+        seed_app.open_first_run_planning_simple_review();
+        wait_for_planning_init_refresh(&mut seed_app);
+        seed_app.promote_simple_mode_planning_draft();
+
+        let (port, observation) = FailingPlanningWorkspacePort::observed_with_failure(
+            PlanningWorkspacePortFailure::ReplaceWorkspace,
+        );
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+
+        app.handle_reset_shell_command(Some("queue"));
+        app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "newer operator status".to_string(),
+        });
+        wait_for_planning_workspace_operation(&mut app);
+        wait_for_observed_load_completions(&mut app, &observation, 2);
+
+        assert_eq!(observation.load_count.load(Ordering::SeqCst), 2);
+        assert!(post_turn_continuation_is_paused(&app));
+        assert_eq!(ready_status(&app), "newer operator status");
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    }
+
+    #[test]
+    fn reset_busy_gate_and_exact_completion_survive_workspace_aba() {
+        let workspace_a = TempPlanningWorkspace::new("tui-reset-workspace-aba-a");
+        let workspace_b = TempPlanningWorkspace::new("tui-reset-workspace-aba-b");
+        let mut seed_app = make_test_app(&workspace_a);
+        seed_app.open_first_run_planning_simple_review();
+        wait_for_planning_init_refresh(&mut seed_app);
+        seed_app.promote_simple_mode_planning_draft();
+
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace_a, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace_a.path_str(), false);
+
+        app.handle_reset_shell_command(Some("queue"));
+        app.sync_draft_shell_workspace(workspace_b.path_str());
+        app.sync_draft_shell_workspace(workspace_a.path_str());
+        assert_eq!(
+            app.planning_workspace_directory(),
+            workspace_a.path_str(),
+            "test must return to the original workspace before settlement"
+        );
+
+        app.stage_simple_mode_planning_init_draft();
+        assert_eq!(
+            ready_status(&app),
+            "planning workspace busy / reset queue is still in progress"
+        );
+        wait_for_planning_workspace_operation(&mut app);
+        wait_for_observed_load_completions(&mut app, &observation, 3);
+
+        assert_eq!(observation.load_count.load(Ordering::SeqCst), 3);
+        assert!(post_turn_continuation_is_paused(&app));
+        assert_eq!(
+            ready_status(&app),
+            "planning workspace busy / reset queue is still in progress",
+            "A→B→A completion must refresh the current authority without replaying stale presentation"
+        );
     }
 
     #[test]

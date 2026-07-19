@@ -18,6 +18,8 @@ pub(super) enum AutoFollowControlEvent {
      * 재설정 전까지 자동화를 disarm하라는 operator intent다.
      */
     AutoFollowPaused,
+    // Authority writers must stop continuation without replacing newer status presentation.
+    PlanningAuthorityMutationSettled,
     /*
      * MaxAutoTurnsUpdated는 `:turns` editor가 확정한 raw 문자열을 실제 정책 값으로 반영한다.
      * 입력 검증은 AutoFollowState의 canonical parser를 사용해 UI와 runtime copy가 같은 규칙을 쓴다.
@@ -65,6 +67,10 @@ pub(super) fn reduce_auto_follow_controls(
             state.status_text =
                 "auto-follow stopped and disarmed / use :turns <positive|infinite> to re-enable"
                     .to_string();
+        }
+        AutoFollowControlEvent::PlanningAuthorityMutationSettled => {
+            state.pause_post_turn_continuation();
+            state.record_internal_continuation_paused();
         }
         AutoFollowControlEvent::MaxAutoTurnsUpdated { value } => {
             /*

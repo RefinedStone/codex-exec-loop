@@ -1301,6 +1301,32 @@ fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
 fn stale_post_turn_evaluation_background_message_is_ignored() {
     let mut runtime = make_test_runtime();
     runtime.take_redraw_request();
+    let workspace_directory = runtime.app().planning_workspace_directory();
+    let initial_refresh_deadline = Instant::now() + Duration::from_secs(2);
+    while runtime
+        .app()
+        .core_runtime
+        .snapshot()
+        .planning_parallel
+        .planning_runtime_workspace_directory
+        .as_deref()
+        != Some(workspace_directory.as_str())
+        && Instant::now() < initial_refresh_deadline
+    {
+        runtime.poll_background_messages();
+        thread::yield_now();
+    }
+    assert_eq!(
+        runtime
+            .app()
+            .core_runtime
+            .snapshot()
+            .planning_parallel
+            .planning_runtime_workspace_directory
+            .as_deref(),
+        Some(workspace_directory.as_str()),
+        "the fixture's exact initial refresh must settle before testing stale writer events"
+    );
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
     };
@@ -1316,7 +1342,6 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     runtime
         .app_mut()
         .sync_core_planning_runtime_projection(expected_projection.clone());
-    let workspace_directory = runtime.app().planning_workspace_directory();
 
     runtime
         .app

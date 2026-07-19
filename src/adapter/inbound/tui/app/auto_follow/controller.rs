@@ -23,14 +23,16 @@ use super::super::{
 };
 
 impl NativeTuiApp {
-    pub(crate) fn pause_post_turn_continuation(&mut self) {
+    pub(crate) fn pause_post_turn_continuation_after_authority_mutation(&mut self) {
         /*
          * Pause is an operator intent against the auto-follow policy, not a
          * visual toggle. Sending it through the control reducer keeps footer
          * copy, post-turn continuation guards, and budget accounting on the
          * same ConversationViewModel state.
          */
-        self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
+        self.dispatch_auto_follow_controls(
+            AutoFollowControlEvent::PlanningAuthorityMutationSettled,
+        );
     }
 
     pub(crate) fn current_max_auto_turns_label(&self) -> String {
