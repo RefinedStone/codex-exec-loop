@@ -1,6 +1,5 @@
-use crate::application::port::outbound::review_center_repository_port::{
-    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
-};
+use crate::core::app::ReviewCenterLoadCorrelation;
+pub(super) use crate::core::app::ReviewCenterSnapshot as ReviewsOverlayAuthoritySnapshot;
 
 use super::{ConversationState, NativeTuiApp, ShellOverlay};
 
@@ -27,15 +26,8 @@ impl ReviewsOverlayContext {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ReviewsOverlayLoadRequest {
-    pub(super) request_id: u64,
+    pub(super) correlation: ReviewCenterLoadCorrelation,
     pub(super) context: ReviewsOverlayContext,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ReviewsOverlayAuthoritySnapshot {
-    pub(super) current_thread_reviews: Result<Vec<ReviewCenterThreadProjection>, String>,
-    pub(super) pending_inbox: Result<Vec<ReviewCenterInboxItem>, String>,
-    pub(super) recent_history: Result<Vec<ReviewCenterHistoryEntry>, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,14 +59,12 @@ pub(super) enum ReviewsOverlayScreenModel<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ReviewsOverlayUiState {
-    next_request_id: u64,
     projection: ReviewsOverlayProjectionState,
 }
 
 impl Default for ReviewsOverlayUiState {
     fn default() -> Self {
         Self {
-            next_request_id: 0,
             projection: ReviewsOverlayProjectionState::Idle,
         }
     }
@@ -83,11 +73,11 @@ impl Default for ReviewsOverlayUiState {
 impl ReviewsOverlayUiState {
     pub(super) fn begin_load(
         &mut self,
+        correlation: ReviewCenterLoadCorrelation,
         context: ReviewsOverlayContext,
     ) -> ReviewsOverlayLoadRequest {
-        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
         let request = ReviewsOverlayLoadRequest {
-            request_id: self.next_request_id,
+            correlation,
             context,
         };
         self.projection = ReviewsOverlayProjectionState::Loading(request.clone());
@@ -96,25 +86,34 @@ impl ReviewsOverlayUiState {
 
     pub(super) fn apply_loaded(
         &mut self,
-        request: ReviewsOverlayLoadRequest,
+        correlation: ReviewCenterLoadCorrelation,
         authority: ReviewsOverlayAuthoritySnapshot,
     ) -> bool {
-        let request_matches = matches!(
-            &self.projection,
-            ReviewsOverlayProjectionState::Loading(pending) if pending == &request
-        );
-        if !request_matches {
+        let ReviewsOverlayProjectionState::Loading(request) = &self.projection else {
+            return false;
+        };
+        if request.correlation != correlation {
             return false;
         }
+        let request = request.clone();
         self.projection = ReviewsOverlayProjectionState::Ready { request, authority };
         true
     }
 
-    fn is_loading_request(&self, request: &ReviewsOverlayLoadRequest) -> bool {
-        matches!(
-            &self.projection,
-            ReviewsOverlayProjectionState::Loading(pending) if pending == request
-        )
+    fn loading_request(
+        &self,
+        correlation: &ReviewCenterLoadCorrelation,
+    ) -> Option<&ReviewsOverlayLoadRequest> {
+        match &self.projection {
+            ReviewsOverlayProjectionState::Loading(request)
+                if request.correlation == *correlation =>
+            {
+                Some(request)
+            }
+            ReviewsOverlayProjectionState::Idle
+            | ReviewsOverlayProjectionState::Loading(_)
+            | ReviewsOverlayProjectionState::Ready { .. } => None,
+        }
     }
 
     fn requires_authority_load_for(&self, context: &ReviewsOverlayContext) -> bool {
@@ -145,21 +144,30 @@ impl ReviewsOverlayUiState {
 }
 
 impl NativeTuiApp {
-    pub(super) fn begin_reviews_overlay_load(&mut self) -> ReviewsOverlayLoadRequest {
+    pub(super) fn begin_reviews_overlay_load(
+        &mut self,
+        correlation: ReviewCenterLoadCorrelation,
+    ) -> ReviewsOverlayLoadRequest {
         let context = self.current_reviews_overlay_context();
-        self.reviews_overlay_ui_state.begin_load(context)
+        self.reviews_overlay_ui_state
+            .begin_load(correlation, context)
     }
 
     pub(super) fn apply_reviews_overlay_loaded(
         &mut self,
-        request: ReviewsOverlayLoadRequest,
+        correlation: ReviewCenterLoadCorrelation,
         authority: ReviewsOverlayAuthoritySnapshot,
     ) -> ReviewsOverlayLoadCompletion {
-        if self.shell_overlay != ShellOverlay::Reviews
-            || !self.reviews_overlay_ui_state.is_loading_request(&request)
-        {
+        if self.shell_overlay != ShellOverlay::Reviews {
             return ReviewsOverlayLoadCompletion::Ignored;
         }
+        let Some(request) = self
+            .reviews_overlay_ui_state
+            .loading_request(&correlation)
+            .cloned()
+        else {
+            return ReviewsOverlayLoadCompletion::Ignored;
+        };
         if !self
             .current_reviews_overlay_context()
             .has_same_authority_identity(&request.context)
@@ -168,7 +176,7 @@ impl NativeTuiApp {
         }
         let applied = self
             .reviews_overlay_ui_state
-            .apply_loaded(request, authority);
+            .apply_loaded(correlation, authority);
         debug_assert!(applied);
         ReviewsOverlayLoadCompletion::Applied
     }
@@ -181,7 +189,7 @@ impl NativeTuiApp {
             .requires_authority_load_for(&self.current_reviews_overlay_context())
     }
 
-    fn current_reviews_overlay_context(&self) -> ReviewsOverlayContext {
+    pub(super) fn current_reviews_overlay_context(&self) -> ReviewsOverlayContext {
         let active_thread = match &self.conversation_state {
             ConversationState::Ready(conversation) if conversation.has_active_thread() => {
                 Some(ReviewsOverlayThreadContext {
@@ -209,6 +217,7 @@ impl NativeTuiApp {
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
+    use crate::core::app::ReviewCenterInboxItemSnapshot;
 
     fn context(workspace: &str, thread_id: Option<&str>) -> ReviewsOverlayContext {
         ReviewsOverlayContext {
@@ -227,6 +236,25 @@ mod tests {
             pending_inbox: Ok(Vec::new()),
             recent_history: Ok(Vec::new()),
         }
+    }
+
+    fn correlation_for(
+        generation: u64,
+        context: &ReviewsOverlayContext,
+    ) -> ReviewCenterLoadCorrelation {
+        ReviewCenterLoadCorrelation::new(
+            generation,
+            context.workspace_directory.clone(),
+            context
+                .active_thread
+                .as_ref()
+                .map(|thread| thread.thread_id.clone()),
+        )
+    }
+
+    fn begin_app_load(app: &mut NativeTuiApp, generation: u64) -> ReviewsOverlayLoadRequest {
+        let context = app.current_reviews_overlay_context();
+        app.begin_reviews_overlay_load(correlation_for(generation, &context))
     }
 
     #[test]
@@ -249,7 +277,7 @@ mod tests {
     fn app_requests_reload_when_pending_authority_identity_changes() {
         let mut app = test_native_tui_app();
         app.shell_overlay = ShellOverlay::Reviews;
-        let request = app.begin_reviews_overlay_load();
+        let request = begin_app_load(&mut app, 1);
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("test app should have a ready conversation");
         };
@@ -257,7 +285,7 @@ mod tests {
         conversation.draft_workspace_directory = "/tmp/other".to_string();
 
         assert_eq!(
-            app.apply_reviews_overlay_loaded(request.clone(), authority()),
+            app.apply_reviews_overlay_loaded(request.correlation.clone(), authority()),
             ReviewsOverlayLoadCompletion::ReloadRequired
         );
 
@@ -270,7 +298,7 @@ mod tests {
             "/tmp/root".to_string(),
         );
         assert_eq!(
-            app.apply_reviews_overlay_loaded(request, authority()),
+            app.apply_reviews_overlay_loaded(request.correlation, authority()),
             ReviewsOverlayLoadCompletion::ReloadRequired
         );
     }
@@ -279,7 +307,7 @@ mod tests {
     fn leaving_and_reopening_reviews_ignores_the_previous_request() {
         let mut app = test_native_tui_app();
         app.shell_overlay = ShellOverlay::Reviews;
-        let stale = app.begin_reviews_overlay_load();
+        let stale = begin_app_load(&mut app, 1);
         app.dispatch_shell_chrome(super::super::ShellChromeEvent::HelpOverlayShown);
         assert!(matches!(
             app.reviews_overlay_ui_state.screen_model(),
@@ -287,9 +315,9 @@ mod tests {
         ));
 
         app.shell_overlay = ShellOverlay::Reviews;
-        let current = app.begin_reviews_overlay_load();
+        let current = begin_app_load(&mut app, 2);
         assert_eq!(
-            app.apply_reviews_overlay_loaded(stale, authority()),
+            app.apply_reviews_overlay_loaded(stale.correlation, authority()),
             ReviewsOverlayLoadCompletion::Ignored
         );
         assert!(matches!(
@@ -301,13 +329,14 @@ mod tests {
     #[test]
     fn exact_load_completion_becomes_the_immutable_screen_model() {
         let mut state = ReviewsOverlayUiState::default();
-        let request = state.begin_load(context("/tmp/repo", Some("thread-1")));
+        let context = context("/tmp/repo", Some("thread-1"));
+        let request = state.begin_load(correlation_for(1, &context), context);
 
         assert!(matches!(
             state.screen_model(),
             ReviewsOverlayScreenModel::Loading(pending) if pending == &request
         ));
-        assert!(state.apply_loaded(request.clone(), authority()));
+        assert!(state.apply_loaded(request.correlation.clone(), authority()));
         assert!(matches!(
             state.screen_model(),
             ReviewsOverlayScreenModel::Ready { request: ready, .. } if ready == &request
@@ -317,24 +346,27 @@ mod tests {
     #[test]
     fn stale_request_workspace_and_thread_completions_are_ignored() {
         let mut state = ReviewsOverlayUiState::default();
-        let pending = state.begin_load(context("/tmp/repo", Some("thread-2")));
+        let pending_context = context("/tmp/repo", Some("thread-2"));
+        let pending = state.begin_load(correlation_for(1, &pending_context), pending_context);
+        let other_workspace = context("/tmp/other", Some("thread-2"));
+        let other_thread = context("/tmp/repo", Some("thread-1"));
         let stale_requests = [
             ReviewsOverlayLoadRequest {
-                request_id: pending.request_id.wrapping_add(1),
+                correlation: correlation_for(2, &pending.context),
                 context: pending.context.clone(),
             },
             ReviewsOverlayLoadRequest {
-                request_id: pending.request_id,
-                context: context("/tmp/other", Some("thread-2")),
+                correlation: correlation_for(1, &other_workspace),
+                context: other_workspace,
             },
             ReviewsOverlayLoadRequest {
-                request_id: pending.request_id,
-                context: context("/tmp/repo", Some("thread-1")),
+                correlation: correlation_for(1, &other_thread),
+                context: other_thread,
             },
         ];
 
         for stale in stale_requests {
-            assert!(!state.apply_loaded(stale, authority()));
+            assert!(!state.apply_loaded(stale.correlation, authority()));
             assert!(matches!(
                 state.screen_model(),
                 ReviewsOverlayScreenModel::Loading(request) if request == &pending
@@ -345,14 +377,15 @@ mod tests {
     #[test]
     fn section_failures_remain_data_in_the_ready_screen_model() {
         let mut state = ReviewsOverlayUiState::default();
-        let request = state.begin_load(context("/tmp/repo", None));
+        let context = context("/tmp/repo", None);
+        let request = state.begin_load(correlation_for(1, &context), context);
         let authority = ReviewsOverlayAuthoritySnapshot {
             current_thread_reviews: Ok(Vec::new()),
             pending_inbox: Err("inbox unavailable".to_string()),
             recent_history: Err("history unavailable".to_string()),
         };
 
-        assert!(state.apply_loaded(request, authority));
+        assert!(state.apply_loaded(request.correlation, authority));
         assert!(matches!(
             state.screen_model(),
             ReviewsOverlayScreenModel::Ready { authority, .. }
@@ -366,20 +399,22 @@ mod tests {
     #[test]
     fn partial_section_failure_projects_error_without_hiding_loaded_sections() {
         let mut state = ReviewsOverlayUiState::default();
-        let request = state.begin_load(context("/tmp/repo", None));
+        let context = context("/tmp/repo", None);
+        let request = state.begin_load(correlation_for(1, &context), context);
         let authority = ReviewsOverlayAuthoritySnapshot {
             current_thread_reviews: Ok(Vec::new()),
-            pending_inbox: Ok(vec![ReviewCenterInboxItem::new(
-                "review-1",
-                "thread-1",
-                "pending",
-                "inbox remains visible",
-                "2026-07-16T10:00:00Z",
-                "2026-07-16T10:01:00Z",
-            )]),
+            pending_inbox: Ok(vec![ReviewCenterInboxItemSnapshot {
+                review_id: "review-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                inbox_state: "pending".to_string(),
+                summary: "inbox remains visible".to_string(),
+                requested_at: "2026-07-16T10:00:00Z".to_string(),
+                last_activity_at: "2026-07-16T10:01:00Z".to_string(),
+                handoff_target: None,
+            }]),
             recent_history: Err("history unavailable".to_string()),
         };
-        assert!(state.apply_loaded(request, authority));
+        assert!(state.apply_loaded(request.correlation, authority));
 
         let view =
             crate::adapter::inbound::tui::app::shell_presentation::build_reviews_overlay_view(
@@ -406,13 +441,14 @@ mod tests {
     }
 
     #[test]
-    fn reset_invalidates_an_in_flight_completion_without_reusing_request_ids() {
+    fn reset_invalidates_an_in_flight_completion_and_accepts_a_new_core_correlation() {
         let mut state = ReviewsOverlayUiState::default();
-        let stale = state.begin_load(context("/tmp/repo", None));
+        let context = context("/tmp/repo", None);
+        let stale = state.begin_load(correlation_for(1, &context), context.clone());
         state.reset();
-        assert!(!state.apply_loaded(stale.clone(), authority()));
+        assert!(!state.apply_loaded(stale.correlation.clone(), authority()));
 
-        let next = state.begin_load(context("/tmp/repo", None));
-        assert!(next.request_id > stale.request_id);
+        let next = state.begin_load(correlation_for(2, &context), context);
+        assert!(next.correlation.generation > stale.correlation.generation);
     }
 }

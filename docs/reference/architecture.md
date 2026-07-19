@@ -64,6 +64,12 @@ duplicate completions before they reach the TUI. The TUI owns agent selection, l
 presentation, and clears that preview when another shell overlay supersedes it. Peek results never
 replace the interactive conversation.
 
+Review Center reads follow the same latest-wins boundary. Core correlates the workspace and optional
+active thread, starts the authority read through its effect runner, and drops stale or duplicate
+completions. Section-level failures remain data in a core-owned snapshot so one unavailable source
+does not hide the other sections. The TUI owns overlay lifecycle and display-only thread context,
+and requests a fresh load when the current workspace or thread identity changes.
+
 An accepted post-turn completion updates the core planning-runtime projection in the same
 correlated dispatch. TUI conversation state does not retain a second planning-runtime copy.
 

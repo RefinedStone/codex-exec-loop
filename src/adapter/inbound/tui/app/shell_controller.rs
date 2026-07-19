@@ -102,13 +102,23 @@ impl NativeTuiApp {
         if self.shell_overlay != ShellOverlay::Reviews {
             return;
         }
-        let request = self.begin_reviews_overlay_load();
-        let application = self.application.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let authority = application.load_reviews_overlay_authority(&request);
-            let _ = tx.send(BackgroundMessage::ReviewsOverlayLoaded { request, authority });
+        let context = self.current_reviews_overlay_context();
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::LoadReviewCenter {
+                workspace_directory: context.workspace_directory,
+                active_thread_id: context.active_thread.map(|thread| thread.thread_id),
+            });
+        let correlation = outcome.events.iter().find_map(|event| match event {
+            AppEvent::ReviewCenterLoadStarted { correlation } => Some(correlation.clone()),
+            _ => None,
         });
+        if let Some(correlation) = correlation {
+            self.begin_reviews_overlay_load(correlation);
+        }
+        // Bind the adapter-local display context before an immediate completion
+        // is projected back through the core event stream.
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn reconcile_reviews_overlay_authority_context(&mut self) -> bool {
@@ -1657,7 +1667,11 @@ mod tests {
         );
 
         app.shell_overlay = ShellOverlay::Reviews;
-        app.begin_reviews_overlay_load();
+        app.begin_reviews_overlay_load(crate::core::app::ReviewCenterLoadCorrelation::new(
+            1,
+            "/tmp/root",
+            None,
+        ));
         assert!(matches!(
             app.reviews_overlay_ui_state.screen_model(),
             crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Loading(_)

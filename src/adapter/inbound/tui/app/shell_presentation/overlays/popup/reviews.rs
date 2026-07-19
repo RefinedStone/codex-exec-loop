@@ -3,8 +3,9 @@ use super::{ReviewOverlayView, ReviewsOverlayView};
 use crate::adapter::inbound::tui::app::reviews_overlay_ui::{
     ReviewsOverlayAuthoritySnapshot, ReviewsOverlayContext, ReviewsOverlayScreenModel,
 };
-use crate::application::port::outbound::review_center_repository_port::{
-    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
+use crate::core::app::{
+    ConversationThreadReviewSnapshot, ReviewCenterHistoryEntrySnapshot,
+    ReviewCenterInboxItemSnapshot,
 };
 use crate::domain::text::compact_whitespace_detail;
 
@@ -201,7 +202,7 @@ fn load_section<T>(
 }
 
 fn build_thread_review_views(
-    reviews: &[ReviewCenterThreadProjection],
+    reviews: &[ConversationThreadReviewSnapshot],
 ) -> (usize, Vec<ReviewOverlayView>) {
     let mut entries = reviews
         .iter()
@@ -224,7 +225,9 @@ fn build_thread_review_views(
     (reviews.len(), entries)
 }
 
-fn build_thread_review_detail_lines(review: &ReviewCenterThreadProjection) -> Vec<Line<'static>> {
+fn build_thread_review_detail_lines(
+    review: &ConversationThreadReviewSnapshot,
+) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(format!(
         "thread: {}  |  updated: {}",
         compact_whitespace_detail(review.thread_id.trim(), REVIEW_ID_DETAIL_LIMIT),
@@ -242,7 +245,9 @@ fn build_thread_review_detail_lines(review: &ReviewCenterThreadProjection) -> Ve
     lines
 }
 
-fn build_inbox_review_views(inbox: &[ReviewCenterInboxItem]) -> (usize, Vec<ReviewOverlayView>) {
+fn build_inbox_review_views(
+    inbox: &[ReviewCenterInboxItemSnapshot],
+) -> (usize, Vec<ReviewOverlayView>) {
     let mut entries = inbox
         .iter()
         .take(REVIEW_ENTRY_LIMIT)
@@ -260,7 +265,7 @@ fn build_inbox_review_views(inbox: &[ReviewCenterInboxItem]) -> (usize, Vec<Revi
     (inbox.len(), entries)
 }
 
-fn build_inbox_review_detail_lines(item: &ReviewCenterInboxItem) -> Vec<Line<'static>> {
+fn build_inbox_review_detail_lines(item: &ReviewCenterInboxItemSnapshot) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(format!(
         "thread: {}  |  requested: {}",
         compact_whitespace_detail(item.thread_id.trim(), REVIEW_ID_DETAIL_LIMIT),
@@ -285,7 +290,7 @@ fn build_inbox_review_detail_lines(item: &ReviewCenterInboxItem) -> Vec<Line<'st
 }
 
 fn build_history_review_views(
-    history: &[ReviewCenterHistoryEntry],
+    history: &[ReviewCenterHistoryEntrySnapshot],
 ) -> (usize, Vec<ReviewOverlayView>) {
     let mut entries = history
         .iter()

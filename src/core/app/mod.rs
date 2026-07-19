@@ -11,6 +11,7 @@ pub mod event;
 pub mod manual_prompt;
 pub mod projection;
 pub mod request;
+pub mod review_center;
 pub mod session;
 pub mod snapshot;
 pub mod startup;
@@ -30,8 +31,11 @@ pub use event::{AppEvent, CoreEffectCompletion, CoreInput, SessionRenameAccepted
 pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparationIntent};
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
 pub use request::{
-    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
+};
+pub use review_center::{
+    ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterSnapshot,
 };
 pub use session::{SessionCatalogReadySnapshot, SessionCatalogSnapshot, SessionCatalogState};
 pub use snapshot::AppSnapshot;

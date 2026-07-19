@@ -25,6 +25,10 @@ pub enum AppCommand {
     LoadParallelPeekConversation {
         thread_id: String,
     },
+    LoadReviewCenter {
+        workspace_directory: String,
+        active_thread_id: Option<String>,
+    },
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
     SubmitTurn(TurnSubmissionRequest),

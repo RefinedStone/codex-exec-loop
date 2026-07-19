@@ -116,14 +116,15 @@ the fixed Akra theme.
 - Popup overlays must use the shared Akra panel frame from `AkraTheme::panel_block`.
 - Overlay content should follow this order when the surface needs all sections: header, summary,
   primary content, status, keys.
-- The Review Center read-only overlay must load application authority through controller-owned
-  asynchronous work into a request-correlated immutable screen model.
+- The Review Center read-only overlay controller must dispatch a core load command. Core owns
+  latest-wins correlation and completion; composition executes the application authority reads
+  into a core-owned snapshot.
 - Review Center projection and rendering must read only that screen model; displaying its loading
   state, resizing, or repeatedly redrawing it must not perform service, repository, filesystem, or
   database I/O.
-- Async Review Center results may replace the current screen model only when the request identifier,
-  workspace, and active-thread identity (thread ID) still match; workspace or thread identity drift
-  must trigger a correlated reload.
+- Async Review Center results may replace the current screen model only when the core correlation
+  generation, workspace, and active-thread identity (thread ID) still match; workspace or thread
+  identity drift must trigger a correlated reload.
 - Opening the Queue overlay must dispatch its chrome before starting controller-owned asynchronous
   authority loading. The terminal input path must not read planning services, repositories,
   filesystems, or databases.

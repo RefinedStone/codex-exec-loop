@@ -166,13 +166,6 @@ impl ShellRuntime {
                     self.app
                         .dispatch_core_input(CoreInput::ConversationRuntimeNotice(notice));
                 }
-                BackgroundMessage::ReviewsOverlayLoaded { request, authority } => {
-                    if self.app.apply_reviews_overlay_loaded(request, authority)
-                        == super::reviews_overlay_ui::ReviewsOverlayLoadCompletion::ReloadRequired
-                    {
-                        self.app.start_reviews_overlay_authority_load();
-                    }
-                }
                 BackgroundMessage::QueueOverlayAuthorityLoaded(result) => {
                     if self.app.apply_queue_overlay_authority_loaded(*result)
                         == super::queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::ReloadRequired

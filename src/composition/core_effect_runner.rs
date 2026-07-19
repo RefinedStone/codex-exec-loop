@@ -2,6 +2,9 @@ use std::thread;
 
 use anyhow::Result;
 
+use crate::application::port::outbound::review_center_repository_port::{
+    ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
+};
 use crate::application::service::conversation_service::{
     ConversationService, LoadedConversationThreadSnapshot,
 };
@@ -16,8 +19,9 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
     ConversationLoadCorrelation, ConversationReadySnapshot, ConversationThreadReviewSnapshot,
-    ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    ParallelPeekLoadCorrelation, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
+    ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
+    SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -99,6 +103,10 @@ impl CoreEffectRunner {
                 self.spawn_parallel_peek_conversation_load(correlation);
                 None
             }
+            CoreEffect::LoadReviewCenter { correlation } => {
+                self.spawn_review_center_load(correlation);
+                None
+            }
             CoreEffect::PrepareManualPrompt(request) => Some(CoreInput::EffectCompleted(
                 CoreEffectCompletion::ManualPromptPrepared(Box::new(
                     self.manual_prompt_preparation_service.prepare(*request),
@@ -178,6 +186,20 @@ impl CoreEffectRunner {
                 conversation_service.load_snapshot(correlation.requested_thread_id.as_str());
             let completion = parallel_peek_conversation_completion(correlation, result);
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
+    pub fn spawn_review_center_load(&self, correlation: ReviewCenterLoadCorrelation) {
+        let conversation_service = self.conversation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let snapshot = load_review_center_snapshot(&conversation_service, &correlation);
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::ReviewCenterLoaded {
+                    correlation,
+                    snapshot,
+                },
+            ));
         });
     }
 
@@ -320,6 +342,97 @@ fn turn_steer_completion(
     }
 }
 
+fn load_review_center_snapshot(
+    conversation_service: &ConversationService,
+    correlation: &ReviewCenterLoadCorrelation,
+) -> ReviewCenterSnapshot {
+    let current_thread_reviews = match correlation.active_thread_id.as_deref() {
+        Some(thread_id) => conversation_service.load_review_center_thread_reviews_for_workspace(
+            &correlation.workspace_directory,
+            thread_id,
+        ),
+        None => Ok(Vec::new()),
+    };
+    let pending_inbox = conversation_service
+        .load_review_center_pending_inbox_for_workspace(&correlation.workspace_directory);
+    let recent_history = conversation_service
+        .load_review_center_recent_history_for_workspace(&correlation.workspace_directory);
+    review_center_snapshot(current_thread_reviews, pending_inbox, recent_history)
+}
+
+fn review_center_snapshot(
+    current_thread_reviews: Result<Vec<ReviewCenterThreadProjection>>,
+    pending_inbox: Result<Vec<ReviewCenterInboxItem>>,
+    recent_history: Result<Vec<ReviewCenterHistoryEntry>>,
+) -> ReviewCenterSnapshot {
+    ReviewCenterSnapshot {
+        current_thread_reviews: current_thread_reviews
+            .map(|reviews| {
+                reviews
+                    .into_iter()
+                    .map(review_center_thread_snapshot)
+                    .collect()
+            })
+            .map_err(|error| error.to_string()),
+        pending_inbox: pending_inbox
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(review_center_inbox_item_snapshot)
+                    .collect()
+            })
+            .map_err(|error| error.to_string()),
+        recent_history: recent_history
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(review_center_history_entry_snapshot)
+                    .collect()
+            })
+            .map_err(|error| error.to_string()),
+    }
+}
+
+fn review_center_thread_snapshot(
+    review: ReviewCenterThreadProjection,
+) -> ConversationThreadReviewSnapshot {
+    ConversationThreadReviewSnapshot {
+        thread_id: review.thread_id,
+        review_id: review.review_id,
+        review_label: review.review_label,
+        review_state: review.review_state,
+        review_summary: review.review_summary,
+        requested_at: review.requested_at,
+        updated_at: review.updated_at,
+        handoff_target: review.handoff_target,
+        handoff_note: review.handoff_note,
+    }
+}
+
+fn review_center_inbox_item_snapshot(item: ReviewCenterInboxItem) -> ReviewCenterInboxItemSnapshot {
+    ReviewCenterInboxItemSnapshot {
+        review_id: item.review_id,
+        thread_id: item.thread_id,
+        inbox_state: item.inbox_state,
+        summary: item.summary,
+        requested_at: item.requested_at,
+        last_activity_at: item.last_activity_at,
+        handoff_target: item.handoff_target,
+    }
+}
+
+fn review_center_history_entry_snapshot(
+    entry: ReviewCenterHistoryEntry,
+) -> ReviewCenterHistoryEntrySnapshot {
+    ReviewCenterHistoryEntrySnapshot {
+        review_id: entry.review_id,
+        thread_id: entry.thread_id,
+        event_kind: entry.event_kind,
+        summary: entry.summary,
+        recorded_at: entry.recorded_at,
+    }
+}
+
 fn conversation_ready_snapshot(
     snapshot: LoadedConversationThreadSnapshot,
 ) -> ConversationReadySnapshot {
@@ -328,17 +441,7 @@ fn conversation_ready_snapshot(
         snapshot
             .thread_review
             .into_iter()
-            .map(|review| ConversationThreadReviewSnapshot {
-                thread_id: review.thread_id,
-                review_id: review.review_id,
-                review_label: review.review_label,
-                review_state: review.review_state,
-                review_summary: review.review_summary,
-                requested_at: review.requested_at,
-                updated_at: review.updated_at,
-                handoff_target: review.handoff_target,
-                handoff_note: review.handoff_note,
-            })
+            .map(review_center_thread_snapshot)
             .collect(),
     )
 }
@@ -346,7 +449,6 @@ fn conversation_ready_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::port::outbound::review_center_repository_port::ReviewCenterThreadProjection;
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::recent_sessions::{
         RecentSessions, SessionCatalogTier, SessionRenameRequest,
@@ -534,6 +636,104 @@ mod tests {
                 result: Err("steer unavailable".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn review_center_snapshot_maps_every_projection_field() {
+        let mut thread_review = ReviewCenterThreadProjection::new(
+            "thread-1",
+            "review-1",
+            "Manual review",
+            "pending",
+            "Need operator follow-up",
+            "2026-07-06T10:00:00Z",
+            "2026-07-06T11:00:00Z",
+        );
+        thread_review.handoff_target = Some("operator".to_string());
+        thread_review.handoff_note = Some("resume in inbox".to_string());
+        let mut inbox_item = ReviewCenterInboxItem::new(
+            "review-2",
+            "thread-2",
+            "pending",
+            "Approve filesystem access",
+            "2026-07-07T10:00:00Z",
+            "2026-07-07T11:00:00Z",
+        );
+        inbox_item.handoff_target = Some("security".to_string());
+        let history_entry = ReviewCenterHistoryEntry::new(
+            "review-3",
+            "thread-3",
+            "approved",
+            "Operator approved",
+            "2026-07-08T12:00:00Z",
+        );
+
+        assert_eq!(
+            review_center_snapshot(
+                Ok(vec![thread_review]),
+                Ok(vec![inbox_item]),
+                Ok(vec![history_entry]),
+            ),
+            ReviewCenterSnapshot {
+                current_thread_reviews: Ok(vec![ConversationThreadReviewSnapshot {
+                    thread_id: "thread-1".to_string(),
+                    review_id: "review-1".to_string(),
+                    review_label: "Manual review".to_string(),
+                    review_state: "pending".to_string(),
+                    review_summary: "Need operator follow-up".to_string(),
+                    requested_at: "2026-07-06T10:00:00Z".to_string(),
+                    updated_at: "2026-07-06T11:00:00Z".to_string(),
+                    handoff_target: Some("operator".to_string()),
+                    handoff_note: Some("resume in inbox".to_string()),
+                }]),
+                pending_inbox: Ok(vec![ReviewCenterInboxItemSnapshot {
+                    review_id: "review-2".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    inbox_state: "pending".to_string(),
+                    summary: "Approve filesystem access".to_string(),
+                    requested_at: "2026-07-07T10:00:00Z".to_string(),
+                    last_activity_at: "2026-07-07T11:00:00Z".to_string(),
+                    handoff_target: Some("security".to_string()),
+                }]),
+                recent_history: Ok(vec![ReviewCenterHistoryEntrySnapshot {
+                    review_id: "review-3".to_string(),
+                    thread_id: "thread-3".to_string(),
+                    event_kind: "approved".to_string(),
+                    summary: "Operator approved".to_string(),
+                    recorded_at: "2026-07-08T12:00:00Z".to_string(),
+                }]),
+            }
+        );
+    }
+
+    #[test]
+    fn review_center_snapshot_preserves_partial_failures() {
+        let thread_review = ReviewCenterThreadProjection::new(
+            "thread-1",
+            "review-1",
+            "Manual review",
+            "pending",
+            "Needs review",
+            "2026-07-06T10:00:00Z",
+            "2026-07-06T11:00:00Z",
+        );
+        let history_entry = ReviewCenterHistoryEntry::new(
+            "review-1",
+            "thread-1",
+            "requested",
+            "Review requested",
+            "2026-07-06T10:00:00Z",
+        );
+
+        let snapshot = review_center_snapshot(
+            Ok(vec![thread_review]),
+            Err(anyhow::anyhow!("inbox unavailable")),
+            Ok(vec![history_entry]),
+        );
+
+        assert_eq!(snapshot.pending_inbox, Err("inbox unavailable".to_string()));
+        assert_eq!(snapshot.current_thread_reviews.unwrap().len(), 1);
+        assert_eq!(snapshot.recent_history.unwrap().len(), 1);
     }
 
     #[test]
