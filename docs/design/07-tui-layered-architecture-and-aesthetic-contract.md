@@ -125,14 +125,16 @@ the fixed Akra theme.
 - Async Review Center results may replace the current screen model only when the core correlation
   generation, workspace, and active-thread identity (thread ID) still match; workspace or thread
   identity drift must trigger a correlated reload.
-- Opening the Queue overlay must dispatch its chrome before starting controller-owned asynchronous
-  authority loading. The terminal input path must not read planning services, repositories,
+- Opening the Queue overlay must dispatch its chrome before dispatching a core authority-load
+  command. Core owns latest-wins correlation and completion; composition executes the coherent
+  application read. The terminal input path must not read planning services, repositories,
   filesystems, or databases.
-- Queue projection and rendering must consume a request-correlated immutable screen model. Loading
-  and failed authority states are read-only and must not advertise remove or undo shortcuts.
+- Queue projection and rendering must consume a core-correlated immutable screen model. Loading and
+  failed authority states are read-only and must not advertise remove or undo shortcuts.
 - A ready Queue screen model must bind its visible runtime rows, selection, planning revision, and
-  destructive-action tokens to the same authority snapshot. Request, workspace, active-thread, or
-  visible planning-revision drift must invalidate that snapshot and trigger a correlated reload.
+  destructive-action tokens to the same authority snapshot. Correlation generation, workspace,
+  active-thread, or visible planning-revision drift must invalidate that snapshot and trigger a
+  correlated reload.
 - Queue remove and undo actions must expose their pending operation ID and suppress duplicate
   destructive keyboard and mouse actions until a matching background completion is consumed.
 - The queue mutation gate must outlive Queue overlay chrome. Closing the overlay may reset local

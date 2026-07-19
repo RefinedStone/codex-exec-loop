@@ -1192,7 +1192,9 @@ mod tests {
         PlanningBootstrapMode, PlanningInitStageResult, PlanningRuntimeProjection,
         PlanningTaskToolRequest,
     };
-    use crate::core::app::StartupReadySnapshot;
+    use crate::core::app::{
+        QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, StartupReadySnapshot,
+    };
     use crate::domain::conversation::{
         ConversationApprovalRequest, ConversationApprovalRequestKind,
     };
@@ -1523,17 +1525,30 @@ mod tests {
     }
 
     fn apply_next_queue_overlay_authority_load(app: &mut NativeTuiApp) {
-        let message = app
-            .rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("queue authority worker should complete");
-        let BackgroundMessage::QueueOverlayAuthorityLoaded(result) = message else {
-            panic!("expected queue authority completion, got {message:?}");
-        };
-        assert_eq!(
-            app.apply_queue_overlay_authority_loaded(*result),
-            queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            app.poll_core_runtime_inputs(1);
+            if !matches!(
+                app.queue_overlay_ui_state.authority_screen_model(),
+                queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
+            ) {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("queue authority worker should complete");
+    }
+
+    fn begin_test_queue_overlay_authority_load(
+        app: &mut NativeTuiApp,
+        generation: u64,
+    ) -> queue_overlay_ui::QueueOverlayAuthorityLoadRequest {
+        let context = app.current_queue_mutation_context();
+        app.begin_queue_overlay_authority_load(QueueAuthorityLoadCorrelation::new(
+            generation,
+            context.workspace_directory,
+            context.active_thread_id,
+        ))
     }
 
     fn status_text(app: &NativeTuiApp) -> &str {
@@ -2126,7 +2141,7 @@ mod tests {
             7,
         ));
         app.shell_overlay = ShellOverlay::Queue;
-        let request = app.begin_queue_overlay_authority_load();
+        let request = begin_test_queue_overlay_authority_load(&mut app, 1);
 
         app.cancel_selected_queue_task();
         assert!(!app.undo_latest_queue_registration());
@@ -2161,7 +2176,7 @@ mod tests {
             7,
         ));
         app.shell_overlay = ShellOverlay::Queue;
-        let stale_request = app.begin_queue_overlay_authority_load();
+        let stale_request = begin_test_queue_overlay_authority_load(&mut app, 1);
         assert!(
             app.queue_overlay_ui_state
                 .apply_authority_load_failed(stale_request, "database unavailable".to_string())
@@ -2180,15 +2195,18 @@ mod tests {
             app.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
         ));
-        let message = app
-            .rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stale failed authority should start a replacement load");
-        let BackgroundMessage::QueueOverlayAuthorityLoaded(result) = message else {
-            panic!("expected queue authority completion, got {message:?}");
-        };
+        let replacement_context = app.current_queue_mutation_context();
+        let replacement_correlation = QueueAuthorityLoadCorrelation::new(
+            1,
+            replacement_context.workspace_directory.clone(),
+            replacement_context.active_thread_id.clone(),
+        );
         assert_eq!(
-            result.request.context.workspace_directory,
+            app.queue_overlay_ui_state
+                .loading_request(&replacement_correlation)
+                .expect("replacement load should bind the current context")
+                .correlation
+                .workspace_directory,
             "/tmp/queue-stale-failed-context"
         );
     }
@@ -2197,20 +2215,16 @@ mod tests {
     fn queue_close_reopen_ignores_old_authority_completion_before_applying_the_new_one() {
         let mut app = test_native_tui_app();
         app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
-        let old_request = app.begin_queue_overlay_authority_load();
+        let old_request = begin_test_queue_overlay_authority_load(&mut app, 1);
         app.close_shell_overlay();
         app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
-        let new_request = app.begin_queue_overlay_authority_load();
-        assert!(new_request.request_id > old_request.request_id);
+        let new_request = begin_test_queue_overlay_authority_load(&mut app, 2);
+        assert!(new_request.correlation.generation > old_request.correlation.generation);
 
         assert_eq!(
             app.apply_queue_overlay_authority_loaded(
-                queue_overlay_ui::QueueOverlayAuthorityLoadResult {
-                    request: old_request,
-                    authority: Err(
-                        queue_overlay_ui::QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable,
-                    ),
-                },
+                old_request.correlation,
+                Err(QueueAuthorityLoadError::RuntimeProjectionUnavailable),
             ),
             queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Ignored
         );
@@ -2218,14 +2232,10 @@ mod tests {
 
         assert_eq!(
             app.apply_queue_overlay_authority_loaded(
-                queue_overlay_ui::QueueOverlayAuthorityLoadResult {
-                    request: new_request.clone(),
-                    authority: Err(
-                        queue_overlay_ui::QueueMutationAuthorityRefreshError::AuthorityUnavailable(
-                            "database unavailable".to_string(),
-                        ),
-                    ),
-                },
+                new_request.correlation.clone(),
+                Err(QueueAuthorityLoadError::AuthorityUnavailable(
+                    "database unavailable".to_string(),
+                )),
             ),
             queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied
         );
@@ -2234,7 +2244,7 @@ mod tests {
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Failed {
                 request_id,
                 ..
-            } if request_id == new_request.request_id
+            } if request_id == new_request.correlation.generation
         ));
     }
 
@@ -2249,7 +2259,7 @@ mod tests {
             8,
         ));
         app.shell_overlay = ShellOverlay::Queue;
-        let request = app.begin_queue_overlay_authority_load();
+        let request = begin_test_queue_overlay_authority_load(&mut app, 1);
         assert!(app.queue_overlay_ui_state.apply_authority_loaded(
             request,
             authority_projection,
@@ -2294,13 +2304,10 @@ mod tests {
             app.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
         ));
-        let message = app
-            .rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("revision drift should load a replacement authority snapshot");
-        assert!(matches!(
-            message,
-            BackgroundMessage::QueueOverlayAuthorityLoaded(_)
+        apply_next_queue_overlay_authority_load(&mut app);
+        assert!(!matches!(
+            app.queue_overlay_ui_state.authority_screen_model(),
+            queue_overlay_ui::QueueOverlayAuthorityScreenModel::Idle
         ));
     }
 
@@ -2393,15 +2400,18 @@ mod tests {
             app.queue_overlay_ui_state.authority_screen_model(),
             queue_overlay_ui::QueueOverlayAuthorityScreenModel::Loading { .. }
         ));
-        let message = app
-            .rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("drifted context should start a replacement authority load");
-        let BackgroundMessage::QueueOverlayAuthorityLoaded(result) = message else {
-            panic!("expected queue authority completion, got {message:?}");
-        };
+        let replacement_context = app.current_queue_mutation_context();
+        let replacement_correlation = QueueAuthorityLoadCorrelation::new(
+            1,
+            replacement_context.workspace_directory.clone(),
+            replacement_context.active_thread_id.clone(),
+        );
         assert_eq!(
-            result.request.context.workspace_directory,
+            app.queue_overlay_ui_state
+                .loading_request(&replacement_correlation)
+                .expect("replacement load should bind the drifted context")
+                .correlation
+                .workspace_directory,
             "/tmp/queue-drifted-workspace"
         );
     }

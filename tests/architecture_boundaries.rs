@@ -505,6 +505,7 @@ fn future_core_app_public_contracts_are_core_owned() {
             "src/core/app/event.rs",
             "src/core/app/manual_prompt.rs",
             "src/core/app/projection.rs",
+            "src/core/app/queue.rs",
             "src/core/app/review_center.rs",
             "src/core/app/snapshot.rs",
             "src/core/app/state.rs",
@@ -880,6 +881,27 @@ fn tui_queue_presentation_reads_screen_model_without_effects() {
                     )
         ),
         "queue presentation facade must be one pure screen-model delegation"
+    );
+}
+
+#[test]
+fn tui_queue_authority_loads_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI Queue authority loads must run as core effects",
+        &["src/adapter/inbound/tui/app"],
+        &[
+            ".load_coherent_authority(",
+            "BackgroundMessage::QueueOverlayAuthorityLoaded",
+            "next_authority_request_id",
+            "QueueOverlayAuthorityLoadResult",
+        ],
+    );
+
+    let controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/queue_overlay_controller.rs").unwrap();
+    assert!(
+        controller.contains("AppCommand::LoadQueueAuthority {"),
+        "TUI Queue authority loads must positively enter through AppCommand::LoadQueueAuthority"
     );
 }
 

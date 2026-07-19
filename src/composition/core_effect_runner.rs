@@ -10,7 +10,10 @@ use crate::application::service::conversation_service::{
 };
 use crate::application::service::manual_prompt_preparation::ManualPromptPreparationService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
-use crate::application::service::planning::{PlanningRuntimeUseCases, PlanningServices};
+use crate::application::service::planning::{
+    PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError, PlanningQueueUseCases,
+    PlanningRuntimeUseCases, PlanningServices,
+};
 use crate::application::service::post_turn_evaluation::{
     POST_TURN_EVALUATION_TIMEOUT, PostTurnEvaluationService,
 };
@@ -19,7 +22,8 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
     ConversationLoadCorrelation, ConversationReadySnapshot, ConversationThreadReviewSnapshot,
-    ParallelPeekLoadCorrelation, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
+    ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
+    QueueAuthoritySnapshot, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
     ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
     SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
 };
@@ -35,6 +39,7 @@ pub struct CoreEffectRunner {
     session_service: SessionService,
     conversation_service: ConversationService,
     planning_runtime: PlanningRuntimeUseCases,
+    planning_queue: PlanningQueueUseCases,
     parallel_mode_turn_service: ParallelModeTurnService,
     manual_prompt_preparation_service: ManualPromptPreparationService,
     post_turn_evaluation_service: PostTurnEvaluationService,
@@ -51,15 +56,18 @@ impl CoreEffectRunner {
         post_turn_evaluation_service: PostTurnEvaluationService,
         input_sender: CoreInputSender,
     ) -> Self {
+        let planning_runtime = planning_feature.runtime.clone();
+        let planning_queue = planning_feature.queue.clone();
+        let manual_prompt_preparation_service =
+            ManualPromptPreparationService::new(planning_feature);
         Self {
             startup_service,
             session_service,
             conversation_service,
-            planning_runtime: planning_feature.runtime.clone(),
+            planning_runtime,
+            planning_queue,
             parallel_mode_turn_service,
-            manual_prompt_preparation_service: ManualPromptPreparationService::new(
-                planning_feature,
-            ),
+            manual_prompt_preparation_service,
             post_turn_evaluation_service,
             input_sender,
         }
@@ -105,6 +113,10 @@ impl CoreEffectRunner {
             }
             CoreEffect::LoadReviewCenter { correlation } => {
                 self.spawn_review_center_load(correlation);
+                None
+            }
+            CoreEffect::LoadQueueAuthority { correlation } => {
+                self.spawn_queue_authority_load(correlation);
                 None
             }
             CoreEffect::PrepareManualPrompt(request) => Some(CoreInput::EffectCompleted(
@@ -198,6 +210,22 @@ impl CoreEffectRunner {
                 CoreEffectCompletion::ReviewCenterLoaded {
                     correlation,
                     snapshot,
+                },
+            ));
+        });
+    }
+
+    pub fn spawn_queue_authority_load(&self, correlation: QueueAuthorityLoadCorrelation) {
+        let planning_queue = self.planning_queue.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = queue_authority_result(
+                planning_queue.load_coherent_authority(&correlation.workspace_directory),
+            );
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::QueueAuthorityLoaded {
+                    correlation,
+                    result: result.map(Box::new),
                 },
             ));
         });
@@ -433,6 +461,32 @@ fn review_center_history_entry_snapshot(
     }
 }
 
+fn queue_authority_result(
+    result: Result<PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError>,
+) -> Result<QueueAuthoritySnapshot, QueueAuthorityLoadError> {
+    result
+        .map(|authority| QueueAuthoritySnapshot {
+            runtime_projection: authority.runtime_projection,
+            planning_revision: authority.queue_authority.planning_revision,
+            tasks: authority.queue_authority.tasks,
+        })
+        .map_err(|error| match error {
+            PlanningQueueAuthorityRefreshError::AuthorityUnavailable(detail) => {
+                QueueAuthorityLoadError::AuthorityUnavailable(detail)
+            }
+            PlanningQueueAuthorityRefreshError::RevisionsKeptChanging {
+                projection_revision,
+                authority_revision,
+            } => QueueAuthorityLoadError::RevisionsKeptChanging {
+                projection_revision,
+                authority_revision,
+            },
+            PlanningQueueAuthorityRefreshError::RuntimeProjectionUnavailable => {
+                QueueAuthorityLoadError::RuntimeProjectionUnavailable
+            }
+        })
+}
+
 fn conversation_ready_snapshot(
     snapshot: LoadedConversationThreadSnapshot,
 ) -> ConversationReadySnapshot {
@@ -449,7 +503,11 @@ fn conversation_ready_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::service::planning::PlanningQueueAuthoritySnapshot;
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+    use crate::domain::planning::{
+        RuntimeProjection, TaskActor, TaskDefinition, TaskMutationProvenance, TaskStatus,
+    };
     use crate::domain::recent_sessions::{
         RecentSessions, SessionCatalogTier, SessionRenameRequest,
     };
@@ -476,6 +534,27 @@ mod tests {
             3,
             crate::core::app::TurnSubmissionCorrelation::new(2),
         )
+    }
+
+    fn queue_task() -> TaskDefinition {
+        TaskDefinition {
+            id: "task-1".to_string(),
+            direction_id: "direction-1".to_string(),
+            direction_relation_note: String::new(),
+            title: "Review queue authority".to_string(),
+            description: "Preserve the authoritative queue row".to_string(),
+            status: TaskStatus::Ready,
+            base_priority: 50,
+            dynamic_priority_delta: 0,
+            priority_reason: String::new(),
+            depends_on: Vec::new(),
+            blocked_by: Vec::new(),
+            created_by: TaskActor::User,
+            last_updated_by: TaskActor::User,
+            source_turn_id: None,
+            provenance: TaskMutationProvenance::default(),
+            updated_at: "2026-07-19T00:00:00Z".to_string(),
+        }
     }
 
     #[test]
@@ -734,6 +813,60 @@ mod tests {
         assert_eq!(snapshot.pending_inbox, Err("inbox unavailable".to_string()));
         assert_eq!(snapshot.current_thread_reviews.unwrap().len(), 1);
         assert_eq!(snapshot.recent_history.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn queue_authority_result_maps_core_owned_projection_and_tasks() {
+        let runtime_projection =
+            RuntimeProjection::ready("prompt".to_string(), "queue".to_string(), None)
+                .with_planning_revision(Some(42));
+        let task = queue_task();
+
+        assert_eq!(
+            queue_authority_result(Ok(PlanningQueueAuthorityProjection {
+                runtime_projection: runtime_projection.clone(),
+                queue_authority: PlanningQueueAuthoritySnapshot {
+                    planning_revision: 42,
+                    tasks: vec![task.clone()],
+                },
+            })),
+            Ok(QueueAuthoritySnapshot {
+                runtime_projection,
+                planning_revision: 42,
+                tasks: vec![task],
+            })
+        );
+    }
+
+    #[test]
+    fn queue_authority_result_preserves_each_refresh_error() {
+        for (application_error, core_error) in [
+            (
+                PlanningQueueAuthorityRefreshError::AuthorityUnavailable(
+                    "store unavailable".to_string(),
+                ),
+                QueueAuthorityLoadError::AuthorityUnavailable("store unavailable".to_string()),
+            ),
+            (
+                PlanningQueueAuthorityRefreshError::RevisionsKeptChanging {
+                    projection_revision: 41,
+                    authority_revision: 42,
+                },
+                QueueAuthorityLoadError::RevisionsKeptChanging {
+                    projection_revision: 41,
+                    authority_revision: 42,
+                },
+            ),
+            (
+                PlanningQueueAuthorityRefreshError::RuntimeProjectionUnavailable,
+                QueueAuthorityLoadError::RuntimeProjectionUnavailable,
+            ),
+        ] {
+            assert_eq!(
+                queue_authority_result(Err(application_error)),
+                Err(core_error)
+            );
+        }
     }
 
     #[test]

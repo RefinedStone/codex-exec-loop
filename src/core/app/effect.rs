@@ -1,7 +1,8 @@
 use super::{
-    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
-    TurnSteerCorrelation, TurnSubmissionCorrelation, TurnSubmissionRequest,
+    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation, TurnSteerCorrelation, TurnSubmissionCorrelation,
+    TurnSubmissionRequest,
 };
 use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
@@ -28,6 +29,9 @@ pub enum CoreEffect {
     },
     LoadReviewCenter {
         correlation: ReviewCenterLoadCorrelation,
+    },
+    LoadQueueAuthority {
+        correlation: QueueAuthorityLoadCorrelation,
     },
     PrepareManualPrompt(Box<ManualPromptRequest>),
     SubmitTurn {

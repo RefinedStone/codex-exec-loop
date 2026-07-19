@@ -1,8 +1,10 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use crate::application::service::planning::{
+    PlanningQueueAuthorityProjection, PlanningQueueAuthoritySnapshot,
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
 };
+use crate::core::app::{AppCommand, AppEvent, QueueAuthorityLoadCorrelation};
 
 use super::{
     BackgroundMessage, ConversationState, NativeTuiApp, ShellChromeEvent, ShellOverlay,
@@ -21,17 +23,22 @@ impl NativeTuiApp {
         {
             return;
         }
-        let request = self.begin_queue_overlay_authority_load();
-        let planning = self.application.planning().clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let authority = planning
-                .queue()
-                .load_coherent_authority(&request.context.workspace_directory);
-            let _ = tx.send(BackgroundMessage::QueueOverlayAuthorityLoaded(Box::new(
-                queue_overlay_ui::QueueOverlayAuthorityLoadResult { request, authority },
-            )));
+        let context = self.current_queue_mutation_context();
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::LoadQueueAuthority {
+                workspace_directory: context.workspace_directory,
+                active_thread_id: context.active_thread_id,
+            });
+        let correlation = outcome.events.iter().find_map(|event| match event {
+            AppEvent::QueueAuthorityLoadStarted { correlation } => Some(correlation.clone()),
+            _ => None,
         });
+        if let Some(correlation) = correlation {
+            self.begin_queue_overlay_authority_load(correlation);
+        }
+        // Bind adapter-local context before an immediate completion is applied.
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn reconcile_queue_overlay_authority_context(&mut self) -> bool {
@@ -44,28 +51,41 @@ impl NativeTuiApp {
 
     pub(super) fn apply_queue_overlay_authority_loaded(
         &mut self,
-        result: queue_overlay_ui::QueueOverlayAuthorityLoadResult,
+        correlation: QueueAuthorityLoadCorrelation,
+        result: Result<
+            Box<crate::core::app::QueueAuthoritySnapshot>,
+            crate::core::app::QueueAuthorityLoadError,
+        >,
     ) -> queue_overlay_ui::QueueOverlayAuthorityLoadCompletion {
-        let request = result.request;
-        if self.shell_overlay != ShellOverlay::Queue
-            || !self.queue_overlay_ui_state.is_loading_request(&request)
-        {
+        if self.shell_overlay != ShellOverlay::Queue {
             return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Ignored;
         }
-        if self.current_queue_mutation_context() != request.context {
+        let Some(request) = self
+            .queue_overlay_ui_state
+            .loading_request(&correlation)
+            .cloned()
+        else {
+            return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Ignored;
+        };
+        if !request.matches_context(&self.current_queue_mutation_context()) {
             return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::ReloadRequired;
         }
 
-        let authority = match result.authority {
-            Ok(authority) => authority,
+        let authority = match result {
+            Ok(authority) => *authority,
             Err(error) => {
-                let error = self
-                    .tui_language
-                    .queue_mutation_authority_refresh_error(&error);
+                let error = self.tui_language.queue_overlay_authority_load_error(&error);
                 self.queue_overlay_ui_state
                     .apply_authority_load_failed(request, error);
                 return queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::Applied;
             }
+        };
+        let authority = PlanningQueueAuthorityProjection {
+            runtime_projection: authority.runtime_projection,
+            queue_authority: PlanningQueueAuthoritySnapshot {
+                planning_revision: authority.planning_revision,
+                tasks: authority.tasks,
+            },
         };
         let Some(planning_revision) = authority.runtime_projection.planning_revision() else {
             self.queue_overlay_ui_state.apply_authority_load_failed(
