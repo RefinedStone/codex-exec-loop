@@ -211,6 +211,26 @@ epoch, keeps one poll in flight, and coalesces later ticks. Only the matching co
 wake or follow-up tick; disable, workspace switch, duplicate, and ABA completions are dropped.
 Read failures preserve the current projection and the next scheduled tick remains a retry.
 
+Post-turn continuation reuses the queue-head fact from the exact runtime projection accepted with
+the completed evaluation; it does not reread planning authority while holding the facade. Durable
+dispatch enqueue and cancellation also run only in effect-runner workers. The runtime serializes
+them with monotonic operation/workspace/epoch correlation, preserves refresh then queued-wake then
+pending-poll priority, and coalesces enqueue intent by workspace, epoch, and canonical durable
+trigger even while its first worker is running. Slot-capacity and task-intake requests therefore
+share one durable task-intake mutation. Cancellation runs for the exact closed epoch ahead of
+queued enqueue work. A current cancellation failure is shown in workspace status. Any failed
+cleanup enters a bounded unsettled-cleanup ledger with its original operation, workspace, epoch,
+and command identity. Its matching global runtime notice is retained independently of conversation
+Loading/Failed state, so a later Ready conversation surfaces it without replacing that
+conversation's workspace projection. Retrying the exact correlation schedules the original
+cancellation through the control-plane effect runner. The production TUI control-plane pulse
+retries the oldest unsettled exact correlation at its existing bounded interval, independent of
+conversation Loading/Failed state. Active replacement-epoch work keeps refresh, queued wake, then
+pending-poll priority; one bounded deferral gives cleanup the next idle pulse before another normal
+cycle, so neither lane starves. Cleanup cadence is independent of pending-poll cadence, and mutation
+coalescing keeps the retry single-flight. Success settles the ledger entry and clears the notice.
+Other late or ABA completions remain diagnostic-only.
+
 Pool mutations also take a repository-scoped OS lock. Every allocation gets an unguessable exact
 generation carried through leases, sessions, events, delivery, and cleanup; delayed events compare
 that generation before mutation. SQLite remains authoritative on every supported platform.

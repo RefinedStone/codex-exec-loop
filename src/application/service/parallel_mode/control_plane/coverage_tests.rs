@@ -14,13 +14,14 @@ use crate::application::port::outbound::planning_task_repository_port::NoopPlann
 use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
-use crate::application::service::planning::PlanningServices;
+use crate::application::service::planning::{PlanningServices, PlanningTaskIntakeRequest};
 use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
 use crate::domain::parallel_mode::{
     ParallelModeCapabilityKey, ParallelModeCapabilitySnapshot, ParallelModeCapabilityState,
     ParallelModeDispatchOutcome, ParallelModeReadinessSnapshot, ParallelModeReadinessState,
     ParallelModeSupervisorSnapshot,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing_subscriber::EnvFilter;
@@ -295,6 +296,42 @@ fn test_control_plane_handle_with_noop_authority(
     (ParallelModeControlPlaneHandle::new(service), rx)
 }
 
+fn bootstrap_ready_planning_workspace_with_noop_authority(
+    authority: Arc<NoopPlanningAuthorityPort>,
+    workspace_directory: &str,
+) {
+    std::fs::create_dir_all(workspace_directory).expect("test workspace root should be created");
+    let planning = PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        authority,
+        Arc::new(NoopPlanningTaskRepositoryPort),
+        Arc::new(NoopPlanningWorkerPort),
+    );
+    let staged = planning
+        .workspace
+        .stage_simple_mode_draft(workspace_directory)
+        .expect("planning workspace should stage");
+    planning
+        .workspace
+        .promote_staged_draft(workspace_directory, &staged.draft_name)
+        .expect("planning workspace should promote");
+    let proposal = planning
+        .runtime
+        .prepare_task_intake(PlanningTaskIntakeRequest {
+            workspace_directory: workspace_directory.to_string(),
+            raw_prompt: "Run the coalesced dispatch task".to_string(),
+            legacy_source_turn_id: None,
+            provenance: Default::default(),
+            requested_direction_id: None,
+            observed_planning_revision: None,
+        })
+        .expect("planning task intake should prepare");
+    planning
+        .runtime
+        .commit_task_intake(&proposal)
+        .expect("planning task intake should commit");
+}
+
 #[test]
 fn disabling_parallel_mode_cancels_the_active_automation_epoch() {
     let (handle, _rx) = test_control_plane_handle();
@@ -413,6 +450,32 @@ fn recv_entered_event(
     panic!("parallel entry completion should be sent");
 }
 
+fn recv_dispatch_mutation_completed(
+    rx: &mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
+) -> ParallelModeControlPlaneBackgroundEvent {
+    for _ in 0..8 {
+        let event = recv_background_event(rx);
+        if matches!(
+            event,
+            ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted { .. }
+        ) {
+            return event;
+        }
+    }
+    panic!("dispatch mutation completion should be sent");
+}
+
+fn wait_for_mutation_count(count: &AtomicUsize, expected: usize) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while count.load(Ordering::SeqCst) < expected {
+        assert!(
+            Instant::now() < deadline,
+            "dispatch mutation worker did not reach authority call {expected}"
+        );
+        std::thread::yield_now();
+    }
+}
+
 fn with_akra_event_trace<T>(body: impl FnOnce() -> T) -> T {
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::new(format!("{AKRA_EVENT_TARGET}=debug")))
@@ -490,27 +553,30 @@ fn utility_effect_ids_inspection_and_reset_tick_signature_cover_process_edges() 
         None
     );
     assert_eq!(
-        ParallelModeControlPlaneEffect::EnqueueSlotCapacityDispatch {
-            workspace_directory: WORKSPACE.to_string(),
-            epoch_id: 1,
+        ParallelModeControlPlaneEffect::MutateDispatchCommands {
+            correlation: ParallelModeDispatchMutationCorrelation::new(1, WORKSPACE.to_string(), 1,),
+            mutation: ParallelModeDispatchMutation::EnqueueSlotCapacity,
         }
         .effect_id(),
         None
     );
     assert_eq!(
-        ParallelModeControlPlaneEffect::EnqueueDispatchForTrigger {
-            workspace_directory: WORKSPACE.to_string(),
-            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
-            epoch_id: 1,
-            reason: "deferred".to_string(),
+        ParallelModeControlPlaneEffect::MutateDispatchCommands {
+            correlation: ParallelModeDispatchMutationCorrelation::new(2, WORKSPACE.to_string(), 1,),
+            mutation: ParallelModeDispatchMutation::EnqueueForTrigger {
+                trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                reason: "deferred".to_string(),
+            },
         }
         .effect_id(),
         None
     );
     assert_eq!(
-        ParallelModeControlPlaneEffect::CancelDispatchCommands {
-            workspace_directory: WORKSPACE.to_string(),
-            reason: "disabled".to_string(),
+        ParallelModeControlPlaneEffect::MutateDispatchCommands {
+            correlation: ParallelModeDispatchMutationCorrelation::new(3, WORKSPACE.to_string(), 1,),
+            mutation: ParallelModeDispatchMutation::Cancel {
+                reason: "disabled".to_string(),
+            },
         }
         .effect_id(),
         None
@@ -1032,7 +1098,10 @@ fn completion_commands_cover_specific_wake_refresh_tick_and_worker_arms() {
         tick_completed.effects.as_slice(),
         [
             ParallelModeControlPlaneEffect::RefreshSupervisor { epoch_id: 1, .. },
-            ParallelModeControlPlaneEffect::EnqueueSlotCapacityDispatch { epoch_id: 1, .. }
+            ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation: ParallelModeDispatchMutationCorrelation { epoch_id: 1, .. },
+                mutation: ParallelModeDispatchMutation::EnqueueSlotCapacity,
+            }
         ]
     ));
 
@@ -1310,15 +1379,29 @@ fn pending_dispatch_poll_rejects_disable_workspace_switch_duplicate_and_aba_comp
     });
     let stale = only_pending_dispatch_poll_correlation(&first);
 
-    runtime.handle(ParallelModeControlPlaneCommand::Disable {
+    let disabled = runtime.handle(ParallelModeControlPlaneCommand::Disable {
         workspace_directory: "/first".to_string(),
     });
+    let cancel_correlation = match disabled.effects.as_slice() {
+        [
+            ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+            },
+        ] => correlation.clone(),
+        effects => panic!("expected one disable cancellation, got {effects:?}"),
+    };
     runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
         workspace_directory: "/second".to_string(),
     });
-    let second = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+    let queued_poll = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
         workspace_directory: "/second".to_string(),
         follow_up_tick_signature: None,
+    });
+    assert!(queued_poll.effects.is_empty());
+    let second = runtime.handle(ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+        correlation: cancel_correlation,
+        result: Ok(0),
     });
     let current = only_pending_dispatch_poll_correlation(&second);
     assert!(current.operation_id > stale.operation_id);
@@ -2059,17 +2142,679 @@ fn pending_dispatch_poll_returns_before_a_gated_six_hundred_millisecond_authorit
 }
 
 #[test]
+fn dispatch_enqueue_returns_before_a_gated_six_hundred_millisecond_authority_read() {
+    let shared_projection = Arc::new(Mutex::new(
+        PlanningAuthorityRuntimeProjectionSnapshot::default(),
+    ));
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_shared_runtime_projection(shared_projection.clone()),
+    );
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    let workspace = unique_workspace("dispatch-enqueue-nonblocking");
+    handle.force_epoch_for_test(&workspace, 1);
+
+    let (gate_entered_tx, gate_entered_rx) = mpsc::channel();
+    let gate = shared_projection.clone();
+    let gate_thread = std::thread::spawn(move || {
+        let _guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        gate_entered_tx
+            .send(())
+            .expect("authority gate should report acquisition");
+        std::thread::sleep(Duration::from_millis(600));
+    });
+    gate_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("authority gate should be held before enqueue");
+
+    let started_at = Instant::now();
+    let presented = handle.handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+        workspace_directory: workspace.clone(),
+        trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+    });
+    let command_elapsed = started_at.elapsed();
+
+    assert!(
+        command_elapsed < Duration::from_millis(300),
+        "dispatch enqueue held the control-plane mutex for {command_elapsed:?}"
+    );
+    assert!(presented.is_empty());
+    assert!(handle.control_effect_in_flight());
+    let snapshot_started_at = Instant::now();
+    assert_eq!(handle.current_epoch_id_for_workspace(&workspace), Some(1));
+    assert!(
+        snapshot_started_at.elapsed() < Duration::from_millis(300),
+        "the async enqueue read must not retain the control-plane mutex"
+    );
+
+    gate_thread
+        .join()
+        .expect("authority gate thread should complete");
+    let completed = recv_dispatch_mutation_completed(&rx);
+    assert!(matches!(
+        &completed,
+        ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+            correlation,
+            result: Ok(_),
+        } if correlation.workspace_directory == workspace
+            && correlation.epoch_id == 1
+            && correlation.operation_id == 1
+    ));
+    let _ = handle.handle_background_event(completed);
+    assert!(!handle.control_effect_in_flight());
+}
+
+#[test]
+fn gated_duplicate_dispatch_requests_share_one_worker_and_release_refresh_promptly() {
+    let mutation_gate = Arc::new(Mutex::new(()));
+    let mutation_count = Arc::new(AtomicUsize::new(0));
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_shared_runtime_dispatch_mutation_gate(mutation_gate.clone())
+            .with_shared_runtime_dispatch_mutation_count(mutation_count.clone()),
+    );
+    let workspace = unique_workspace("dispatch-enqueue-coalesced");
+    bootstrap_ready_planning_workspace_with_noop_authority(authority.clone(), &workspace);
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    handle.force_epoch_for_test(&workspace, 1);
+    handle.force_readiness_snapshot_for_test(ready_readiness(&workspace));
+
+    let gate_guard = mutation_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(
+        handle
+            .handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+                workspace_directory: workspace.clone(),
+                trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+            })
+            .is_empty()
+    );
+    wait_for_mutation_count(&mutation_count, 1);
+
+    let duplicates_started_at = Instant::now();
+    for _ in 0..32 {
+        assert!(
+            handle
+                .handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+                    workspace_directory: workspace.clone(),
+                    trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                })
+                .is_empty()
+        );
+    }
+    assert!(
+        duplicates_started_at.elapsed() < Duration::from_millis(300),
+        "duplicate dispatch intent must not wait behind the gated authority worker"
+    );
+    assert_eq!(
+        mutation_count.load(Ordering::SeqCst),
+        1,
+        "all duplicate semantic intent must share the in-flight worker"
+    );
+
+    assert!(
+        handle
+            .handle_command(ParallelModeControlPlaneCommand::RefreshSupervisor {
+                workspace_directory: workspace.clone(),
+            })
+            .is_empty()
+    );
+    assert!(
+        handle
+            .handle_command(ParallelModeControlPlaneCommand::WakeOrchestrator(
+                ParallelModeControlPlaneWake::new(
+                    workspace.clone(),
+                    ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+                    1,
+                    None,
+                ),
+            ))
+            .is_empty()
+    );
+    assert!(
+        handle
+            .handle_command(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+                workspace_directory: workspace.clone(),
+                follow_up_tick_signature: Some("after-coalesced-enqueue".to_string()),
+            })
+            .is_empty()
+    );
+
+    drop(gate_guard);
+    let enqueue_completed = recv_dispatch_mutation_completed(&rx);
+    let follow_up_started_at = Instant::now();
+    let _ = handle.handle_background_event(enqueue_completed);
+    assert!(
+        follow_up_started_at.elapsed() < Duration::from_millis(300),
+        "queued refresh must start promptly after the shared enqueue completes"
+    );
+    let refreshed = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("queued supervisor refresh should complete without N×I/O delay");
+    assert!(
+        matches!(
+            &refreshed,
+            ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
+                workspace_directory,
+                epoch_id: 1,
+                ..
+            } if workspace_directory == &workspace
+        ),
+        "expected queued supervisor refresh completion, got {refreshed:?}"
+    );
+    assert_eq!(
+        mutation_count.load(Ordering::SeqCst),
+        1,
+        "coalesced duplicates must not spawn a trailing durable mutation"
+    );
+}
+
+#[test]
+fn gated_slot_capacity_and_task_intake_enqueue_share_one_canonical_worker() {
+    let mutation_gate = Arc::new(Mutex::new(()));
+    let mutation_count = Arc::new(AtomicUsize::new(0));
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_shared_runtime_dispatch_mutation_gate(mutation_gate.clone())
+            .with_shared_runtime_dispatch_mutation_count(mutation_count.clone()),
+    );
+    let workspace = unique_workspace("dispatch-cross-variant-coalesced");
+    bootstrap_ready_planning_workspace_with_noop_authority(authority.clone(), &workspace);
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    handle.force_epoch_for_test(&workspace, 1);
+    handle.force_readiness_snapshot_for_test(ready_readiness(&workspace));
+
+    assert!(
+        handle
+            .handle_command(ParallelModeControlPlaneCommand::RunOrchestratorTick {
+                workspace_directory: workspace.clone(),
+                signature: "cross-variant-slot-capacity".to_string(),
+            })
+            .is_empty()
+    );
+    let tick_completed = recv_background_event(&rx);
+    let effect_id = match tick_completed {
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory,
+            epoch_id: 1,
+            effect_id,
+            ..
+        } if workspace_directory == workspace => effect_id,
+        event => panic!("expected exact orchestrator tick completion, got {event:?}"),
+    };
+
+    let gate_guard = mutation_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _ = handle.handle_background_event(
+        ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
+            workspace_directory: workspace.clone(),
+            epoch_id: 1,
+            effect_id,
+            blocked: false,
+            notices: Vec::new(),
+        },
+    );
+    wait_for_mutation_count(&mutation_count, 1);
+
+    for _ in 0..32 {
+        assert!(
+            handle
+                .handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+                    workspace_directory: workspace.clone(),
+                    trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+                })
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        mutation_count.load(Ordering::SeqCst),
+        1,
+        "slot-capacity and task-intake variants must share one canonical durable trigger"
+    );
+
+    drop(gate_guard);
+    let completed = recv_dispatch_mutation_completed(&rx);
+    let _ = handle.handle_background_event(completed);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        mutation_count.load(Ordering::SeqCst),
+        1,
+        "cross-variant duplicates must not spawn a trailing authority worker"
+    );
+}
+
+#[test]
+fn unsettled_dispatch_cleanup_ledger_is_bounded_and_updates_exact_correlation() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+
+    for operation_id in 1..=(MAX_UNSETTLED_DISPATCH_CLEANUPS as u64 + 1) {
+        runtime.record_unsettled_dispatch_cleanup(
+            ParallelModeDispatchCleanupCorrelation {
+                operation_id,
+                workspace_directory: "/cleanup-workspace".to_string(),
+                epoch_id: 4,
+                command_identity: CANCEL_DISPATCH_COMMAND_IDENTITY.to_string(),
+            },
+            format!("failure {operation_id}"),
+        );
+    }
+
+    assert_eq!(
+        runtime.store.unsettled_dispatch_cleanups.len(),
+        MAX_UNSETTLED_DISPATCH_CLEANUPS
+    );
+    assert_eq!(
+        runtime
+            .store
+            .unsettled_dispatch_cleanups
+            .front()
+            .expect("bounded ledger should retain the newest cleanup window")
+            .correlation
+            .operation_id,
+        2
+    );
+
+    let exact_correlation = runtime
+        .store
+        .unsettled_dispatch_cleanups
+        .front()
+        .expect("retained exact cleanup correlation")
+        .correlation
+        .clone();
+    runtime.record_unsettled_dispatch_cleanup(
+        exact_correlation.clone(),
+        "retry failed again".to_string(),
+    );
+
+    assert_eq!(
+        runtime.store.unsettled_dispatch_cleanups.len(),
+        MAX_UNSETTLED_DISPATCH_CLEANUPS
+    );
+    assert_eq!(
+        runtime
+            .store
+            .unsettled_dispatch_cleanups
+            .iter()
+            .find(|cleanup| cleanup.correlation == exact_correlation)
+            .expect("exact cleanup retry should update its existing ledger row")
+            .error,
+        "retry failed again"
+    );
+}
+
+#[test]
+fn dispatch_cancel_returns_before_a_gated_six_hundred_millisecond_authority_write() {
+    let mutation_gate = Arc::new(Mutex::new(()));
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_shared_runtime_dispatch_mutation_gate(mutation_gate.clone()),
+    );
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    let workspace = unique_workspace("dispatch-cancel-nonblocking");
+    handle.force_epoch_for_test(&workspace, 1);
+
+    let (gate_entered_tx, gate_entered_rx) = mpsc::channel();
+    let gate_thread = std::thread::spawn(move || {
+        let _guard = mutation_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        gate_entered_tx
+            .send(())
+            .expect("write gate should report acquisition");
+        std::thread::sleep(Duration::from_millis(600));
+    });
+    gate_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("write gate should be held before disable");
+
+    let started_at = Instant::now();
+    let presented = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: workspace.clone(),
+    });
+    let command_elapsed = started_at.elapsed();
+
+    assert!(
+        command_elapsed < Duration::from_millis(300),
+        "dispatch cancellation held the control-plane mutex for {command_elapsed:?}"
+    );
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::ModeDisabled {
+            workspace_directory
+        } if workspace_directory == &workspace
+    )));
+    assert!(handle.control_effect_in_flight());
+    let snapshot_started_at = Instant::now();
+    assert_eq!(
+        handle.epoch_snapshot(),
+        ParallelModeControlPlaneEpochSnapshot {
+            workspace_directory: None,
+            current_epoch_id: None,
+        }
+    );
+    assert!(
+        snapshot_started_at.elapsed() < Duration::from_millis(300),
+        "the async cancellation write must not retain the control-plane mutex"
+    );
+
+    gate_thread
+        .join()
+        .expect("write gate thread should complete");
+    let completed = recv_dispatch_mutation_completed(&rx);
+    assert!(matches!(
+        &completed,
+        ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+            correlation,
+            result: Ok(0),
+        } if correlation.workspace_directory == workspace
+            && correlation.epoch_id == 1
+            && correlation.operation_id == 1
+    ));
+    assert!(handle.handle_background_event(completed).is_empty());
+    assert!(!handle.control_effect_in_flight());
+}
+
+#[test]
+fn dispatch_cancel_failure_is_visible_when_no_replacement_epoch_exists() {
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_cancel_runtime_dispatch_commands_error("sqlite busy"),
+    );
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    let workspace = unique_workspace("dispatch-cancel-failure");
+    handle.force_epoch_for_test(&workspace, 1);
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: workspace.clone(),
+    });
+    let presented = handle.handle_background_event(recv_dispatch_mutation_completed(&rx));
+
+    assert!(presented.iter().any(|event| matches!(
+        event,
+        ParallelModeControlPlanePresentationEvent::StatusShown {
+            workspace_directory,
+            status_text,
+        } if workspace_directory == &workspace
+            && status_text.contains("dispatch command cancellation failed: sqlite busy")
+    )));
+    assert_eq!(
+        handle.last_dispatch_withheld_reason().as_deref(),
+        Some("dispatch command cancellation failed: sqlite busy")
+    );
+}
+
+#[test]
+fn stale_enqueue_cleanup_failure_enters_global_notice_without_replacing_workspace_state() {
+    let mutation_gate = Arc::new(Mutex::new(()));
+    let mutation_count = Arc::new(AtomicUsize::new(0));
+    let cancel_error = Arc::new(Mutex::new(Some("sqlite cleanup busy".to_string())));
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_shared_runtime_dispatch_mutation_gate(mutation_gate.clone())
+            .with_shared_runtime_dispatch_mutation_count(mutation_count.clone())
+            .with_shared_cancel_runtime_dispatch_commands_error(cancel_error),
+    );
+    let workspace_a = unique_workspace("stale-enqueue-a");
+    let workspace_b = unique_workspace("stale-enqueue-b");
+    bootstrap_ready_planning_workspace_with_noop_authority(authority.clone(), &workspace_a);
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    handle.force_epoch_for_test(&workspace_a, 1);
+
+    let gate_guard = mutation_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+        workspace_directory: workspace_a.clone(),
+        trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+    });
+    wait_for_mutation_count(&mutation_count, 1);
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::OpenEpoch {
+        workspace_directory: workspace_b.clone(),
+    });
+    assert_eq!(
+        handle.epoch_snapshot(),
+        ParallelModeControlPlaneEpochSnapshot {
+            workspace_directory: Some(workspace_b.clone()),
+            current_epoch_id: Some(2),
+        }
+    );
+
+    drop(gate_guard);
+    let stale_enqueue = recv_dispatch_mutation_completed(&rx);
+    assert!(matches!(
+        &stale_enqueue,
+        ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+            correlation,
+            result: Ok(1),
+        } if correlation.workspace_directory == workspace_a
+            && correlation.epoch_id == 1
+            && correlation.operation_id == 1
+    ));
+    assert!(
+        handle.handle_background_event(stale_enqueue).is_empty(),
+        "the stale enqueue completion must not mutate replacement presentation"
+    );
+
+    wait_for_mutation_count(&mutation_count, 2);
+    let failed_cleanup = recv_dispatch_mutation_completed(&rx);
+    assert!(matches!(
+        &failed_cleanup,
+        ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+            correlation,
+            result: Err(error),
+        } if correlation.workspace_directory == workspace_a
+            && correlation.epoch_id == 1
+            && correlation.operation_id == 2
+            && error == "sqlite cleanup busy"
+    ));
+    let presented = handle.handle_background_event(failed_cleanup);
+
+    assert_eq!(
+        handle.epoch_snapshot(),
+        ParallelModeControlPlaneEpochSnapshot {
+            workspace_directory: Some(workspace_b.clone()),
+            current_epoch_id: Some(2),
+        },
+        "failed stale cleanup must not replace the current workspace projection"
+    );
+    assert!(matches!(
+        presented.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
+            cleanup_correlation,
+            notice,
+        }]
+            if cleanup_correlation.workspace_directory == workspace_a
+                && cleanup_correlation.epoch_id == 1
+                && cleanup_correlation.operation_id == 2
+                && cleanup_correlation.command_identity == "cancel_runtime_dispatch_commands"
+                && notice.contains(&workspace_a)
+                && notice.contains("epoch: 1")
+                && notice.contains("operation: 2")
+                && notice.contains("dispatch command cancellation failed: sqlite cleanup busy")
+                && notice.contains("cleanup remains unsettled")
+                && notice.contains("retry this exact cleanup correlation")
+    ));
+    let original_cleanup = match presented.as_slice() {
+        [
+            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
+                cleanup_correlation,
+                ..
+            },
+        ] => cleanup_correlation.clone(),
+        events => panic!("expected one exact cleanup notice, got {events:?}"),
+    };
+    assert_eq!(
+        mutation_count.load(Ordering::SeqCst),
+        2,
+        "one stale enqueue write and one exact compensating cancellation should run"
+    );
+
+    assert!(
+        handle
+            .handle_command(
+                ParallelModeControlPlaneCommand::RetryUnsettledDispatchCleanup {
+                    original_cleanup: original_cleanup.clone(),
+                },
+            )
+            .is_empty()
+    );
+    wait_for_mutation_count(&mutation_count, 3);
+    let retried_cleanup = recv_dispatch_mutation_completed(&rx);
+    assert!(matches!(
+        &retried_cleanup,
+        ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+            correlation,
+            result: Ok(0),
+        } if correlation.workspace_directory == workspace_a
+            && correlation.epoch_id == 1
+            && correlation.operation_id == 3
+    ));
+    let settled = handle.handle_background_event(retried_cleanup);
+    assert!(matches!(
+        settled.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticeCleared {
+            cleanup_correlation,
+        }] if cleanup_correlation == &original_cleanup
+    ));
+    assert_eq!(
+        mutation_count.load(Ordering::SeqCst),
+        3,
+        "exact cleanup retry must execute one additional durable cancellation"
+    );
+    assert_eq!(
+        handle.epoch_snapshot(),
+        ParallelModeControlPlaneEpochSnapshot {
+            workspace_directory: Some(workspace_b),
+            current_epoch_id: Some(2),
+        },
+        "cleanup settlement must not replace the current workspace projection"
+    );
+}
+
+#[test]
+fn persistent_cleanup_retry_yields_to_replacement_refresh_and_pending_poll_without_starving() {
+    let mutation_count = Arc::new(AtomicUsize::new(0));
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_shared_runtime_dispatch_mutation_count(mutation_count.clone())
+            .with_cancel_runtime_dispatch_commands_error("sqlite cleanup busy"),
+    );
+    let stale_workspace = unique_workspace("persistent-cleanup-stale");
+    let replacement_workspace = unique_workspace("persistent-cleanup-replacement");
+    bootstrap_ready_planning_workspace_with_noop_authority(
+        authority.clone(),
+        &replacement_workspace,
+    );
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    handle.force_epoch_for_test(&stale_workspace, 1);
+
+    let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: stale_workspace.clone(),
+    });
+    wait_for_mutation_count(&mutation_count, 1);
+    let failed_cleanup = recv_dispatch_mutation_completed(&rx);
+    handle.force_mode_for_test(&replacement_workspace, true);
+    let replacement_epoch = handle
+        .current_epoch_id_for_workspace(&replacement_workspace)
+        .expect("replacement workspace should own an active epoch");
+    handle.force_readiness_snapshot_for_test(ready_readiness(&replacement_workspace));
+    let initial_notice = handle.handle_background_event(failed_cleanup);
+    let original_cleanup = match initial_notice.as_slice() {
+        [
+            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
+                cleanup_correlation,
+                ..
+            },
+        ] => cleanup_correlation.clone(),
+        events => panic!("expected one exact cleanup notice, got {events:?}"),
+    };
+
+    let first_pulse = Instant::now();
+    for cycle in 0..2 {
+        let cycle_at = first_pulse + Duration::from_secs(cycle * 2);
+        assert!(
+            handle
+                .tick(cycle_at, replacement_workspace.clone(), true)
+                .is_empty()
+        );
+
+        let refreshed = recv_background_event(&rx);
+        assert!(matches!(
+            &refreshed,
+            ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
+                workspace_directory,
+                epoch_id,
+                ..
+            } if workspace_directory == &replacement_workspace
+                && *epoch_id == replacement_epoch
+        ));
+        let _ = handle.handle_background_event(refreshed);
+
+        let polled = recv_background_event(&rx);
+        assert!(matches!(
+            &polled,
+            ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
+                correlation,
+                ..
+            } if correlation.workspace_directory == replacement_workspace
+                && correlation.epoch_id == replacement_epoch
+        ));
+        let _ = handle.handle_background_event(polled);
+
+        assert!(
+            handle
+                .tick(
+                    cycle_at + Duration::from_millis(10),
+                    replacement_workspace.clone(),
+                    true,
+                )
+                .is_empty()
+        );
+        wait_for_mutation_count(&mutation_count, cycle as usize + 2);
+        let retry_failed = recv_dispatch_mutation_completed(&rx);
+        let retry_notice = handle.handle_background_event(retry_failed);
+        assert!(matches!(
+            retry_notice.as_slice(),
+            [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
+                cleanup_correlation,
+                ..
+            }] if cleanup_correlation == &original_cleanup
+        ));
+        assert_eq!(
+            handle.epoch_snapshot(),
+            ParallelModeControlPlaneEpochSnapshot {
+                workspace_directory: Some(replacement_workspace.clone()),
+                current_epoch_id: Some(replacement_epoch),
+            },
+            "stale cleanup retry must not replace the active epoch"
+        );
+    }
+
+    assert_eq!(
+        mutation_count.load(Ordering::SeqCst),
+        3,
+        "two replacement refresh/poll cycles must each be followed by one bounded cleanup retry"
+    );
+}
+
+#[test]
 fn controller_deferred_dispatch_without_projection_records_traceable_queue_state() {
-    let (handle, _rx) = test_control_plane_handle();
+    let (handle, rx) = test_control_plane_handle();
     let workspace = unique_workspace("deferred-dispatch");
     handle.force_epoch_for_test(&workspace, 1);
 
-    let presented = with_akra_event_trace(|| {
+    let started = with_akra_event_trace(|| {
         handle.handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
             workspace_directory: workspace,
             trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
         })
     });
+    assert!(started.is_empty());
+    let presented =
+        with_akra_event_trace(|| handle.handle_background_event(recv_background_event(&rx)));
     assert!(presented.iter().any(|event| matches!(
         event,
         ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
@@ -2378,7 +3123,16 @@ fn disabling_before_inspection_io_is_released_rejects_reconciliation_permit() {
     release_tx
         .send(())
         .expect("inspection worker release should be delivered");
-    let completed = recv_background_event(&background_rx);
+    let completed = loop {
+        let event = recv_background_event(&background_rx);
+        if matches!(
+            event,
+            ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted { .. }
+        ) {
+            break event;
+        }
+        let _ = handle.handle_background_event(event);
+    };
     assert!(matches!(
         &completed,
         ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
@@ -2443,7 +3197,7 @@ fn failed_supervisor_inspection_preserves_projections_and_can_retry() {
 
 #[test]
 fn supervisor_inspection_rejects_stale_duplicate_workspace_and_epoch_completions() {
-    let (handle, _rx) = test_control_plane_handle();
+    let (handle, rx) = test_control_plane_handle();
     let workspace = unique_workspace("inspect-stale");
     handle.force_epoch_for_test(&workspace, 7);
     let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
@@ -2458,6 +3212,11 @@ fn supervisor_inspection_rejects_stale_duplicate_workspace_and_epoch_completions
         workspace_directory: workspace.clone(),
     });
     handle.force_epoch_for_test(&workspace, 8);
+    assert!(
+        handle
+            .handle_background_event(recv_dispatch_mutation_completed(&rx))
+            .is_empty()
+    );
     let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
         workspace_directory: workspace.clone(),
         reconcile_pool: false,

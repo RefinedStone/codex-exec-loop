@@ -124,6 +124,8 @@ pub(super) struct PostTurnEvaluationProvenance {
     pub handoff_task: Option<PlanningTaskHandoff>,
     pub parallel_queue_signal: Option<ParallelModePostTurnQueueSignal>,
     pub queue_mutation_receipt: Option<PlanningQueueMutationReceipt>,
+    pub runtime_projection_workspace_directory: Option<String>,
+    pub has_actionable_queue_head: bool,
 }
 impl PostTurnEvaluationProvenance {
     pub(super) fn new(completed_turn_id: String) -> Self {
@@ -132,6 +134,8 @@ impl PostTurnEvaluationProvenance {
             handoff_task: None,
             parallel_queue_signal: None,
             queue_mutation_receipt: None,
+            runtime_projection_workspace_directory: None,
+            has_actionable_queue_head: false,
         }
     }
 
@@ -153,6 +157,16 @@ impl PostTurnEvaluationProvenance {
         queue_mutation_receipt: Option<PlanningQueueMutationReceipt>,
     ) -> Self {
         self.queue_mutation_receipt = queue_mutation_receipt;
+        self
+    }
+
+    pub(super) fn with_runtime_projection_routing(
+        mut self,
+        workspace_directory: String,
+        has_actionable_queue_head: bool,
+    ) -> Self {
+        self.runtime_projection_workspace_directory = Some(workspace_directory);
+        self.has_actionable_queue_head = has_actionable_queue_head;
         self
     }
 }

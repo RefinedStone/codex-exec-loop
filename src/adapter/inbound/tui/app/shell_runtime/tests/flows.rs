@@ -1414,8 +1414,8 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
     harness.seed_loading_parallel_mode_supervisor();
 
     harness.send_post_turn_auto_prompt("turn-1");
-    harness.runtime.poll_background_messages();
     assert_eq!(harness.worker_port.launch_count(), 0);
+    harness.poll_until_dispatch_command_state(1, ParallelModeDispatchCommandState::Pending);
     let projections = harness.runtime_projections();
     assert_eq!(projections.dispatch_commands.len(), 1);
     assert_eq!(

@@ -16,7 +16,9 @@ use crate::application::port::outbound::interactive_turn_runtime_port::Interacti
 use crate::application::port::outbound::parallel_agent_worker_port::{
     NoopParallelAgentWorkerPort, ParallelAgentWorkerPort,
 };
-use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+use crate::application::port::outbound::planning_authority_port::{
+    NoopPlanningAuthorityPort, PlanningAuthorityPort,
+};
 use crate::application::port::outbound::planning_task_repository_port::{
     NoopPlanningTaskRepositoryPort, PlanningTaskRepositoryPort,
 };
@@ -421,6 +423,16 @@ pub(crate) fn test_parallel_mode_service() -> ParallelModeService {
     test_parallel_mode_service_with_github(Arc::new(TestGithubAutomationPort))
 }
 
+pub(crate) fn test_parallel_mode_service_with_authority(
+    planning_authority: Arc<dyn PlanningAuthorityPort>,
+) -> ParallelModeService {
+    ParallelModeService::new(
+        planning_authority,
+        Arc::new(TestGithubAutomationPort),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    )
+}
+
 pub(crate) fn test_parallel_mode_control_plane_composition(
     planning: PlanningServices,
 ) -> ParallelModeControlPlaneComposition {
@@ -584,6 +596,17 @@ pub(super) fn test_native_tui_app_with_planning(planning: PlanningServices) -> N
     )
 }
 
+pub(super) fn test_native_tui_app_with_parallel_mode_composition(
+    composition: ParallelModeControlPlaneComposition,
+) -> NativeTuiApp {
+    test_native_tui_app_with_parallel_mode_binding(
+        NativeTuiParallelModeBinding::from_composition(composition),
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        None,
+        Arc::new(TestAppServerPort::default()),
+    )
+}
+
 pub(super) fn test_native_tui_app_with_session_catalog_port(
     session_catalog_port: Arc<dyn SessionCatalogPort>,
 ) -> NativeTuiApp {
@@ -613,14 +636,27 @@ fn test_native_tui_app_with_planning_review_center_and_app_server(
     session_catalog_port: Option<Arc<dyn SessionCatalogPort>>,
     app_server_port: Arc<TestAppServerPort>,
 ) -> NativeTuiApp {
+    test_native_tui_app_with_parallel_mode_binding(
+        NativeTuiParallelModeBinding::from_composition(
+            test_parallel_mode_control_plane_composition(planning),
+        ),
+        review_center_repository,
+        session_catalog_port,
+        app_server_port,
+    )
+}
+
+fn test_native_tui_app_with_parallel_mode_binding(
+    parallel_mode_binding: NativeTuiParallelModeBinding,
+    review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
+    session_catalog_port: Option<Arc<dyn SessionCatalogPort>>,
+    app_server_port: Arc<TestAppServerPort>,
+) -> NativeTuiApp {
     /*
      * Build the same production-shaped service graph used by TUI fixtures, with app-server IO
      * pinned to deterministic responses. Tests can then seed NativeTuiApp state directly while
      * still exercising reducer and lifecycle wiring through the real constructor.
      */
-    let parallel_mode_binding = NativeTuiParallelModeBinding::from_composition(
-        test_parallel_mode_control_plane_composition(planning),
-    );
     let conversation_service =
         ConversationService::new(app_server_port.clone()).with_review_center_read_service(
             ReviewCenterReadService::new("/tmp/root", review_center_repository),

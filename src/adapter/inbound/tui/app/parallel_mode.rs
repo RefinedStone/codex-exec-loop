@@ -84,6 +84,17 @@ impl NativeTuiApp {
                     ConversationRuntimeEvent::RuntimeNoticeObserved { notice },
                 );
             }
+            ParallelModePresentationAction::RecordGlobalRuntimeNotice {
+                cleanup_correlation,
+                notice,
+            } => {
+                self.record_global_runtime_notice(cleanup_correlation, notice);
+            }
+            ParallelModePresentationAction::ClearGlobalRuntimeNotice {
+                cleanup_correlation,
+            } => {
+                self.clear_global_runtime_notice(&cleanup_correlation);
+            }
             ParallelModePresentationAction::RefreshPlanningRuntimeProjection {
                 workspace_directory,
             } => {
@@ -91,6 +102,73 @@ impl NativeTuiApp {
                     &workspace_directory,
                 );
             }
+        }
+    }
+
+    fn record_global_runtime_notice(
+        &mut self,
+        cleanup_correlation: super::ParallelModeDispatchCleanupCorrelation,
+        notice: String,
+    ) {
+        if let Some(index) = self
+            .global_runtime_notice_state
+            .entries
+            .iter()
+            .position(|entry| entry.cleanup_correlation == cleanup_correlation)
+        {
+            let previous_notice = std::mem::replace(
+                &mut self.global_runtime_notice_state.entries[index].notice,
+                notice,
+            );
+            self.remove_ready_conversation_runtime_notice(&previous_notice);
+        } else {
+            if self.global_runtime_notice_state.entries.len() == super::MAX_GLOBAL_RUNTIME_NOTICES
+                && let Some(evicted) = self.global_runtime_notice_state.entries.pop_front()
+            {
+                self.remove_ready_conversation_runtime_notice(&evicted.notice);
+            }
+            self.global_runtime_notice_state
+                .entries
+                .push_back(super::GlobalRuntimeNoticeEntry {
+                    cleanup_correlation,
+                    notice,
+                });
+        }
+        self.surface_global_runtime_notices_if_ready();
+    }
+
+    fn clear_global_runtime_notice(
+        &mut self,
+        cleanup_correlation: &super::ParallelModeDispatchCleanupCorrelation,
+    ) {
+        let Some(index) = self
+            .global_runtime_notice_state
+            .entries
+            .iter()
+            .position(|entry| &entry.cleanup_correlation == cleanup_correlation)
+        else {
+            return;
+        };
+        if let Some(entry) = self.global_runtime_notice_state.entries.remove(index) {
+            self.remove_ready_conversation_runtime_notice(&entry.notice);
+        }
+    }
+
+    pub(super) fn surface_global_runtime_notices_if_ready(&mut self) {
+        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
+            return;
+        };
+        conversation.extend_runtime_notices(
+            self.global_runtime_notice_state
+                .entries
+                .iter()
+                .map(|entry| entry.notice.clone()),
+        );
+    }
+
+    fn remove_ready_conversation_runtime_notice(&mut self, notice: &str) {
+        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
+            conversation.remove_runtime_notice(notice);
         }
     }
 }
@@ -392,27 +470,42 @@ impl NativeTuiApp {
         }
     }
 
-    pub(super) fn parallel_mode_post_turn_queue_signal(
+    pub(super) fn parallel_mode_post_turn_queue_projection(
         &self,
         event: &ConversationRuntimeEvent,
-    ) -> Option<ParallelModePostTurnQueueSignal> {
+    ) -> (
+        Option<ParallelModePostTurnQueueSignal>,
+        Option<String>,
+        bool,
+    ) {
         let ConversationRuntimeEvent::PostTurnEvaluationCompleted { evaluation } = event else {
-            return None;
+            return (None, None, false);
         };
-        evaluation.provenance.parallel_queue_signal
+        (
+            evaluation.provenance.parallel_queue_signal,
+            evaluation
+                .provenance
+                .runtime_projection_workspace_directory
+                .clone(),
+            evaluation.provenance.has_actionable_queue_head,
+        )
     }
 
     pub(super) fn apply_parallel_mode_post_turn_queue_continuation(
         &mut self,
+        accepted_workspace_directory: Option<String>,
         auto_follow_prompt_queued: bool,
         event_signal: Option<ParallelModePostTurnQueueSignal>,
+        has_actionable_queue_head: bool,
     ) -> bool {
-        let workspace_directory = self.planning_workspace_directory();
+        let workspace_directory =
+            accepted_workspace_directory.unwrap_or_else(|| self.planning_workspace_directory());
         let control_plane = self.parallel_mode_control_plane.clone();
         let outcome = control_plane.continue_post_turn_queue(
             workspace_directory,
             event_signal,
             auto_follow_prompt_queued,
+            has_actionable_queue_head,
         );
         self.apply_parallel_mode_control_plane_presentation_events(outcome.presentation_events);
         outcome.auto_follow_prompt_consumed
@@ -629,6 +722,351 @@ impl NativeTuiApp {
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod global_runtime_notice_tests {
+    use super::*;
+    use crate::adapter::inbound::tui::app::test_helpers::{
+        self, test_native_tui_app, test_native_tui_app_with_parallel_mode_composition,
+    };
+    use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
+    use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
+    use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
+    use crate::application::service::parallel_mode::control_plane::ParallelModeDispatchCleanupCorrelation;
+    use crate::application::service::planning::PlanningServices;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    fn tick_parallel_mode_control_plane_for_test(app: &mut NativeTuiApp, now: Instant) {
+        let sample = ParallelPanelProjectionSample::capture(app);
+        app.tick_parallel_mode_control_plane(now, &sample);
+    }
+
+    #[test]
+    fn cleanup_notice_arriving_while_loading_or_failed_surfaces_and_clears_when_ready() {
+        for (operation_id, initial_state) in [
+            (7, ConversationState::Loading),
+            (
+                8,
+                ConversationState::Failed("conversation load failed".to_string()),
+            ),
+        ] {
+            let mut app = test_native_tui_app();
+            let workspace_directory = app.planning_workspace_directory();
+            app.conversation_state = initial_state;
+            let cleanup_correlation =
+                cleanup_correlation(operation_id, format!("{workspace_directory}/stale-cleanup"));
+            let notice = format!("cleanup {operation_id} remains unsettled");
+
+            app.apply_parallel_mode_control_plane_presentation_events(vec![
+                ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
+                    cleanup_correlation: cleanup_correlation.clone(),
+                    notice: notice.clone(),
+                },
+            ]);
+
+            assert_eq!(app.global_runtime_notice_state.entries.len(), 1);
+            assert!(!matches!(
+                app.conversation_state,
+                ConversationState::Ready(_)
+            ));
+
+            app.dispatch_conversation_lifecycle(
+                super::super::ConversationLifecycleEvent::NewDraftOpened {
+                    workspace_directory: workspace_directory.clone(),
+                },
+            );
+
+            let ConversationState::Ready(conversation) = &app.conversation_state else {
+                panic!("opening a draft should restore a ready conversation");
+            };
+            assert_eq!(conversation.cwd, workspace_directory);
+            assert!(conversation.runtime_notices.contains(&notice));
+
+            app.apply_parallel_mode_control_plane_presentation_events(vec![
+                ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticeCleared {
+                    cleanup_correlation,
+                },
+            ]);
+
+            assert!(app.global_runtime_notice_state.entries.is_empty());
+            let ConversationState::Ready(conversation) = &app.conversation_state else {
+                panic!("cleanup settlement must not replace the ready conversation");
+            };
+            assert!(!conversation.runtime_notices.contains(&notice));
+        }
+    }
+
+    #[test]
+    fn cleanup_notice_ledger_is_bounded_while_conversation_is_loading() {
+        let mut app = test_native_tui_app();
+        let workspace_directory = app.planning_workspace_directory();
+        app.conversation_state = ConversationState::Loading;
+        let notice_count = super::super::MAX_GLOBAL_RUNTIME_NOTICES + 1;
+        let events = (1..=notice_count)
+            .map(
+                |operation_id| ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
+                    cleanup_correlation: cleanup_correlation(
+                        operation_id as u64,
+                        workspace_directory.clone(),
+                    ),
+                    notice: format!("cleanup {operation_id} remains unsettled"),
+                },
+            )
+            .collect();
+
+        app.apply_parallel_mode_control_plane_presentation_events(events);
+
+        assert_eq!(
+            app.global_runtime_notice_state.entries.len(),
+            super::super::MAX_GLOBAL_RUNTIME_NOTICES
+        );
+        assert_eq!(
+            app.global_runtime_notice_state
+                .entries
+                .front()
+                .expect("oldest retained notice")
+                .cleanup_correlation
+                .operation_id,
+            2
+        );
+
+        app.dispatch_conversation_lifecycle(
+            super::super::ConversationLifecycleEvent::NewDraftOpened {
+                workspace_directory,
+            },
+        );
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("opening a draft should restore a ready conversation");
+        };
+        assert_eq!(
+            conversation.runtime_notices.len(),
+            super::super::MAX_GLOBAL_RUNTIME_NOTICES
+        );
+        assert!(
+            !conversation
+                .runtime_notices
+                .contains(&"cleanup 1 remains unsettled".to_string())
+        );
+        assert!(
+            conversation
+                .runtime_notices
+                .contains(&format!("cleanup {notice_count} remains unsettled"))
+        );
+    }
+
+    #[test]
+    fn production_tui_pulse_retries_cleanup_during_loading_or_failed_without_duplicates() {
+        for (operation_id, initial_state) in [
+            (11, ConversationState::Loading),
+            (
+                12,
+                ConversationState::Failed("conversation load failed".to_string()),
+            ),
+        ] {
+            let mutation_gate = Arc::new(Mutex::new(()));
+            let mutation_count = Arc::new(AtomicUsize::new(0));
+            let cancel_error = Arc::new(Mutex::new(Some("sqlite cleanup busy".to_string())));
+            let authority = Arc::new(
+                NoopPlanningAuthorityPort::default()
+                    .with_shared_runtime_dispatch_mutation_gate(mutation_gate.clone())
+                    .with_shared_runtime_dispatch_mutation_count(mutation_count.clone())
+                    .with_shared_cancel_runtime_dispatch_commands_error(cancel_error),
+            );
+            let mut app = test_app_with_retry_authority(authority);
+            let workspace_directory = format!("/tmp/pulse-cleanup-{operation_id}");
+            app.conversation_state = initial_state;
+            app.parallel_mode_control_plane
+                .force_epoch_for_test(&workspace_directory, 1);
+
+            app.apply_parallel_mode_control_plane_command(
+                ParallelModeControlPlaneCommand::Disable {
+                    workspace_directory: workspace_directory.clone(),
+                },
+            );
+            wait_for_mutation_count(&mutation_count, 1);
+            let failed_cleanup = recv_control_plane_background_event(&app);
+            assert!(matches!(
+                &failed_cleanup,
+                ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+                    result: Err(error),
+                    ..
+                } if error == "sqlite cleanup busy"
+            ));
+            let replacement_workspace = format!("/tmp/pulse-cleanup-replacement-{operation_id}");
+            app.parallel_mode_control_plane
+                .force_epoch_for_test(&replacement_workspace, 2);
+            app.apply_parallel_mode_control_plane_background_event(failed_cleanup);
+            assert_eq!(app.global_runtime_notice_state.entries.len(), 1);
+            let original_cleanup = &app
+                .global_runtime_notice_state
+                .entries
+                .front()
+                .expect("failed cancellation should retain its exact correlation")
+                .cleanup_correlation;
+            assert_eq!(original_cleanup.workspace_directory, workspace_directory);
+            assert_eq!(original_cleanup.epoch_id, 1);
+            assert_eq!(
+                original_cleanup.command_identity,
+                "cancel_runtime_dispatch_commands"
+            );
+            assert!(!matches!(
+                app.conversation_state,
+                ConversationState::Ready(_)
+            ));
+
+            let gate_guard = mutation_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let first_pulse = Instant::now();
+            tick_parallel_mode_control_plane_for_test(&mut app, first_pulse);
+            wait_for_mutation_count(&mutation_count, 2);
+            for seconds in 1..=4 {
+                tick_parallel_mode_control_plane_for_test(
+                    &mut app,
+                    first_pulse + Duration::from_secs(seconds),
+                );
+            }
+            assert_eq!(
+                mutation_count.load(Ordering::SeqCst),
+                2,
+                "duplicate pulses must share the one exact cleanup retry worker"
+            );
+
+            drop(gate_guard);
+            let settled_cleanup = recv_control_plane_background_event(&app);
+            assert!(matches!(
+                settled_cleanup,
+                ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+                    result: Ok(0),
+                    ..
+                }
+            ));
+            app.apply_parallel_mode_control_plane_background_event(settled_cleanup);
+
+            assert_eq!(
+                mutation_count.load(Ordering::SeqCst),
+                2,
+                "the production pulse must execute one additional cancellation"
+            );
+            assert!(app.global_runtime_notice_state.entries.is_empty());
+            assert_eq!(
+                app.parallel_mode_control_plane.epoch_snapshot(),
+                crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
+                    workspace_directory: Some(replacement_workspace),
+                    current_epoch_id: Some(2),
+                },
+                "exact stale cleanup retry must not replace the newer workspace projection"
+            );
+            assert!(!matches!(
+                app.conversation_state,
+                ConversationState::Ready(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn production_tui_pulse_uses_its_existing_interval_after_retry_failure() {
+        let mutation_count = Arc::new(AtomicUsize::new(0));
+        let authority = Arc::new(
+            NoopPlanningAuthorityPort::default()
+                .with_shared_runtime_dispatch_mutation_count(mutation_count.clone())
+                .with_cancel_runtime_dispatch_commands_error("sqlite cleanup busy"),
+        );
+        let mut app = test_app_with_retry_authority(authority);
+        let workspace_directory = "/tmp/pulse-cleanup-backoff".to_string();
+        app.conversation_state = ConversationState::Loading;
+        app.parallel_mode_control_plane
+            .force_epoch_for_test(&workspace_directory, 1);
+
+        app.apply_parallel_mode_control_plane_command(ParallelModeControlPlaneCommand::Disable {
+            workspace_directory,
+        });
+        wait_for_mutation_count(&mutation_count, 1);
+        let failed_cleanup = recv_control_plane_background_event(&app);
+        app.apply_parallel_mode_control_plane_background_event(failed_cleanup);
+
+        let first_pulse = Instant::now();
+        tick_parallel_mode_control_plane_for_test(&mut app, first_pulse);
+        wait_for_mutation_count(&mutation_count, 2);
+        let failed_retry = recv_control_plane_background_event(&app);
+        app.apply_parallel_mode_control_plane_background_event(failed_retry);
+
+        tick_parallel_mode_control_plane_for_test(
+            &mut app,
+            first_pulse + Duration::from_millis(999),
+        );
+        assert_eq!(
+            mutation_count.load(Ordering::SeqCst),
+            2,
+            "a failed retry must not create a busy loop before the next pulse interval"
+        );
+
+        tick_parallel_mode_control_plane_for_test(&mut app, first_pulse + Duration::from_secs(1));
+        wait_for_mutation_count(&mutation_count, 3);
+        let failed_retry = recv_control_plane_background_event(&app);
+        app.apply_parallel_mode_control_plane_background_event(failed_retry);
+        assert_eq!(
+            app.global_runtime_notice_state.entries.len(),
+            1,
+            "the exact cleanup must remain one unsettled row across periodic retries"
+        );
+    }
+
+    fn test_app_with_retry_authority(authority: Arc<NoopPlanningAuthorityPort>) -> NativeTuiApp {
+        let planning = PlanningServices::from_ports(
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+            authority.clone(),
+            Arc::new(NoopPlanningTaskRepositoryPort),
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        let parallel_mode_service =
+            test_helpers::test_parallel_mode_service_with_authority(authority);
+        let composition = test_helpers::test_parallel_mode_control_plane_composition_with_worker(
+            parallel_mode_service,
+            planning,
+            Arc::new(NoopParallelAgentWorkerPort),
+        );
+        test_native_tui_app_with_parallel_mode_composition(composition)
+    }
+
+    fn recv_control_plane_background_event(
+        app: &NativeTuiApp,
+    ) -> ParallelModeControlPlaneBackgroundEvent {
+        match app
+            .rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("control-plane worker should return through the production TUI channel")
+        {
+            super::super::BackgroundMessage::ParallelModeControlPlaneEvent(event) => *event,
+            event => panic!("expected a control-plane background event, got {event:?}"),
+        }
+    }
+
+    fn wait_for_mutation_count(count: &AtomicUsize, expected: usize) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while count.load(Ordering::SeqCst) < expected && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(count.load(Ordering::SeqCst), expected);
+    }
+
+    fn cleanup_correlation(
+        operation_id: u64,
+        workspace_directory: String,
+    ) -> ParallelModeDispatchCleanupCorrelation {
+        ParallelModeDispatchCleanupCorrelation {
+            operation_id,
+            workspace_directory,
+            epoch_id: 3,
+            command_identity: "cancel_runtime_dispatch_commands".to_string(),
+        }
     }
 }
 

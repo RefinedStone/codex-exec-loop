@@ -8,6 +8,10 @@ use crate::domain::parallel_mode::{
     ParallelModeTickCompletionDecision,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+
+const MAX_UNSETTLED_DISPATCH_CLEANUPS: usize = 64;
+const CANCEL_DISPATCH_COMMAND_IDENTITY: &str = "cancel_runtime_dispatch_commands";
 
 mod composition;
 mod controller;
@@ -83,6 +87,96 @@ impl ParallelModePendingDispatchPollCorrelation {
             operation_id,
             workspace_directory,
             epoch_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeDispatchMutationCorrelation {
+    pub operation_id: u64,
+    pub workspace_directory: String,
+    pub epoch_id: u64,
+}
+
+impl ParallelModeDispatchMutationCorrelation {
+    fn new(operation_id: u64, workspace_directory: String, epoch_id: u64) -> Self {
+        Self {
+            operation_id,
+            workspace_directory,
+            epoch_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModeDispatchCleanupCorrelation {
+    pub operation_id: u64,
+    pub workspace_directory: String,
+    pub epoch_id: u64,
+    pub command_identity: String,
+}
+
+impl ParallelModeDispatchCleanupCorrelation {
+    fn from_mutation(correlation: &ParallelModeDispatchMutationCorrelation) -> Self {
+        Self {
+            operation_id: correlation.operation_id,
+            workspace_directory: correlation.workspace_directory.clone(),
+            epoch_id: correlation.epoch_id,
+            command_identity: CANCEL_DISPATCH_COMMAND_IDENTITY.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mutation", rename_all = "snake_case")]
+pub enum ParallelModeDispatchMutation {
+    EnqueueSlotCapacity,
+    EnqueueForTrigger {
+        trigger: ParallelModeAutomationTrigger,
+        reason: String,
+    },
+    Cancel {
+        reason: String,
+    },
+    RetryCancel {
+        original_cleanup: ParallelModeDispatchCleanupCorrelation,
+    },
+}
+
+impl ParallelModeDispatchMutation {
+    fn is_enqueue(&self) -> bool {
+        matches!(
+            self,
+            Self::EnqueueSlotCapacity | Self::EnqueueForTrigger { .. }
+        )
+    }
+
+    fn canonical_enqueue_trigger(&self) -> Option<ParallelModeAutomationTrigger> {
+        match self {
+            Self::EnqueueSlotCapacity => Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+            Self::EnqueueForTrigger { trigger, .. } => Some(*trigger),
+            Self::Cancel { .. } | Self::RetryCancel { .. } => None,
+        }
+    }
+
+    fn has_same_semantic_intent(&self, other: &Self) -> bool {
+        if let (Some(left), Some(right)) = (
+            self.canonical_enqueue_trigger(),
+            other.canonical_enqueue_trigger(),
+        ) {
+            return left == right;
+        }
+        match (self, other) {
+            (Self::Cancel { .. }, Self::Cancel { .. }) => true,
+            (
+                Self::RetryCancel {
+                    original_cleanup: left,
+                },
+                Self::RetryCancel {
+                    original_cleanup: right,
+                },
+            ) => left == right,
+            _ => false,
         }
     }
 }
@@ -185,6 +279,13 @@ pub enum ParallelModeControlPlaneCommand {
         correlation: ParallelModePendingDispatchPollCorrelation,
         result: Result<Option<ParallelModeControlPlaneWake>, String>,
     },
+    DispatchMutationCompleted {
+        correlation: ParallelModeDispatchMutationCorrelation,
+        result: Result<usize, String>,
+    },
+    RetryUnsettledDispatchCleanup {
+        original_cleanup: ParallelModeDispatchCleanupCorrelation,
+    },
     WorkerCompleted {
         workspace_directory: String,
         epoch_id: u64,
@@ -274,8 +375,28 @@ pub enum ParallelModeControlPlaneEvent {
         reason: String,
     },
     DispatchCommandQueued {
+        workspace_directory: String,
         trigger: ParallelModeAutomationTrigger,
         inserted_count: usize,
+        reason: String,
+    },
+    DispatchCommandsCancelled {
+        workspace_directory: String,
+        epoch_id: u64,
+        cancelled_count: usize,
+    },
+    DispatchMutationFailed {
+        operation_id: u64,
+        workspace_directory: String,
+        epoch_id: u64,
+        trigger: Option<ParallelModeAutomationTrigger>,
+        reason: String,
+        presentation_current: bool,
+        cleanup_correlation: Option<ParallelModeDispatchCleanupCorrelation>,
+    },
+    DispatchCleanupSettled {
+        original_cleanup: ParallelModeDispatchCleanupCorrelation,
+        retry_operation_id: u64,
     },
     PostTurnAutoFollowPromptConsumed,
     PostTurnDispatchRequested {
@@ -344,19 +465,9 @@ pub enum ParallelModeControlPlaneEffect {
     PollPendingDispatchWake {
         correlation: ParallelModePendingDispatchPollCorrelation,
     },
-    EnqueueSlotCapacityDispatch {
-        workspace_directory: String,
-        epoch_id: u64,
-    },
-    EnqueueDispatchForTrigger {
-        workspace_directory: String,
-        trigger: ParallelModeAutomationTrigger,
-        epoch_id: u64,
-        reason: String,
-    },
-    CancelDispatchCommands {
-        workspace_directory: String,
-        reason: String,
+    MutateDispatchCommands {
+        correlation: ParallelModeDispatchMutationCorrelation,
+        mutation: ParallelModeDispatchMutation,
     },
 }
 
@@ -369,9 +480,7 @@ impl ParallelModeControlPlaneEffect {
             | Self::RunOrchestratorTick { effect_id, .. } => Some(*effect_id),
             Self::InspectSupervisor { .. }
             | Self::PollPendingDispatchWake { .. }
-            | Self::EnqueueSlotCapacityDispatch { .. }
-            | Self::EnqueueDispatchForTrigger { .. }
-            | Self::CancelDispatchCommands { .. } => None,
+            | Self::MutateDispatchCommands { .. } => None,
         }
     }
 }
@@ -419,7 +528,12 @@ pub struct ParallelModeControlPlaneRuntimeStore {
     pending_supervisor_inspection: Option<ParallelModeSupervisorInspectionIntent>,
     next_supervisor_inspection_operation_id: u64,
     pending_dispatch_poll_in_flight: Option<ParallelModePendingDispatchPollInFlight>,
+    pending_dispatch_poll: Option<ParallelModePendingDispatchPollIntent>,
     next_pending_dispatch_poll_operation_id: u64,
+    dispatch_mutation_in_flight: Option<ParallelModeDispatchMutationInFlight>,
+    pending_dispatch_mutations: VecDeque<ParallelModeDispatchMutationIntent>,
+    unsettled_dispatch_cleanups: VecDeque<ParallelModeUnsettledDispatchCleanup>,
+    next_dispatch_mutation_operation_id: u64,
     next_effect_sequence: u64,
 }
 
@@ -450,6 +564,32 @@ struct ParallelModeSupervisorInspectionInFlight {
 struct ParallelModePendingDispatchPollInFlight {
     correlation: ParallelModePendingDispatchPollCorrelation,
     follow_up_tick_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModePendingDispatchPollIntent {
+    workspace_directory: String,
+    epoch_id: u64,
+    follow_up_tick_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModeDispatchMutationIntent {
+    workspace_directory: String,
+    epoch_id: u64,
+    mutation: ParallelModeDispatchMutation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModeDispatchMutationInFlight {
+    correlation: ParallelModeDispatchMutationCorrelation,
+    mutation: ParallelModeDispatchMutation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModeUnsettledDispatchCleanup {
+    correlation: ParallelModeDispatchCleanupCorrelation,
+    error: String,
 }
 
 struct ParallelModeEntryCompletion {
@@ -484,7 +624,12 @@ impl Default for ParallelModeControlPlaneRuntimeStore {
             pending_supervisor_inspection: None,
             next_supervisor_inspection_operation_id: 1,
             pending_dispatch_poll_in_flight: None,
+            pending_dispatch_poll: None,
             next_pending_dispatch_poll_operation_id: 1,
+            dispatch_mutation_in_flight: None,
+            pending_dispatch_mutations: VecDeque::new(),
+            unsettled_dispatch_cleanups: VecDeque::new(),
+            next_dispatch_mutation_operation_id: 1,
             next_effect_sequence: 1,
         }
     }
@@ -521,6 +666,13 @@ impl ParallelModeControlPlaneRuntime {
 
     pub fn store(&self) -> &ParallelModeControlPlaneRuntimeStore {
         &self.store
+    }
+
+    fn oldest_unsettled_dispatch_cleanup(&self) -> Option<ParallelModeDispatchCleanupCorrelation> {
+        self.store
+            .unsettled_dispatch_cleanups
+            .front()
+            .map(|cleanup| cleanup.correlation.clone())
     }
 
     pub fn reset_orchestrator_tick_signature(&mut self) {
@@ -659,6 +811,13 @@ impl ParallelModeControlPlaneRuntime {
                 correlation,
                 result,
             } => self.pending_dispatch_wake_polled(correlation, result, &mut outcome),
+            ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation,
+                result,
+            } => self.dispatch_mutation_completed(correlation, result, &mut outcome),
+            ParallelModeControlPlaneCommand::RetryUnsettledDispatchCleanup { original_cleanup } => {
+                self.retry_unsettled_dispatch_cleanup(original_cleanup, &mut outcome)
+            }
             ParallelModeControlPlaneCommand::WorkerCompleted {
                 workspace_directory,
                 epoch_id,
@@ -799,7 +958,8 @@ impl ParallelModeControlPlaneRuntime {
                 });
             return;
         }
-        if let Some(epoch_id) = self.store.current_epoch_id.take() {
+        let closed_epoch_id = self.store.current_epoch_id.take();
+        if let Some(epoch_id) = closed_epoch_id {
             outcome
                 .events
                 .push(ParallelModeControlPlaneEvent::EpochClosed {
@@ -816,12 +976,16 @@ impl ParallelModeControlPlaneRuntime {
             .push(ParallelModeControlPlaneEvent::ModeDisabled {
                 workspace_directory: workspace_directory.clone(),
             });
-        outcome
-            .effects
-            .push(ParallelModeControlPlaneEffect::CancelDispatchCommands {
+        if let Some(epoch_id) = closed_epoch_id {
+            self.schedule_dispatch_mutation(
                 workspace_directory,
-                reason: "parallel mode disabled".to_string(),
-            });
+                epoch_id,
+                ParallelModeDispatchMutation::Cancel {
+                    reason: "parallel mode disabled".to_string(),
+                },
+                outcome,
+            );
+        }
     }
 
     fn inspect_supervisor(
@@ -1163,11 +1327,11 @@ impl ParallelModeControlPlaneRuntime {
         if ParallelModeControlPlaneAggregate::tick_completion(blocked)
             == ParallelModeTickCompletionDecision::RefreshSupervisorAndQueueCapacityDispatch
         {
-            outcome.effects.push(
-                ParallelModeControlPlaneEffect::EnqueueSlotCapacityDispatch {
-                    workspace_directory,
-                    epoch_id,
-                },
+            self.schedule_dispatch_mutation(
+                workspace_directory,
+                epoch_id,
+                ParallelModeDispatchMutation::EnqueueSlotCapacity,
+                outcome,
             );
         }
     }
@@ -1258,6 +1422,8 @@ impl ParallelModeControlPlaneRuntime {
             ParallelModeEffectStartDecision::QueueUntilIdle => {
                 if self.store.supervisor_inspection_in_flight.is_some()
                     || self.store.pending_supervisor_inspection.is_some()
+                    || self.store.dispatch_mutation_in_flight.is_some()
+                    || !self.store.pending_dispatch_mutations.is_empty()
                 {
                     let pending_entry = ParallelModePendingEntry {
                         workspace_directory,
@@ -1409,14 +1575,15 @@ impl ParallelModeControlPlaneRuntime {
         )
         .deferred_reason()
         {
-            outcome
-                .effects
-                .push(ParallelModeControlPlaneEffect::EnqueueDispatchForTrigger {
-                    workspace_directory,
+            self.schedule_dispatch_mutation(
+                workspace_directory,
+                epoch_id,
+                ParallelModeDispatchMutation::EnqueueForTrigger {
                     trigger,
-                    epoch_id,
                     reason: reason.to_string(),
-                });
+                },
+                outcome,
+            );
             return;
         }
         self.start_orchestrator_wake(
@@ -1491,6 +1658,11 @@ impl ParallelModeControlPlaneRuntime {
             return;
         }
         if self.has_in_flight_effect() {
+            self.queue_pending_dispatch_poll(
+                workspace_directory,
+                epoch_id,
+                follow_up_tick_signature,
+            );
             return;
         }
         self.start_pending_dispatch_poll(
@@ -1576,6 +1748,333 @@ impl ParallelModeControlPlaneRuntime {
         }
     }
 
+    fn schedule_dispatch_mutation(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        mutation: ParallelModeDispatchMutation,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        if self
+            .store
+            .dispatch_mutation_in_flight
+            .as_ref()
+            .is_some_and(|in_flight| {
+                in_flight.correlation.workspace_directory == workspace_directory
+                    && in_flight.correlation.epoch_id == epoch_id
+                    && in_flight.mutation.has_same_semantic_intent(&mutation)
+            })
+        {
+            return;
+        }
+
+        let intent = ParallelModeDispatchMutationIntent {
+            workspace_directory,
+            epoch_id,
+            mutation,
+        };
+        if intent.mutation.is_enqueue()
+            && self.store.pending_dispatch_mutations.iter().any(|pending| {
+                pending.workspace_directory == intent.workspace_directory
+                    && pending.epoch_id == intent.epoch_id
+                    && pending.mutation.has_same_semantic_intent(&intent.mutation)
+            })
+        {
+            return;
+        }
+        if self.store.dispatch_mutation_in_flight.is_some() {
+            if intent.mutation.is_enqueue() {
+                self.store.pending_dispatch_mutations.push_back(intent);
+            } else {
+                self.store.pending_dispatch_mutations.retain(|pending| {
+                    pending.workspace_directory != intent.workspace_directory
+                        || pending.epoch_id != intent.epoch_id
+                        || !pending.mutation.is_enqueue()
+                });
+                if self.store.pending_dispatch_mutations.iter().any(|pending| {
+                    pending.workspace_directory == intent.workspace_directory
+                        && pending.epoch_id == intent.epoch_id
+                        && pending.mutation.has_same_semantic_intent(&intent.mutation)
+                }) {
+                    return;
+                }
+                let insert_at = self
+                    .store
+                    .pending_dispatch_mutations
+                    .iter()
+                    .position(|pending| pending.mutation.is_enqueue())
+                    .unwrap_or(self.store.pending_dispatch_mutations.len());
+                self.store
+                    .pending_dispatch_mutations
+                    .insert(insert_at, intent);
+            }
+            return;
+        }
+        self.start_dispatch_mutation(intent, outcome);
+    }
+
+    fn retry_unsettled_dispatch_cleanup(
+        &mut self,
+        original_cleanup: ParallelModeDispatchCleanupCorrelation,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        if !self
+            .store
+            .unsettled_dispatch_cleanups
+            .iter()
+            .any(|cleanup| cleanup.correlation == original_cleanup)
+        {
+            self.stale_command(
+                original_cleanup.workspace_directory,
+                original_cleanup.epoch_id,
+                "unknown unsettled dispatch cleanup",
+                outcome,
+            );
+            return;
+        }
+        self.schedule_dispatch_mutation(
+            original_cleanup.workspace_directory.clone(),
+            original_cleanup.epoch_id,
+            ParallelModeDispatchMutation::RetryCancel { original_cleanup },
+            outcome,
+        );
+    }
+
+    fn start_dispatch_mutation(
+        &mut self,
+        intent: ParallelModeDispatchMutationIntent,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let operation_id = self.store.next_dispatch_mutation_operation_id;
+        self.store.next_dispatch_mutation_operation_id = operation_id
+            .checked_add(1)
+            .expect("parallel dispatch mutation operation id exhausted");
+        let correlation = ParallelModeDispatchMutationCorrelation::new(
+            operation_id,
+            intent.workspace_directory,
+            intent.epoch_id,
+        );
+        self.store.dispatch_mutation_in_flight = Some(ParallelModeDispatchMutationInFlight {
+            correlation: correlation.clone(),
+            mutation: intent.mutation.clone(),
+        });
+        outcome
+            .effects
+            .push(ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation: intent.mutation,
+            });
+    }
+
+    fn dispatch_mutation_completed(
+        &mut self,
+        correlation: ParallelModeDispatchMutationCorrelation,
+        result: Result<usize, String>,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let Some(in_flight) = self
+            .store
+            .dispatch_mutation_in_flight
+            .as_ref()
+            .filter(|in_flight| in_flight.correlation == correlation)
+            .cloned()
+        else {
+            self.stale_command(
+                correlation.workspace_directory,
+                correlation.epoch_id,
+                "unknown dispatch mutation",
+                outcome,
+            );
+            return;
+        };
+        self.store.dispatch_mutation_in_flight = None;
+
+        let targets_current_epoch =
+            ParallelModeControlPlaneAggregate::command_targets_current_epoch(
+                &correlation.workspace_directory,
+                correlation.epoch_id,
+                self.store.workspace_directory.as_deref(),
+                self.store.current_epoch_id,
+            );
+        if in_flight.mutation.is_enqueue() && !targets_current_epoch {
+            self.stale_command(
+                correlation.workspace_directory.clone(),
+                correlation.epoch_id,
+                "dispatch mutation belongs to a stale epoch",
+                outcome,
+            );
+        } else {
+            self.record_dispatch_mutation_result(
+                &correlation,
+                &in_flight.mutation,
+                result,
+                targets_current_epoch,
+                outcome,
+            );
+        }
+
+        if self.start_next_dispatch_mutation(outcome) || self.has_in_flight_effect() {
+            return;
+        }
+        self.continue_current_context_after_effect_completed(outcome);
+    }
+
+    fn record_dispatch_mutation_result(
+        &mut self,
+        correlation: &ParallelModeDispatchMutationCorrelation,
+        mutation: &ParallelModeDispatchMutation,
+        result: Result<usize, String>,
+        targets_current_epoch: bool,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        match (mutation, result) {
+            (ParallelModeDispatchMutation::EnqueueSlotCapacity, Ok(_)) => {}
+            (ParallelModeDispatchMutation::EnqueueForTrigger { trigger, .. }, Ok(0)) => outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::DispatchWithheld {
+                    trigger: Some(*trigger),
+                    reason: "orchestrator wake already queued".to_string(),
+                }),
+            (
+                ParallelModeDispatchMutation::EnqueueForTrigger { trigger, reason },
+                Ok(inserted_count),
+            ) => outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::DispatchCommandQueued {
+                    workspace_directory: correlation.workspace_directory.clone(),
+                    trigger: *trigger,
+                    inserted_count,
+                    reason: reason.clone(),
+                }),
+            (ParallelModeDispatchMutation::Cancel { .. }, Ok(cancelled_count)) => outcome
+                .events
+                .push(ParallelModeControlPlaneEvent::DispatchCommandsCancelled {
+                    workspace_directory: correlation.workspace_directory.clone(),
+                    epoch_id: correlation.epoch_id,
+                    cancelled_count,
+                }),
+            (
+                ParallelModeDispatchMutation::RetryCancel { original_cleanup },
+                Ok(cancelled_count),
+            ) => {
+                self.store
+                    .unsettled_dispatch_cleanups
+                    .retain(|cleanup| cleanup.correlation != *original_cleanup);
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::DispatchCommandsCancelled {
+                        workspace_directory: correlation.workspace_directory.clone(),
+                        epoch_id: correlation.epoch_id,
+                        cancelled_count,
+                    });
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::DispatchCleanupSettled {
+                        original_cleanup: original_cleanup.clone(),
+                        retry_operation_id: correlation.operation_id,
+                    });
+            }
+            (mutation, Err(error)) => {
+                let (trigger, reason, cleanup_correlation) = match mutation {
+                    ParallelModeDispatchMutation::EnqueueSlotCapacity => (
+                        Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
+                        format!("slot-capacity dispatch queue failed: {error}"),
+                        None,
+                    ),
+                    ParallelModeDispatchMutation::EnqueueForTrigger { trigger, .. } => (
+                        Some(*trigger),
+                        format!("orchestrator wake queue failed: {error}"),
+                        None,
+                    ),
+                    ParallelModeDispatchMutation::Cancel { .. } => {
+                        let cleanup =
+                            ParallelModeDispatchCleanupCorrelation::from_mutation(correlation);
+                        (
+                            None,
+                            format!("dispatch command cancellation failed: {error}"),
+                            Some(cleanup),
+                        )
+                    }
+                    ParallelModeDispatchMutation::RetryCancel { original_cleanup } => (
+                        None,
+                        format!("dispatch command cancellation retry failed: {error}"),
+                        Some(original_cleanup.clone()),
+                    ),
+                };
+                if let Some(cleanup_correlation) = cleanup_correlation.as_ref() {
+                    self.record_unsettled_dispatch_cleanup(
+                        cleanup_correlation.clone(),
+                        reason.clone(),
+                    );
+                }
+                let presentation_current = targets_current_epoch
+                    || (cleanup_correlation.is_some()
+                        && self.store.current_epoch_id.is_none()
+                        && self.store.workspace_directory.is_none());
+                outcome
+                    .events
+                    .push(ParallelModeControlPlaneEvent::DispatchMutationFailed {
+                        operation_id: correlation.operation_id,
+                        workspace_directory: correlation.workspace_directory.clone(),
+                        epoch_id: correlation.epoch_id,
+                        trigger,
+                        reason,
+                        presentation_current,
+                        cleanup_correlation,
+                    });
+            }
+        }
+    }
+
+    fn record_unsettled_dispatch_cleanup(
+        &mut self,
+        correlation: ParallelModeDispatchCleanupCorrelation,
+        error: String,
+    ) {
+        if let Some(cleanup) = self
+            .store
+            .unsettled_dispatch_cleanups
+            .iter_mut()
+            .find(|cleanup| cleanup.correlation == correlation)
+        {
+            cleanup.error = error;
+            return;
+        }
+        if self.store.unsettled_dispatch_cleanups.len() == MAX_UNSETTLED_DISPATCH_CLEANUPS {
+            self.store.unsettled_dispatch_cleanups.pop_front();
+        }
+        self.store
+            .unsettled_dispatch_cleanups
+            .push_back(ParallelModeUnsettledDispatchCleanup { correlation, error });
+    }
+
+    fn start_next_dispatch_mutation(
+        &mut self,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) -> bool {
+        while let Some(intent) = self.store.pending_dispatch_mutations.pop_front() {
+            if intent.mutation.is_enqueue()
+                && !ParallelModeControlPlaneAggregate::command_targets_current_epoch(
+                    &intent.workspace_directory,
+                    intent.epoch_id,
+                    self.store.workspace_directory.as_deref(),
+                    self.store.current_epoch_id,
+                )
+            {
+                self.stale_command(
+                    intent.workspace_directory,
+                    intent.epoch_id,
+                    "queued dispatch mutation belongs to a stale epoch",
+                    outcome,
+                );
+                continue;
+            }
+            self.start_dispatch_mutation(intent, outcome);
+            return true;
+        }
+        false
+    }
+
     fn schedule_after_projection_ready(
         &mut self,
         workspace_directory: String,
@@ -1599,6 +2098,15 @@ impl ParallelModeControlPlaneRuntime {
             }
             ParallelModeProjectionReadyContinuation::PollPendingDispatchWake => {}
         }
+        if self.store.pending_dispatch_poll.is_some() {
+            self.queue_pending_dispatch_poll(
+                workspace_directory,
+                epoch_id,
+                follow_up_tick_signature,
+            );
+            self.drain_pending_dispatch_poll(outcome);
+            return;
+        }
         self.start_pending_dispatch_poll(
             workspace_directory,
             epoch_id,
@@ -1615,6 +2123,11 @@ impl ParallelModeControlPlaneRuntime {
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
         if self.has_in_flight_effect() {
+            self.queue_pending_dispatch_poll(
+                workspace_directory,
+                epoch_id,
+                follow_up_tick_signature,
+            );
             return;
         }
         let operation_id = self.store.next_pending_dispatch_poll_operation_id;
@@ -1634,6 +2147,61 @@ impl ParallelModeControlPlaneRuntime {
         outcome
             .effects
             .push(ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation });
+    }
+
+    fn queue_pending_dispatch_poll(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        follow_up_tick_signature: Option<String>,
+    ) {
+        if let Some(pending) = self.store.pending_dispatch_poll.as_mut()
+            && pending.workspace_directory == workspace_directory
+            && pending.epoch_id == epoch_id
+        {
+            if follow_up_tick_signature.is_some() {
+                pending.follow_up_tick_signature = follow_up_tick_signature;
+            }
+            return;
+        }
+        self.store.pending_dispatch_poll = Some(ParallelModePendingDispatchPollIntent {
+            workspace_directory,
+            epoch_id,
+            follow_up_tick_signature,
+        });
+    }
+
+    fn drain_pending_dispatch_poll(
+        &mut self,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) -> bool {
+        if self.has_in_flight_effect() {
+            return false;
+        }
+        let Some(intent) = self.store.pending_dispatch_poll.take() else {
+            return false;
+        };
+        if !ParallelModeControlPlaneAggregate::command_targets_current_epoch(
+            &intent.workspace_directory,
+            intent.epoch_id,
+            self.store.workspace_directory.as_deref(),
+            self.store.current_epoch_id,
+        ) {
+            self.stale_command(
+                intent.workspace_directory,
+                intent.epoch_id,
+                "pending dispatch poll belongs to a stale epoch",
+                outcome,
+            );
+            return false;
+        }
+        self.start_pending_dispatch_poll(
+            intent.workspace_directory,
+            intent.epoch_id,
+            intent.follow_up_tick_signature,
+            outcome,
+        );
+        true
     }
 
     fn drain_pending_orchestrator_wake(
@@ -1683,9 +2251,24 @@ impl ParallelModeControlPlaneRuntime {
                 self.start_supervisor_refresh(workspace_directory, epoch_id, outcome);
             }
             ParallelModeControlPlaneEffectCompletionFollowUp::DrainPendingWake => {
-                self.drain_pending_orchestrator_wake(outcome);
+                if !self.drain_pending_orchestrator_wake(outcome) {
+                    self.drain_pending_dispatch_poll(outcome);
+                }
             }
         }
+    }
+
+    fn continue_current_context_after_effect_completed(
+        &mut self,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        let (Some(workspace_directory), Some(epoch_id)) = (
+            self.store.workspace_directory.clone(),
+            self.store.current_epoch_id,
+        ) else {
+            return;
+        };
+        self.continue_after_effect_completed(workspace_directory, epoch_id, outcome);
     }
 
     fn finish_effect(
@@ -1777,12 +2360,14 @@ impl ParallelModeControlPlaneRuntime {
                             workspace_directory: previous_workspace.clone(),
                             epoch_id: previous_epoch_id,
                         });
-                    outcome
-                        .effects
-                        .push(ParallelModeControlPlaneEffect::CancelDispatchCommands {
-                            workspace_directory: previous_workspace,
+                    self.schedule_dispatch_mutation(
+                        previous_workspace,
+                        previous_epoch_id,
+                        ParallelModeDispatchMutation::Cancel {
                             reason: "parallel workspace superseded".to_string(),
-                        });
+                        },
+                        outcome,
+                    );
                 }
                 let epoch_id = self.store.next_epoch_id;
                 self.store.next_epoch_id = self.store.next_epoch_id.saturating_add(1);
@@ -1809,6 +2394,7 @@ impl ParallelModeControlPlaneRuntime {
             || self.store.orchestrator_tick_in_flight.is_some()
             || self.store.supervisor_inspection_in_flight.is_some()
             || self.store.pending_dispatch_poll_in_flight.is_some()
+            || self.store.dispatch_mutation_in_flight.is_some()
     }
 
     fn clear_process_effect_state(&mut self) {
@@ -1819,6 +2405,7 @@ impl ParallelModeControlPlaneRuntime {
         self.store.supervisor_inspection_in_flight = None;
         self.store.pending_supervisor_inspection = None;
         self.store.pending_dispatch_poll_in_flight = None;
+        self.store.pending_dispatch_poll = None;
         self.store.pending_parallel_entry = None;
         self.store.projection_ready = false;
         self.store.pending_supervisor_refresh = false;
@@ -2140,10 +2727,12 @@ mod tests {
         ));
         assert!(matches!(
             opened.effects.as_slice(),
-            [ParallelModeControlPlaneEffect::CancelDispatchCommands {
-                workspace_directory,
-                reason,
-            }] if workspace_directory == "/repo" && reason == "parallel workspace superseded"
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation: ParallelModeDispatchMutation::Cancel { reason },
+            }] if correlation.workspace_directory == "/repo"
+                && correlation.epoch_id == 1
+                && reason == "parallel workspace superseded"
         ));
         assert!(runtime.store().supervisor_refresh_in_flight.is_none());
         assert_eq!(runtime.store().current_epoch_id, Some(2));
@@ -2179,14 +2768,30 @@ mod tests {
         ));
         assert!(matches!(
             opened.effects.as_slice(),
-            [ParallelModeControlPlaneEffect::CancelDispatchCommands {
-                workspace_directory,
-                ..
-            }] if workspace_directory == "/repo"
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+            }] if correlation.workspace_directory == "/repo" && correlation.epoch_id == 1
         ));
         assert!(!runtime.store().mode_enabled);
         assert!(!runtime.store().initial_pool_reset_completed);
         assert_eq!(runtime.store().current_epoch_id, Some(2));
+
+        let cancel_correlation = match opened.effects.as_slice() {
+            [
+                ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                    correlation,
+                    mutation: ParallelModeDispatchMutation::Cancel { .. },
+                },
+            ] => correlation.clone(),
+            effects => panic!("expected one superseded-workspace cancellation, got {effects:?}"),
+        };
+        let cancelled =
+            runtime.handle(ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: cancel_correlation,
+                result: Ok(0),
+            });
+        assert!(cancelled.effects.is_empty());
 
         let enabled = runtime.handle(enable("/other"));
         let entry = only_effect(&enabled);
@@ -2315,7 +2920,10 @@ mod tests {
         });
         assert!(matches!(
             disabled.effects.as_slice(),
-            [ParallelModeControlPlaneEffect::CancelDispatchCommands { .. }]
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+                ..
+            }]
         ));
 
         let stale_completion = runtime.handle(completed("/repo", 1, run_id));
@@ -2384,7 +2992,10 @@ mod tests {
         });
         assert!(matches!(
             disabled.effects.as_slice(),
-            [ParallelModeControlPlaneEffect::CancelDispatchCommands { .. }]
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+                ..
+            }]
         ));
         assert_eq!(runtime.store().current_epoch_id, None);
 
@@ -2480,12 +3091,341 @@ mod tests {
 
         assert!(matches!(
             requested.effects.as_slice(),
-            [ParallelModeControlPlaneEffect::EnqueueDispatchForTrigger {
-                trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation: ParallelModeDispatchMutationCorrelation { epoch_id: 1, .. },
+                mutation: ParallelModeDispatchMutation::EnqueueForTrigger {
+                    trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                    ..
+                },
+            }]
+        ));
+    }
+
+    #[test]
+    fn duplicate_enqueue_coalesces_and_closed_epoch_cancels_preempt_pending_enqueue() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo-a".to_string(),
+        });
+        let first = runtime.handle(ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory: "/repo-a".to_string(),
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        });
+        let first_correlation = match first.effects.as_slice() {
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands { correlation, .. }] => {
+                correlation.clone()
+            }
+            effects => panic!("expected one initial enqueue, got {effects:?}"),
+        };
+
+        for _ in 0..32 {
+            assert!(
+                runtime
+                    .handle(ParallelModeControlPlaneCommand::RequestDispatch {
+                        workspace_directory: "/repo-a".to_string(),
+                        trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+                    })
+                    .effects
+                    .is_empty()
+            );
+        }
+        assert!(
+            runtime.store.pending_dispatch_mutations.is_empty(),
+            "duplicates must coalesce with the in-flight semantic intent"
+        );
+
+        runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo-b".to_string(),
+        });
+        runtime.handle(ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory: "/repo-b".to_string(),
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        });
+        runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo-c".to_string(),
+        });
+        runtime.handle(ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory: "/repo-c".to_string(),
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        });
+
+        assert_eq!(runtime.store.pending_dispatch_mutations.len(), 3);
+        assert!(matches!(
+            runtime.store.pending_dispatch_mutations.front(),
+            Some(ParallelModeDispatchMutationIntent {
+                workspace_directory,
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+                ..
+            }) if workspace_directory == "/repo-a"
+        ));
+        assert!(matches!(
+            runtime.store.pending_dispatch_mutations.get(1),
+            Some(ParallelModeDispatchMutationIntent {
+                workspace_directory,
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+                ..
+            }) if workspace_directory == "/repo-b"
+        ));
+        assert!(matches!(
+            runtime.store.pending_dispatch_mutations.get(2),
+            Some(ParallelModeDispatchMutationIntent {
+                workspace_directory,
+                mutation: ParallelModeDispatchMutation::EnqueueForTrigger { .. },
+                ..
+            }) if workspace_directory == "/repo-c"
+        ));
+
+        let first_cancel = only_effect(&runtime.handle(
+            ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: first_correlation,
+                result: Ok(1),
+            },
+        ))
+        .clone();
+        let first_cancel_correlation = match first_cancel {
+            ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+            } if correlation.workspace_directory == "/repo-a" => correlation,
+            effect => panic!("expected repo-a cleanup first, got {effect:?}"),
+        };
+        let second_cancel = only_effect(&runtime.handle(
+            ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: first_cancel_correlation,
+                result: Ok(0),
+            },
+        ))
+        .clone();
+        let second_cancel_correlation = match second_cancel {
+            ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
+            } if correlation.workspace_directory == "/repo-b" => correlation,
+            effect => panic!("expected repo-b cleanup second, got {effect:?}"),
+        };
+        assert!(matches!(
+            only_effect(&runtime.handle(
+                ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                    correlation: second_cancel_correlation,
+                    result: Ok(0),
+                },
+            )),
+            ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation: ParallelModeDispatchMutation::EnqueueForTrigger { .. },
+            } if correlation.workspace_directory == "/repo-c"
+        ));
+    }
+
+    #[test]
+    fn dispatch_mutation_rejects_forged_duplicate_and_aba_completions() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo-a".to_string(),
+        });
+        let started = runtime.handle(ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory: "/repo-a".to_string(),
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        });
+        let first = match started.effects.as_slice() {
+            [
+                ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                    correlation,
+                    mutation: ParallelModeDispatchMutation::EnqueueForTrigger { .. },
+                },
+            ] => correlation.clone(),
+            effects => panic!("expected one dispatch enqueue, got {effects:?}"),
+        };
+
+        assert!(
+            runtime
+                .handle(ParallelModeControlPlaneCommand::OpenEpoch {
+                    workspace_directory: "/repo-b".to_string(),
+                })
+                .effects
+                .is_empty(),
+            "repo-a cancellation must queue behind its in-flight enqueue"
+        );
+        assert!(
+            runtime
+                .handle(ParallelModeControlPlaneCommand::OpenEpoch {
+                    workspace_directory: "/repo-a".to_string(),
+                })
+                .effects
+                .is_empty(),
+            "repo-b cancellation must preserve FIFO ordering during ABA"
+        );
+        assert_eq!(runtime.store().current_epoch_id, Some(3));
+
+        let mut forged = first.clone();
+        forged.operation_id = forged.operation_id.saturating_add(10);
+        let forged_completion =
+            runtime.handle(ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: forged,
+                result: Ok(1),
+            });
+        assert!(matches!(
+            forged_completion.events.as_slice(),
+            [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
+                if reason == "unknown dispatch mutation"
+        ));
+        assert_eq!(
+            runtime
+                .store
+                .dispatch_mutation_in_flight
+                .as_ref()
+                .map(|in_flight| &in_flight.correlation),
+            Some(&first)
+        );
+
+        let stale_enqueue =
+            runtime.handle(ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: first.clone(),
+                result: Ok(1),
+            });
+        assert!(matches!(
+            stale_enqueue.events.as_slice(),
+            [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
+                if reason == "dispatch mutation belongs to a stale epoch"
+        ));
+        let first_cancel = match stale_enqueue.effects.as_slice() {
+            [
+                ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                    correlation,
+                    mutation: ParallelModeDispatchMutation::Cancel { .. },
+                },
+            ] => correlation.clone(),
+            effects => panic!("expected repo-a cancellation after stale enqueue, got {effects:?}"),
+        };
+        assert!(first_cancel.operation_id > first.operation_id);
+
+        let duplicate =
+            runtime.handle(ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: first,
+                result: Ok(1),
+            });
+        assert!(matches!(
+            duplicate.events.as_slice(),
+            [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
+                if reason == "unknown dispatch mutation"
+        ));
+        assert_eq!(
+            runtime
+                .store
+                .dispatch_mutation_in_flight
+                .as_ref()
+                .map(|in_flight| &in_flight.correlation),
+            Some(&first_cancel)
+        );
+
+        let stale_cancel_failure =
+            runtime.handle(ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: first_cancel,
+                result: Err("sqlite busy".to_string()),
+            });
+        assert!(matches!(
+            stale_cancel_failure.events.as_slice(),
+            [ParallelModeControlPlaneEvent::DispatchMutationFailed {
+                workspace_directory,
                 epoch_id: 1,
+                presentation_current: false,
+                ..
+            }] if workspace_directory == "/repo-a"
+        ));
+        assert!(matches!(
+            stale_cancel_failure.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                mutation: ParallelModeDispatchMutation::Cancel { .. },
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn dispatch_mutation_completion_preserves_refresh_wake_then_poll_priority() {
+        let mut runtime = ParallelModeControlPlaneRuntime::new();
+        runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+            workspace_directory: "/repo".to_string(),
+        });
+        let enqueue = runtime.handle(ParallelModeControlPlaneCommand::RequestDispatch {
+            workspace_directory: "/repo".to_string(),
+            trigger: ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        });
+        let enqueue_correlation = match enqueue.effects.as_slice() {
+            [ParallelModeControlPlaneEffect::MutateDispatchCommands { correlation, .. }] => {
+                correlation.clone()
+            }
+            effects => panic!("expected one dispatch enqueue, got {effects:?}"),
+        };
+        assert!(
+            runtime
+                .handle(ParallelModeControlPlaneCommand::RefreshSupervisor {
+                    workspace_directory: "/repo".to_string(),
+                })
+                .effects
+                .is_empty()
+        );
+        assert!(runtime.handle(wake("/repo", 1)).effects.is_empty());
+        assert!(
+            runtime
+                .handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+                    workspace_directory: "/repo".to_string(),
+                    follow_up_tick_signature: Some("queued-tick".to_string()),
+                })
+                .effects
+                .is_empty()
+        );
+
+        let refreshed =
+            runtime.handle(ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                correlation: enqueue_correlation,
+                result: Ok(1),
+            });
+        let refresh_id = only_effect(&refreshed)
+            .effect_id()
+            .expect("supervisor refresh should run first");
+        assert_eq!(
+            refresh_id.kind,
+            ParallelModeControlPlaneEffectKind::RefreshSupervisor
+        );
+
+        let woke = runtime.handle(
+            ParallelModeControlPlaneCommand::SupervisorSnapshotRefreshCompleted {
+                workspace_directory: "/repo".to_string(),
+                epoch_id: 1,
+                effect_id: refresh_id,
+                follow_up_tick_signature: None,
+            },
+        );
+        let wake_id = only_effect(&woke)
+            .effect_id()
+            .expect("queued wake should run after refresh");
+        assert_eq!(
+            wake_id.kind,
+            ParallelModeControlPlaneEffectKind::RunOrchestrator
+        );
+
+        let polled = runtime.handle(ParallelModeControlPlaneCommand::OrchestratorWakeCompleted {
+            workspace_directory: "/repo".to_string(),
+            epoch_id: 1,
+            effect_id: wake_id,
+            mode_enabled: true,
+            follow_up_tick_signature: None,
+        });
+        assert!(matches!(
+            polled.effects.as_slice(),
+            [ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation }]
+                if correlation.workspace_directory == "/repo" && correlation.epoch_id == 1
+        ));
+        assert_eq!(
+            runtime
+                .store
+                .pending_dispatch_poll_in_flight
+                .as_ref()
+                .and_then(|in_flight| in_flight.follow_up_tick_signature.as_deref()),
+            Some("queued-tick")
+        );
+        assert!(runtime.store.pending_dispatch_poll.is_none());
     }
 
     #[test]
