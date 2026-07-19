@@ -178,21 +178,29 @@ closed-overlay, workspace-drifted, or newer-UI-intent completions cannot choose 
 replace status. Inspection failures remain distinct from an absent workspace, and reset recovery
 preserves both the reset error and any inspection error.
 
-Destructive TUI reset uses a separate Core-owned planning-workspace operation coordinator. Core
-assigns a monotonic correlation containing the generation, exact workspace, and reset target.
-Repeating that exact reset coalesces onto the active correlation without starting another worker;
-any different reset is reported as busy. Composition executes the reset off the TUI input thread
-and converts a provider panic into the exact correlated error completion. Only that exact
-completion settles the coordinator, and Core also converts a success snapshot whose target differs
-from the correlation into an error. Stale, duplicate, workspace-drifted, target-drifted, and ABA
-completions cannot present a result. For an exact completion whose workspace is current, the TUI
-always pauses post-turn continuation and refreshes the Core runtime projection, including after an
-A-to-B-to-A workspace round trip. Its separate presentation revision gates only status and overlay
-changes: a newer UI intent keeps its copy while authority/runtime reconciliation still runs.
-Closing or changing an overlay does not cancel the destructive operation. Until the remaining
-stage/open/save/promote paths move behind Core, they retain their direct application calls but are
-rejected with visible busy status while reset is active. This is an active-operation gate, not a
-deferred queue, actor, or cancellation abstraction.
+TUI reset and simple-draft stage/load/promotion share one Core-owned planning-workspace operation
+coordinator. Core assigns a monotonic correlation containing the exact workspace and operation
+kind, plus reset target or simple-draft/session identity where applicable. Repeating that exact
+operation coalesces without starting another worker; any different operation is reported as busy.
+Composition executes provider work off the TUI input thread and converts panics into exact
+correlated error completions. These workers use the shared redacting panic boundary, so a provider
+panic payload is not emitted to stderr. Only that exact completion settles the coordinator. Core rejects a
+reset target, editor draft/session, or promotion draft that does not match the correlation. Stale,
+duplicate, workspace-drifted, target-drifted, and ABA completions cannot present a result.
+
+An accepted simple stage creates a session identity from its stage generation; an accepted editor
+load replaces it with a load-generation identity. The TUI keeps those identities with review/editor
+state so a late load cannot replace a newer editor and a late promotion cannot close a newer
+overlay. Editor file bodies travel only in the typed completion payload and are redacted from
+debug output; they never enter correlation data. For an exact reset or promotion completion whose
+workspace is current, the TUI always pauses post-turn continuation and refreshes the Core runtime
+projection, including after an A-to-B-to-A workspace round trip. A separate presentation revision
+gates status and overlay changes: a newer UI intent keeps its copy while authority/runtime
+reconciliation still runs. Closing or changing an overlay does not cancel destructive work.
+Until the remaining detail/directions stage/open/save/promote paths move behind Core, their seven
+direct application calls are rejected with visible busy status while any coordinated workspace
+operation is active. This is an active-operation gate, not a deferred queue, actor, or cancellation
+abstraction.
 
 Opening the TUI Queue overlay first applies shell chrome, then dispatches a core load command. Core
 assigns a monotonically increasing generation to the workspace and active-thread identity, lets the

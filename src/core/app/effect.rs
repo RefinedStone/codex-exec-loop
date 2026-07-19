@@ -47,6 +47,15 @@ pub enum CoreEffect {
     ResetPlanningWorkspace {
         correlation: PlanningWorkspaceOperationCorrelation,
     },
+    StageSimplePlanningDraft {
+        correlation: PlanningWorkspaceOperationCorrelation,
+    },
+    LoadSimplePlanningEditor {
+        correlation: PlanningWorkspaceOperationCorrelation,
+    },
+    PromoteSimplePlanningDraft {
+        correlation: PlanningWorkspaceOperationCorrelation,
+    },
     ExecuteQueueMutation {
         correlation: QueueMutationCorrelation,
     },

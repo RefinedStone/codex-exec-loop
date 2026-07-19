@@ -10,10 +10,12 @@ use super::{
 use super::{
     ConversationLoadCorrelation, GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
     GithubReviewPollingSetupResult, ParallelPeekLoadCorrelation, PlanningDoctorSnapshot,
-    PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
-    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
-    PlanningWorkspaceResetSnapshot, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    PlanningEditorSessionSnapshot, PlanningRuntimeRefreshCorrelation,
+    PlanningRuntimeRefreshSnapshot, PlanningSimpleDraftPromotionSnapshot,
+    PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationAdmission,
+    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetSnapshot,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
@@ -104,6 +106,18 @@ pub enum CoreEffectCompletion {
     PlanningWorkspaceResetCompleted {
         correlation: PlanningWorkspaceOperationCorrelation,
         result: Result<Box<PlanningWorkspaceResetSnapshot>, String>,
+    },
+    PlanningSimpleDraftStaged {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningSimpleDraftStageSnapshot>, String>,
+    },
+    PlanningSimpleEditorLoaded {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorSessionSnapshot>, String>,
+    },
+    PlanningSimpleDraftPromoted {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningSimpleDraftPromotionSnapshot>, String>,
     },
     QueueMutationCompleted {
         correlation: QueueMutationCorrelation,
@@ -198,6 +212,18 @@ pub enum AppEvent {
     PlanningWorkspaceResetCompleted {
         correlation: PlanningWorkspaceOperationCorrelation,
         result: Result<Box<PlanningWorkspaceResetSnapshot>, String>,
+    },
+    PlanningSimpleDraftStaged {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningSimpleDraftStageSnapshot>, String>,
+    },
+    PlanningSimpleEditorLoaded {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorSessionSnapshot>, String>,
+    },
+    PlanningSimpleDraftPromoted {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningSimpleDraftPromotionSnapshot>, String>,
     },
     QueueMutationStarted {
         correlation: QueueMutationCorrelation,

@@ -1250,11 +1250,20 @@ fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
 
 #[test]
 fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
-    assert_no_production_callable_reference_named_in_paths(
-        "TUI planning reset must dispatch a Core command instead of invoking the workspace service",
-        &["src/adapter/inbound/tui"],
-        "reset_workspace",
-    );
+    for (callable_name, operation) in [
+        ("reset_workspace", "reset"),
+        ("stage_simple_mode_draft", "simple draft stage"),
+        ("load_manual_editor_session", "simple editor load"),
+        ("promote_staged_draft", "simple draft promotion"),
+    ] {
+        assert_no_production_callable_reference_named_in_paths(
+            &format!(
+                "TUI planning {operation} must dispatch a Core command instead of invoking the workspace service"
+            ),
+            &["src/adapter/inbound/tui"],
+            callable_name,
+        );
+    }
     assert_no_forbidden_references_in_paths(
         "TUI planning reset controller must leave worker ownership in composition",
         &["src/adapter/inbound/tui/app/planning/controller.rs"],
@@ -1265,8 +1274,11 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         fs::read_to_string("src/adapter/inbound/tui/app/planning/controller.rs").unwrap();
     assert!(
         planning_controller.contains("AppCommand::ResetPlanningWorkspace(intent)")
+            && planning_controller.contains("AppCommand::StageSimplePlanningDraft")
+            && planning_controller.contains("AppCommand::LoadSimplePlanningEditor")
+            && planning_controller.contains("AppCommand::PromoteSimplePlanningDraft")
             && planning_controller.contains("PlanningWorkspaceOperationUiSettlement::Applied"),
-        "TUI reset must enter through Core and gate presentation on exact UI settlement"
+        "TUI reset and simple authoring must enter through Core and gate presentation on exact UI settlement"
     );
     assert!(
         planning_controller
@@ -1276,6 +1288,15 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
             )
             && planning_controller.contains(
                 "fn failed_reset_refreshes_runtime_and_preserves_newer_status_presentation()"
+            )
+            && planning_controller.contains(
+                "fn simple_authoring_completions_do_not_reopen_after_close_or_workspace_drift()"
+            )
+            && planning_controller.contains(
+                "fn stale_simple_promotion_refreshes_authority_without_closing_or_replacing_newer_status()"
+            )
+            && planning_controller.contains(
+                "fn late_simple_editor_load_cannot_replace_a_newer_editor_session_identity()"
             )
             && planning_controller
                 .contains("app.sync_draft_shell_workspace(workspace_b.path_str());")
@@ -1299,15 +1320,21 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     assert!(
         core_controller
             .contains("planning_workspace_operations: PlanningWorkspaceOperationCoordinator",)
-            && core_controller.contains(".begin_reset(intent)")
+            && core_controller.contains(".begin(intent)")
             && core_controller.contains(".accept(&correlation)")
-            && core_controller.contains("snapshot.target == correlation.reset_target"),
-        "CoreController must delegate reset admission and exact target settlement to one coordinator"
+            && core_controller.contains("correlation.reset_target() == Some(snapshot.target)")
+            && core_controller.contains("PlanningWorkspaceOperationKind::StageSimpleDraft")
+            && core_controller.contains("PlanningWorkspaceOperationKind::LoadSimpleEditor")
+            && core_controller.contains("PlanningWorkspaceOperationKind::PromoteSimpleDraft"),
+        "CoreController must delegate reset and simple-authoring admission plus exact settlement to one coordinator"
     );
     let coordinator = fs::read_to_string("src/core/app/planning_workspace.rs").unwrap();
     for required in [
         "PlanningWorkspaceOperationAdmission::Coalesced",
         "PlanningWorkspaceOperationAdmission::Busy",
+        "PlanningEditorSessionIdentity",
+        "LoadSimpleEditor",
+        "PromoteSimpleDraft",
         "checked_add(1)",
     ] {
         assert!(
@@ -1318,21 +1345,46 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     for forbidden in ["VecDeque", "cancel(", "actor"] {
         assert!(
             !coordinator.contains(forbidden),
-            "first reset slice must not add queue/actor/cancellation machinery: {forbidden}"
+            "planning workspace coordinator must not add queue/actor/cancellation machinery: {forbidden}"
         );
     }
 
     let effect_runner = fs::read_to_string("src/composition/core_effect_runner.rs").unwrap();
     let reset_worker = effect_runner
         .split_once("pub fn spawn_planning_workspace_reset(")
-        .and_then(|(_, body)| body.split_once("pub fn spawn_queue_mutation("))
+        .and_then(|(_, body)| body.split_once("pub fn spawn_simple_planning_draft_stage("))
         .map(|(body, _)| body)
         .expect("planning reset worker should have a bounded source body");
     assert!(
         reset_worker.contains("thread::spawn(move ||")
-            && reset_worker.contains("catch_unwind")
+            && reset_worker.contains("catch_redacted_worker_unwind")
             && reset_worker.contains("PlanningWorkspaceResetCompleted"),
-        "planning reset provider I/O and panic conversion must stay in the Core effect worker"
+        "planning reset provider I/O and redacted panic conversion must stay in the Core effect worker"
+    );
+    for required in [
+        "pub fn spawn_simple_planning_draft_stage(",
+        "pub fn spawn_simple_planning_editor_load(",
+        "pub fn spawn_simple_planning_draft_promotion(",
+        "PlanningSimpleDraftStaged",
+        "PlanningSimpleEditorLoaded",
+        "PlanningSimpleDraftPromoted",
+        "planning simple draft stage worker panicked",
+        "planning simple editor load worker panicked",
+        "planning simple draft promotion worker panicked",
+    ] {
+        assert!(
+            effect_runner.contains(required),
+            "simple authoring effect runner is missing typed async contract: {required}"
+        );
+    }
+    assert!(
+        effect_runner.contains(
+            "fn simple_draft_stage_dispatch_returns_within_300ms_while_provider_stays_gated()"
+        ) && effect_runner.contains(
+            "fn simple_editor_worker_panic_returns_one_redacted_completion_and_reopens_admission()"
+        ) && effect_runner
+            .contains("fn mismatched_simple_authoring_source_session_never_calls_the_provider()"),
+        "simple authoring workers must prove bounded dispatch, fail-closed source identity, and panic settlement"
     );
 
     let tui_root = repo_root().join("src/adapter/inbound/tui");
@@ -1364,8 +1416,8 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         }
     }
     assert_eq!(
-        direct_workspace_calls, 10,
-        "this slice must remove only reset from NativeTuiApplicationHandle and leave the other ten direct calls for later slices"
+        direct_workspace_calls, 7,
+        "this slice must remove simple stage/load/promotion from NativeTuiApplicationHandle and leave only seven direct calls for later slices"
     );
     guarded_mutation_methods.sort();
     assert_eq!(
@@ -1374,40 +1426,61 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
             "open_directions_detail_doc_editor",
             "open_planning_manual_editor",
             "open_queue_idle_prompt_editor",
-            "open_simple_mode_planning_editor",
             "promote_directions_manual_editor",
             "promote_planning_manual_editor",
-            "promote_simple_mode_planning_draft",
             "save_directions_manual_editor",
             "save_planning_manual_editor",
-            "stage_simple_mode_planning_init_draft",
         ],
         "every remaining direct planning workspace mutation must have a leading reset busy guard"
     );
 }
 
 #[test]
-fn planning_reset_ast_guard_rejects_text_ufcs_and_ignored_busy_results() {
-    let text_only = r#"
-        fn sample() {
-            // PlanningWorkspaceUseCases::reset_workspace(...)
-            let _copy = "reset_workspace";
-        }
-    "#;
-    assert!(
-        production_callable_reference_lines(text_only, "reset_workspace").is_empty(),
-        "comments and literals must not create a reset call"
-    );
+fn planning_workspace_ast_guard_rejects_all_callable_forms_and_ignored_busy_results() {
+    for callable_name in [
+        "reset_workspace",
+        "stage_simple_mode_draft",
+        "load_manual_editor_session",
+        "promote_staged_draft",
+    ] {
+        let text_only = format!(
+            r#"
+                fn sample() {{
+                    // PlanningWorkspaceUseCases::{callable_name}(...)
+                    let _copy = "{callable_name}";
+                    stringify!("{callable_name}");
+                }}
 
-    let ufcs = r#"
-        fn sample(service: &PlanningWorkspaceUseCases) {
-            PlanningWorkspaceUseCases::reset_workspace(service, "/workspace", target);
+                #[cfg(test)]
+                fn test_only(service: &PlanningWorkspaceUseCases) {{
+                    invoke!(PlanningWorkspaceUseCases::{callable_name});
+                    service.{callable_name}();
+                }}
+            "#
+        );
+        assert!(
+            production_callable_reference_lines(&text_only, callable_name).is_empty(),
+            "comments, literals, and cfg(test) references must not create a production violation for {callable_name}"
+        );
+
+        for callable_source in [
+            format!(
+                "fn sample(service: &PlanningWorkspaceUseCases) {{ service.{callable_name}(); }}"
+            ),
+            format!(
+                "fn sample(service: &PlanningWorkspaceUseCases) {{ PlanningWorkspaceUseCases::{callable_name}(service); }}"
+            ),
+            format!(
+                "fn sample() {{ let callable = PlanningWorkspaceUseCases::{callable_name}; use_it(callable); }}"
+            ),
+            format!("fn sample() {{ invoke!(PlanningWorkspaceUseCases::{callable_name}); }}"),
+        ] {
+            assert!(
+                !production_callable_reference_lines(&callable_source, callable_name).is_empty(),
+                "method, UFCS, function-pointer, path, and macro-token references must be detected for {callable_name}: {callable_source}"
+            );
         }
-    "#;
-    assert!(
-        !production_callable_reference_lines(ufcs, "reset_workspace").is_empty(),
-        "UFCS reset calls must be detected"
-    );
+    }
 
     let guarded = r#"
         impl App {
@@ -4463,6 +4536,29 @@ impl<'ast> Visit<'ast> for ProductionCallableReferenceVisitor<'_> {
             self.lines.push(path.path.span().start().line);
         }
         visit::visit_expr_path(self, path);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        collect_named_macro_token_lines(&mac.tokens, self.callable_name, &mut self.lines);
+        visit::visit_macro(self, mac);
+    }
+}
+
+fn collect_named_macro_token_lines(
+    tokens: &TokenStream,
+    callable_name: &str,
+    lines: &mut Vec<usize>,
+) {
+    for token in tokens.clone() {
+        match token {
+            TokenTree::Ident(identifier) if identifier == callable_name => {
+                lines.push(identifier.span().start().line);
+            }
+            TokenTree::Group(group) => {
+                collect_named_macro_token_lines(&group.stream(), callable_name, lines);
+            }
+            TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
     }
 }
 
