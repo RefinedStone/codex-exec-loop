@@ -22,8 +22,8 @@ use crate::application::service::planning::{
 use crate::core::app::{TurnStreamProgressiveActivityUpdate, TurnStreamSnapshot, TurnStreamUpdate};
 use crate::diagnostics::event_log;
 use crate::domain::conversation::{
-    ConversationApprovalDecision, ConversationApprovalResolution, ConversationApprovalReview,
-    ConversationMessage, ConversationMessageKind,
+    ConversationApprovalDecision, ConversationApprovalResolution, ConversationMessage,
+    ConversationMessageKind,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeEnvelopeObservation, ConversationRuntimeObservedValue,
@@ -93,11 +93,6 @@ pub(super) enum ConversationRuntimeEffect {
         mode_label: String,
         transcript_text: String,
         handoff_task: Option<PlanningTaskHandoff>,
-    },
-    PersistApprovalReview {
-        workspace_directory: String,
-        thread_id: String,
-        review: ConversationApprovalReview,
     },
     ShowApprovalOverlay,
     CloseApprovalOverlay,
@@ -501,18 +496,6 @@ pub(super) fn reduce_conversation_runtime(
                         state.turn_control_truth().approval,
                     ) {
                         state.extend_runtime_notices([notice]);
-                    }
-                    if state.has_active_thread() {
-                        effects.push(ConversationRuntimeEffect::PersistApprovalReview {
-                            workspace_directory: state
-                                .active_turn_workspace_directory
-                                .clone()
-                                .unwrap_or_else(|| {
-                                    state.planning_workspace_directory().to_string()
-                                }),
-                            thread_id: state.thread_id.clone(),
-                            review: review.clone(),
-                        });
                     }
                     state.update_approval_review(review);
                 }
@@ -1506,16 +1489,7 @@ mod tests {
                 .map(|review| review.target_item_id.as_str()),
             Some("tool-1")
         );
-        assert!(reduction.effects.iter().any(|effect| matches!(
-            effect,
-            ConversationRuntimeEffect::PersistApprovalReview {
-                workspace_directory,
-                thread_id,
-                review,
-            } if workspace_directory == "/tmp/workspace"
-                && thread_id == "thread-1"
-                && review.target_item_id == "tool-1"
-        )));
+        assert!(reduction.effects.is_empty());
 
         reduction = reduce_conversation_runtime(
             reduction.state,

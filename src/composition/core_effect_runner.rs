@@ -27,9 +27,10 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
-    ApprovalDecisionCorrelation, ConversationLoadCorrelation, ConversationReadySnapshot,
-    ConversationThreadReviewSnapshot, DirectionsMaintenanceDirectionSnapshot,
-    DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot,
+    ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation, ConversationLoadCorrelation,
+    ConversationReadySnapshot, ConversationThreadReviewSnapshot,
+    DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceLoadCorrelation,
+    DirectionsMaintenanceSummarySnapshot,
     DirectionsSupportingFileStatus as CoreDirectionsSupportingFileStatus,
     GithubReviewPollCorrelation, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
     QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
@@ -176,6 +177,10 @@ impl CoreEffectRunner {
             )),
             CoreEffect::SubmitApprovalDecision { correlation } => {
                 self.spawn_approval_decision_submission(correlation);
+                None
+            }
+            CoreEffect::PersistApprovalReview { correlation } => {
+                self.spawn_approval_review_persistence(correlation);
                 None
             }
             CoreEffect::SubmitTurn {
@@ -376,6 +381,23 @@ impl CoreEffectRunner {
         });
     }
 
+    pub fn spawn_approval_review_persistence(
+        &self,
+        correlation: ApprovalReviewPersistenceCorrelation,
+    ) {
+        let conversation_service = self.conversation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = conversation_service.persist_review_center_approval_review_for_workspace(
+                &correlation.workspace_directory,
+                &correlation.thread_id,
+                &correlation.review,
+            );
+            let completion = approval_review_persistence_completion(correlation, result);
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
     pub fn spawn_turn_submission(
         &self,
         correlation: crate::core::app::TurnSubmissionCorrelation,
@@ -520,6 +542,16 @@ fn approval_decision_completion(
     result: Result<()>,
 ) -> CoreEffectCompletion {
     CoreEffectCompletion::ApprovalDecisionSubmitted {
+        correlation,
+        result: result.map_err(|error| error.to_string()),
+    }
+}
+
+fn approval_review_persistence_completion(
+    correlation: ApprovalReviewPersistenceCorrelation,
+    result: Result<()>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::ApprovalReviewPersisted {
         correlation,
         result: result.map_err(|error| error.to_string()),
     }
@@ -786,7 +818,10 @@ mod tests {
         PlanningQueueAuthoritySnapshot,
     };
     use crate::core::app::{QueueMutationKind, QueueMutationTarget, TurnSubmissionCorrelation};
-    use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
+    use crate::domain::conversation::{
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
+        ConversationMessageKind,
+    };
     use crate::domain::planning::{
         QueueIdlePolicy, RuntimeProjection, TaskActor, TaskDefinition, TaskMutationProvenance,
         TaskStatus,
@@ -825,6 +860,21 @@ mod tests {
             crate::core::app::TurnSubmissionCorrelation::new(2),
             "approval-1",
             crate::domain::conversation::ConversationApprovalDecision::Accept,
+        )
+    }
+
+    fn approval_review_persistence_correlation() -> ApprovalReviewPersistenceCorrelation {
+        ApprovalReviewPersistenceCorrelation::new(
+            5,
+            TurnSubmissionCorrelation::new(2),
+            "/tmp/workspace",
+            "thread-1",
+            ConversationApprovalReview {
+                target_item_id: "tool-1".to_string(),
+                status: ConversationApprovalReviewStatus::InProgress,
+                risk_level: Some("medium".to_string()),
+                rationale: Some("needs approval".to_string()),
+            },
         )
     }
 
@@ -1066,6 +1116,30 @@ mod tests {
             CoreEffectCompletion::ApprovalDecisionSubmitted {
                 correlation: approval_decision_correlation(),
                 result: Err("approval unavailable".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn approval_review_persistence_result_maps_to_exact_core_completion() {
+        assert_eq!(
+            approval_review_persistence_completion(
+                approval_review_persistence_correlation(),
+                Ok(())
+            ),
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation: approval_review_persistence_correlation(),
+                result: Ok(()),
+            }
+        );
+        assert_eq!(
+            approval_review_persistence_completion(
+                approval_review_persistence_correlation(),
+                Err(anyhow::anyhow!("review authority unavailable")),
+            ),
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation: approval_review_persistence_correlation(),
+                result: Err("review authority unavailable".to_string()),
             }
         );
     }

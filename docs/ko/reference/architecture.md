@@ -71,6 +71,11 @@ Approval decision도 core 소유 single-flight 권한입니다. Core는 활성 t
 Composition은 provider 호출을 실행하고 correlation이 유지된 completion을 반환합니다. TUI는 approval
 modal projection과 재시도 상태 문구만 소유합니다.
 
+Approval review stream update는 Core 소유 직렬 effect queue를 통해 영속화합니다. 각 write는 정확한
+turn, workspace, thread, review와 correlation되며, composition이 기존 idempotent Review Center write를
+TUI thread 밖에서 실행합니다. 지연된 실패는 해당 conversation identity가 여전히 현재일 때만
+표시되므로 이전 write의 오류가 새 conversation에 추가되지 않습니다.
+
 GitHub review polling도 core-correlated 작업입니다. Core는 설정된 pull request target, 성공한 poll
 cursor, 단조 증가 generation, single-flight와 stale completion 규칙을 소유합니다. Polling을 다시
 설정하면 새 권한 epoch가 시작되므로 이전 worker가 새 target이나 cursor를 덮어쓸 수 없습니다.

@@ -212,7 +212,6 @@ mod tests {
     use crate::application::service::review_center::ReviewCenterReadService;
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
-    use crate::core::app::TurnStreamState;
     use crate::domain::conversation::{
         ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
         ConversationToolActivityKind,
@@ -228,7 +227,9 @@ mod tests {
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     use anyhow::Result;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn application_stream_events_map_to_core_stream_events() {
@@ -442,6 +443,23 @@ mod tests {
         thread_reviews: Mutex<Vec<ReviewCenterThreadProjection>>,
         pending_inbox: Mutex<Vec<ReviewCenterInboxItem>>,
         history: Mutex<Vec<ReviewCenterHistoryEntry>>,
+        thread_review_load_count: AtomicUsize,
+        pending_inbox_replace_count: AtomicUsize,
+        thread_review_load_entered: Option<mpsc::Sender<()>>,
+        thread_review_load_release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl FakeReviewCenterRepository {
+        fn with_thread_review_load_gate(
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+        ) -> Self {
+            Self {
+                thread_review_load_entered: Some(entered),
+                thread_review_load_release: Mutex::new(Some(release)),
+                ..Self::default()
+            }
+        }
     }
 
     impl ReviewCenterRepositoryPort for FakeReviewCenterRepository {
@@ -450,6 +468,20 @@ mod tests {
             _workspace_dir: &str,
             _thread_id: &str,
         ) -> Result<Vec<ReviewCenterThreadProjection>> {
+            self.thread_review_load_count.fetch_add(1, Ordering::SeqCst);
+            if let Some(entered) = &self.thread_review_load_entered {
+                let _ = entered.send(());
+            }
+            if let Some(release) = self
+                .thread_review_load_release
+                .lock()
+                .expect("thread review release mutex poisoned")
+                .as_ref()
+            {
+                release
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|error| anyhow::anyhow!("review persistence gate failed: {error}"))?;
+            }
             Ok(self
                 .thread_reviews
                 .lock()
@@ -501,6 +533,8 @@ mod tests {
                 .pending_inbox
                 .lock()
                 .expect("pending inbox mutex poisoned") = inbox.to_vec();
+            self.pending_inbox_replace_count
+                .fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -595,7 +629,9 @@ mod tests {
         }
     }
 
-    fn review_persistence_app(review_repository: Arc<FakeReviewCenterRepository>) -> NativeTuiApp {
+    fn review_persistence_app(
+        review_repository: Arc<dyn ReviewCenterRepositoryPort>,
+    ) -> NativeTuiApp {
         let runtime_port = Arc::new(ReviewPersistenceRuntimePort);
         let planning = test_helpers::test_planning_services(Arc::new(
             FilesystemPlanningWorkspaceAdapter::new(),
@@ -613,6 +649,38 @@ mod tests {
             conversation_service,
             parallel_mode_binding,
         )
+    }
+
+    fn prepare_review_persistence_turn(
+        app: &mut NativeTuiApp,
+    ) -> crate::core::app::TurnSubmissionCorrelation {
+        let correlation = app.core_runtime.begin_test_turn_submission();
+        for event in [
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Thread".to_string(),
+                cwd: "/tmp/root".to_string(),
+                runtime_envelope: Box::default(),
+            },
+            TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        ] {
+            dispatch_review_persistence_stream_event(app, correlation, event);
+        }
+        correlation
+    }
+
+    fn dispatch_review_persistence_stream_event(
+        app: &mut NativeTuiApp,
+        correlation: crate::core::app::TurnSubmissionCorrelation,
+        event: TurnStreamEvent,
+    ) {
+        let outcome = app
+            .core_runtime
+            .dispatch_input(CoreInput::ConversationStreamUpdated { correlation, event });
+        app.apply_core_dispatch_outcome(outcome);
     }
 
     #[test]
@@ -653,43 +721,65 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_conversation_runtime_persists_active_thread_approval_review() {
+    fn duplicate_approval_review_updates_keep_one_history_entry() {
         let review_repository = Arc::new(FakeReviewCenterRepository::default());
         let mut app = review_persistence_app(review_repository.clone());
-        let mut stream_state = TurnStreamState::new();
-
-        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
-            Box::new(
-                stream_state.apply_stream_event(TurnStreamEvent::ThreadPrepared {
-                    thread_id: "thread-1".to_string(),
-                    title: "Thread".to_string(),
-                    cwd: "/tmp/root".to_string(),
-                    runtime_envelope: Box::default(),
-                }),
-            ),
-        ));
-        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
-            Box::new(
-                stream_state.apply_stream_event(TurnStreamEvent::TurnStarted {
-                    turn_id: "turn-1".to_string(),
-                    runtime_request: Box::default(),
-                }),
-            ),
-        ));
-        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
-            Box::new(
-                stream_state.apply_stream_event(TurnStreamEvent::ApprovalReviewUpdated {
-                    review: ConversationApprovalReview {
-                        target_item_id: "tool-9".to_string(),
-                        status: ConversationApprovalReviewStatus::Unknown(
-                            "human_review_requested".to_string(),
-                        ),
-                        risk_level: Some("medium".to_string()),
-                        rationale: Some("Need operator follow-up".to_string()),
-                    },
-                }),
-            ),
-        ));
+        let correlation = prepare_review_persistence_turn(&mut app);
+        let review = ConversationApprovalReview {
+            target_item_id: "tool-9".to_string(),
+            status: ConversationApprovalReviewStatus::Unknown("human_review_requested".to_string()),
+            risk_level: Some("medium".to_string()),
+            rationale: Some("Need operator follow-up".to_string()),
+        };
+        dispatch_review_persistence_stream_event(
+            &mut app,
+            correlation,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: review.clone(),
+            },
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while review_repository
+            .history
+            .lock()
+            .expect("history mutex poisoned")
+            .is_empty()
+            && Instant::now() < deadline
+        {
+            app.poll_core_runtime_inputs(16);
+            std::thread::yield_now();
+        }
+        let duplicate_deadline = Instant::now() + Duration::from_secs(2);
+        while review_repository
+            .pending_inbox_replace_count
+            .load(Ordering::SeqCst)
+            < 2
+            && Instant::now() < duplicate_deadline
+        {
+            app.poll_core_runtime_inputs(16);
+            dispatch_review_persistence_stream_event(
+                &mut app,
+                correlation,
+                TurnStreamEvent::ApprovalReviewUpdated {
+                    review: review.clone(),
+                },
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            review_repository
+                .pending_inbox_replace_count
+                .load(Ordering::SeqCst),
+            2,
+            "both serialized duplicate writes should finish their final repository mutation"
+        );
+        assert_eq!(
+            review_repository
+                .thread_review_load_count
+                .load(Ordering::SeqCst),
+            2
+        );
+        while app.poll_core_runtime_inputs(16) {}
 
         let thread_reviews = review_repository
             .thread_reviews
@@ -723,6 +813,81 @@ mod tests {
         assert_eq!(
             history[0].event_kind,
             "manual_handoff_human_review_requested"
+        );
+    }
+
+    #[test]
+    fn approval_review_persistence_does_not_block_stream_dispatch_or_render() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let review_repository = Arc::new(FakeReviewCenterRepository::with_thread_review_load_gate(
+            entered_tx, release_rx,
+        ));
+        let mut app = review_persistence_app(review_repository.clone());
+        let correlation = prepare_review_persistence_turn(&mut app);
+        let (returned_tx, returned_rx) = mpsc::sync_channel(1);
+
+        let dispatch_thread = std::thread::spawn(move || {
+            dispatch_review_persistence_stream_event(
+                &mut app,
+                correlation,
+                TurnStreamEvent::ApprovalReviewUpdated {
+                    review: ConversationApprovalReview {
+                        target_item_id: "tool-gated".to_string(),
+                        status: ConversationApprovalReviewStatus::InProgress,
+                        risk_level: Some("medium".to_string()),
+                        rationale: Some("gated repository".to_string()),
+                    },
+                },
+            );
+            let _screen_model =
+                crate::adapter::inbound::tui::app::shell_presentation::ConversationScreenModel::from_app(
+                    &app,
+                );
+            let review_is_projected = matches!(
+                &app.conversation_state,
+                ConversationState::Ready(conversation)
+                    if conversation.approval_review.as_ref().is_some_and(|review| {
+                        review.target_item_id == "tool-gated"
+                    })
+            );
+            returned_tx
+                .send((app, review_is_projected))
+                .expect("test receiver should remain connected");
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("repository worker should reach the gate");
+        let returned = returned_rx.recv_timeout(Duration::from_secs(2));
+        release_tx
+            .send(())
+            .expect("repository worker should remain gated");
+        let (mut app, review_is_projected) = returned
+            .expect("stream dispatch and screen projection must return before repository release");
+        dispatch_thread
+            .join()
+            .expect("stream dispatch thread should not panic");
+        assert!(review_is_projected);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while review_repository
+            .history
+            .lock()
+            .expect("history mutex poisoned")
+            .is_empty()
+            && Instant::now() < deadline
+        {
+            app.poll_core_runtime_inputs(16);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            review_repository
+                .history
+                .lock()
+                .expect("history mutex poisoned")
+                .len(),
+            1
         );
     }
 
@@ -1135,60 +1300,18 @@ mod tests {
 
 #[derive(Clone)]
 pub(super) struct NativeTuiApplicationHandle {
-    conversations: NativeTuiConversationHandle,
     planning_feature: NativeTuiPlanningHandle,
 }
 
 impl NativeTuiApplicationHandle {
-    fn new(conversations: ConversationService, planning_feature: PlanningServices) -> Self {
+    fn new(planning_feature: PlanningServices) -> Self {
         Self {
-            conversations: NativeTuiConversationHandle::new(conversations),
             planning_feature: NativeTuiPlanningHandle::new(planning_feature),
         }
     }
 
     pub(super) fn planning(&self) -> &NativeTuiPlanningHandle {
         &self.planning_feature
-    }
-
-    pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
-        self.conversations.runtime_control_truth()
-    }
-
-    pub(super) fn persist_review_center_approval_review_for_workspace(
-        &self,
-        workspace_dir: &str,
-        thread_id: &str,
-        review: &crate::domain::conversation::ConversationApprovalReview,
-    ) -> Result<(), String> {
-        self.conversations
-            .persist_review_center_approval_review_for_workspace(workspace_dir, thread_id, review)
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct NativeTuiConversationHandle {
-    service: ConversationService,
-}
-
-impl NativeTuiConversationHandle {
-    fn new(service: ConversationService) -> Self {
-        Self { service }
-    }
-
-    pub(super) fn runtime_control_truth(&self) -> super::ConversationRuntimeControlTruth {
-        self.service.runtime_control_truth()
-    }
-
-    pub(super) fn persist_review_center_approval_review_for_workspace(
-        &self,
-        workspace_dir: &str,
-        thread_id: &str,
-        review: &crate::domain::conversation::ConversationApprovalReview,
-    ) -> Result<(), String> {
-        self.service
-            .persist_review_center_approval_review_for_workspace(workspace_dir, thread_id, review)
-            .map_err(|error| error.to_string())
     }
 }
 #[derive(Clone)]
@@ -1294,14 +1417,14 @@ impl NativeTuiApp {
         )
         .with_github_review_poller_service(github_review_poller_service);
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
-        let application = NativeTuiApplicationHandle::new(conversation_service, planning_feature);
+        let turn_control_truth = conversation_service.runtime_control_truth();
+        let application = NativeTuiApplicationHandle::new(planning_feature);
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
         let workspace_directory = std::env::current_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
-        let turn_control_truth = application.runtime_control_truth();
         let initial_conversation = ConversationViewModel::new_draft_with_truth(
             workspace_directory.clone(),
             turn_control_truth,

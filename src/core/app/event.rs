@@ -4,7 +4,9 @@ use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
 };
-use super::{ApprovalDecisionAdmission, ApprovalDecisionCorrelation};
+use super::{
+    ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
+};
 use super::{
     ConversationLoadCorrelation, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
     PlanningRuntimeRefreshCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
@@ -111,6 +113,10 @@ pub enum CoreEffectCompletion {
     },
     ApprovalDecisionSubmitted {
         correlation: ApprovalDecisionCorrelation,
+        result: Result<(), String>,
+    },
+    ApprovalReviewPersisted {
+        correlation: ApprovalReviewPersistenceCorrelation,
         result: Result<(), String>,
     },
     GithubReviewPollCompleted {
