@@ -1,9 +1,9 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
-    CoreEffectCompletion, CoreInput, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
-    TurnStreamEvent, TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission,
-    TurnSubmissionCorrelation,
+    CoreEffectCompletion, CoreInput, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::ManualPromptCorrelation;
@@ -36,6 +36,8 @@ pub struct CoreController {
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     deferred_conversation_load: Option<(String, String)>,
+    next_parallel_peek_load_generation: u64,
+    active_parallel_peek_load: Option<ParallelPeekLoadCorrelation>,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
@@ -59,6 +61,8 @@ impl CoreController {
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
             deferred_conversation_load: None,
+            next_parallel_peek_load_generation: 1,
+            active_parallel_peek_load: None,
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
@@ -157,17 +161,21 @@ impl CoreController {
                 self.turn_stream_state = TurnStreamState::new();
                 self.conversation_changed_outcome(None, Vec::new())
             }
-            CoreInput::Command(AppCommand::LoadParallelPeekConversation {
-                request_id,
-                thread_id,
-            }) => CoreDispatchOutcome {
-                events: Vec::new(),
-                effects: vec![CoreEffect::LoadParallelPeekConversation {
-                    request_id,
+            CoreInput::Command(AppCommand::LoadParallelPeekConversation { thread_id }) => {
+                let correlation = ParallelPeekLoadCorrelation::new(
+                    take_generation(
+                        &mut self.next_parallel_peek_load_generation,
+                        "parallel peek load",
+                    ),
                     thread_id,
-                }],
-                snapshot: self.snapshot(),
-            },
+                );
+                self.active_parallel_peek_load = Some(correlation.clone());
+                CoreDispatchOutcome {
+                    events: Vec::new(),
+                    effects: vec![CoreEffect::LoadParallelPeekConversation { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::Command(AppCommand::PrepareManualPrompt(request)) => {
                 if self.in_flight_manual_prompt_preparation.is_some() {
                     return CoreDispatchOutcome {
@@ -367,18 +375,22 @@ impl CoreController {
                 self.conversation_changed_outcome(Some(correlation), Vec::new())
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ParallelPeekConversationLoaded {
-                request_id,
-                thread_id,
+                correlation,
                 result,
-            }) => CoreDispatchOutcome {
-                events: vec![AppEvent::ParallelPeekConversationLoaded {
-                    request_id,
-                    thread_id,
-                    result,
-                }],
-                effects: Vec::new(),
-                snapshot: self.snapshot(),
-            },
+            }) => {
+                if self.active_parallel_peek_load.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.active_parallel_peek_load = None;
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::ParallelPeekConversationLoaded {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::TurnSteered {
                 correlation,
                 result,
@@ -800,6 +812,13 @@ mod tests {
         thread_id: &str,
     ) -> ConversationLoadCorrelation {
         ConversationLoadCorrelation::new(generation, thread_id)
+    }
+
+    fn parallel_peek_load_correlation(
+        generation: u64,
+        thread_id: &str,
+    ) -> ParallelPeekLoadCorrelation {
+        ParallelPeekLoadCorrelation::new(generation, thread_id)
     }
 
     fn session_rename_correlation(
@@ -1434,12 +1453,11 @@ mod tests {
     }
 
     #[test]
-    fn parallel_peek_load_dispatches_effect_without_replacing_active_conversation() {
+    fn parallel_peek_load_dispatches_correlated_effect_without_replacing_active_conversation() {
         let mut controller = CoreController::new();
 
         let outcome = controller.handle_input(CoreInput::Command(
             AppCommand::LoadParallelPeekConversation {
-                request_id: 7,
                 thread_id: "thread-peek".to_string(),
             },
         ));
@@ -1449,8 +1467,30 @@ mod tests {
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::LoadParallelPeekConversation {
-                request_id: 7,
-                thread_id: "thread-peek".to_string(),
+                correlation: parallel_peek_load_correlation(1, "thread-peek"),
+            }]
+        );
+    }
+
+    #[test]
+    fn newer_parallel_peek_load_supersedes_the_active_correlation() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(
+            AppCommand::LoadParallelPeekConversation {
+                thread_id: "thread-old".to_string(),
+            },
+        ));
+
+        let outcome = controller.handle_input(CoreInput::Command(
+            AppCommand::LoadParallelPeekConversation {
+                thread_id: "thread-new".to_string(),
+            },
+        ));
+
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::LoadParallelPeekConversation {
+                correlation: parallel_peek_load_correlation(2, "thread-new"),
             }]
         );
     }
@@ -2219,28 +2259,101 @@ mod tests {
     }
 
     #[test]
-    fn parallel_peek_completion_passes_through_without_mutating_core_state() {
+    fn parallel_peek_completion_without_an_active_load_is_ignored() {
         let mut controller = CoreController::new();
-        let ready = sample_conversation_ready_snapshot();
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::ParallelPeekConversationLoaded {
-                request_id: 7,
-                thread_id: "thread-peek".to_string(),
-                result: Ok(Box::new(ready.clone())),
+                correlation: parallel_peek_load_correlation(1, "thread-peek"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot())),
             },
         ));
 
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert!(outcome.events.is_empty());
+        assert!(outcome.effects.is_empty());
+    }
+
+    #[test]
+    fn parallel_peek_completion_accepts_only_the_latest_generation_once() {
+        let mut controller = CoreController::new();
+        let ready = sample_conversation_ready_snapshot();
+        controller.handle_input(CoreInput::Command(
+            AppCommand::LoadParallelPeekConversation {
+                thread_id: "thread-old".to_string(),
+            },
+        ));
+        controller.handle_input(CoreInput::Command(
+            AppCommand::LoadParallelPeekConversation {
+                thread_id: "thread-new".to_string(),
+            },
+        ));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ParallelPeekConversationLoaded {
+                correlation: parallel_peek_load_correlation(1, "thread-old"),
+                result: Ok(Box::new(ready.clone())),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ParallelPeekConversationLoaded {
+                correlation: parallel_peek_load_correlation(2, "thread-new"),
+                result: Ok(Box::new(ready.clone())),
+            },
+        ));
         assert_eq!(
-            outcome.events,
+            accepted.events,
             vec![AppEvent::ParallelPeekConversationLoaded {
-                request_id: 7,
-                thread_id: "thread-peek".to_string(),
-                result: Ok(Box::new(ready)),
+                correlation: parallel_peek_load_correlation(2, "thread-new"),
+                result: Ok(Box::new(ready.clone())),
             }]
         );
-        assert!(outcome.effects.is_empty());
+        assert_eq!(accepted.snapshot, AppSnapshot::initial());
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ParallelPeekConversationLoaded {
+                correlation: parallel_peek_load_correlation(2, "thread-new"),
+                result: Ok(Box::new(ready)),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+    }
+
+    #[test]
+    fn same_thread_parallel_peek_reload_rejects_the_older_generation() {
+        let mut controller = CoreController::new();
+        for _ in 0..2 {
+            controller.handle_input(CoreInput::Command(
+                AppCommand::LoadParallelPeekConversation {
+                    thread_id: "thread-peek".to_string(),
+                },
+            ));
+        }
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ParallelPeekConversationLoaded {
+                correlation: parallel_peek_load_correlation(1, "thread-peek"),
+                result: Err("stale result".to_string()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ParallelPeekConversationLoaded {
+                correlation: parallel_peek_load_correlation(2, "thread-peek"),
+                result: Err("latest result".to_string()),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::ParallelPeekConversationLoaded {
+                correlation: parallel_peek_load_correlation(2, "thread-peek"),
+                result: Err("latest result".to_string()),
+            }]
+        );
     }
 
     #[test]

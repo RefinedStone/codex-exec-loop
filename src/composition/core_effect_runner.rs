@@ -16,8 +16,8 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
     ConversationLoadCorrelation, ConversationReadySnapshot, ConversationThreadReviewSnapshot,
-    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation,
+    ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
+    SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -95,11 +95,8 @@ impl CoreEffectRunner {
                 self.spawn_conversation_load(correlation, fallback_workspace_directory);
                 None
             }
-            CoreEffect::LoadParallelPeekConversation {
-                request_id,
-                thread_id,
-            } => {
-                self.spawn_parallel_peek_conversation_load(request_id, thread_id);
+            CoreEffect::LoadParallelPeekConversation { correlation } => {
+                self.spawn_parallel_peek_conversation_load(correlation);
                 None
             }
             CoreEffect::PrepareManualPrompt(request) => Some(CoreInput::EffectCompleted(
@@ -173,12 +170,13 @@ impl CoreEffectRunner {
         });
     }
 
-    pub fn spawn_parallel_peek_conversation_load(&self, request_id: u64, thread_id: String) {
+    pub fn spawn_parallel_peek_conversation_load(&self, correlation: ParallelPeekLoadCorrelation) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
-            let result = conversation_service.load_snapshot(thread_id.as_str());
-            let completion = parallel_peek_conversation_completion(request_id, thread_id, result);
+            let result =
+                conversation_service.load_snapshot(correlation.requested_thread_id.as_str());
+            let completion = parallel_peek_conversation_completion(correlation, result);
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -289,13 +287,13 @@ fn conversation_snapshot_completion(
 }
 
 fn parallel_peek_conversation_completion(
-    request_id: u64,
-    thread_id: String,
+    correlation: ParallelPeekLoadCorrelation,
     result: Result<crate::domain::conversation::ConversationSnapshot>,
 ) -> CoreEffectCompletion {
+    let requested_thread_id = correlation.requested_thread_id.clone();
     let result = result
         .and_then(|snapshot| {
-            if snapshot.thread_id == thread_id {
+            if snapshot.thread_id == requested_thread_id {
                 Ok(snapshot)
             } else {
                 Err(anyhow::anyhow!(
@@ -307,8 +305,7 @@ fn parallel_peek_conversation_completion(
         .map(Box::new)
         .map_err(|error| error.to_string());
     CoreEffectCompletion::ParallelPeekConversationLoaded {
-        request_id,
-        thread_id,
+        correlation,
         result,
     }
 }
@@ -636,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn parallel_peek_completion_keeps_request_identity_and_validates_thread() {
+    fn parallel_peek_completion_keeps_correlation_and_validates_thread() {
         let conversation = crate::domain::conversation::ConversationSnapshot {
             thread_id: "thread-peek".to_string(),
             title: "Peek thread".to_string(),
@@ -649,13 +646,11 @@ mod tests {
 
         assert_eq!(
             parallel_peek_conversation_completion(
-                7,
-                "thread-peek".to_string(),
+                ParallelPeekLoadCorrelation::new(7, "thread-peek"),
                 Ok(conversation.clone()),
             ),
             CoreEffectCompletion::ParallelPeekConversationLoaded {
-                request_id: 7,
-                thread_id: "thread-peek".to_string(),
+                correlation: ParallelPeekLoadCorrelation::new(7, "thread-peek"),
                 result: Ok(Box::new(ConversationReadySnapshot::from(conversation))),
             }
         );
@@ -670,7 +665,10 @@ mod tests {
             item_lifecycle: Default::default(),
         };
         let CoreEffectCompletion::ParallelPeekConversationLoaded { result, .. } =
-            parallel_peek_conversation_completion(8, "thread-peek".to_string(), Ok(mismatched))
+            parallel_peek_conversation_completion(
+                ParallelPeekLoadCorrelation::new(8, "thread-peek"),
+                Ok(mismatched),
+            )
         else {
             panic!("parallel peek completion must keep its dedicated variant");
         };

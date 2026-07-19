@@ -1,7 +1,7 @@
 use super::{
-    ConversationLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
-    StartupCheckCorrelation, TurnSteerCorrelation, TurnSubmissionCorrelation,
-    TurnSubmissionRequest,
+    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameCorrelation, StartupCheckCorrelation, TurnSteerCorrelation,
+    TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
@@ -24,8 +24,7 @@ pub enum CoreEffect {
         fallback_workspace_directory: String,
     },
     LoadParallelPeekConversation {
-        request_id: u64,
-        thread_id: String,
+        correlation: ParallelPeekLoadCorrelation,
     },
     PrepareManualPrompt(Box<ManualPromptRequest>),
     SubmitTurn {

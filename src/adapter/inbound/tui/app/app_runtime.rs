@@ -204,6 +204,7 @@ pub(super) fn core_turn_stream_event_from_application(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::parallel_peek_overlay_ui::ParallelPeekConversationPreview;
     use crate::adapter::inbound::tui::app::test_helpers;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -1006,6 +1007,78 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn parallel_peek_projection_requires_the_visible_matching_preview() {
+        let mut app = test_helpers::test_native_tui_app();
+        app.parallel_peek_overlay_ui_state
+            .open_preview(test_parallel_peek_preview("thread-current"));
+
+        app.apply_parallel_peek_conversation_load(
+            crate::core::app::ParallelPeekLoadCorrelation::new(1, "thread-current"),
+            Err("hidden failure".to_string()),
+        );
+        assert_eq!(
+            app.parallel_peek_overlay_ui_state
+                .preview()
+                .map(|preview| preview.status_text.as_str()),
+            Some("conversation snapshot loading")
+        );
+
+        app.shell_overlay = ShellOverlay::ParallelPeek;
+        app.apply_parallel_peek_conversation_load(
+            crate::core::app::ParallelPeekLoadCorrelation::new(2, "thread-stale"),
+            Err("stale failure".to_string()),
+        );
+        assert_eq!(
+            app.parallel_peek_overlay_ui_state
+                .preview()
+                .map(|preview| preview.status_text.as_str()),
+            Some("conversation snapshot loading")
+        );
+
+        app.apply_parallel_peek_conversation_load(
+            crate::core::app::ParallelPeekLoadCorrelation::new(3, "thread-current"),
+            Err("current failure".to_string()),
+        );
+        assert_eq!(
+            app.parallel_peek_overlay_ui_state
+                .preview()
+                .map(|preview| preview.status_text.as_str()),
+            Some("conversation snapshot failed: current failure")
+        );
+    }
+
+    #[test]
+    fn shell_chrome_supersession_resets_parallel_peek_projection() {
+        let mut app = test_helpers::test_native_tui_app();
+        app.shell_overlay = ShellOverlay::ParallelPeek;
+        app.parallel_peek_overlay_ui_state
+            .open_preview(test_parallel_peek_preview("thread-current"));
+        app.parallel_peek_overlay_ui_state
+            .scroll_conversation_older(10);
+
+        app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+        assert!(app.parallel_peek_overlay_ui_state.preview().is_none());
+        assert_eq!(
+            app.parallel_peek_overlay_ui_state
+                .conversation_scroll_from_bottom(),
+            0
+        );
+    }
+
+    fn test_parallel_peek_preview(thread_id: &str) -> ParallelPeekConversationPreview {
+        ParallelPeekConversationPreview {
+            agent_id: "agent-peek".to_string(),
+            slot_id: "slot-peek".to_string(),
+            task_title: "Inspect conversation".to_string(),
+            thread_id: Some(thread_id.to_string()),
+            snapshot: None,
+            status_text: "conversation snapshot loading".to_string(),
+        }
+    }
+
     fn test_startup_ready_snapshot(workspace_path: &str) -> Box<StartupReadySnapshot> {
         Box::new(StartupReadySnapshot {
             cwd: workspace_path.to_string(),
@@ -1376,6 +1449,11 @@ impl NativeTuiApp {
         if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue {
             self.queue_overlay_ui_state.reset();
         }
+        if previous_overlay == ShellOverlay::ParallelPeek
+            && self.shell_overlay != ShellOverlay::ParallelPeek
+        {
+            self.parallel_peek_overlay_ui_state.reset();
+        }
         if previous_overlay == ShellOverlay::PlanningInit
             && self.shell_overlay != ShellOverlay::PlanningInit
         {
@@ -1433,11 +1511,10 @@ impl NativeTuiApp {
                 snapshot,
             } => self.apply_correlated_conversation_snapshot(correlation, snapshot),
             AppEvent::ParallelPeekConversationLoaded {
-                request_id,
-                thread_id,
+                correlation,
                 result,
             } => {
-                self.apply_parallel_peek_conversation_load(request_id, thread_id, result);
+                self.apply_parallel_peek_conversation_load(correlation, result);
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnSteerAdmissionResolved(_) => {}

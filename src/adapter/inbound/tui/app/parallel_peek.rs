@@ -1,4 +1,4 @@
-use crate::core::app::{AppCommand, ConversationReadySnapshot};
+use crate::core::app::{AppCommand, ConversationReadySnapshot, ParallelPeekLoadCorrelation};
 use crate::domain::parallel_mode::ParallelModeAgentRosterEntry;
 
 use super::parallel_peek_overlay_ui::ParallelPeekConversationPreview;
@@ -154,13 +154,8 @@ impl NativeTuiApp {
             preview.agent_id, preview.slot_id, preview.status_text
         );
         if let Some(thread_id) = thread_id {
-            let request_id = self
-                .parallel_peek_overlay_ui_state
-                .begin_conversation_load(preview, thread_id.clone());
-            self.dispatch_core_command(AppCommand::LoadParallelPeekConversation {
-                request_id,
-                thread_id,
-            });
+            self.parallel_peek_overlay_ui_state.open_preview(preview);
+            self.dispatch_core_command(AppCommand::LoadParallelPeekConversation { thread_id });
         } else {
             self.parallel_peek_overlay_ui_state.open_preview(preview);
         }
@@ -171,14 +166,16 @@ impl NativeTuiApp {
 
     pub(super) fn apply_parallel_peek_conversation_load(
         &mut self,
-        request_id: u64,
-        thread_id: String,
+        correlation: ParallelPeekLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,
     ) {
+        if self.shell_overlay != ShellOverlay::ParallelPeek {
+            return;
+        }
         let result = result.map(|ready| *ready.conversation);
         if !self
             .parallel_peek_overlay_ui_state
-            .complete_conversation_load(request_id, thread_id.as_str(), result)
+            .complete_conversation_load(correlation.requested_thread_id.as_str(), result)
         {
             return;
         }

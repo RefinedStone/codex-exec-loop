@@ -1225,6 +1225,23 @@ fn tui_conversation_loads_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_parallel_peek_load_correlation_is_core_owned() {
+    assert_no_forbidden_references_in_paths(
+        "TUI parallel peek may project accepted loads but must not own request correlation",
+        &[
+            "src/adapter/inbound/tui/app/parallel_peek.rs",
+            "src/adapter/inbound/tui/app/parallel_peek_overlay_ui.rs",
+        ],
+        &[
+            "PendingParallelPeekConversationLoad",
+            "next_load_request_id",
+            "pending_load",
+            ".begin_conversation_load(",
+        ],
+    );
+}
+
+#[test]
 fn tui_conversation_stream_events_enter_through_core_runtime() {
     // Static guard for turn-stream preparation: shell runtime should not feed app-server
     // stream events directly to the TUI conversation reducer.

@@ -53,6 +53,12 @@ provider worker, and drops stale completions. The TUI owns only the confirmation
 editor revision needed to clear an unchanged draft after success. A terminal turn event does not
 invalidate an already accepted steer, but a conversation identity transition does.
 
+Parallel peek loads are core-correlated reads. Core assigns a monotonically increasing generation
+to the requested thread, lets the latest request supersede the previous one, and drops unmatched or
+duplicate completions before they reach the TUI. The TUI owns agent selection, loading/status/scroll
+presentation, and clears that preview when another shell overlay supersedes it. Peek results never
+replace the interactive conversation.
+
 An accepted post-turn completion updates the core planning-runtime projection in the same
 correlated dispatch. TUI conversation state does not retain a second planning-runtime copy.
 

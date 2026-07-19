@@ -123,6 +123,8 @@ marker로 linked worktree를 공유하고 독립 clone을 분리합니다.
 
 Board는 readiness, pool slot, active roster, 선택한 lifecycle, distributor head, queue 상태,
 dispatch 보류 사유를 읽기 전용으로 보여줍니다.
+`:peek`은 활성 agent 대화를 읽기 전용으로 미리 보여줍니다. Agent나 overlay를 바꾸면 늦게 도착한
+결과가 최신 preview 또는 interactive conversation을 교체하지 못합니다.
 
 ## 복구와 제한
 
