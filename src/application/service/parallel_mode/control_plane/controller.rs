@@ -16,8 +16,9 @@ use super::{
     ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffect,
     ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEvent,
     ParallelModeControlPlaneRuntime, ParallelModeControlPlaneRuntimeOutcome,
-    ParallelModeControlPlaneRuntimeStore, ParallelModeSupervisorInspectionCorrelation,
-    ParallelModeSupervisorInspectionSnapshot, ParallelModeSupervisorInspectionState,
+    ParallelModeControlPlaneRuntimeStore, ParallelModePendingDispatchPollCorrelation,
+    ParallelModeSupervisorInspectionCorrelation, ParallelModeSupervisorInspectionSnapshot,
+    ParallelModeSupervisorInspectionState,
 };
 
 const CONTROL_PLANE_TICK_INTERVAL: Duration = Duration::from_secs(1);
@@ -162,12 +163,21 @@ where
         self.runtime.store().orchestrator_tick_in_flight.is_some()
     }
 
-    pub fn control_effect_in_flight(&self) -> bool {
+    fn non_poll_control_effect_in_flight(&self) -> bool {
         self.runtime.store().parallel_entry_in_flight.is_some()
             || self.supervisor_refresh_in_flight()
             || self.orchestrator_wake_in_flight()
             || self.orchestrator_tick_in_flight()
             || self.supervisor_inspection_state.is_loading()
+    }
+
+    pub fn control_effect_in_flight(&self) -> bool {
+        self.non_poll_control_effect_in_flight()
+            || self
+                .runtime
+                .store()
+                .pending_dispatch_poll_in_flight
+                .is_some()
     }
 
     pub fn supervisor_inspection_state(&self) -> &ParallelModeSupervisorInspectionState {
@@ -279,6 +289,10 @@ where
                 correlation,
                 result,
             } => self.supervisor_inspection_completed(correlation, result),
+            ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
+                correlation,
+                result,
+            } => self.pending_dispatch_wake_polled(correlation, result),
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                 workspace_directory,
                 epoch_id,
@@ -356,7 +370,7 @@ where
     }
 
     pub fn supervisor_refresh_due(&self, now: Instant, activity_pulse_visible: bool) -> bool {
-        if self.control_effect_in_flight() {
+        if self.non_poll_control_effect_in_flight() {
             return false;
         }
         if !activity_pulse_visible {
@@ -696,6 +710,20 @@ where
         };
         events.extend(self.drain_outcome(outcome));
         events
+    }
+
+    fn pending_dispatch_wake_polled(
+        &mut self,
+        correlation: ParallelModePendingDispatchPollCorrelation,
+        result: Result<Option<super::ParallelModeControlPlaneWake>, String>,
+    ) -> Vec<ParallelModeControlPlanePresentationEvent> {
+        let outcome =
+            self.runtime
+                .handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+                    correlation,
+                    result,
+                });
+        self.drain_outcome(outcome)
     }
 
     fn orchestrator_wake_completed(
@@ -1083,28 +1111,10 @@ where
                 );
                 Vec::new()
             }
-            ParallelModeControlPlaneEffect::PollPendingDispatchWake {
-                workspace_directory,
-                epoch_id,
-                follow_up_tick_signature,
-            } => {
-                let (wake, error) = match self
-                    .effect_runner
-                    .pending_dispatch_wake(&workspace_directory, epoch_id)
-                {
-                    Ok(wake) => (wake, None),
-                    Err(error) => (None, Some(error)),
-                };
-                let outcome = self.runtime.handle(
-                    ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
-                        workspace_directory,
-                        epoch_id,
-                        wake,
-                        error,
-                        follow_up_tick_signature,
-                    },
-                );
-                self.drain_outcome(outcome)
+            ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation } => {
+                self.effect_runner
+                    .spawn_pending_dispatch_wake_poll(correlation);
+                Vec::new()
             }
             ParallelModeControlPlaneEffect::EnqueueSlotCapacityDispatch {
                 workspace_directory,

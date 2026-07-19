@@ -768,6 +768,53 @@ fn parallel_supervisor_inspection_never_runs_inline_under_the_control_plane_mute
 }
 
 #[test]
+fn parallel_pending_dispatch_poll_never_reads_authority_under_the_control_plane_mutex() {
+    assert_no_forbidden_references_in_paths(
+        "parallel pending-dispatch polling must dispatch a worker before reading SQLite or filesystem authority",
+        &[
+            "src/application/service/parallel_mode/control_plane/controller.rs",
+            "src/adapter/inbound/tui/app/parallel_mode.rs",
+            "src/adapter/inbound/tui/app/shell_runtime.rs",
+        ],
+        &[
+            ".pending_dispatch_wake(",
+            ".load_runtime_projections(",
+            ".load_runtime_projection_or_invalid(",
+        ],
+    );
+
+    let controller =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/controller.rs")
+            .expect("parallel control-plane controller source should load");
+    assert!(
+        controller.contains(".spawn_pending_dispatch_wake_poll(correlation);"),
+        "the controller must dispatch pending-wake authority reads through the async effect runner"
+    );
+    let runner =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
+            .expect("parallel control-plane effect runner source should load");
+    let poll_worker = runner
+        .split_once("pub fn spawn_pending_dispatch_wake_poll(")
+        .and_then(|(_, body)| body.split_once("pub fn enqueue_slot_capacity_dispatch("))
+        .map(|(body, _)| body)
+        .expect("pending dispatch poll worker should have a bounded source body");
+    assert!(
+        poll_worker.contains("thread::spawn(move ||")
+            && poll_worker.contains(".pending_dispatch_wake(")
+            && poll_worker
+                .contains("ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled"),
+        "pending dispatch polling must perform authority I/O and completion delivery inside the worker"
+    );
+    let runtime = fs::read_to_string("src/application/service/parallel_mode/control_plane/mod.rs")
+        .expect("parallel control-plane runtime source should load");
+    assert!(
+        runtime.contains("ParallelModePendingDispatchPollCorrelation")
+            && runtime.contains("pending_dispatch_poll_in_flight"),
+        "pending dispatch polling must retain typed operation/workspace/epoch correlation before worker dispatch"
+    );
+}
+
+#[test]
 fn tui_startup_checks_enter_through_core_runtime() {
     // Static guard for the startup migration: TUI may request startup checks, but execution belongs
     // to CoreRuntime/CoreEffectRunner so completion re-enters core before TUI state changes.

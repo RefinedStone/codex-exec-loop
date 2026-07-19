@@ -165,6 +165,12 @@ accounting, stale completion drop, wake coalescing, durable backpressure, 단일
 제공합니다. 이 결정을 다시 검토하지 않고 mailbox actor, TUI/core의 raw parallel service owner,
 두 번째 dispatch queue를 추가하지 않습니다.
 
+주기적인 pending dispatch poll은 이 facade가 승인하지만 durable authority 읽기는 effect runner에서만
+실행합니다. Runtime은 정확한 workspace와 epoch에 묶인 단조 증가 operation을 할당하고 poll 하나만
+진행하며 이후 tick을 합칩니다. 정확히 일치하는 completion만 wake 또는 후속 tick을 시작할 수 있고,
+disable, workspace 전환, duplicate, ABA completion은 폐기합니다. 읽기 실패는 현재 projection을
+보존하고 다음 주기 tick이 재시도가 됩니다.
+
 Pool mutation은 repository-scoped OS lock도 획득합니다. 각 allocation은 추측할 수 없는 정확한
 generation을 받고 lease, session, event, delivery, cleanup까지 전달됩니다. 지연 event는 mutation
 전에 같은 generation인지 비교합니다. 모든 지원 플랫폼에서 SQLite가 권한을 가집니다.

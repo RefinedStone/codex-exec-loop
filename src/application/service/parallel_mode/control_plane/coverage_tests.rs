@@ -7,6 +7,10 @@ use crate::application::port::outbound::github_automation_port::{
     GithubAutomationCapabilities, GithubAutomationPort, GithubAutomationPullRequest,
 };
 use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+use crate::application::port::outbound::planning_authority_port::{
+    NoopPlanningAuthorityPort, PlanningAuthorityRuntimeProjectionSnapshot,
+};
+use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
 use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
 use crate::application::service::parallel_mode::ParallelModeService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
@@ -262,6 +266,35 @@ fn test_control_plane_handle_with_github(
     (ParallelModeControlPlaneHandle::new(service), rx)
 }
 
+fn test_control_plane_handle_with_noop_authority(
+    authority: Arc<NoopPlanningAuthorityPort>,
+) -> (
+    ParallelModeControlPlaneHandle<CapturingControlPlaneEventSink>,
+    mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>,
+) {
+    let parallel_mode_service = ParallelModeService::new(
+        authority.clone(),
+        Arc::new(ReadyGithubAutomationPort),
+        Arc::new(GitParallelModeRuntimeAdapter::new()),
+    );
+    let planning = PlanningServices::from_ports(
+        Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        authority,
+        Arc::new(NoopPlanningTaskRepositoryPort),
+        Arc::new(NoopPlanningWorkerPort),
+    );
+    let (tx, rx) = mpsc::channel();
+    let effect_runner = ParallelModeControlPlaneEffectRunner::new(
+        parallel_mode_service.clone(),
+        planning,
+        Arc::new(NoopParallelAgentWorkerPort),
+        ParallelModeTurnService::new(parallel_mode_service),
+        CapturingControlPlaneEventSink { tx },
+    );
+    let service = super::controller::ParallelModeControlPlaneService::new(effect_runner);
+    (ParallelModeControlPlaneHandle::new(service), rx)
+}
+
 #[test]
 fn disabling_parallel_mode_cancels_the_active_automation_epoch() {
     let (handle, _rx) = test_control_plane_handle();
@@ -403,6 +436,17 @@ fn only_effect_id(
         .expect("outcome should contain one identified effect")
 }
 
+fn only_pending_dispatch_poll_correlation(
+    outcome: &ParallelModeControlPlaneRuntimeOutcome,
+) -> ParallelModePendingDispatchPollCorrelation {
+    match outcome.effects.as_slice() {
+        [ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation }] => {
+            correlation.clone()
+        }
+        effects => panic!("expected one pending dispatch poll effect, got {effects:?}"),
+    }
+}
+
 fn wake(epoch_id: u64) -> ParallelModeControlPlaneWake {
     ParallelModeControlPlaneWake::new(
         WORKSPACE,
@@ -436,9 +480,11 @@ fn utility_effect_ids_inspection_and_reset_tick_signature_cover_process_edges() 
     );
     assert_eq!(
         ParallelModeControlPlaneEffect::PollPendingDispatchWake {
-            workspace_directory: WORKSPACE.to_string(),
-            epoch_id: 1,
-            follow_up_tick_signature: None,
+            correlation: ParallelModePendingDispatchPollCorrelation::new(
+                1,
+                WORKSPACE.to_string(),
+                1,
+            ),
         }
         .effect_id(),
         None
@@ -702,6 +748,15 @@ fn unchanged_recovery_signature_dedupes_until_external_state_changes_in_same_epo
         effect,
         ParallelModeControlPlaneEffect::RunOrchestratorTick { .. }
     )));
+    let poll_correlation = only_pending_dispatch_poll_correlation(&refreshed);
+    let polled = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+        correlation: poll_correlation,
+        result: Ok(None),
+    });
+    assert!(polled.effects.iter().all(|effect| !matches!(
+        effect,
+        ParallelModeControlPlaneEffect::RunOrchestratorTick { .. }
+    )));
     let unchanged = runtime.handle(ParallelModeControlPlaneCommand::RunOrchestratorTick {
         workspace_directory: WORKSPACE.to_string(),
         signature: dirty_signature.to_string(),
@@ -955,7 +1010,8 @@ fn completion_commands_cover_specific_wake_refresh_tick_and_worker_arms() {
     );
     assert!(matches!(
         refreshed.effects.as_slice(),
-        [ParallelModeControlPlaneEffect::PollPendingDispatchWake { epoch_id: 1, .. }]
+        [ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation }]
+            if correlation.epoch_id == 1
     ));
 
     let mut tick_runtime = ParallelModeControlPlaneRuntime::new();
@@ -1043,20 +1099,29 @@ fn pending_dispatch_poll_and_request_edges_cover_ready_stale_busy_and_error_path
     );
     assert!(matches!(
         polled_after_refresh.effects.as_slice(),
-        [ParallelModeControlPlaneEffect::PollPendingDispatchWake {
-            follow_up_tick_signature: Some(signature),
-            ..
-        }] if signature == "tick"
+        [ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation }]
+            if correlation.workspace_directory == WORKSPACE && correlation.epoch_id == 1
     ));
+    assert_eq!(
+        busy_runtime
+            .store
+            .pending_dispatch_poll_in_flight
+            .as_ref()
+            .and_then(|in_flight| in_flight.follow_up_tick_signature.as_deref()),
+        Some("tick")
+    );
 
     let mut polled_runtime = ParallelModeControlPlaneRuntime::new();
     open_epoch(&mut polled_runtime);
+    let started_error =
+        polled_runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+            workspace_directory: WORKSPACE.to_string(),
+            follow_up_tick_signature: None,
+        });
+    let error_correlation = only_pending_dispatch_poll_correlation(&started_error);
     let error = polled_runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
-        workspace_directory: WORKSPACE.to_string(),
-        epoch_id: 1,
-        wake: None,
-        error: Some("sqlite busy".to_string()),
-        follow_up_tick_signature: None,
+        correlation: error_correlation,
+        result: Err("sqlite busy".to_string()),
     });
     assert_eq!(
         error.events,
@@ -1066,13 +1131,16 @@ fn pending_dispatch_poll_and_request_edges_cover_ready_stale_busy_and_error_path
         }]
     );
 
+    let started_wake =
+        polled_runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+            workspace_directory: WORKSPACE.to_string(),
+            follow_up_tick_signature: Some("unused".to_string()),
+        });
+    let wake_correlation = only_pending_dispatch_poll_correlation(&started_wake);
     let wake_polled =
         polled_runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
-            workspace_directory: WORKSPACE.to_string(),
-            epoch_id: 1,
-            wake: Some(wake(1)),
-            error: None,
-            follow_up_tick_signature: Some("unused".to_string()),
+            correlation: wake_correlation,
+            result: Ok(Some(wake(1))),
         });
     assert!(matches!(
         wake_polled.effects.as_slice(),
@@ -1081,15 +1149,235 @@ fn pending_dispatch_poll_and_request_edges_cover_ready_stale_busy_and_error_path
 
     let stale_polled =
         polled_runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
-            workspace_directory: WORKSPACE.to_string(),
-            epoch_id: 99,
-            wake: None,
-            error: None,
-            follow_up_tick_signature: None,
+            correlation: ParallelModePendingDispatchPollCorrelation::new(
+                99,
+                WORKSPACE.to_string(),
+                99,
+            ),
+            result: Ok(None),
         });
     assert!(matches!(
         stale_polled.events.as_slice(),
         [ParallelModeControlPlaneEvent::StaleCommandDropped { epoch_id: 99, .. }]
+    ));
+}
+
+#[test]
+fn pending_dispatch_poll_coalesces_ticks_and_keeps_the_stronger_follow_up() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    open_epoch(&mut runtime);
+    let started = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: WORKSPACE.to_string(),
+        follow_up_tick_signature: None,
+    });
+    let correlation = only_pending_dispatch_poll_correlation(&started);
+
+    let coalesced = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: WORKSPACE.to_string(),
+        follow_up_tick_signature: Some("coalesced-tick".to_string()),
+    });
+    assert!(coalesced.effects.is_empty());
+    assert_eq!(
+        runtime
+            .store
+            .pending_dispatch_poll_in_flight
+            .as_ref()
+            .map(|in_flight| &in_flight.correlation),
+        Some(&correlation)
+    );
+
+    let completed = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+        correlation,
+        result: Ok(None),
+    });
+    assert!(matches!(
+        completed.effects.as_slice(),
+        [ParallelModeControlPlaneEffect::RunOrchestratorTick { signature, .. }]
+            if signature == "coalesced-tick"
+    ));
+}
+
+#[test]
+fn deduped_poll_follow_up_still_drains_work_queued_while_authority_was_loading() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    open_epoch(&mut runtime);
+    runtime.store.last_orchestrator_tick_signature = Some("same-tick".to_string());
+    let started = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: WORKSPACE.to_string(),
+        follow_up_tick_signature: Some("same-tick".to_string()),
+    });
+    let correlation = only_pending_dispatch_poll_correlation(&started);
+    runtime.store.pending_supervisor_refresh = true;
+
+    let completed = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+        correlation,
+        result: Ok(None),
+    });
+
+    assert!(matches!(
+        completed.effects.as_slice(),
+        [ParallelModeControlPlaneEffect::RefreshSupervisor { .. }]
+    ));
+}
+
+#[test]
+fn new_poll_follow_up_yields_to_queued_refresh_before_queued_wake() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    open_epoch(&mut runtime);
+    let started = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: WORKSPACE.to_string(),
+        follow_up_tick_signature: Some("new-tick".to_string()),
+    });
+    let correlation = only_pending_dispatch_poll_correlation(&started);
+    runtime.store.pending_supervisor_refresh = true;
+    runtime.store.pending_orchestrator_wake = Some(ParallelModeControlPlaneWake::new(
+        WORKSPACE,
+        ParallelModeAutomationTrigger::ParallelOfficialCompletion,
+        1,
+        None,
+    ));
+
+    let completed = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+        correlation,
+        result: Ok(None),
+    });
+
+    assert!(matches!(
+        completed.effects.as_slice(),
+        [ParallelModeControlPlaneEffect::RefreshSupervisor { .. }]
+    ));
+    assert_eq!(
+        runtime
+            .store
+            .pending_orchestrator_wake
+            .as_ref()
+            .map(|wake| wake.trigger),
+        Some(ParallelModeAutomationTrigger::ParallelOfficialCompletion)
+    );
+    assert!(
+        completed.effects.iter().all(|effect| !matches!(
+            effect,
+            ParallelModeControlPlaneEffect::RunOrchestratorTick { .. }
+        )),
+        "the captured tick signature is stale once a newer refresh is queued"
+    );
+}
+
+#[test]
+fn new_poll_follow_up_yields_to_a_wake_queued_while_authority_was_loading() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    open_epoch(&mut runtime);
+    let started = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: WORKSPACE.to_string(),
+        follow_up_tick_signature: Some("new-tick".to_string()),
+    });
+    let correlation = only_pending_dispatch_poll_correlation(&started);
+    runtime.store.pending_orchestrator_wake = Some(ParallelModeControlPlaneWake::new(
+        WORKSPACE,
+        ParallelModeAutomationTrigger::MainTurnPostEvaluation,
+        1,
+        None,
+    ));
+
+    let completed = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+        correlation,
+        result: Ok(None),
+    });
+
+    assert!(matches!(
+        completed.effects.as_slice(),
+        [ParallelModeControlPlaneEffect::RunOrchestrator { wake, .. }]
+            if wake.trigger == ParallelModeAutomationTrigger::MainTurnPostEvaluation
+    ));
+    assert!(
+        completed.effects.iter().all(|effect| !matches!(
+            effect,
+            ParallelModeControlPlaneEffect::RunOrchestratorTick { .. }
+        )),
+        "a wake accepted during the poll must run before the captured follow-up tick"
+    );
+}
+
+#[test]
+fn pending_dispatch_poll_rejects_disable_workspace_switch_duplicate_and_aba_completions() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+        workspace_directory: "/first".to_string(),
+    });
+    let first = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: "/first".to_string(),
+        follow_up_tick_signature: None,
+    });
+    let stale = only_pending_dispatch_poll_correlation(&first);
+
+    runtime.handle(ParallelModeControlPlaneCommand::Disable {
+        workspace_directory: "/first".to_string(),
+    });
+    runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
+        workspace_directory: "/second".to_string(),
+    });
+    let second = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+        workspace_directory: "/second".to_string(),
+        follow_up_tick_signature: None,
+    });
+    let current = only_pending_dispatch_poll_correlation(&second);
+    assert!(current.operation_id > stale.operation_id);
+    assert!(current.epoch_id > stale.epoch_id);
+
+    let stale_completion =
+        runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+            correlation: stale,
+            result: Ok(None),
+        });
+    assert!(matches!(
+        stale_completion.events.as_slice(),
+        [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
+            if reason == "unknown pending dispatch poll"
+    ));
+    assert_eq!(
+        runtime
+            .store
+            .pending_dispatch_poll_in_flight
+            .as_ref()
+            .map(|in_flight| &in_flight.correlation),
+        Some(&current)
+    );
+
+    let mut forged = current.clone();
+    forged.operation_id = forged.operation_id.saturating_add(1);
+    let forged_completion =
+        runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+            correlation: forged,
+            result: Ok(None),
+        });
+    assert!(matches!(
+        forged_completion.events.as_slice(),
+        [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
+            if reason == "unknown pending dispatch poll"
+    ));
+    assert_eq!(
+        runtime
+            .store
+            .pending_dispatch_poll_in_flight
+            .as_ref()
+            .map(|in_flight| &in_flight.correlation),
+        Some(&current)
+    );
+
+    let accepted = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+        correlation: current.clone(),
+        result: Ok(None),
+    });
+    assert!(accepted.effects.is_empty());
+    assert!(runtime.store.pending_dispatch_poll_in_flight.is_none());
+    let duplicate = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
+        correlation: current,
+        result: Ok(None),
+    });
+    assert!(matches!(
+        duplicate.events.as_slice(),
+        [ParallelModeControlPlaneEvent::StaleCommandDropped { reason, .. }]
+            if reason == "unknown pending dispatch poll"
     ));
 }
 
@@ -1170,13 +1458,7 @@ fn projection_ready_and_effect_completion_drain_or_refresh_pending_work() {
         Some("tick-after-busy".to_string()),
         &mut busy_schedule_outcome,
     );
-    assert!(matches!(
-        busy_schedule_outcome.effects.as_slice(),
-        [ParallelModeControlPlaneEffect::PollPendingDispatchWake {
-            follow_up_tick_signature: Some(signature),
-            ..
-        }] if signature == "tick-after-busy"
-    ));
+    assert!(matches!(busy_schedule_outcome.effects.as_slice(), []));
 
     let mut refresh_follow_up_runtime = ParallelModeControlPlaneRuntime::new();
     refresh_follow_up_runtime.force_mode_for_test(WORKSPACE, true);
@@ -1669,6 +1951,15 @@ fn controller_pending_dispatch_poll_runs_follow_up_tick_when_queue_is_empty() {
     });
     assert!(started.is_empty());
 
+    let poll_event = recv_background_event(&rx);
+    assert!(matches!(
+        poll_event,
+        ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled { .. }
+    ));
+    assert!(
+        handle.handle_background_event(poll_event).is_empty(),
+        "an empty poll should only schedule the correlated follow-up tick"
+    );
     let tick_event = recv_background_event(&rx);
     let (workspace_directory, epoch_id, effect_id) = match tick_event {
         ParallelModeControlPlaneBackgroundEvent::OrchestratorTickCompleted {
@@ -1693,6 +1984,78 @@ fn controller_pending_dispatch_poll_runs_follow_up_tick_when_queue_is_empty() {
         ParallelModeControlPlanePresentationEvent::StatusShown { status_text, .. }
             if status_text == "parallel mode: distributor retry completed / notices: 0"
     )));
+}
+
+#[test]
+fn pending_dispatch_poll_returns_before_a_gated_six_hundred_millisecond_authority_read() {
+    let shared_projection = Arc::new(Mutex::new(
+        PlanningAuthorityRuntimeProjectionSnapshot::default(),
+    ));
+    let authority = Arc::new(
+        NoopPlanningAuthorityPort::default()
+            .with_shared_runtime_projection(shared_projection.clone()),
+    );
+    let (handle, rx) = test_control_plane_handle_with_noop_authority(authority);
+    let workspace = unique_workspace("pending-poll-nonblocking");
+    handle.force_epoch_for_test(&workspace, 1);
+
+    let (gate_entered_tx, gate_entered_rx) = mpsc::channel();
+    let gate = shared_projection.clone();
+    let gate_thread = std::thread::spawn(move || {
+        let _guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        gate_entered_tx
+            .send(())
+            .expect("authority gate should report acquisition");
+        std::thread::sleep(Duration::from_millis(600));
+    });
+    gate_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("authority gate should be held before dispatch");
+
+    let started_at = Instant::now();
+    let presented =
+        handle.handle_command(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+            workspace_directory: workspace.clone(),
+            follow_up_tick_signature: None,
+        });
+    let command_elapsed = started_at.elapsed();
+
+    assert!(
+        command_elapsed < Duration::from_millis(300),
+        "pending dispatch poll held the control-plane mutex for {command_elapsed:?}"
+    );
+    assert!(presented.is_empty());
+    assert!(
+        handle.control_effect_in_flight(),
+        "correlation must be installed before the worker is dispatched"
+    );
+    let snapshot_started_at = Instant::now();
+    assert_eq!(
+        handle
+            .current_epoch_id_for_workspace(&workspace)
+            .expect("active epoch should remain readable"),
+        1
+    );
+    assert!(
+        snapshot_started_at.elapsed() < Duration::from_millis(300),
+        "the async authority read must not retain the control-plane mutex"
+    );
+
+    gate_thread
+        .join()
+        .expect("authority gate thread should complete");
+    let completed = recv_background_event(&rx);
+    assert!(matches!(
+        &completed,
+        ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
+            correlation,
+            result: Ok(None),
+        } if correlation.workspace_directory == workspace
+            && correlation.epoch_id == 1
+            && correlation.operation_id == 1
+    ));
+    assert!(handle.handle_background_event(completed).is_empty());
+    assert!(!handle.control_effect_in_flight());
 }
 
 #[test]
