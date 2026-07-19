@@ -1232,8 +1232,34 @@ fn session_catalog_request_uses_current_workspace_context() {
     );
 }
 #[test]
-fn idle_background_poll_does_not_request_redraw() {
+fn idle_background_poll_after_initial_refresh_does_not_request_redraw() {
     let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().planning_workspace_directory();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while runtime
+        .app()
+        .core_runtime
+        .snapshot()
+        .planning_parallel
+        .planning_runtime_workspace_directory
+        .as_deref()
+        != Some(workspace_directory.as_str())
+        && Instant::now() < deadline
+    {
+        runtime.poll_background_messages();
+        thread::yield_now();
+    }
+    assert_eq!(
+        runtime
+            .app()
+            .core_runtime
+            .snapshot()
+            .planning_parallel
+            .planning_runtime_workspace_directory
+            .as_deref(),
+        Some(workspace_directory.as_str()),
+        "fixture planning runtime refresh should settle before idle polling"
+    );
     runtime.take_redraw_request();
 
     runtime.poll_background_messages();
