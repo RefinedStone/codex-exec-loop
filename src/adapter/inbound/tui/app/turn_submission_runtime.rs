@@ -416,6 +416,11 @@ impl NativeTuiApp {
                 let draft_name = review.draft_name.clone();
                 self.planning_init_overlay_ui_state
                     .open_simple_review_summary(
+                        crate::core::app::PlanningEditorSessionIdentity::new(
+                            correlation.generation,
+                            correlation.workspace_directory.clone(),
+                            review.draft_name.clone(),
+                        ),
                         review.draft_name,
                         review.staged_file_count,
                         review.validation_report,

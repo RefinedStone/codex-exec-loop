@@ -65,7 +65,7 @@ impl PlanningWorkspaceOperationUiState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::PlanningWorkspaceResetTarget;
+    use crate::core::app::{PlanningWorkspaceOperationKind, PlanningWorkspaceResetTarget};
 
     fn correlation(
         generation: u64,
@@ -74,7 +74,9 @@ mod tests {
         PlanningWorkspaceOperationCorrelation {
             generation,
             workspace_directory: workspace_directory.to_string(),
-            reset_target: PlanningWorkspaceResetTarget::Queue,
+            operation: PlanningWorkspaceOperationKind::Reset {
+                target: PlanningWorkspaceResetTarget::Queue,
+            },
         }
     }
 

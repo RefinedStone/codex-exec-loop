@@ -1,4 +1,6 @@
+#[cfg(test)]
 use crate::application::service::planning::PlanningInitStageResult;
+use crate::core::app::PlanningEditorSessionIdentity;
 use crate::domain::planning::PlanningValidationReport;
 
 /*
@@ -45,12 +47,17 @@ pub(super) enum PlanningInitRuntimeRefreshIntent {
 // file list 전체가 아니라 operator decision에 필요한 요약과 validation 결과만 읽는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PlanningInitSimpleReviewState {
+    session_identity: PlanningEditorSessionIdentity,
     draft_name: String,
     staged_file_count: usize,
     validation_report: PlanningValidationReport,
 }
 
 impl PlanningInitSimpleReviewState {
+    pub fn session_identity(&self) -> &PlanningEditorSessionIdentity {
+        &self.session_identity
+    }
+
     pub fn draft_name(&self) -> &str {
         self.draft_name.as_str()
     }
@@ -111,6 +118,18 @@ impl PlanningInitOverlayUiState {
     pub fn begin_runtime_refresh(&mut self) {
         self.step = PlanningInitOverlayStep::Loading;
         self.simple_review = None;
+    }
+
+    pub fn begin_simple_authoring_operation(&mut self) {
+        self.step = PlanningInitOverlayStep::Loading;
+    }
+
+    pub fn restore_simple_review_or_selection(&mut self) {
+        self.step = if self.simple_review.is_some() {
+            PlanningInitOverlayStep::SimpleReview
+        } else {
+            PlanningInitOverlayStep::ModeSelection
+        };
     }
 
     pub fn apply_runtime_refresh(
@@ -193,12 +212,14 @@ impl PlanningInitOverlayUiState {
         self.step = PlanningInitOverlayStep::ManualEditor;
     }
 
+    #[cfg(test)]
     pub fn open_simple_review(&mut self, staged: PlanningInitStageResult) {
         /*
         service layer가 draft directory와 staged file 목록을 만들지만, UI state는 renderer가
         필요한 summary만 보관한다. 실제 promote/edit 작업은 controller가 service API로 다시 위임한다.
         */
         self.open_simple_review_summary(
+            PlanningEditorSessionIdentity::new(0, "/test-workspace", staged.draft_name.clone()),
             staged.draft_name,
             staged.staged_file_count,
             staged.validation_report,
@@ -207,6 +228,7 @@ impl PlanningInitOverlayUiState {
 
     pub fn open_simple_review_summary(
         &mut self,
+        session_identity: PlanningEditorSessionIdentity,
         draft_name: String,
         staged_file_count: usize,
         validation_report: PlanningValidationReport,
@@ -214,6 +236,7 @@ impl PlanningInitOverlayUiState {
         self.mode_selection = PlanningInitModeSelection::Simple;
         self.step = PlanningInitOverlayStep::SimpleReview;
         self.simple_review = Some(PlanningInitSimpleReviewState {
+            session_identity,
             draft_name,
             staged_file_count,
             validation_report,

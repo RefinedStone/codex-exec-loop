@@ -1804,6 +1804,24 @@ impl NativeTuiApp {
             } => {
                 self.apply_planning_workspace_reset_completion(correlation, result);
             }
+            AppEvent::PlanningSimpleDraftStaged {
+                correlation,
+                result,
+            } => {
+                self.apply_simple_planning_draft_stage_completion(correlation, result);
+            }
+            AppEvent::PlanningSimpleEditorLoaded {
+                correlation,
+                result,
+            } => {
+                self.apply_simple_planning_editor_load_completion(correlation, result);
+            }
+            AppEvent::PlanningSimpleDraftPromoted {
+                correlation,
+                result,
+            } => {
+                self.apply_simple_planning_draft_promotion_completion(correlation, result);
+            }
             AppEvent::QueueMutationStarted { correlation } => {
                 self.apply_queue_mutation_started(correlation);
             }

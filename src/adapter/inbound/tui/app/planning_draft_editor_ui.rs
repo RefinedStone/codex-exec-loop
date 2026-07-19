@@ -1,4 +1,7 @@
 use crate::application::service::planning::{PlanningDraftEditorFile, PlanningDraftEditorSession};
+use crate::core::app::{
+    PlanningEditorFileSnapshot, PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot,
+};
 use crate::domain::planning::PlanningValidationReport;
 use std::path::Path;
 
@@ -15,6 +18,7 @@ pub(super) struct PlanningDraftEditorUiState {
 // from the last service round-trip. Buffer mutation is local until save.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PlanningDraftEditorSessionState {
+    session_identity: Option<PlanningEditorSessionIdentity>,
     draft_name: String,
     draft_directory: String,
     buffers: Vec<PlanningDraftEditorBufferState>,
@@ -63,6 +67,17 @@ impl PlanningDraftEditorUiState {
     pub fn open_session(&mut self, session: PlanningDraftEditorSession) {
         self.session = Some(PlanningDraftEditorSessionState::from(session));
         self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
+    }
+    pub fn open_correlated_session(&mut self, session: PlanningEditorSessionSnapshot) {
+        self.session = Some(<PlanningDraftEditorSessionState as From<
+            PlanningEditorSessionSnapshot,
+        >>::from(session));
+        self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
+    }
+    pub fn session_identity(&self) -> Option<&PlanningEditorSessionIdentity> {
+        self.session
+            .as_ref()
+            .and_then(|session| session.session_identity.as_ref())
     }
     pub fn draft_name(&self) -> Option<&str> {
         self.session
@@ -273,6 +288,7 @@ impl PlanningDraftEditorSessionState {
             .map(PlanningDraftEditorBufferState::from)
             .collect::<Vec<_>>();
         Self {
+            session_identity: None,
             draft_name: session.draft_name,
             draft_directory: session.draft_directory,
             buffers,
@@ -281,7 +297,50 @@ impl PlanningDraftEditorSessionState {
         }
     }
 }
+
+impl From<PlanningEditorSessionSnapshot> for PlanningDraftEditorSessionState {
+    fn from(session: PlanningEditorSessionSnapshot) -> Self {
+        let buffers = session
+            .editable_files
+            .into_iter()
+            .map(PlanningDraftEditorBufferState::from)
+            .collect::<Vec<_>>();
+        Self {
+            draft_name: session.session_identity.draft_name.clone(),
+            session_identity: Some(session.session_identity),
+            draft_directory: session.draft_directory,
+            buffers,
+            selected_file_index: 0,
+            validation_report: session.validation_report,
+        }
+    }
+}
+
+impl From<PlanningEditorFileSnapshot> for PlanningDraftEditorBufferState {
+    fn from(file: PlanningEditorFileSnapshot) -> Self {
+        Self::from_parts(file.active_path, file.staged_path, file.body)
+    }
+}
+
 impl PlanningDraftEditorBufferState {
+    fn from_parts(active_path: String, staged_path: String, body: String) -> Self {
+        let lines = if body.is_empty() {
+            vec![String::new()]
+        } else {
+            body.split('\n').map(|line| line.to_string()).collect()
+        };
+        Self {
+            active_path,
+            staged_path,
+            lines,
+            cursor_line_index: 0,
+            cursor_column: 0,
+            preferred_column: 0,
+            editor_scroll: 0,
+            dirty: false,
+        }
+    }
+
     pub fn active_path(&self) -> &str {
         self.active_path.as_str()
     }
@@ -452,22 +511,7 @@ impl From<PlanningDraftEditorFile> for PlanningDraftEditorBufferState {
     fn from(file: PlanningDraftEditorFile) -> Self {
         // Store even an empty file as one editable line so cursor movement and
         // insertion paths can index the current line without special casing.
-        let lines = if file.body.is_empty() {
-            vec![String::new()]
-        } else {
-            file.body.split('\n').map(|line| line.to_string()).collect()
-        };
-
-        Self {
-            active_path: file.active_path,
-            staged_path: file.staged_path,
-            lines,
-            cursor_line_index: 0,
-            cursor_column: 0,
-            preferred_column: 0,
-            editor_scroll: 0,
-            dirty: false,
-        }
+        Self::from_parts(file.active_path, file.staged_path, file.body)
     }
 }
 

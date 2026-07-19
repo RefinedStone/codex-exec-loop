@@ -20,6 +20,9 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     DirectionsMaintenanceSummary as ApplicationDirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus as ApplicationDirectionsSupportingFileStatus,
+    PlanningDraftEditorSession as ApplicationPlanningDraftEditorSession,
+    PlanningDraftPromoteResult as ApplicationPlanningDraftPromoteResult,
+    PlanningInitStageResult as ApplicationPlanningInitStageResult,
     PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
     PlanningQueueCancellationTransactionResult, PlanningQueueUseCases,
@@ -43,14 +46,16 @@ use crate::core::app::{
     DirectionsSupportingFileStatus as CoreDirectionsSupportingFileStatus,
     GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
     GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult, ParallelPeekLoadCorrelation,
-    PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
-    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetSnapshot,
-    PlanningWorkspaceResetTarget, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
-    QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationCorrelation,
-    QueueMutationIntent, QueueMutationResult, ReviewCenterHistoryEntrySnapshot,
-    ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
-    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation,
+    PlanningEditorFileSnapshot, PlanningEditorSessionSnapshot, PlanningRuntimeRefreshCorrelation,
+    PlanningRuntimeRefreshSnapshot, PlanningSimpleDraftPromotionSnapshot,
+    PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationCorrelation,
+    PlanningWorkspaceOperationKind, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
+    QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
+    QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
+    QueueMutationResult, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
+    ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
+    SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    StopRequestAttempt, StopRequestCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -311,6 +316,18 @@ impl CoreEffectRunner {
                 self.spawn_planning_workspace_reset(correlation);
                 None
             }
+            CoreEffect::StageSimplePlanningDraft { correlation } => {
+                self.spawn_simple_planning_draft_stage(correlation);
+                None
+            }
+            CoreEffect::LoadSimplePlanningEditor { correlation } => {
+                self.spawn_simple_planning_editor_load(correlation);
+                None
+            }
+            CoreEffect::PromoteSimplePlanningDraft { correlation } => {
+                self.spawn_simple_planning_draft_promotion(correlation);
+                None
+            }
             CoreEffect::ExecuteQueueMutation { correlation } => {
                 self.spawn_queue_mutation(correlation);
                 None
@@ -529,31 +546,94 @@ impl CoreEffectRunner {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
-            let requested_target = correlation.reset_target;
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                planning_workspace.reset_workspace(
-                    &correlation.workspace_directory,
-                    application_planning_reset_target(requested_target),
-                )
-            }))
-            .map_err(|_| anyhow::anyhow!("planning workspace reset worker panicked"))
-            .and_then(|result| result)
-            .map(planning_workspace_reset_snapshot)
-            .and_then(|snapshot| {
-                if snapshot.target == requested_target {
-                    Ok(snapshot)
-                } else {
-                    Err(anyhow::anyhow!(
-                        "planning workspace reset provider returned a different target"
-                    ))
-                }
-            })
-            .map(Box::new)
-            .map_err(|error| error.to_string());
+            let result = correlation
+                .reset_target()
+                .ok_or_else(|| anyhow::anyhow!("planning workspace reset operation mismatch"))
+                .and_then(|requested_target| {
+                    catch_redacted_worker_unwind(|| {
+                        planning_workspace.reset_workspace(
+                            &correlation.workspace_directory,
+                            application_planning_reset_target(requested_target),
+                        )
+                    })
+                    .map_err(|_| anyhow::anyhow!("planning workspace reset worker panicked"))
+                    .and_then(|result| result)
+                    .map(planning_workspace_reset_snapshot)
+                    .and_then(|snapshot| {
+                        if snapshot.target == requested_target {
+                            Ok(snapshot)
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "planning workspace reset provider returned a different target"
+                            ))
+                        }
+                    })
+                    .map(Box::new)
+                })
+                .map_err(|error| error.to_string());
             let completion = CoreEffectCompletion::PlanningWorkspaceResetCompleted {
                 correlation,
                 result,
             };
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
+    pub fn spawn_simple_planning_draft_stage(
+        &self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+    ) {
+        let planning_workspace = self.planning_workspace.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = if matches!(
+                &correlation.operation,
+                PlanningWorkspaceOperationKind::StageSimpleDraft
+            ) {
+                catch_redacted_worker_unwind(|| {
+                    planning_workspace.stage_simple_mode_draft(&correlation.workspace_directory)
+                })
+                .map_err(|_| anyhow::anyhow!("planning simple draft stage worker panicked"))
+                .and_then(|result| result)
+                .map(|result| simple_draft_stage_snapshot(&correlation, result))
+                .map(Box::new)
+            } else {
+                Err(anyhow::anyhow!(
+                    "planning simple draft stage operation mismatch"
+                ))
+            }
+            .map_err(|error| error.to_string());
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PlanningSimpleDraftStaged {
+                    correlation,
+                    result,
+                },
+            ));
+        });
+    }
+
+    pub fn spawn_simple_planning_editor_load(
+        &self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+    ) {
+        let planning_workspace = self.planning_workspace.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let completion =
+                simple_planning_editor_load_completion(&planning_workspace, correlation);
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
+    pub fn spawn_simple_planning_draft_promotion(
+        &self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+    ) {
+        let planning_workspace = self.planning_workspace.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let completion =
+                simple_planning_draft_promotion_completion(&planning_workspace, correlation);
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -837,6 +917,119 @@ fn guarded_startup_checks_completion(
     let result = catch_redacted_worker_unwind(|| run_checks(&workspace_directory))
         .unwrap_or_else(|_| Err(anyhow::anyhow!("startup checks panicked")));
     startup_checks_completion(correlation, result)
+}
+
+fn simple_draft_stage_snapshot(
+    correlation: &PlanningWorkspaceOperationCorrelation,
+    result: ApplicationPlanningInitStageResult,
+) -> PlanningSimpleDraftStageSnapshot {
+    PlanningSimpleDraftStageSnapshot {
+        session_identity: correlation.editor_session_identity(result.draft_name),
+        staged_file_count: result.staged_file_count,
+        validation_report: result.validation_report,
+    }
+}
+
+fn planning_editor_session_snapshot(
+    correlation: &PlanningWorkspaceOperationCorrelation,
+    result: ApplicationPlanningDraftEditorSession,
+) -> PlanningEditorSessionSnapshot {
+    PlanningEditorSessionSnapshot {
+        session_identity: correlation.editor_session_identity(result.draft_name),
+        draft_directory: result.draft_directory,
+        editable_files: result
+            .editable_files
+            .into_iter()
+            .map(|file| PlanningEditorFileSnapshot {
+                active_path: file.active_path,
+                staged_path: file.staged_path,
+                body: file.body,
+            })
+            .collect(),
+        validation_report: result.validation_report,
+    }
+}
+
+fn simple_draft_promotion_snapshot(
+    result: ApplicationPlanningDraftPromoteResult,
+) -> PlanningSimpleDraftPromotionSnapshot {
+    PlanningSimpleDraftPromotionSnapshot {
+        draft_name: result.draft_name,
+        promoted_file_count: result.promoted_file_count,
+        validation_report: result.validation_report,
+    }
+}
+
+fn simple_planning_editor_load_completion(
+    planning_workspace: &PlanningWorkspaceUseCases,
+    correlation: PlanningWorkspaceOperationCorrelation,
+) -> CoreEffectCompletion {
+    let result = match &correlation.operation {
+        PlanningWorkspaceOperationKind::LoadSimpleEditor {
+            draft_name,
+            source_session,
+        } if source_session.workspace_directory.as_str()
+            == correlation.workspace_directory.as_str()
+            && source_session.draft_name.as_str() == draft_name.as_str() =>
+        {
+            let draft_name = draft_name.clone();
+            catch_redacted_worker_unwind(|| {
+                planning_workspace
+                    .load_manual_editor_session(&correlation.workspace_directory, &draft_name)
+            })
+            .map_err(|_| anyhow::anyhow!("planning simple editor load worker panicked"))
+            .and_then(|result| result)
+            .map(|result| planning_editor_session_snapshot(&correlation, result))
+        }
+        PlanningWorkspaceOperationKind::LoadSimpleEditor { .. } => Err(anyhow::anyhow!(
+            "planning simple editor load source session mismatch"
+        )),
+        _ => Err(anyhow::anyhow!(
+            "planning simple editor load operation mismatch"
+        )),
+    }
+    .map(Box::new)
+    .map_err(|error| error.to_string());
+    CoreEffectCompletion::PlanningSimpleEditorLoaded {
+        correlation,
+        result,
+    }
+}
+
+fn simple_planning_draft_promotion_completion(
+    planning_workspace: &PlanningWorkspaceUseCases,
+    correlation: PlanningWorkspaceOperationCorrelation,
+) -> CoreEffectCompletion {
+    let result = match &correlation.operation {
+        PlanningWorkspaceOperationKind::PromoteSimpleDraft {
+            draft_name,
+            source_session,
+        } if source_session.workspace_directory.as_str()
+            == correlation.workspace_directory.as_str()
+            && source_session.draft_name.as_str() == draft_name.as_str() =>
+        {
+            let draft_name = draft_name.clone();
+            catch_redacted_worker_unwind(|| {
+                planning_workspace
+                    .promote_staged_draft(&correlation.workspace_directory, &draft_name)
+            })
+            .map_err(|_| anyhow::anyhow!("planning simple draft promotion worker panicked"))
+            .and_then(|result| result)
+            .map(simple_draft_promotion_snapshot)
+        }
+        PlanningWorkspaceOperationKind::PromoteSimpleDraft { .. } => Err(anyhow::anyhow!(
+            "planning simple draft promotion source session mismatch"
+        )),
+        _ => Err(anyhow::anyhow!(
+            "planning simple draft promotion operation mismatch"
+        )),
+    }
+    .map(Box::new)
+    .map_err(|error| error.to_string());
+    CoreEffectCompletion::PlanningSimpleDraftPromoted {
+        correlation,
+        result,
+    }
 }
 
 fn session_catalog_completion(
@@ -1249,6 +1442,8 @@ mod tests {
     const NONBLOCKING_DISPATCH_TIMEOUT: Duration = Duration::from_secs(1);
     const WORKER_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
     const SENSITIVE_MAINTENANCE_PANIC_PAYLOAD: &str = "raw maintenance provider prompt payload";
+    const SENSITIVE_SIMPLE_AUTHORING_PANIC_PAYLOAD: &str =
+        "raw simple authoring provider draft payload";
     const SENSITIVE_STARTUP_PANIC_PAYLOAD: &str = "raw startup provider prompt payload";
     const STARTUP_PANIC_CHILD_ENV: &str = "AKRA_STARTUP_PANIC_OBSERVATION_CHILD";
     const STARTUP_PANIC_TEST_NAME: &str = "composition::core_effect_runner::tests::startup_provider_panic_stderr_is_redacted_in_isolated_process";
@@ -1291,9 +1486,11 @@ mod tests {
 
     struct GatedPlanningWorkspacePort {
         load_gate: Arc<OneShotGate>,
+        simple_authoring_gate: Option<Arc<OneShotGate>>,
         stage_call_count: Arc<AtomicUsize>,
         promote_call_count: Arc<AtomicUsize>,
         panic_load_once: AtomicBool,
+        panic_draft_load_once: AtomicBool,
     }
 
     impl PlanningWorkspacePort for GatedPlanningWorkspacePort {
@@ -1304,6 +1501,9 @@ mod tests {
             _files: &[PlanningDraftFileRecord],
         ) -> Result<PlanningDraftStageRecord> {
             self.stage_call_count.fetch_add(1, Ordering::SeqCst);
+            if let Some(gate) = &self.simple_authoring_gate {
+                gate.wait_once();
+            }
             anyhow::bail!("synthetic stage should not complete")
         }
 
@@ -1313,6 +1513,12 @@ mod tests {
             _draft_name: &str,
         ) -> Result<PlanningDraftLoadRecord> {
             self.promote_call_count.fetch_add(1, Ordering::SeqCst);
+            if self.panic_draft_load_once.swap(false, Ordering::SeqCst) {
+                panic!("{SENSITIVE_SIMPLE_AUTHORING_PANIC_PAYLOAD}");
+            }
+            if let Some(gate) = &self.simple_authoring_gate {
+                gate.wait_once();
+            }
             anyhow::bail!("synthetic promote should not complete")
         }
 
@@ -1626,9 +1832,11 @@ mod tests {
             .expect("unused planning gate should start open");
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: planning_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let runtime_port = Arc::new(GatedRuntimePort::default());
         let (input_sender, input_receiver) = core_input_channel();
@@ -1847,8 +2055,243 @@ mod tests {
         PlanningWorkspaceOperationCorrelation {
             generation,
             workspace_directory: workspace_directory.to_string(),
-            reset_target: PlanningWorkspaceResetTarget::Queue,
+            operation: PlanningWorkspaceOperationKind::Reset {
+                target: PlanningWorkspaceResetTarget::Queue,
+            },
         }
+    }
+
+    fn planning_editor_session(
+        generation: u64,
+        workspace_directory: &str,
+        draft_name: &str,
+    ) -> crate::core::app::PlanningEditorSessionIdentity {
+        crate::core::app::PlanningEditorSessionIdentity::new(
+            generation,
+            workspace_directory,
+            draft_name,
+        )
+    }
+
+    #[test]
+    fn simple_draft_stage_dispatch_returns_within_300ms_while_provider_stays_gated() {
+        let workspace_directory = "/tmp/gated-simple-stage";
+        let (unused_load_gate, _unused_entered, _unused_release) = one_shot_gate();
+        let (authoring_gate, gate_entered, gate_release) = one_shot_gate();
+        let stage_call_count = Arc::new(AtomicUsize::new(0));
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: unused_load_gate,
+            simple_authoring_gate: Some(authoring_gate),
+            stage_call_count: stage_call_count.clone(),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let runtime = CoreRuntime::new(runner, input_receiver);
+        let (dispatch_tx, dispatch_rx) = mpsc::sync_channel(1);
+        let dispatcher = thread::spawn(move || {
+            let mut runtime = runtime;
+            let outcome = runtime.dispatch_command(AppCommand::StageSimplePlanningDraft {
+                workspace_directory: workspace_directory.to_string(),
+            });
+            dispatch_tx
+                .send((runtime, outcome))
+                .expect("simple stage dispatch should return to the test");
+        });
+
+        gate_entered
+            .recv_timeout(WORKER_COMPLETION_TIMEOUT)
+            .expect("simple stage provider should reach the gate");
+        thread::sleep(Duration::from_millis(650));
+        let (mut runtime, accepted) = dispatch_rx
+            .recv_timeout(Duration::from_millis(300))
+            .expect("simple stage dispatch must return within 300ms while provider I/O is blocked");
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = accepted.events.as_slice()
+        else {
+            panic!("simple stage should be admitted");
+        };
+        let correlation = correlation.clone();
+        assert!(matches!(
+            &correlation.operation,
+            PlanningWorkspaceOperationKind::StageSimpleDraft
+        ));
+
+        let duplicate = runtime.dispatch_command(AppCommand::StageSimplePlanningDraft {
+            workspace_directory: workspace_directory.to_string(),
+        });
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Coalesced {
+                    correlation: correlation.clone(),
+                },
+            )]
+        );
+        assert!(duplicate.effects.is_empty());
+        assert_eq!(stage_call_count.load(Ordering::SeqCst), 1);
+
+        gate_release
+            .send(())
+            .expect("simple stage provider gate should release");
+        dispatcher
+            .join()
+            .expect("simple stage dispatch thread should not panic");
+        let completed = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningSimpleDraftStaged {
+                    correlation: completed,
+                    result: Err(error),
+                }] if completed == &correlation
+                    && error == "synthetic stage should not complete"
+            )
+        });
+        assert!(matches!(
+            completed.events.as_slice(),
+            [AppEvent::PlanningSimpleDraftStaged { correlation: completed, .. }]
+                if completed == &correlation
+        ));
+    }
+
+    #[test]
+    fn mismatched_simple_authoring_source_session_never_calls_the_provider() {
+        let workspace_directory = "/tmp/simple-source-workspace-a";
+        let draft_name = "draft-a";
+        let (unused_load_gate, _unused_entered, _unused_release) = one_shot_gate();
+        let provider_call_count = Arc::new(AtomicUsize::new(0));
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: unused_load_gate,
+            simple_authoring_gate: None,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: provider_call_count.clone(),
+            panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, _input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+
+        let load_correlation = PlanningWorkspaceOperationCorrelation {
+            generation: 1,
+            workspace_directory: workspace_directory.to_string(),
+            operation: PlanningWorkspaceOperationKind::LoadSimpleEditor {
+                draft_name: draft_name.to_string(),
+                source_session: planning_editor_session(
+                    8,
+                    "/tmp/simple-source-workspace-b",
+                    draft_name,
+                ),
+            },
+        };
+        let CoreEffectCompletion::PlanningSimpleEditorLoaded {
+            correlation,
+            result,
+        } = simple_planning_editor_load_completion(
+            &runner.planning_workspace,
+            load_correlation.clone(),
+        )
+        else {
+            panic!("malformed load should produce a typed load completion");
+        };
+        assert_eq!(correlation, load_correlation);
+        assert_eq!(
+            result.expect_err("malformed load should fail"),
+            "planning simple editor load source session mismatch"
+        );
+        assert_eq!(provider_call_count.load(Ordering::SeqCst), 0);
+
+        let promotion_correlation = PlanningWorkspaceOperationCorrelation {
+            generation: 2,
+            workspace_directory: workspace_directory.to_string(),
+            operation: PlanningWorkspaceOperationKind::PromoteSimpleDraft {
+                draft_name: draft_name.to_string(),
+                source_session: planning_editor_session(9, workspace_directory, "different-draft"),
+            },
+        };
+        let CoreEffectCompletion::PlanningSimpleDraftPromoted {
+            correlation,
+            result,
+        } = simple_planning_draft_promotion_completion(
+            &runner.planning_workspace,
+            promotion_correlation.clone(),
+        )
+        else {
+            panic!("malformed promotion should produce a typed promotion completion");
+        };
+        assert_eq!(correlation, promotion_correlation);
+        assert_eq!(
+            result.expect_err("malformed promotion should fail"),
+            "planning simple draft promotion source session mismatch"
+        );
+        assert_eq!(provider_call_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn simple_editor_worker_panic_returns_one_redacted_completion_and_reopens_admission() {
+        let workspace_directory = "/tmp/panicking-simple-editor";
+        let draft_name = "draft-a";
+        let (unused_load_gate, _unused_entered, _unused_release) = one_shot_gate();
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: unused_load_gate,
+            simple_authoring_gate: None,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(true),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let mut runtime = CoreRuntime::new(runner, input_receiver);
+        let command = AppCommand::LoadSimplePlanningEditor {
+            workspace_directory: workspace_directory.to_string(),
+            draft_name: draft_name.to_string(),
+            source_session: planning_editor_session(8, workspace_directory, draft_name),
+        };
+        let started = runtime.dispatch_command(command.clone());
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = started.events.as_slice()
+        else {
+            panic!("simple editor load should start");
+        };
+        let first = correlation.clone();
+
+        let panicked = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningSimpleEditorLoaded {
+                    correlation,
+                    result: Err(error),
+                }] if correlation == &first
+                    && error == "planning simple editor load worker panicked"
+            )
+        });
+        assert!(matches!(
+            panicked.events.as_slice(),
+            [AppEvent::PlanningSimpleEditorLoaded {
+                correlation,
+                result: Err(error),
+            }] if correlation == &first
+                && error == "planning simple editor load worker panicked"
+        ));
+
+        let reopened = runtime.dispatch_command(command);
+        assert!(matches!(
+            reopened.events.as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation }
+            )] if correlation.generation == first.generation + 1
+        ));
     }
 
     #[test]
@@ -1857,9 +2300,11 @@ mod tests {
         let (planning_gate, gate_entered, gate_release) = one_shot_gate();
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: planning_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let runtime_port = Arc::new(GatedRuntimePort::default());
         let (input_sender, input_receiver) = core_input_channel();
@@ -1939,9 +2384,11 @@ mod tests {
         let (planning_gate, gate_entered, gate_release) = one_shot_gate();
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: planning_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(true),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let runtime_port = Arc::new(GatedRuntimePort::default());
         let (input_sender, input_receiver) = core_input_channel();
@@ -2002,9 +2449,11 @@ mod tests {
         let (planning_gate, gate_entered, gate_release) = one_shot_gate();
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: planning_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let runtime_port = Arc::new(GatedRuntimePort::default());
         let (input_sender, input_receiver) = core_input_channel();
@@ -2090,9 +2539,11 @@ mod tests {
         let promote_call_count = Arc::new(AtomicUsize::new(0));
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: planning_gate,
+            simple_authoring_gate: None,
             stage_call_count: stage_call_count.clone(),
             promote_call_count: promote_call_count.clone(),
             panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let runtime_port = Arc::new(GatedRuntimePort::default());
         let (input_sender, input_receiver) = core_input_channel();
@@ -2193,9 +2644,11 @@ mod tests {
         let (unused_planning_gate, _unused_entered, _unused_release) = one_shot_gate();
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: unused_planning_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let (input_sender, input_receiver) = core_input_channel();
         let runner = test_effect_runner(planning_workspace, runtime_port.clone(), input_sender);
@@ -2300,9 +2753,11 @@ mod tests {
         let (unused_planning_gate, _unused_entered, _unused_release) = one_shot_gate();
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: unused_planning_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let (input_sender, input_receiver) = core_input_channel();
         let runner = test_effect_runner(planning_workspace, runtime_port.clone(), input_sender);
@@ -2396,9 +2851,11 @@ mod tests {
             .expect("manual fallback gate should start open");
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: manual_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(true),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let runtime_port = Arc::new(GatedRuntimePort::panicking_stop_once());
         let (input_sender, input_receiver) = core_input_channel();
@@ -2557,6 +3014,10 @@ mod tests {
                 run_panicking_startup_worker_child(mode);
                 return;
             }
+            Ok("simple") => {
+                run_panicking_simple_authoring_worker_child();
+                return;
+            }
             Ok("normal") => {
                 assert!(catch_redacted_worker_unwind(|| ()).is_ok());
                 panic!("{NORMAL_PANIC_PAYLOAD}");
@@ -2565,7 +3026,7 @@ mod tests {
         }
 
         let executable = std::env::current_exe().expect("test executable should resolve");
-        for mode in ["maintenance", "startup"] {
+        for mode in ["maintenance", "startup", "simple"] {
             let redacted_output = Command::new(&executable)
                 .args(["--exact", STARTUP_PANIC_TEST_NAME, "--nocapture"])
                 .env(STARTUP_PANIC_CHILD_ENV, mode)
@@ -2585,6 +3046,7 @@ mod tests {
             );
             for sensitive_payload in [
                 SENSITIVE_MAINTENANCE_PANIC_PAYLOAD,
+                SENSITIVE_SIMPLE_AUTHORING_PANIC_PAYLOAD,
                 SENSITIVE_STARTUP_PANIC_PAYLOAD,
             ] {
                 assert!(!redacted_stdout.contains(sensitive_payload));
@@ -2628,9 +3090,11 @@ mod tests {
         let (unused_gate, _unused_entered, _unused_release) = one_shot_gate();
         let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
             load_gate: unused_gate,
+            simple_authoring_gate: None,
             stage_call_count: Arc::new(AtomicUsize::new(0)),
             promote_call_count: Arc::new(AtomicUsize::new(0)),
             panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
         });
         let (input_sender, input_receiver) = core_input_channel();
         let runner = test_effect_runner_with_startup_service(
@@ -2692,6 +3156,57 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(received_completion_inputs, 1);
+        println!("{STARTUP_COMPLETION_MARKER}");
+    }
+
+    fn run_panicking_simple_authoring_worker_child() {
+        let workspace_directory = "/tmp/simple-authoring-redacted";
+        let draft_name = "draft-redacted";
+        let (unused_gate, _unused_entered, _unused_release) = one_shot_gate();
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: unused_gate,
+            simple_authoring_gate: None,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(true),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let mut runtime = CoreRuntime::new(runner, input_receiver);
+
+        let admission = runtime.dispatch_command(AppCommand::LoadSimplePlanningEditor {
+            workspace_directory: workspace_directory.to_string(),
+            draft_name: draft_name.to_string(),
+            source_session: planning_editor_session(1, workspace_directory, draft_name),
+        });
+        assert!(matches!(
+            admission.events.as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { .. }
+            )]
+        ));
+        let completion = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningSimpleEditorLoaded {
+                    result: Err(error),
+                    ..
+                }] if error == "planning simple editor load worker panicked"
+            )
+        });
+        assert!(matches!(
+            completion.events.as_slice(),
+            [AppEvent::PlanningSimpleEditorLoaded {
+                result: Err(error),
+                ..
+            }] if error == "planning simple editor load worker panicked"
+        ));
+        assert!(
+            runtime.poll_pending_input().is_none(),
+            "one simple-authoring worker must emit exactly one completion"
+        );
         println!("{STARTUP_COMPLETION_MARKER}");
     }
 

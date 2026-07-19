@@ -5,13 +5,15 @@ use super::super::{
     ConversationInputEvent, DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep,
     DirectionsMaintenanceProjectionKind, NativeTuiApp, PlanningInitDetailSelection,
     PlanningInitModeSelection, PlanningInitOverlayStep, PlanningInitRuntimeRefreshIntent,
-    PlanningRuntimeRefreshOperation, PlanningWorkspaceOperationUiSettlement, ShellChromeEvent,
-    ShellOverlay,
+    PlanningRuntimeRefreshOperation, PlanningRuntimeRefreshUiState,
+    PlanningWorkspaceOperationUiSettlement, ShellChromeEvent, ShellOverlay,
 };
 use crate::application::service::planning::{PlanningDraftEditorSession, PlanningResetTarget};
 use crate::core::app::{
     AppCommand, AppEvent, PlanningDoctorSnapshot, PlanningDoctorSnapshotState,
-    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
+    PlanningEditorSessionSnapshot, PlanningSimpleDraftPromotionSnapshot,
+    PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationAdmission,
+    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceOperationKind,
     PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
 };
 use crossterm::event::{self, KeyCode, KeyModifiers};
@@ -389,20 +391,48 @@ impl NativeTuiApp {
     ) {
         match admission {
             PlanningWorkspaceOperationAdmission::Started { correlation } => {
+                let status_text = match &correlation.operation {
+                    PlanningWorkspaceOperationKind::Reset { target } => {
+                        format!("planning reset in progress / target: {}", target.label())
+                    }
+                    PlanningWorkspaceOperationKind::StageSimpleDraft => {
+                        "planning simple draft staging in progress".to_string()
+                    }
+                    PlanningWorkspaceOperationKind::LoadSimpleEditor { .. } => {
+                        "planning simple draft editor loading".to_string()
+                    }
+                    PlanningWorkspaceOperationKind::PromoteSimpleDraft { .. } => {
+                        "planning simple draft promotion in progress".to_string()
+                    }
+                };
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!(
-                        "planning reset in progress / target: {}",
-                        correlation.reset_target.label()
-                    ),
+                    status_text,
                 });
+                if !matches!(
+                    &correlation.operation,
+                    PlanningWorkspaceOperationKind::Reset { .. }
+                ) && self.shell_overlay == ShellOverlay::PlanningInit
+                {
+                    self.planning_init_overlay_ui_state
+                        .begin_simple_authoring_operation();
+                }
                 self.planning_workspace_operation_ui_state
                     .begin(correlation, self.planning_ui_intent_revision);
             }
             PlanningWorkspaceOperationAdmission::Coalesced { correlation } => {
-                if self
-                    .planning_workspace_operation_ui_state
-                    .active_correlation()
-                    != Some(&correlation)
+                let is_reset = matches!(
+                    &correlation.operation,
+                    PlanningWorkspaceOperationKind::Reset { .. }
+                );
+                if !is_reset && self.shell_overlay == ShellOverlay::PlanningInit {
+                    self.planning_init_overlay_ui_state
+                        .begin_simple_authoring_operation();
+                }
+                if !is_reset
+                    || self
+                        .planning_workspace_operation_ui_state
+                        .active_correlation()
+                        != Some(&correlation)
                 {
                     self.planning_workspace_operation_ui_state
                         .begin(correlation, self.planning_ui_intent_revision);
@@ -412,12 +442,29 @@ impl NativeTuiApp {
                 active_correlation,
                 requested,
             } => {
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: format!(
+                let status_text = match (active_correlation.reset_target(), &requested.operation) {
+                    (
+                        Some(active_target),
+                        PlanningWorkspaceOperationKind::Reset {
+                            target: requested_target,
+                        },
+                    ) => format!(
                         "planning workspace busy / active reset: {} / requested reset: {} / wait for the active operation to finish",
-                        active_correlation.reset_target.label(),
-                        requested.target.label(),
+                        active_target.label(),
+                        requested_target.label(),
                     ),
+                    (Some(active_target), _) => format!(
+                        "planning workspace busy / reset {} is still in progress",
+                        active_target.label()
+                    ),
+                    _ => format!(
+                        "planning workspace busy / active: {} / requested: {} / wait for the active operation to finish",
+                        active_correlation.label(),
+                        requested.label(),
+                    ),
+                };
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
                 });
             }
         }
@@ -490,11 +537,22 @@ impl NativeTuiApp {
         else {
             return false;
         };
+        let status_text = active.reset_target().map_or_else(
+            || {
+                format!(
+                    "planning workspace busy / {} is still in progress",
+                    active.label()
+                )
+            },
+            |target| {
+                format!(
+                    "planning workspace busy / reset {} is still in progress",
+                    target.label()
+                )
+            },
+        );
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: format!(
-                "planning workspace busy / reset {} is still in progress",
-                active.reset_target.label()
-            ),
+            status_text,
         });
         true
     }
@@ -503,21 +561,113 @@ impl NativeTuiApp {
     // the review step. Promotion later reuses that validation state so blocked
     // drafts remain inspectable through the same overlay.
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
+        let workspace_directory = self.planning_workspace_directory();
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::StageSimplePlanningDraft {
+                workspace_directory,
+            });
+        self.apply_core_dispatch_outcome(outcome);
+    }
+    pub(super) fn open_simple_mode_planning_editor(&mut self) {
+        let Some((draft_name, source_session)) = self
+            .planning_init_overlay_ui_state
+            .simple_review()
+            .map(|review| {
+                (
+                    review.draft_name().to_string(),
+                    review.session_identity().clone(),
+                )
+            })
+        else {
+            return;
+        };
+        let workspace_directory = self.planning_workspace_directory();
+        if source_session.workspace_directory != workspace_directory
+            || source_session.draft_name != draft_name
+        {
             return;
         }
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::LoadSimplePlanningEditor {
+                workspace_directory,
+                draft_name,
+                source_session,
+            });
+        self.apply_core_dispatch_outcome(outcome);
+    }
+    pub(super) fn promote_simple_mode_planning_draft(&mut self) {
+        let Some((draft_name, source_session)) = self
+            .planning_init_overlay_ui_state
+            .simple_review()
+            .map(|review| {
+                (
+                    review.draft_name().to_string(),
+                    review.session_identity().clone(),
+                )
+            })
+        else {
+            return;
+        };
         let workspace_directory = self.planning_workspace_directory();
-        let status_text = match self
-            .application
-            .planning()
-            .workspace()
-            .stage_simple_mode_draft(&workspace_directory)
+        if source_session.workspace_directory != workspace_directory
+            || source_session.draft_name != draft_name
         {
+            return;
+        }
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::PromoteSimplePlanningDraft {
+                workspace_directory,
+                draft_name,
+                source_session,
+            });
+        self.apply_core_dispatch_outcome(outcome);
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_simple_planning_draft_stage_completion(
+        &mut self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningSimpleDraftStageSnapshot>, String>,
+    ) {
+        let workspace_directory = self.planning_workspace_directory();
+        let settlement = self.planning_workspace_operation_ui_state.settle(
+            &correlation,
+            &workspace_directory,
+            self.planning_ui_intent_revision,
+        );
+        match settlement {
+            PlanningWorkspaceOperationUiSettlement::Applied => {}
+            PlanningWorkspaceOperationUiSettlement::PresentationSuperseded => {
+                if self.shell_overlay == ShellOverlay::PlanningInit
+                    && self.planning_init_overlay_ui_state.step()
+                        == PlanningInitOverlayStep::Loading
+                    && !matches!(
+                        &self.planning_runtime_refresh_ui_state,
+                        PlanningRuntimeRefreshUiState::Loading { .. }
+                    )
+                {
+                    self.planning_init_overlay_ui_state
+                        .restore_simple_review_or_selection();
+                }
+                return;
+            }
+            PlanningWorkspaceOperationUiSettlement::WorkspaceSuperseded
+            | PlanningWorkspaceOperationUiSettlement::Rejected => return,
+        }
+
+        let status_text = match result {
             Ok(stage_result) => {
                 let validation_ok = stage_result.validation_report.is_valid();
-                let draft_name = stage_result.draft_name.clone();
+                let draft_name = stage_result.session_identity.draft_name.clone();
                 self.planning_init_overlay_ui_state
-                    .open_simple_review(stage_result);
+                    .open_simple_review_summary(
+                        stage_result.session_identity,
+                        draft_name.clone(),
+                        stage_result.staged_file_count,
+                        stage_result.validation_report,
+                    );
                 format!(
                     "planning simple review ready / staged draft: {} / validation state: {} / simple behavior: no queue head yet; queue-idle review stays enabled / next action: Enter or Ctrl+P promotes the low-ceremony scaffold. Ctrl+E inspects the draft. D opens detail-mode authoring.",
                     draft_name,
@@ -528,54 +678,137 @@ impl NativeTuiApp {
                     }
                 )
             }
-            Err(error) => format!("planning init failed: {error}"),
+            Err(error) => {
+                self.planning_init_overlay_ui_state
+                    .restore_simple_review_or_selection();
+                format!("planning init failed: {error}")
+            }
         };
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
     }
-    pub(super) fn open_simple_mode_planning_editor(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
-            return;
-        }
-        let Some(draft_name) = self
-            .planning_init_overlay_ui_state
-            .simple_review()
-            .map(|review| review.draft_name().to_string())
-        else {
-            return;
-        };
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_simple_planning_editor_load_completion(
+        &mut self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorSessionSnapshot>, String>,
+    ) {
         let workspace_directory = self.planning_workspace_directory();
-        self.open_guided_planning_editor_session(
-            self.application
-                .planning()
-                .workspace()
-                .load_manual_editor_session(&workspace_directory, &draft_name),
-            "planning simple draft editor ready",
-            PlanningInitModeSelection::Simple,
+        let settlement = self.planning_workspace_operation_ui_state.settle(
+            &correlation,
+            &workspace_directory,
+            self.planning_ui_intent_revision,
         );
-    }
-    pub(super) fn promote_simple_mode_planning_draft(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
+        let source_is_current = correlation.source_session().is_some_and(|source| {
+            self.planning_init_overlay_ui_state
+                .simple_review()
+                .is_some_and(|review| review.session_identity() == source)
+        });
+        match settlement {
+            PlanningWorkspaceOperationUiSettlement::Applied => {}
+            PlanningWorkspaceOperationUiSettlement::PresentationSuperseded => {
+                if self.shell_overlay == ShellOverlay::PlanningInit
+                    && source_is_current
+                    && self.planning_init_overlay_ui_state.step()
+                        == PlanningInitOverlayStep::Loading
+                {
+                    self.planning_init_overlay_ui_state
+                        .restore_simple_review_or_selection();
+                }
+                return;
+            }
+            PlanningWorkspaceOperationUiSettlement::WorkspaceSuperseded
+            | PlanningWorkspaceOperationUiSettlement::Rejected => return,
+        }
+        if !source_is_current {
             return;
         }
-        let Some(draft_name) = self
-            .planning_init_overlay_ui_state
-            .simple_review()
-            .map(|review| review.draft_name().to_string())
-        else {
+        if self
+            .planning_draft_editor_ui_state
+            .session_identity()
+            .is_some_and(|active| active.generation >= correlation.generation)
+        {
             return;
+        }
+
+        let status_text = match result {
+            Ok(session) => {
+                let validation_ok = session.validation_report.is_valid();
+                let draft_name = session.session_identity.draft_name.clone();
+                self.planning_draft_editor_ui_state
+                    .open_correlated_session(*session);
+                self.planning_init_overlay_ui_state.open_simple_editor();
+                format!(
+                    "planning simple draft editor ready / draft: {} / validation: {}",
+                    draft_name,
+                    if validation_ok {
+                        "ok"
+                    } else {
+                        "needs attention"
+                    }
+                )
+            }
+            Err(error) => {
+                self.planning_init_overlay_ui_state
+                    .restore_simple_review_or_selection();
+                format!("planning init failed: {error}")
+            }
         };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_simple_planning_draft_promotion_completion(
+        &mut self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningSimpleDraftPromotionSnapshot>, String>,
+    ) {
         let workspace_directory = self.planning_workspace_directory();
-        let promote_result = self
-            .application
-            .planning()
-            .workspace()
-            .promote_staged_draft(&workspace_directory, &draft_name);
+        let settlement = self.planning_workspace_operation_ui_state.settle(
+            &correlation,
+            &workspace_directory,
+            self.planning_ui_intent_revision,
+        );
+        if matches!(
+            settlement,
+            PlanningWorkspaceOperationUiSettlement::Rejected
+                | PlanningWorkspaceOperationUiSettlement::WorkspaceSuperseded
+        ) {
+            return;
+        }
+
+        self.pause_post_turn_continuation_after_authority_mutation();
         self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
-        let status_text = match promote_result {
+        if settlement == PlanningWorkspaceOperationUiSettlement::PresentationSuperseded
+            && self.shell_overlay == ShellOverlay::PlanningInit
+            && correlation.source_session().is_some_and(|source| {
+                self.planning_init_overlay_ui_state
+                    .simple_review()
+                    .is_some_and(|review| review.session_identity() == source)
+            })
+            && self.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::Loading
+        {
+            self.planning_init_overlay_ui_state
+                .restore_simple_review_or_selection();
+        }
+        if settlement != PlanningWorkspaceOperationUiSettlement::Applied
+            || self.shell_overlay != ShellOverlay::PlanningInit
+            || correlation.source_session().is_none_or(|source| {
+                self.planning_init_overlay_ui_state
+                    .simple_review()
+                    .is_none_or(|review| review.session_identity() != source)
+            })
+        {
+            return;
+        }
+        self.planning_init_overlay_ui_state
+            .restore_simple_review_or_selection();
+
+        let status_text = match result {
             Ok(result) => {
                 let validation_ok = result.validation_report.is_valid();
                 self.planning_init_overlay_ui_state
@@ -755,7 +988,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const CONTROLLER_RS: &str = include_str!("controller.rs");
@@ -889,10 +1122,76 @@ mod tests {
         SlowOptionalLoad,
     }
 
+    struct PlanningTestGate {
+        armed: Arc<AtomicBool>,
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl PlanningTestGate {
+        fn wait_if_armed(&self) -> anyhow::Result<()> {
+            if !self.armed.swap(false, Ordering::SeqCst) {
+                return Ok(());
+            }
+            self.entered
+                .send(())
+                .map_err(|error| anyhow::anyhow!("test gate enter failed: {error}"))?;
+            self.release
+                .lock()
+                .expect("test gate release should not be poisoned")
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|error| anyhow::anyhow!("test gate release failed: {error}"))
+        }
+    }
+
+    struct PlanningTestGateControl {
+        armed: Arc<AtomicBool>,
+        entered: mpsc::Receiver<()>,
+        release: mpsc::SyncSender<()>,
+    }
+
+    impl PlanningTestGateControl {
+        fn arm(&self) {
+            self.armed.store(true, Ordering::SeqCst);
+        }
+
+        fn wait_until_entered(&self) {
+            self.entered
+                .recv_timeout(Duration::from_secs(5))
+                .expect("test worker should enter its gate");
+        }
+
+        fn release(&self) {
+            self.release
+                .send(())
+                .expect("test worker gate should release");
+        }
+    }
+
+    fn planning_test_gate(armed: bool) -> (PlanningTestGate, PlanningTestGateControl) {
+        let armed = Arc::new(AtomicBool::new(armed));
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        (
+            PlanningTestGate {
+                armed: armed.clone(),
+                entered: entered_sender,
+                release: Mutex::new(release_receiver),
+            },
+            PlanningTestGateControl {
+                armed,
+                entered: entered_receiver,
+                release: release_sender,
+            },
+        )
+    }
+
     struct FailingPlanningWorkspacePort {
         inner: FilesystemPlanningWorkspaceAdapter,
         failure: PlanningWorkspacePortFailure,
         load_observation: Option<PlanningWorkspaceLoadObservation>,
+        stage_gate: Option<PlanningTestGate>,
+        load_gate: Option<PlanningTestGate>,
     }
 
     #[derive(Clone)]
@@ -934,6 +1233,8 @@ mod tests {
                 inner: FilesystemPlanningWorkspaceAdapter::new(),
                 failure,
                 load_observation: None,
+                stage_gate: None,
+                load_gate: None,
             }
         }
 
@@ -950,8 +1251,26 @@ mod tests {
                     inner: FilesystemPlanningWorkspaceAdapter::new(),
                     failure,
                     load_observation: Some(observation.clone()),
+                    stage_gate: None,
+                    load_gate: None,
                 },
                 observation,
+            )
+        }
+
+        fn gated_stage() -> (Self, PlanningTestGateControl, PlanningTestGateControl) {
+            let (stage_gate, stage_control) = planning_test_gate(true);
+            let (load_gate, load_control) = planning_test_gate(false);
+            (
+                Self {
+                    inner: FilesystemPlanningWorkspaceAdapter::new(),
+                    failure: PlanningWorkspacePortFailure::ReplaceDraft,
+                    load_observation: None,
+                    stage_gate: Some(stage_gate),
+                    load_gate: Some(load_gate),
+                },
+                stage_control,
+                load_control,
             )
         }
 
@@ -971,6 +1290,9 @@ mod tests {
             files: &[PlanningDraftFileRecord],
         ) -> anyhow::Result<PlanningDraftStageRecord> {
             self.fail_if(PlanningWorkspacePortFailure::StageDraft)?;
+            if let Some(gate) = &self.stage_gate {
+                gate.wait_if_armed()?;
+            }
             self.inner
                 .stage_planning_draft_files(workspace_dir, draft_name, files)
         }
@@ -1001,6 +1323,9 @@ mod tests {
             &self,
             workspace_dir: &str,
         ) -> anyhow::Result<PlanningWorkspaceLoadRecord> {
+            if let Some(gate) = &self.load_gate {
+                gate.wait_if_armed()?;
+            }
             let observation = self.load_observation.as_ref().filter(|observation| {
                 observation
                     .target_workspace
@@ -1156,6 +1481,33 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         panic!("planning workspace operation should complete");
+    }
+
+    fn begin_gated_simple_stage(
+        workspace_name: &str,
+    ) -> (
+        TempPlanningWorkspace,
+        NativeTuiApp,
+        PlanningWorkspaceOperationCorrelation,
+        PlanningTestGateControl,
+        PlanningTestGateControl,
+    ) {
+        let workspace = TempPlanningWorkspace::new(workspace_name);
+        let (port, stage_gate, load_gate) = FailingPlanningWorkspacePort::gated_stage();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        app.stage_simple_mode_planning_init_draft();
+        stage_gate.wait_until_entered();
+        let correlation = app
+            .planning_workspace_operation_ui_state
+            .active_correlation()
+            .cloned()
+            .expect("gated simple stage should remain active");
+        assert!(matches!(
+            &correlation.operation,
+            PlanningWorkspaceOperationKind::StageSimpleDraft
+        ));
+        (workspace, app, correlation, stage_gate, load_gate)
     }
 
     fn wait_for_observed_loads_to_settle(
@@ -1448,6 +1800,7 @@ mod tests {
         existing_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut existing_app);
         existing_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut existing_app);
         assert_eq!(existing_app.shell_overlay, ShellOverlay::Hidden);
 
         existing_app.handle_planning_shell_command(None);
@@ -1558,7 +1911,7 @@ mod tests {
             "doctor dispatch waited for 600ms workspace I/O: {elapsed:?}"
         );
         assert!(matches!(
-            app.planning_runtime_refresh_ui_state,
+            &app.planning_runtime_refresh_ui_state,
             PlanningRuntimeRefreshUiState::Loading { .. }
         ));
         wait_for_planning_runtime_refresh(&mut app);
@@ -1754,6 +2107,7 @@ mod tests {
         app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut app);
         app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut app);
 
         app.show_planning_init_overlay();
 
@@ -1919,6 +2273,7 @@ mod tests {
         success_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut success_app);
         success_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut success_app);
         success_app.handle_reset_shell_command(Some("queue"));
         assert_eq!(
             ready_status(&success_app),
@@ -1940,6 +2295,7 @@ mod tests {
         seed_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut seed_app);
         seed_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut seed_app);
         let (failure_port, observation) = FailingPlanningWorkspacePort::observed_with_failure(
             PlanningWorkspacePortFailure::ReplaceWorkspace,
         );
@@ -1971,6 +2327,7 @@ mod tests {
         seed_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut seed_app);
         seed_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut seed_app);
 
         let (port, observation) = FailingPlanningWorkspacePort::observed();
         let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
@@ -2028,6 +2385,7 @@ mod tests {
         seed_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut seed_app);
         seed_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut seed_app);
 
         let (port, observation) = FailingPlanningWorkspacePort::observed_with_failure(
             PlanningWorkspacePortFailure::ReplaceWorkspace,
@@ -2057,6 +2415,7 @@ mod tests {
         seed_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut seed_app);
         seed_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut seed_app);
 
         let (port, observation) = FailingPlanningWorkspacePort::observed();
         let mut app = make_test_app_with_planning_workspace_port(&workspace_a, Arc::new(port));
@@ -2090,6 +2449,283 @@ mod tests {
     }
 
     #[test]
+    fn simple_authoring_completions_do_not_reopen_after_close_or_workspace_drift() {
+        let workspace_a = TempPlanningWorkspace::new("tui-simple-authoring-close-a");
+        let workspace_b = TempPlanningWorkspace::new("tui-simple-authoring-close-b");
+        let mut closed_app = make_test_app(&workspace_a);
+        closed_app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        let stage = PlanningWorkspaceOperationCorrelation {
+            generation: 70,
+            workspace_directory: workspace_a.path_str().to_string(),
+            operation: PlanningWorkspaceOperationKind::StageSimpleDraft,
+        };
+        closed_app
+            .planning_init_overlay_ui_state
+            .begin_simple_authoring_operation();
+        closed_app
+            .planning_workspace_operation_ui_state
+            .begin(stage.clone(), closed_app.planning_ui_intent_revision);
+        closed_app.close_shell_overlay();
+
+        closed_app.apply_simple_planning_draft_stage_completion(
+            stage.clone(),
+            Ok(Box::new(PlanningSimpleDraftStageSnapshot {
+                session_identity: stage.editor_session_identity("draft-close"),
+                staged_file_count: 3,
+                validation_report: Default::default(),
+            })),
+        );
+
+        assert_eq!(closed_app.shell_overlay, ShellOverlay::Hidden);
+        assert!(
+            closed_app
+                .planning_init_overlay_ui_state
+                .simple_review()
+                .is_none()
+        );
+        assert!(
+            closed_app
+                .planning_workspace_operation_ui_state
+                .active_correlation()
+                .is_none()
+        );
+
+        let mut drifted_app = make_test_app(&workspace_a);
+        drifted_app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        let source = crate::core::app::PlanningEditorSessionIdentity::new(
+            71,
+            workspace_a.path_str(),
+            "draft-drift",
+        );
+        drifted_app
+            .planning_init_overlay_ui_state
+            .open_simple_review_summary(
+                source.clone(),
+                source.draft_name.clone(),
+                3,
+                Default::default(),
+            );
+        let load = PlanningWorkspaceOperationCorrelation {
+            generation: 72,
+            workspace_directory: workspace_a.path_str().to_string(),
+            operation: PlanningWorkspaceOperationKind::LoadSimpleEditor {
+                draft_name: source.draft_name.clone(),
+                source_session: source,
+            },
+        };
+        drifted_app
+            .planning_init_overlay_ui_state
+            .begin_simple_authoring_operation();
+        drifted_app
+            .planning_workspace_operation_ui_state
+            .begin(load.clone(), drifted_app.planning_ui_intent_revision);
+        drifted_app.sync_draft_shell_workspace(workspace_b.path_str());
+        drifted_app.apply_simple_planning_editor_load_completion(
+            load.clone(),
+            Ok(Box::new(PlanningEditorSessionSnapshot {
+                session_identity: load.editor_session_identity("draft-drift"),
+                draft_directory: "/tmp/draft-drift".to_string(),
+                editable_files: Vec::new(),
+                validation_report: Default::default(),
+            })),
+        );
+
+        assert!(
+            drifted_app
+                .planning_draft_editor_ui_state
+                .session_identity()
+                .is_none()
+        );
+        assert!(
+            drifted_app
+                .planning_workspace_operation_ui_state
+                .active_correlation()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn reopened_simple_stage_keeps_new_runtime_loading_when_old_stage_finishes_first() {
+        let (_workspace, mut app, _correlation, stage_gate, load_gate) =
+            begin_gated_simple_stage("tui-simple-stage-reopen-stage-first");
+
+        app.close_shell_overlay();
+        load_gate.arm();
+        app.open_first_run_planning_simple_review();
+        load_gate.wait_until_entered();
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::Loading
+        );
+        assert!(matches!(
+            &app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Loading { .. }
+        ));
+
+        stage_gate.release();
+        wait_for_planning_workspace_operation(&mut app);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::Loading,
+            "the old stage completion must not replace the reopened runtime loading surface"
+        );
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Loading { .. }
+        ));
+
+        load_gate.release();
+        wait_for_planning_runtime_refresh(&mut app);
+        wait_for_planning_workspace_operation(&mut app);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+    }
+
+    #[test]
+    fn reopened_simple_stage_rebinds_coalesced_stage_when_refresh_finishes_first() {
+        let (_workspace, mut app, correlation, stage_gate, _load_gate) =
+            begin_gated_simple_stage("tui-simple-stage-reopen-refresh-first");
+
+        app.close_shell_overlay();
+        app.open_first_run_planning_simple_review();
+        wait_for_planning_runtime_refresh(&mut app);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::Loading
+        );
+        assert_eq!(
+            app.planning_workspace_operation_ui_state
+                .active_correlation(),
+            Some(&correlation),
+            "the reopened simple request must rebind the coalesced stage"
+        );
+
+        stage_gate.release();
+        wait_for_planning_workspace_operation(&mut app);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+    }
+
+    #[test]
+    fn stale_simple_promotion_refreshes_authority_without_closing_or_replacing_newer_status() {
+        let workspace = TempPlanningWorkspace::new("tui-simple-promotion-stale-presentation");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        let source = crate::core::app::PlanningEditorSessionIdentity::new(
+            80,
+            workspace.path_str(),
+            "draft-stale",
+        );
+        app.planning_init_overlay_ui_state
+            .open_simple_review_summary(
+                source.clone(),
+                source.draft_name.clone(),
+                3,
+                Default::default(),
+            );
+        let promotion = PlanningWorkspaceOperationCorrelation {
+            generation: 81,
+            workspace_directory: workspace.path_str().to_string(),
+            operation: PlanningWorkspaceOperationKind::PromoteSimpleDraft {
+                draft_name: source.draft_name.clone(),
+                source_session: source,
+            },
+        };
+        app.planning_init_overlay_ui_state
+            .begin_simple_authoring_operation();
+        app.planning_workspace_operation_ui_state
+            .begin(promotion.clone(), app.planning_ui_intent_revision);
+        let permit = app.post_turn_continuation_gate.capture();
+        app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "newer operator status".to_string(),
+        });
+
+        app.apply_simple_planning_draft_promotion_completion(
+            promotion,
+            Ok(Box::new(PlanningSimpleDraftPromotionSnapshot {
+                draft_name: "draft-stale".to_string(),
+                promoted_file_count: 3,
+                validation_report: Default::default(),
+            })),
+        );
+
+        assert!(!permit.is_current());
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::SimpleReview
+        );
+        assert_eq!(ready_status(&app), "newer operator status");
+    }
+
+    #[test]
+    fn late_simple_editor_load_cannot_replace_a_newer_editor_session_identity() {
+        let workspace = TempPlanningWorkspace::new("tui-simple-editor-session-identity");
+        let mut app = make_test_app(&workspace);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        let source = crate::core::app::PlanningEditorSessionIdentity::new(
+            90,
+            workspace.path_str(),
+            "draft-session",
+        );
+        app.planning_init_overlay_ui_state
+            .open_simple_review_summary(
+                source.clone(),
+                source.draft_name.clone(),
+                3,
+                Default::default(),
+            );
+        let load = PlanningWorkspaceOperationCorrelation {
+            generation: 91,
+            workspace_directory: workspace.path_str().to_string(),
+            operation: PlanningWorkspaceOperationKind::LoadSimpleEditor {
+                draft_name: source.draft_name.clone(),
+                source_session: source,
+            },
+        };
+        app.planning_init_overlay_ui_state
+            .begin_simple_authoring_operation();
+        app.planning_workspace_operation_ui_state
+            .begin(load.clone(), app.planning_ui_intent_revision);
+        let newer_identity = crate::core::app::PlanningEditorSessionIdentity::new(
+            92,
+            workspace.path_str(),
+            "draft-session",
+        );
+        app.planning_draft_editor_ui_state
+            .open_correlated_session(PlanningEditorSessionSnapshot {
+                session_identity: newer_identity.clone(),
+                draft_directory: "/tmp/newer-draft-session".to_string(),
+                editable_files: Vec::new(),
+                validation_report: Default::default(),
+            });
+        app.planning_init_overlay_ui_state.open_simple_editor();
+
+        app.apply_simple_planning_editor_load_completion(
+            load.clone(),
+            Ok(Box::new(PlanningEditorSessionSnapshot {
+                session_identity: load.editor_session_identity("draft-session"),
+                draft_directory: "/tmp/late-draft-session".to_string(),
+                editable_files: Vec::new(),
+                validation_report: Default::default(),
+            })),
+        );
+
+        assert_eq!(
+            app.planning_draft_editor_ui_state.session_identity(),
+            Some(&newer_identity)
+        );
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+    }
+
+    #[test]
     fn simple_mode_editor_loads_and_promotion_blocks_invalid_staged_drafts() {
         let editor_workspace = TempPlanningWorkspace::new("tui-simple-editor-invalid-load");
         let mut editor_app = make_test_app(&editor_workspace);
@@ -2112,6 +2748,7 @@ mod tests {
         .expect("staged result output should be writable");
 
         editor_app.open_simple_mode_planning_editor();
+        wait_for_planning_workspace_operation(&mut editor_app);
 
         assert_eq!(
             editor_app.planning_init_overlay_ui_state.step(),
@@ -2141,6 +2778,7 @@ mod tests {
         .expect("staged result output should be writable");
 
         promote_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut promote_app);
 
         assert_eq!(promote_app.shell_overlay, ShellOverlay::PlanningInit);
         assert_eq!(
@@ -2204,6 +2842,7 @@ mod tests {
             )),
         );
         stage_app.stage_simple_mode_planning_init_draft();
+        wait_for_planning_workspace_operation(&mut stage_app);
         assert!(
             ready_status(&stage_app).starts_with("planning init failed: forced "),
             "status: {}",
@@ -2234,12 +2873,14 @@ mod tests {
             )),
         );
         load_draft_app.stage_simple_mode_planning_init_draft();
+        wait_for_planning_workspace_operation(&mut load_draft_app);
         assert!(
             ready_status(&load_draft_app).contains("planning simple review ready"),
             "status: {}",
             ready_status(&load_draft_app)
         );
         load_draft_app.open_simple_mode_planning_editor();
+        wait_for_planning_workspace_operation(&mut load_draft_app);
         assert!(
             ready_status(&load_draft_app).starts_with("planning init failed: forced "),
             "status: {}",
@@ -2299,6 +2940,7 @@ mod tests {
         app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
 
         assert!(app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+        wait_for_planning_workspace_operation(&mut app);
 
         assert_eq!(
             app.planning_init_overlay_ui_state.step(),
@@ -2323,6 +2965,7 @@ mod tests {
         );
         assert!(app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('l'))));
         assert!(app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('e'))));
+        wait_for_planning_workspace_operation(&mut app);
         assert_eq!(
             app.planning_init_overlay_ui_state.step(),
             PlanningInitOverlayStep::ManualEditor
@@ -2353,11 +2996,13 @@ mod tests {
         let mut promote_app = make_test_app(&promote_workspace);
         promote_app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
         assert!(promote_app.handle_planning_init_overlay_key(key(KeyCode::Enter)));
+        wait_for_planning_workspace_operation(&mut promote_app);
         assert_eq!(
             promote_app.planning_init_overlay_ui_state.step(),
             PlanningInitOverlayStep::SimpleReview
         );
         assert!(promote_app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('p'))));
+        wait_for_planning_workspace_operation(&mut promote_app);
         assert_eq!(promote_app.shell_overlay, ShellOverlay::Hidden);
         assert!(ready_status(&promote_app).contains("planning draft promoted / draft: "));
     }
@@ -2562,7 +3207,9 @@ mod tests {
         let mut app = make_test_app(&workspace);
         app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
         app.stage_simple_mode_planning_init_draft();
+        wait_for_planning_workspace_operation(&mut app);
         app.open_simple_mode_planning_editor();
+        wait_for_planning_workspace_operation(&mut app);
 
         app.promote_planning_manual_editor();
 
@@ -2820,6 +3467,7 @@ mod tests {
         planning_close_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut planning_close_app);
         planning_close_app.open_simple_mode_planning_editor();
+        wait_for_planning_workspace_operation(&mut planning_close_app);
         planning_close_app.request_close_planning_manual_editor();
 
         assert_eq!(planning_close_app.shell_overlay, ShellOverlay::Hidden);
@@ -2906,6 +3554,7 @@ mod tests {
         app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut app);
         app.open_simple_mode_planning_editor();
+        wait_for_planning_workspace_operation(&mut app);
 
         app.handle_draft_editor_key(
             key(KeyCode::Tab),
@@ -2999,6 +3648,7 @@ mod tests {
         promote_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut promote_app);
         promote_app.open_simple_mode_planning_editor();
+        wait_for_planning_workspace_operation(&mut promote_app);
         promote_app.promote_planning_manual_editor();
         assert!(
             ready_status(&promote_app).starts_with("planning draft promote failed: forced "),
@@ -3013,6 +3663,7 @@ mod tests {
         seed_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut seed_app);
         seed_app.promote_simple_mode_planning_draft();
+        wait_for_planning_workspace_operation(&mut seed_app);
         let mut directions_promote_app = make_test_app_with_planning_workspace_port(
             &directions_promote_workspace,
             Arc::new(FailingPlanningWorkspacePort::new(
