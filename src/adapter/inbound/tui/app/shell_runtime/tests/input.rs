@@ -1,7 +1,7 @@
 use super::{
     BackgroundMessage, ConversationState, InlineShellCommand, ShellOverlay, StartupState,
-    make_dispatch_ready_parallel_runtime, make_test_runtime, mark_core_turn_completed,
-    post_turn_evaluation_completed_message, sample_startup_diagnostics,
+    arm_core_post_turn_evaluation, make_dispatch_ready_parallel_runtime, make_test_runtime,
+    mark_core_turn_completed, post_turn_evaluation_completed_message, sample_startup_diagnostics,
 };
 use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
@@ -777,11 +777,9 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
             ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
             None,
         )));
-    let planning_projection = runtime
-        .app()
-        .application
-        .planning()
-        .runtime()
+    let planning_projection = fixture
+        .planning
+        .runtime
         .load_runtime_projection_or_invalid(&workspace_directory);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
@@ -789,6 +787,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
+    arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
 
     runtime
         .app
@@ -861,11 +860,9 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
     let workspace_directory = runtime.app().current_workspace_directory();
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
     let captured_permit = runtime.app().post_turn_continuation_gate.capture();
-    let planning_projection = runtime
-        .app()
-        .application
-        .planning()
-        .runtime()
+    let planning_projection = fixture
+        .planning
+        .runtime
         .load_runtime_projection_or_invalid(&workspace_directory);
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
@@ -873,6 +870,7 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
     conversation.thread_id = "thread-disable-race".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-disable-race".to_string());
     mark_core_turn_completed(&mut runtime, "thread-disable-race", "turn-disable-race");
+    arm_core_post_turn_evaluation(&mut runtime, "thread-disable-race", "turn-disable-race");
 
     runtime.app_mut().close_parallel_mode_automation_epoch();
     assert!(
@@ -938,12 +936,7 @@ fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result(
     runtime.app_mut().startup_state =
         StartupState::Ready(sample_startup_diagnostics(&workspace_directory));
     runtime.app_mut().set_parallel_mode_enabled_for_test(true);
-    let planning_projection = runtime
-        .app()
-        .application
-        .planning()
-        .runtime()
-        .load_runtime_projection_or_invalid(&workspace_directory);
+    let planning_projection = runtime.app().planning_runtime_projection_snapshot();
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
     };
@@ -951,6 +944,7 @@ fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result(
     conversation.thread_id = "thread-single-follow".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-single-follow".to_string());
     mark_core_turn_completed(&mut runtime, "thread-single-follow", "turn-single-follow");
+    arm_core_post_turn_evaluation(&mut runtime, "thread-single-follow", "turn-single-follow");
     runtime.app_mut().close_parallel_mode_automation_epoch();
 
     runtime

@@ -1205,7 +1205,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::test_helpers::{
         sample_planning_runtime_projection, sample_queue_head, test_native_tui_app,
         test_native_tui_app_with_approval_resolution_error, test_native_tui_app_with_planning,
-        test_planning_services_with_task_repository,
+        test_native_tui_app_with_services, test_planning_services_with_task_repository,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_task_repository_port::{
@@ -2616,7 +2616,7 @@ mod tests {
 
     #[test]
     fn queue_reopen_reconciles_a_preserved_stale_receipt_instead_of_dropping_it() {
-        let mut app = test_native_tui_app();
+        let (mut app, planning) = test_native_tui_app_with_services();
         let workspace = std::env::temp_dir()
             .join(format!(
                 "akra-queue-reopen-receipt-{}-{}",
@@ -2629,16 +2629,13 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::create_dir_all(&workspace).expect("queue workspace should exist");
-        app.application
-            .planning()
-            .workspace()
+        planning
+            .workspace
             .initialize_simple_workspace(&workspace)
             .expect("planning workspace should initialize");
         ready_conversation_mut(&mut app).sync_draft_workspace(workspace.clone());
-        let created = app
-            .application
-            .planning()
-            .task_tool()
+        let created = planning
+            .task_tool
             .run(
                 &workspace,
                 serde_json::from_str::<PlanningTaskToolRequest>(
@@ -2647,10 +2644,8 @@ mod tests {
                 .expect("task request should parse"),
             )
             .expect("task should be created");
-        let authority = app
-            .application
-            .planning()
-            .queue()
+        let authority = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("queue authority should load");
         let task = authority
@@ -2858,7 +2853,7 @@ mod tests {
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
             repository.clone(),
         );
-        let mut app = test_native_tui_app_with_planning(planning);
+        let (mut app, planning) = test_native_tui_app_with_planning(planning);
         let workspace = std::env::temp_dir()
             .join(format!(
                 "akra-queue-authority-load-gate-{}-{}",
@@ -2871,9 +2866,8 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::create_dir_all(&workspace).expect("queue workspace should exist");
-        app.application
-            .planning()
-            .workspace()
+        planning
+            .workspace
             .initialize_simple_workspace(&workspace)
             .expect("planning workspace should initialize");
         ready_conversation_mut(&mut app).sync_draft_workspace(workspace.clone());
@@ -2941,7 +2935,7 @@ mod tests {
             Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
             repository.clone(),
         );
-        let mut app = test_native_tui_app_with_planning(planning);
+        let (mut app, planning) = test_native_tui_app_with_planning(planning);
         let workspace = std::env::temp_dir()
             .join(format!(
                 "akra-queue-mutation-gate-{}-{}",
@@ -2954,16 +2948,13 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::create_dir_all(&workspace).expect("queue workspace should exist");
-        app.application
-            .planning()
-            .workspace()
+        planning
+            .workspace
             .initialize_simple_workspace(&workspace)
             .expect("planning workspace should initialize");
         ready_conversation_mut(&mut app).sync_draft_workspace(workspace.clone());
-        let created = app
-            .application
-            .planning()
-            .task_tool()
+        let created = planning
+            .task_tool
             .run(
                 &workspace,
                 serde_json::from_str::<PlanningTaskToolRequest>(
@@ -2973,10 +2964,8 @@ mod tests {
             )
             .expect("task should be created");
         let task_id = created.committed_task_ids[0].clone();
-        let snapshot = app
-            .application
-            .planning()
-            .queue()
+        let snapshot = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("queue snapshot should load");
         let task = snapshot
@@ -3046,10 +3035,8 @@ mod tests {
                 .planning_revision(),
             Some(snapshot.planning_revision)
         );
-        let while_pending = app
-            .application
-            .planning()
-            .queue()
+        let while_pending = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("pending mutation should leave authority readable");
         assert_eq!(while_pending.planning_revision, snapshot.planning_revision);
@@ -3092,10 +3079,8 @@ mod tests {
             .send(())
             .expect("gated mutation should be released");
         let (correlation, completion) = take_next_queue_mutation_completion(&mut app);
-        let after = app
-            .application
-            .planning()
-            .queue()
+        let after = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("cancelled queue snapshot should load");
         assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
@@ -3415,7 +3400,7 @@ mod tests {
 
     #[test]
     fn queue_overlay_mutations_gate_settlement_invalidate_stale_receipts_and_persist() {
-        let mut app = test_native_tui_app();
+        let (mut app, planning) = test_native_tui_app_with_services();
         let workspace = std::env::temp_dir()
             .join(format!(
                 "akra-queue-overlay-undo-{}-{}",
@@ -3428,16 +3413,13 @@ mod tests {
             .to_string_lossy()
             .to_string();
         std::fs::create_dir_all(&workspace).expect("queue workspace should exist");
-        app.application
-            .planning()
-            .workspace()
+        planning
+            .workspace
             .initialize_simple_workspace(&workspace)
             .expect("planning workspace should initialize");
         ready_conversation_mut(&mut app).sync_draft_workspace(workspace.clone());
-        let created = app
-            .application
-            .planning()
-            .task_tool()
+        let created = planning
+            .task_tool
             .run(
                 &workspace,
                 serde_json::from_str::<PlanningTaskToolRequest>(
@@ -3447,10 +3429,8 @@ mod tests {
             )
             .expect("task should be created");
         let task_id = created.committed_task_ids[0].clone();
-        let snapshot = app
-            .application
-            .planning()
-            .queue()
+        let snapshot = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("queue snapshot should load");
         let task = snapshot
@@ -3479,10 +3459,8 @@ mod tests {
         ready_conversation_mut(&mut app).begin_post_turn_settlement("turn-queue");
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
-        let blocked = app
-            .application
-            .planning()
-            .queue()
+        let blocked = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("settlement gate should preserve queue authority");
         assert_eq!(blocked.planning_revision, snapshot.planning_revision);
@@ -3517,10 +3495,8 @@ mod tests {
         app.tui_language = TuiLanguage::Korean;
         apply_next_queue_mutation_completion(&mut app);
 
-        let after = app
-            .application
-            .planning()
-            .queue()
+        let after = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("cancelled queue snapshot should load");
         assert_eq!(after.tasks[0].status, TaskStatus::Cancelled);
@@ -3542,10 +3518,8 @@ mod tests {
         ready_conversation_mut(&mut app).mark_turn_finished();
         app.tui_language = TuiLanguage::English;
 
-        let individually_removed = app
-            .application
-            .planning()
-            .task_tool()
+        let individually_removed = planning
+            .task_tool
             .run(
                 &workspace,
                 serde_json::from_str::<PlanningTaskToolRequest>(
@@ -3555,10 +3529,8 @@ mod tests {
             )
             .expect("individual task should create");
         let individual_task_id = individually_removed.committed_task_ids[0].clone();
-        let individual_snapshot = app
-            .application
-            .planning()
-            .queue()
+        let individual_snapshot = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("individual task snapshot should load");
         let individual_task = individual_snapshot
@@ -3583,9 +3555,8 @@ mod tests {
             });
         app.show_queue_overlay();
         apply_next_queue_overlay_authority_load(&mut app);
-        app.application
-            .planning()
-            .task_tool()
+        planning
+            .task_tool
             .run(
                 &workspace,
                 serde_json::from_str::<PlanningTaskToolRequest>(
@@ -3610,10 +3581,8 @@ mod tests {
                 .latest_queue_mutation_receipt
                 .is_some()
         );
-        let after_stale_remove = app
-            .application
-            .planning()
-            .queue()
+        let after_stale_remove = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("stale remove should refresh authority");
         assert_eq!(
@@ -3636,10 +3605,8 @@ mod tests {
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         apply_next_queue_mutation_completion(&mut app);
-        let after_individual_remove = app
-            .application
-            .planning()
-            .queue()
+        let after_individual_remove = planning
+            .queue
             .load_authority_snapshot(&workspace)
             .expect("individual cancellation should persist");
         assert_eq!(

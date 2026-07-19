@@ -40,6 +40,17 @@ Mapping은 adapter에, policy는 domain 또는 application service에 둡니다.
 사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.
 Core는 projection을 복사할 수 있지만 두 번째 parallel runtime을 소유하면 안 됩니다.
 
+Post-turn 평가는 planning-worker panel을 바꾸기 전에 Core로 진입합니다. Command는 explicit
+완료·확정된 최신 terminal이고 active turn, 이미 적용된 평가, 같은 in-flight 평가가 없을 때만
+허용됩니다. 오래되거나 잘못되거나 중복된 start는 event/effect를 내지 않으며 completion은 정확한
+in-flight thread/turn lease와 일치해야 합니다. 허용된 command는
+settlement pause면 기존 전체 상태를 보존하고, 아니면 protected planning file 변경 시
+`RepairRunning`, 빈 queue와 stop policy면 기존 전체 상태 보존, 나머지는 `RefreshRunning`을
+선택합니다. Core는 계산한 정확한 상태를 비동기 effect보다 먼저
+`PostTurnEvaluationStarted`로 내보내며 effect request에도 같은 상태를 넣습니다. TUI는 started
+event를 단순 대입할 뿐 raw application/planning handle을 보관하거나 planning workspace/runtime
+use case를 직접 호출하지 않습니다.
+
 Native TUI의 prompt-log privacy maintenance도 이 effect 경로가 소유합니다. Production composition은
 typed maintenance port를 `StartupService`에 주입하지만 app을 build하는 동안 SQLite purge/clear를
 실행하지 않습니다. Startup command는 단조 증가 generation과 요청된 정확한 workspace를 캡처하고,
@@ -315,9 +326,9 @@ host-scrollback/live-tail 분할, prompt lock, animation, draw는 control-plane 
 다시 읽지 않고 이 immutable projection을 사용합니다. 자주 실행되는 prompt, pulse, scheduler
 검사는 panel 전용 경량 projection을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
 
-Planning worker 진단은 post-turn execution부터 screen model까지 domain
-`PlanningWorkerPanelState`를 그대로 보관합니다. TUI presentation은 adapter 소유 status DTO나
-왕복 mapper 없이 label과 content visibility만 파생합니다.
+Planning worker 진단은 Core가 시작한 post-turn event부터 비동기 completion과 screen model까지
+domain `PlanningWorkerPanelState`를 그대로 보관합니다. TUI presentation은 adapter 소유 status
+DTO나 왕복 mapper 없이 label과 content visibility만 파생합니다.
 
 상세한 test-guarded 계약은 [TUI 계층 아키텍처](tui-contract.md)를 참고하세요.
 

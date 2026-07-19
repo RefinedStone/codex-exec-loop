@@ -2680,6 +2680,142 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         ],
         TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS,
     );
+    assert_no_forbidden_references_in_paths(
+        "TUI post-turn execution must not own raw providers, process, threads, filesystem, database, Git, or GitHub access",
+        &[
+            "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
+            "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution",
+        ],
+        &[
+            "crate::adapter::outbound::",
+            "crate::application::port::",
+            "std::process",
+            "std::thread",
+            "std::fs",
+            "Sqlite",
+            "Filesystem",
+            "GitAdapter",
+            "Github",
+        ],
+    );
+    let semantic_forbidden_prefixes = [
+        "crate::adapter::outbound",
+        "crate::application::port",
+        "std::process",
+        "std::thread",
+        "std::fs",
+    ];
+    let semantic_forbidden_segments = [
+        "Sqlite",
+        "Filesystem",
+        "GitAdapter",
+        "Github",
+        "NativeTuiApplicationHandle",
+        "NativeTuiPlanningHandle",
+        "PlanningWorkspaceUseCases",
+    ];
+    assert_no_semantic_references_in_paths(
+        "TUI post-turn execution must not alias raw providers, process, threads, filesystem, database, Git, GitHub, or raw application handles",
+        &[
+            "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
+            "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution",
+        ],
+        &semantic_forbidden_prefixes,
+        &semantic_forbidden_segments,
+    );
+    for source in [
+        "fn sample() { std::thread::spawn(|| {}); }",
+        "use std::{fs, process, thread}; fn sample() { thread::spawn(|| {}); }",
+        "use std::thread as worker; fn sample() { worker::spawn(|| {}); }",
+        "use std as system; fn sample() { system::process::Command::new(\"git\"); }",
+        "use crate::adapter as adapters; fn sample() { adapters::outbound::filesystem::FilesystemPlanningWorkspaceAdapter::new(); }",
+        "use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter as Workspace; fn sample() { Workspace::new(); }",
+    ] {
+        assert!(
+            rust_semantic_references(source).paths.iter().any(|path| {
+                semantic_path_is_forbidden(
+                    path,
+                    &semantic_forbidden_prefixes,
+                    &semantic_forbidden_segments,
+                )
+            }),
+            "semantic post-turn guard must detect direct, grouped, and aliased imports: {source}"
+        );
+    }
+
+    assert_no_forbidden_references_in_paths(
+        "production TUI must not retain raw application/planning handles or expose planning workspace use cases",
+        &["src/adapter/inbound/tui"],
+        &[
+            "NativeTuiApplicationHandle",
+            "NativeTuiPlanningHandle",
+            "PlanningWorkspaceUseCases",
+        ],
+    );
+    let tui_app_source = fs::read_to_string("src/adapter/inbound/tui/app.rs").unwrap();
+    let tui_app_syntax =
+        syn::parse_file(&tui_app_source).expect("NativeTuiApp source should parse");
+    assert!(
+        named_struct_fields(&tui_app_syntax, "NativeTuiApp")
+            .iter()
+            .all(|field| field
+                .ident
+                .as_ref()
+                .is_none_or(|ident| ident != "application")),
+        "NativeTuiApp must not retain a raw application field"
+    );
+    assert_no_production_callable_reference_named_in_paths(
+        "production TUI must not call or retain the old post-turn panel-state helper",
+        &["src/adapter/inbound/tui"],
+        "post_turn_worker_panel_start_state",
+    );
+    for source in [
+        "fn sample(service: &PlanningRuntimeUseCases) { service.post_turn_worker_panel_start_state(); }",
+        "fn sample(service: &PlanningRuntimeUseCases) { PlanningRuntimeUseCases::post_turn_worker_panel_start_state(service); }",
+        "fn sample() { let callable = PlanningRuntimeUseCases::post_turn_worker_panel_start_state; use_it(callable); }",
+        "fn sample() { invoke!(PlanningRuntimeUseCases::post_turn_worker_panel_start_state); }",
+    ] {
+        assert!(
+            !production_callable_reference_lines(source, "post_turn_worker_panel_start_state")
+                .is_empty(),
+            "old helper guard must detect direct, UFCS, function-pointer, path, and macro references: {source}"
+        );
+    }
+
+    let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    let core_event = fs::read_to_string("src/core/app/event.rs").unwrap();
+    let core_runtime = fs::read_to_string("src/core/runtime/driver.rs").unwrap();
+    let tui_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs").unwrap();
+    let tui_tests =
+        fs::read_to_string("src/adapter/inbound/tui/app/shell_runtime/tests.rs").unwrap();
+    for required in [
+        "fn post_turn_worker_panel_start_state(request: &PostTurnRequest)",
+        "fn post_turn_start_state_obeys_priority_and_preserves_panel_detail()",
+    ] {
+        assert!(
+            core_controller.contains(required),
+            "Core post-turn panel-state ownership is missing: {required}"
+        );
+    }
+    assert!(
+        core_event.contains("PostTurnEvaluationStarted(PlanningWorkerPanelState)"),
+        "Core must publish the full post-turn panel state before dispatching evaluation"
+    );
+    assert!(
+        core_runtime.contains("fn immediate_post_turn_completion_keeps_started_event_first()"),
+        "Core runtime must prove Started precedes an immediate completion"
+    );
+    assert!(
+        tui_runtime.contains("AppEvent::PostTurnEvaluationStarted(state)")
+            && tui_runtime.contains("self.planning_worker_panel_state = state;"),
+        "TUI must apply the Core-started panel state by direct assignment"
+    );
+    assert!(
+        tui_tests.contains(
+            "fn post_turn_evaluation_started_event_applies_running_state_without_waiting_for_completion()"
+        ),
+        "TUI must prove running state is visible before post-turn completion"
+    );
 }
 
 #[test]
@@ -2740,7 +2876,7 @@ fn temporary_tui_raw_application_services_have_been_wrapped() {
 
     assert!(
         debts.is_empty(),
-        "temporary TUI service-wiring debt remains. TUI production state should hold UI state, projection cache, and narrow application handles only:\n{}",
+        "temporary TUI service-wiring debt remains. TUI production state should hold UI state, projection cache, and narrow typed runtime/control-plane handles only:\n{}",
         format_temporary_debts(&debts)
     );
 }
@@ -3801,6 +3937,65 @@ fn assert_no_forbidden_references_in_paths(
     );
 }
 
+fn assert_no_semantic_references_in_paths(
+    rule_name: &'static str,
+    path_suffixes: &[&str],
+    forbidden_prefixes: &[&str],
+    forbidden_segments: &[&str],
+) {
+    let repo_root = repo_root();
+    let mut violations = Vec::new();
+
+    for path_suffix in path_suffixes {
+        let root = repo_root.join(path_suffix);
+        for path in rust_files_for_path(&root) {
+            if is_test_only_path(&path) {
+                continue;
+            }
+
+            let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!("failed to read {}: {error}", path.display());
+            });
+            let relative_path = relative_path(&repo_root, &path);
+            for reference in
+                rust_semantic_references(&source)
+                    .paths
+                    .into_iter()
+                    .filter(|reference| {
+                        semantic_path_is_forbidden(
+                            reference,
+                            forbidden_prefixes,
+                            forbidden_segments,
+                        )
+                    })
+            {
+                violations.push(format!("{relative_path}: {reference}"));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "{rule_name}:\n{}",
+        violations.join("\n")
+    );
+}
+
+fn semantic_path_is_forbidden(
+    path: &str,
+    forbidden_prefixes: &[&str],
+    forbidden_segments: &[&str],
+) -> bool {
+    forbidden_prefixes
+        .iter()
+        .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}::")))
+        || path.split("::").any(|segment| {
+            forbidden_segments
+                .iter()
+                .any(|forbidden| segment.contains(forbidden))
+        })
+}
+
 fn production_call_expression_names(source: &str) -> Vec<String> {
     let syntax = syn::parse_file(source)
         .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
@@ -3994,14 +4189,43 @@ fn rust_semantic_references(source: &str) -> RustSemanticReferences {
         .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
     let mut visitor = RustSemanticReferenceVisitor::default();
     visitor.visit_file(&syntax);
+    expand_semantic_alias_paths(&mut visitor.references.paths, &visitor.aliases);
     visitor.references.paths.sort();
     visitor.references.paths.dedup();
     visitor.references
 }
 
+fn expand_semantic_alias_paths(paths: &mut Vec<String>, aliases: &[(String, String)]) {
+    for _ in 0..=aliases.len() {
+        let mut additions = Vec::new();
+        for path in paths.iter() {
+            let (root, suffix) = path
+                .split_once("::")
+                .map_or((path.as_str(), None), |(root, suffix)| (root, Some(suffix)));
+            for (alias, original) in aliases {
+                if root != alias {
+                    continue;
+                }
+                let expanded = suffix.map_or_else(
+                    || original.clone(),
+                    |suffix| format!("{original}::{suffix}"),
+                );
+                if !paths.contains(&expanded) && !additions.contains(&expanded) {
+                    additions.push(expanded);
+                }
+            }
+        }
+        if additions.is_empty() {
+            break;
+        }
+        paths.extend(additions);
+    }
+}
+
 #[derive(Default)]
 struct RustSemanticReferenceVisitor {
     references: RustSemanticReferences,
+    aliases: Vec<(String, String)>,
 }
 
 impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
@@ -4034,7 +4258,12 @@ impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
     }
 
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        collect_semantic_use_paths(&item.tree, &mut Vec::new(), &mut self.references.paths);
+        collect_semantic_use_paths(
+            &item.tree,
+            &mut Vec::new(),
+            &mut self.references.paths,
+            &mut self.aliases,
+        );
     }
 
     fn visit_path(&mut self, path: &'ast syn::Path) {
@@ -4058,11 +4287,12 @@ fn collect_semantic_use_paths(
     tree: &syn::UseTree,
     prefix: &mut Vec<String>,
     references: &mut Vec<String>,
+    aliases: &mut Vec<(String, String)>,
 ) {
     match tree {
         syn::UseTree::Path(path) => {
             prefix.push(path.ident.to_string());
-            collect_semantic_use_paths(&path.tree, prefix, references);
+            collect_semantic_use_paths(&path.tree, prefix, references, aliases);
             prefix.pop();
         }
         syn::UseTree::Name(name) => {
@@ -4072,7 +4302,9 @@ fn collect_semantic_use_paths(
         }
         syn::UseTree::Rename(rename) => {
             prefix.push(rename.ident.to_string());
-            references.push(prefix.join("::"));
+            let original = prefix.join("::");
+            references.push(original.clone());
+            aliases.push((rename.rename.to_string(), original));
             prefix.pop();
         }
         syn::UseTree::Glob(_) => {
@@ -4080,7 +4312,7 @@ fn collect_semantic_use_paths(
         }
         syn::UseTree::Group(group) => {
             for item in &group.items {
-                collect_semantic_use_paths(item, prefix, references);
+                collect_semantic_use_paths(item, prefix, references, aliases);
             }
         }
     }

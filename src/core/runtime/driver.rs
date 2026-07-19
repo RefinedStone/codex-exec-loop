@@ -95,6 +95,26 @@ where
     ) -> crate::core::app::TurnSubmissionCorrelation {
         self.controller.begin_test_turn_submission()
     }
+
+    #[cfg(test)]
+    pub(crate) fn begin_test_post_turn_evaluation(
+        &mut self,
+        thread_id: &str,
+        completed_turn_id: &str,
+    ) {
+        self.controller
+            .begin_test_post_turn_evaluation(thread_id, completed_turn_id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_post_turn_evaluation_is_in_flight(
+        &self,
+        thread_id: &str,
+        completed_turn_id: &str,
+    ) -> bool {
+        self.controller
+            .test_post_turn_evaluation_is_in_flight(thread_id, completed_turn_id)
+    }
 }
 
 #[cfg(test)]
@@ -127,7 +147,15 @@ mod tests {
         GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestPollState,
         GithubPullRequestTarget,
     };
-    use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest, TaskStatus};
+    use crate::domain::planning::{
+        ManualPromptCorrelation, ManualPromptRequest, PlanningWorkerPanelState,
+        PlanningWorkerStatus, PostTurnAutoFollowSkipReason, PostTurnContext,
+        PostTurnContinuationAction, PostTurnContinuationGate, PostTurnExecution, PostTurnOutcome,
+        PostTurnProvenance, PostTurnRequest, RuntimeProjection, TaskStatus,
+    };
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
+    };
 
     #[test]
     fn core_input_channel_applies_backpressure_and_reports_disconnect() {
@@ -182,6 +210,35 @@ mod tests {
                         reason: "blocked".to_string(),
                     },
                 )),
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediatePostTurnExecutor;
+
+    impl CoreEffectExecutor for ImmediatePostTurnExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::EvaluatePostTurn(request) = effect else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(PostTurnExecution {
+                    thread_id: request.context.thread_id.clone(),
+                    completed_turn_id: request.completed_turn_id.clone(),
+                    runtime_projection_workspace_directory: request.workspace_directory.clone(),
+                    evaluation: PostTurnOutcome {
+                        provenance: PostTurnProvenance::new(request.completed_turn_id.clone()),
+                        runtime_projection: request.context.current_runtime_projection.clone(),
+                        planning_repair_state: None,
+                        runtime_notices: Vec::new(),
+                        action: PostTurnContinuationAction::SkipAutoFollow {
+                            reason: PostTurnAutoFollowSkipReason::PlanningQueueDrained,
+                        },
+                        operator_alerts: Vec::new(),
+                    },
+                    planning_worker_panel_state: request.planning_worker_panel_state,
+                })),
             ))
         }
     }
@@ -794,6 +851,83 @@ mod tests {
             ] if accepted.generation == 2
                 && accepted.request_id == accepted.generation
                 && result.correlation() == accepted
+        ));
+    }
+
+    #[test]
+    fn immediate_post_turn_completion_keeps_started_event_first() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediatePostTurnExecutor, rx);
+        let turn_submission = runtime.begin_test_turn_submission();
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        });
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::TurnTerminal {
+                receipt: ConversationTurnTerminalReceipt::completed(
+                    "thread-1",
+                    "turn-1",
+                    Vec::new(),
+                )
+                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed),
+                execution_snapshot_capture: None,
+            },
+        });
+        let previous = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshSucceeded,
+            last_summary: Some("previous summary".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let request = PostTurnRequest {
+            context: PostTurnContext {
+                thread_id: "thread-1".to_string(),
+                planning_workspace_directory: "/tmp/workspace".to_string(),
+                latest_user_message: None,
+                latest_main_reply: None,
+                previous_handoff_task: None,
+                current_runtime_projection: RuntimeProjection::invalid("refresh required"),
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: None,
+                planning_settlement_paused: false,
+                continuation_paused: false,
+                can_queue_next: false,
+                stop_keyword: ":stop".to_string(),
+                stop_keyword_matched: false,
+                no_file_changes_stop_matched: false,
+                mode_label: "test".to_string(),
+            },
+            workspace_directory: "/tmp/workspace".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: None,
+            planning_worker_panel_state: previous,
+            continuation_permit: PostTurnContinuationGate::default().capture(),
+        };
+
+        let outcome = runtime.dispatch_command(AppCommand::EvaluatePostTurn(Box::new(request)));
+
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                AppEvent::PostTurnEvaluationStarted(started),
+                AppEvent::PostTurnEvaluationCompleted(completed),
+            ] if started.status == PlanningWorkerStatus::RefreshRunning
+                && started.last_summary.as_deref() == Some("previous summary")
+                && completed.planning_worker_panel_state == *started
         ));
     }
 

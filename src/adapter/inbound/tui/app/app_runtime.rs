@@ -8,9 +8,7 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
-use crate::application::service::planning::{PlanningRuntimeUseCases, PlanningServices};
-#[cfg(test)]
-use crate::application::service::planning::{PlanningTaskToolUseCases, PlanningWorkspaceUseCases};
+use crate::application::service::planning::PlanningServices;
 #[cfg(test)]
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
@@ -193,6 +191,7 @@ pub(super) fn core_turn_stream_event_from_application(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::parallel_peek_overlay_ui::ParallelPeekConversationPreview;
@@ -1296,52 +1295,6 @@ mod tests {
     }
 }
 
-#[derive(Clone)]
-pub(super) struct NativeTuiApplicationHandle {
-    planning_feature: NativeTuiPlanningHandle,
-}
-
-impl NativeTuiApplicationHandle {
-    fn new(planning_feature: PlanningServices) -> Self {
-        Self {
-            planning_feature: NativeTuiPlanningHandle::new(planning_feature),
-        }
-    }
-
-    pub(super) fn planning(&self) -> &NativeTuiPlanningHandle {
-        &self.planning_feature
-    }
-}
-#[derive(Clone)]
-pub(super) struct NativeTuiPlanningHandle {
-    services: PlanningServices,
-}
-
-impl NativeTuiPlanningHandle {
-    fn new(services: PlanningServices) -> Self {
-        Self { services }
-    }
-
-    #[cfg(test)]
-    pub(super) fn workspace(&self) -> &PlanningWorkspaceUseCases {
-        &self.services.workspace
-    }
-
-    pub(super) fn runtime(&self) -> &PlanningRuntimeUseCases {
-        &self.services.runtime
-    }
-
-    #[cfg(test)]
-    pub(super) fn queue(&self) -> &crate::application::service::planning::PlanningQueueUseCases {
-        &self.services.queue
-    }
-
-    #[cfg(test)]
-    pub(super) fn task_tool(&self) -> &PlanningTaskToolUseCases {
-        &self.services.task_tool
-    }
-}
-
 pub(crate) struct NativeTuiParallelModeBinding {
     parallel_turns: ParallelModeTurnService,
     planning_feature: PlanningServices,
@@ -1457,7 +1410,6 @@ impl NativeTuiApp {
         ));
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
         let turn_control_truth = conversation_service.runtime_control_truth();
-        let application = NativeTuiApplicationHandle::new(planning_feature);
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.
@@ -1508,7 +1460,6 @@ impl NativeTuiApp {
             planning_workspace_operation_ui_state:
                 super::PlanningWorkspaceOperationUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
-            application,
             core_runtime,
             turn_control_truth,
             turn_options: Default::default(),
@@ -1891,6 +1842,9 @@ impl NativeTuiApp {
             }
             AppEvent::ManualPromptPrepared(result) => {
                 self.apply_manual_prompt_preparation(*result);
+            }
+            AppEvent::PostTurnEvaluationStarted(state) => {
+                self.planning_worker_panel_state = state;
             }
             AppEvent::PostTurnEvaluationCompleted(execution) => {
                 self.apply_post_turn_evaluation_execution(*execution);

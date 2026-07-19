@@ -21,7 +21,7 @@ the final frame text that a TUI operator actually sees.
 #[test]
 fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
-    let mut app = make_test_app();
+    let (mut app, planning) = make_test_app_with_planning();
     let workspace_dir = std::env::temp_dir().join(format!(
         "codex-exec-loop-render-planning-{}",
         std::time::SystemTime::now()
@@ -49,9 +49,8 @@ fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_fr
         },
     )));
     app.sync_draft_shell_workspace(&workspace_dir);
-    app.application
-        .planning()
-        .workspace()
+    planning
+        .workspace
         .initialize_simple_workspace(&workspace_dir)
         .expect("planning workspace should initialize");
     app.show_planning_init_overlay();

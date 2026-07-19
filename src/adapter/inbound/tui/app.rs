@@ -17,9 +17,10 @@ use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
     ConversationRuntimeControlTruth, ConversationTurnOptions, ConversationTurnSteerRequest,
 };
+#[cfg(test)]
+use crate::domain::planning::PlanningWorkerStatus;
 use crate::domain::planning::{
-    ManualPromptCorrelation, PlanningWorkerPanelState, PlanningWorkerStatus,
-    PostTurnContinuationGate,
+    ManualPromptCorrelation, PlanningWorkerPanelState, PostTurnContinuationGate,
 };
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::Frame;
@@ -175,7 +176,6 @@ mod view_selection_overlay_ui;
 // app module root. Keeping them here makes the dependency graph explicit: app
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
-use app_runtime::NativeTuiApplicationHandle;
 pub(super) use app_runtime::NativeTuiParallelModeBinding;
 use app_runtime::{BackgroundMessage, TuiParallelModeControlPlaneEventSink};
 use auto_follow_controls::{AutoFollowControlEvent, reduce_auto_follow_controls};
@@ -411,7 +411,6 @@ struct NativeTuiApp {
     planning_runtime_refresh_ui_state: PlanningRuntimeRefreshUiState,
     planning_workspace_operation_ui_state: PlanningWorkspaceOperationUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
-    application: NativeTuiApplicationHandle,
     core_runtime: CoreRuntime<CoreEffectRunner>,
     turn_control_truth: ConversationRuntimeControlTruth,
     turn_options: ConversationTurnOptions,

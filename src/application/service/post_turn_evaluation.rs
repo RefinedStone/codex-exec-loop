@@ -11,8 +11,7 @@ use crate::application::service::planning::{
     PlanningPostTurnAutoFollowRequest, PlanningPostTurnAutoFollowSkipReason,
     PlanningPostTurnQueueRefreshFinalizationEvent, PlanningPostTurnQueueRefreshFinalizationRequest,
     PlanningPostTurnQueueRefreshPreparation, PlanningPostTurnQueueRefreshPreparationRequest,
-    PlanningPostTurnReconciliationRequest, PlanningPostTurnWorkerPanelStartRequest,
-    PlanningPostTurnWorkerPanelStartState, PlanningQueueAuthoritySnapshot,
+    PlanningPostTurnReconciliationRequest, PlanningQueueAuthoritySnapshot,
     PlanningRuntimeProjection, PlanningServices, PlanningTaskHandoff,
 };
 use crate::application::service::post_turn_decision::{
@@ -72,19 +71,6 @@ impl PostTurnEvaluationService {
             planning_feature,
             parallel_mode_turn_service,
         }
-    }
-
-    pub fn worker_panel_start_state(
-        &self,
-        request: &PostTurnEvaluationRequest,
-    ) -> PlanningPostTurnWorkerPanelStartState {
-        self.planning_feature
-            .runtime
-            .post_turn_worker_panel_start_state(PlanningPostTurnWorkerPanelStartRequest {
-                planning_settlement_paused: request.context.planning_settlement_paused,
-                changed_planning_file_paths: &request.changed_planning_file_paths,
-                current_runtime_projection: &request.context.current_runtime_projection,
-            })
     }
 
     pub fn evaluate(&self, request: PostTurnEvaluationRequest) -> PostTurnEvaluationExecution {
@@ -1793,11 +1779,6 @@ mod tests {
             request.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
             request.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
 
-            assert_eq!(
-                service.worker_panel_start_state(&request),
-                PlanningPostTurnWorkerPanelStartState::RefreshRunning
-            );
-
             let execution = service.evaluate(request);
 
             assert_eq!(
@@ -1847,11 +1828,6 @@ mod tests {
             request.workspace_directory = workspace.path.clone();
             request.planning_worker_panel_state.status = PlanningWorkerStatus::RefreshSucceeded;
             request.planning_worker_panel_state.last_summary = Some("previous summary".to_string());
-
-            assert_eq!(
-                service.worker_panel_start_state(&request),
-                PlanningPostTurnWorkerPanelStartState::PreserveCurrent
-            );
 
             let execution = service.evaluate(request);
 

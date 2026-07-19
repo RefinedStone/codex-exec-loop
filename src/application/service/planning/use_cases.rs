@@ -364,18 +364,6 @@ pub struct PlanningPostTurnReconciliationOutcome {
     pub runtime_projection: PlanningRuntimeProjection,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanningPostTurnWorkerPanelStartRequest<'a> {
-    pub planning_settlement_paused: bool,
-    pub changed_planning_file_paths: &'a [String],
-    pub current_runtime_projection: &'a PlanningRuntimeProjection,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlanningPostTurnWorkerPanelStartState {
-    PreserveCurrent,
-    RepairRunning,
-    RefreshRunning,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningPostTurnAutoFollowRequest<'a> {
     pub continuation_paused: bool,
     pub can_queue_next: bool,
@@ -939,29 +927,6 @@ impl PlanningRuntimeUseCases {
                 ..PlanningReconciliationResult::default()
             },
         }
-    }
-
-    pub fn post_turn_worker_panel_start_state(
-        &self,
-        request: PlanningPostTurnWorkerPanelStartRequest<'_>,
-    ) -> PlanningPostTurnWorkerPanelStartState {
-        if request.planning_settlement_paused {
-            return PlanningPostTurnWorkerPanelStartState::PreserveCurrent;
-        }
-        if request
-            .changed_planning_file_paths
-            .iter()
-            .any(|path| PlanningExecutionSnapshot::captures_path(path))
-        {
-            return PlanningPostTurnWorkerPanelStartState::RepairRunning;
-        }
-        if request.current_runtime_projection.workspace_status()
-            == PlanningRuntimeWorkspaceStatus::ReadyNoTask
-            && request.current_runtime_projection.queue_idle_policy() == QueueIdlePolicy::Stop
-        {
-            return PlanningPostTurnWorkerPanelStartState::PreserveCurrent;
-        }
-        PlanningPostTurnWorkerPanelStartState::RefreshRunning
     }
 
     pub fn decide_post_turn_auto_follow(
@@ -2537,65 +2502,6 @@ mod tests {
                 .reconciliation_result
                 .auto_follow_block_reason
                 .is_none()
-        );
-    }
-
-    #[test]
-    fn post_turn_worker_panel_state_prioritizes_pause_repair_and_stop_policy() {
-        let planning =
-            planning_services(Arc::new(ScriptedPlanningWorkspacePort::with_result_output(
-                "# Result Output\n- Keep completion copy.",
-            )));
-        let ready_with_task = PlanningRuntimeProjection::ready(
-            "prompt".to_string(),
-            "queue summary".to_string(),
-            Some(sample_queue_head()),
-        );
-        let changed_paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
-
-        assert_eq!(
-            planning.runtime.post_turn_worker_panel_start_state(
-                PlanningPostTurnWorkerPanelStartRequest {
-                    planning_settlement_paused: true,
-                    changed_planning_file_paths: &changed_paths,
-                    current_runtime_projection: &ready_with_task,
-                },
-            ),
-            PlanningPostTurnWorkerPanelStartState::PreserveCurrent
-        );
-        assert_eq!(
-            planning.runtime.post_turn_worker_panel_start_state(
-                PlanningPostTurnWorkerPanelStartRequest {
-                    planning_settlement_paused: false,
-                    changed_planning_file_paths: &changed_paths,
-                    current_runtime_projection: &ready_with_task,
-                },
-            ),
-            PlanningPostTurnWorkerPanelStartState::RepairRunning
-        );
-        assert_eq!(
-            planning.runtime.post_turn_worker_panel_start_state(
-                PlanningPostTurnWorkerPanelStartRequest {
-                    planning_settlement_paused: false,
-                    changed_planning_file_paths: &[],
-                    current_runtime_projection: &PlanningRuntimeProjection::ready(
-                        "prompt".to_string(),
-                        "queue empty".to_string(),
-                        None,
-                    ),
-                },
-            ),
-            PlanningPostTurnWorkerPanelStartState::PreserveCurrent
-        );
-        assert_eq!(
-            planning.runtime.post_turn_worker_panel_start_state(
-                PlanningPostTurnWorkerPanelStartRequest {
-                    planning_settlement_paused: false,
-                    changed_planning_file_paths: &[],
-                    current_runtime_projection: &ready_with_task,
-                },
-            ),
-            PlanningPostTurnWorkerPanelStartState::RefreshRunning
         );
     }
 

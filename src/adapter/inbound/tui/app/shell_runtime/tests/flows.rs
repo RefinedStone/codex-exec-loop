@@ -52,6 +52,7 @@ fn flow_test_guard() -> MutexGuard<'static, ()> {
 struct NativeFlowHarness {
     runtime: ShellRuntime,
     workspace_dir: String,
+    planning: PlanningServices,
     authority: Arc<SqlitePlanningAuthorityAdapter>,
     parallel_mode_service: crate::application::service::parallel_mode::ParallelModeService,
     worker_port: Arc<FlowParallelAgentWorkerPort>,
@@ -219,6 +220,7 @@ impl NativeFlowHarness {
             Arc::new(NoopPlanningWorkerPort),
         );
         bootstrap_active_planning_workspace_with_services(&planning, &workspace_dir);
+        let harness_planning = planning.clone();
         let worker_port = Arc::new(FlowParallelAgentWorkerPort::default());
         let codex_port = Arc::new(FakeAppServerPort);
         let parallel_mode_service =
@@ -244,6 +246,7 @@ impl NativeFlowHarness {
         Self {
             runtime: ShellRuntime::new(app),
             workspace_dir,
+            planning: harness_planning,
             authority,
             parallel_mode_service,
             worker_port,
@@ -276,11 +279,8 @@ impl NativeFlowHarness {
 
     fn committed_ready_task(&self, prompt: &str) -> PlanningTaskIntakeCommitResult {
         let proposal = self
+            .planning
             .runtime
-            .app()
-            .application
-            .planning()
-            .runtime()
             .prepare_task_intake(PlanningTaskIntakeRequest {
                 workspace_directory: self.workspace_dir.clone(),
                 raw_prompt: prompt.to_string(),
@@ -290,21 +290,15 @@ impl NativeFlowHarness {
                 observed_planning_revision: None,
             })
             .expect("task intake proposal should prepare");
-        self.runtime
-            .app()
-            .application
-            .planning()
-            .runtime()
+        self.planning
+            .runtime
             .commit_task_intake(&proposal)
             .expect("task intake proposal should commit")
     }
 
     fn update_task_description(&self, task_id: &str, description: &str) {
-        self.runtime
-            .app()
-            .application
-            .planning()
-            .task_tool()
+        self.planning
+            .task_tool
             .run(
                 &self.workspace_dir,
                 PlanningTaskToolRequest::UpdateTask(PlanningTaskToolUpdateRequest {
@@ -418,11 +412,8 @@ impl NativeFlowHarness {
 
     fn send_post_turn_auto_prompt(&mut self, turn_id: &str) {
         let planning_projection = self
+            .planning
             .runtime
-            .app()
-            .application
-            .planning()
-            .runtime()
             .load_runtime_projection_or_invalid(&self.workspace_dir);
         let ConversationState::Ready(conversation) = &mut self.runtime.app_mut().conversation_state
         else {
@@ -431,6 +422,7 @@ impl NativeFlowHarness {
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
         mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
+        arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
@@ -463,11 +455,8 @@ impl NativeFlowHarness {
 
     fn send_parallel_completion_with_ready_queue_head(&mut self, turn_id: &str) {
         let planning_projection = self
+            .planning
             .runtime
-            .app()
-            .application
-            .planning()
-            .runtime()
             .load_runtime_projection_or_invalid(&self.workspace_dir);
         assert!(
             planning_projection.has_actionable_queue_head(),
@@ -480,6 +469,7 @@ impl NativeFlowHarness {
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
         mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
+        arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
@@ -520,6 +510,7 @@ impl NativeFlowHarness {
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
         mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
+        arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app

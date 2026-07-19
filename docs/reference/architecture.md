@@ -42,6 +42,18 @@ and post-turn evaluation use this flow. Parallel mutation remains application-ow
 through `ParallelModeControlPlaneHandle`; core may copy the projection but must not own a second
 parallel runtime.
 
+Post-turn evaluation also enters Core before changing the planning-worker panel. The command
+is admitted only for the latest confirmed completed terminal with no active turn, no already
+applied evaluation, and no exact evaluation already in flight. Stale, wrong, and duplicate starts
+emit neither an event nor an effect; completion must match the exact in-flight thread/turn lease.
+After admission, the command
+preserves the complete prior state for an explicit settlement pause, otherwise selects
+`RepairRunning` for a protected planning-file change, preserves the complete state for an empty
+queue with stop policy, and selects `RefreshRunning` for every remaining case. Core emits that
+exact state as `PostTurnEvaluationStarted` before dispatching the asynchronous effect, and the
+effect request carries the same state. The TUI only assigns the started event and no longer retains
+a raw application/planning handle or calls a planning workspace/runtime use case directly.
+
 Native TUI startup also owns prompt-log privacy maintenance through this effect path. Production
 composition injects a typed maintenance port into `StartupService` but performs no SQLite purge or
 clear while building the app. The startup command captures a monotonic generation and the exact
@@ -347,9 +359,9 @@ The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft
 is closed, status and review presentation read the canonical policy from the conversation model;
 the adapter does not retain or reverse-sync a second budget value.
 
-Planning-worker diagnostics retain the domain `PlanningWorkerPanelState` directly from post-turn
-execution through the screen model. TUI presentation derives labels and content visibility without
-an adapter-owned status DTO or round-trip mapper.
+Planning-worker diagnostics retain the domain `PlanningWorkerPanelState` directly from the
+Core-started post-turn event through asynchronous completion and the screen model. TUI presentation
+derives labels and content visibility without an adapter-owned status DTO or round-trip mapper.
 
 The detailed, test-guarded contract is
 [TUI Layered Architecture](../design/07-tui-layered-architecture-and-aesthetic-contract.md).

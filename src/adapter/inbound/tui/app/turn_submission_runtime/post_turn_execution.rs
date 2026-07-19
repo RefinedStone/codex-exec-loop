@@ -1,6 +1,5 @@
 use crate::application::service::planning::{
-    PlanningPostTurnWorkerPanelStartRequest, PlanningRuntimeProjection,
-    PlanningTurnExecutionSnapshotCapture,
+    PlanningRuntimeProjection, PlanningTurnExecutionSnapshotCapture,
 };
 use crate::application::service::post_turn_evaluation::{
     PostTurnAutoFollowSkipReason,
@@ -18,7 +17,7 @@ use super::super::conversation_runtime::{
 use super::super::post_turn_continuation::PostTurnEvaluationCompletionPayload;
 use super::super::{
     AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
-    PlanningWorkerPanelState, PlanningWorkerStatus,
+    PlanningWorkerPanelState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,16 +33,6 @@ impl NativeTuiApp {
         let Some(context) = self.ready_post_turn_evaluation_context() else {
             return;
         };
-        let start_state = self
-            .application
-            .planning()
-            .runtime()
-            .post_turn_worker_panel_start_state(PlanningPostTurnWorkerPanelStartRequest {
-                planning_settlement_paused: context.planning_settlement_paused,
-                changed_planning_file_paths: &request.changed_planning_file_paths,
-                current_runtime_projection: &context.current_runtime_projection,
-            });
-        apply_post_turn_start_state(&mut self.planning_worker_panel_state, start_state);
         let request = application_post_turn_request(
             request,
             context,
@@ -162,21 +151,6 @@ fn post_turn_context_from_conversation(
         stop_keyword_matched,
         no_file_changes_stop_matched,
         mode_label: conversation.auto_follow_state.mode_label().to_string(),
-    }
-}
-
-fn apply_post_turn_start_state(
-    state: &mut PlanningWorkerPanelState,
-    start_state: crate::application::service::planning::PlanningPostTurnWorkerPanelStartState,
-) {
-    match start_state {
-        crate::application::service::planning::PlanningPostTurnWorkerPanelStartState::PreserveCurrent => {}
-        crate::application::service::planning::PlanningPostTurnWorkerPanelStartState::RepairRunning => {
-            state.status = PlanningWorkerStatus::RepairRunning;
-        }
-        crate::application::service::planning::PlanningPostTurnWorkerPanelStartState::RefreshRunning => {
-            state.status = PlanningWorkerStatus::RefreshRunning;
-        }
     }
 }
 
