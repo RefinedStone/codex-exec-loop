@@ -1158,14 +1158,6 @@ impl NativeTuiApplicationHandle {
         self.conversations.request_stop_all_sessions()
     }
 
-    pub(super) fn resolve_approval_request(
-        &self,
-        approval_id: &str,
-        decision: crate::domain::conversation::ConversationApprovalDecision,
-    ) -> Result<(), String> {
-        self.conversations
-            .resolve_approval_request(approval_id, decision)
-    }
     pub(super) fn persist_review_center_approval_review_for_workspace(
         &self,
         workspace_dir: &str,
@@ -1197,15 +1189,6 @@ impl NativeTuiConversationHandle {
             .map_err(|error| error.to_string())
     }
 
-    pub(super) fn resolve_approval_request(
-        &self,
-        approval_id: &str,
-        decision: crate::domain::conversation::ConversationApprovalDecision,
-    ) -> Result<(), String> {
-        self.service
-            .resolve_approval_request(approval_id, decision)
-            .map_err(|error| error.to_string())
-    }
     pub(super) fn persist_review_center_approval_review_for_workspace(
         &self,
         workspace_dir: &str,
@@ -1485,6 +1468,20 @@ impl NativeTuiApp {
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnSteerAdmissionResolved(_) => {}
+            AppEvent::ApprovalDecisionAdmissionResolved(_) => {}
+            AppEvent::ApprovalDecisionSubmissionCompleted {
+                correlation,
+                result,
+            } => {
+                if let Err(error) = result {
+                    self.dispatch_conversation_runtime(
+                        ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed {
+                            approval_id: correlation.approval_id,
+                            error,
+                        },
+                    );
+                }
+            }
             AppEvent::ManualPromptPreparationAdmissionResolved(_) => {}
             AppEvent::TurnSteerCompleted {
                 correlation,

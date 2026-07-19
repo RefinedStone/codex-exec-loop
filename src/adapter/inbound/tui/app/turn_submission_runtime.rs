@@ -165,22 +165,6 @@ impl NativeTuiApp {
                     );
                 }
             }
-            ConversationRuntimeEffect::ResolveApprovalRequest {
-                approval_id,
-                decision,
-            } => {
-                if let Err(error) = self
-                    .application
-                    .resolve_approval_request(&approval_id, decision)
-                {
-                    self.dispatch_conversation_runtime(
-                        ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed {
-                            approval_id,
-                            error,
-                        },
-                    );
-                }
-            }
             ConversationRuntimeEffect::ShowApprovalOverlay => {
                 self.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
             }

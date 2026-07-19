@@ -3,7 +3,9 @@ use super::*;
 use crate::application::service::planning::{
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
 };
-use crate::core::app::{AppCommand, AppEvent, TurnSteerAdmission, TurnSteerCorrelation};
+use crate::core::app::{
+    AppCommand, AppEvent, ApprovalDecisionAdmission, TurnSteerAdmission, TurnSteerCorrelation,
+};
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
 // auto-follow, and overlays report the same readiness reason.
@@ -996,12 +998,31 @@ impl NativeTuiApp {
             ConversationState::Ready(_) => None,
         };
         if let Some(approval_id) = approval_id {
-            self.dispatch_conversation_runtime(
-                ConversationRuntimeEvent::ApprovalDecisionSubmitted {
-                    approval_id,
+            let outcome = self
+                .core_runtime
+                .dispatch_command(AppCommand::SubmitApprovalDecision {
+                    approval_id: approval_id.clone(),
                     decision,
-                },
-            );
+                });
+            let admitted = outcome.events.iter().any(|event| {
+                matches!(
+                    event,
+                    AppEvent::ApprovalDecisionAdmissionResolved(
+                        ApprovalDecisionAdmission::Accepted { .. }
+                    )
+                )
+            });
+            if admitted {
+                self.dispatch_conversation_runtime(
+                    ConversationRuntimeEvent::ApprovalDecisionSubmitted {
+                        approval_id,
+                        decision,
+                    },
+                );
+            }
+            // Commit the adapter-local pending projection before an immediate
+            // completion can reopen it for retry.
+            self.apply_core_dispatch_outcome(outcome);
         }
     }
     pub(super) fn handle_ctrl_c(&mut self) {
@@ -1178,7 +1199,8 @@ mod tests {
 
     use crate::adapter::inbound::tui::app::test_helpers::{
         sample_planning_runtime_projection, sample_queue_head, test_native_tui_app,
-        test_native_tui_app_with_planning, test_planning_services_with_task_repository,
+        test_native_tui_app_with_approval_resolution_error, test_native_tui_app_with_planning,
+        test_planning_services_with_task_repository,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_task_repository_port::{
@@ -1212,6 +1234,34 @@ mod tests {
 
     fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> event::KeyEvent {
         event::KeyEvent::new(code, modifiers)
+    }
+
+    fn arm_pending_approval(
+        app: &mut NativeTuiApp,
+        request: ConversationApprovalRequest,
+    ) -> crate::core::app::TurnSubmissionCorrelation {
+        let turn_submission = app.core_runtime.begin_test_turn_submission();
+        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: crate::core::app::TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-approval".to_string(),
+                title: "Approval test".to_string(),
+                cwd: "/tmp/root".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        });
+        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: crate::core::app::TurnStreamEvent::TurnStarted {
+                turn_id: "turn-approval".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: crate::core::app::TurnStreamEvent::ApprovalRequested { request },
+        });
+        turn_submission
     }
 
     fn open_simple_review(app: &mut NativeTuiApp) {
@@ -3665,18 +3715,18 @@ mod tests {
     #[test]
     fn approval_overlay_consumes_all_input_and_routes_only_explicit_decisions() {
         let mut app = test_native_tui_app();
-        let conversation = ready_conversation_mut(&mut app);
-        conversation.input_buffer = "draft prompt".to_string();
-        conversation.mark_turn_submitting("/tmp/root".to_string());
-        conversation.pending_approval_request = Some(ConversationApprovalRequest {
-            approval_id: "approval-key".to_string(),
-            server_request_id: "server-key".to_string(),
-            method: "item/commandExecution/requestApproval".to_string(),
-            kind: ConversationApprovalRequestKind::CommandExecution,
-            summary: "Command execution requested.".to_string(),
-            details: (1..=8).map(|index| format!("Detail {index}")).collect(),
-        });
-        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+        ready_conversation_mut(&mut app).input_buffer = "draft prompt".to_string();
+        let turn_submission = arm_pending_approval(
+            &mut app,
+            ConversationApprovalRequest {
+                approval_id: "approval-key".to_string(),
+                server_request_id: "server-key".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind: ConversationApprovalRequestKind::CommandExecution,
+                summary: "Command execution requested.".to_string(),
+                details: (1..=8).map(|index| format!("Detail {index}")).collect(),
+            },
+        );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
@@ -3703,6 +3753,20 @@ mod tests {
         );
         assert_eq!(app.shell_overlay, ShellOverlay::Approval);
 
+        app.apply_core_event(AppEvent::ApprovalDecisionSubmissionCompleted {
+            correlation: crate::core::app::ApprovalDecisionCorrelation::new(
+                1,
+                turn_submission,
+                "approval-key",
+                crate::domain::conversation::ConversationApprovalDecision::Accept,
+            ),
+            result: Ok(()),
+        });
+        assert_eq!(
+            ready_conversation(&app).pending_approval_decision(),
+            Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
+        );
+
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('n'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Esc)));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
@@ -3728,6 +3792,65 @@ mod tests {
             Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
         );
         assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
+    }
+
+    #[test]
+    fn unavailable_approval_decision_does_not_commit_pending_projection() {
+        let mut app = test_native_tui_app();
+        ready_conversation_mut(&mut app).pending_approval_request =
+            Some(ConversationApprovalRequest {
+                approval_id: "approval-unavailable".to_string(),
+                server_request_id: "server-unavailable".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind: ConversationApprovalRequestKind::CommandExecution,
+                summary: "Command execution requested.".to_string(),
+                details: vec!["Command: cargo test".to_string()],
+            });
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
+        assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
+        assert!(ready_conversation(&app).pending_approval_request.is_some());
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+    }
+
+    #[test]
+    fn failed_approval_decision_completion_reopens_retry_before_provider_resolution() {
+        let mut app = test_native_tui_app_with_approval_resolution_error("runtime unavailable");
+        let _ = arm_pending_approval(
+            &mut app,
+            ConversationApprovalRequest {
+                approval_id: "approval-failure".to_string(),
+                server_request_id: "server-failure".to_string(),
+                method: "item/commandExecution/requestApproval".to_string(),
+                kind: ConversationApprovalRequestKind::CommandExecution,
+                summary: "Command execution requested.".to_string(),
+                details: vec!["Command: cargo test".to_string()],
+            },
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('y'))));
+        assert_eq!(
+            ready_conversation(&app).pending_approval_decision(),
+            Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while ready_conversation(&app)
+            .pending_approval_decision()
+            .is_some()
+            && Instant::now() < deadline
+        {
+            app.poll_core_runtime_inputs(8);
+            std::thread::yield_now();
+        }
+
+        assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            "approval decision failed: runtime unavailable / retry accept or decline"
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
     }
 
     #[test]

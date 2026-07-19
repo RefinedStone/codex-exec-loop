@@ -56,6 +56,11 @@ worker 하나만 시작하며 stale completion을 버립니다. TUI에는 confir
 않은 draft만 지우기 위한 editor revision만 남습니다. 이미 승인된 steer는 turn terminal event만으로
 무효화하지 않지만 conversation identity가 바뀌면 무효화합니다.
 
+Approval decision도 core 소유 single-flight 권한입니다. Core는 활성 turn의 현재 pending approval과
+일치하는 decision만 승인하고 submitting/submitted 상태를 소유하며 중복 provider 제출을 막습니다.
+Composition은 provider 호출을 실행하고 correlation이 유지된 completion을 반환합니다. TUI는 approval
+modal projection과 재시도 상태 문구만 소유합니다.
+
 Parallel peek load는 core-correlated read입니다. Core가 요청 thread에 단조 증가 generation을
 부여하고 최신 요청으로 이전 요청을 대체하며, 일치하지 않거나 중복된 completion은 TUI에 도달하기
 전에 버립니다. TUI는 agent 선택과 loading/status/scroll 표현을 소유하고 다른 shell overlay가

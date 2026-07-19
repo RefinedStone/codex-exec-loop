@@ -1343,6 +1343,25 @@ fn tui_active_turn_steering_enters_through_core_runtime() {
 }
 
 #[test]
+fn tui_approval_decisions_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI approval decisions must enter core instead of calling the provider directly",
+        &["src/adapter/inbound/tui"],
+        &[
+            ".resolve_approval_request(",
+            "ConversationRuntimeEffect::ResolveApprovalRequest",
+        ],
+    );
+    let controller_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_controller.rs"))
+            .expect("shell controller source should be readable");
+    assert!(
+        controller_source.contains(".dispatch_command(AppCommand::SubmitApprovalDecision"),
+        "TUI approval decisions must positively enter through AppCommand::SubmitApprovalDecision"
+    );
+}
+
+#[test]
 fn tui_manual_prompt_preparation_enters_through_core_runtime() {
     // TUI owns editable prompt text and overlay state, while manual planning bootstrap and intake
     // execution must run as a core effect backed by application services.

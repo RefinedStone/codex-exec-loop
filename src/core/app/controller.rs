@@ -1,11 +1,11 @@
 use super::{
-    AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
-    CoreEffectCompletion, CoreInput, ManualPromptPreparationAdmission,
-    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
-    TurnStreamEvent, TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission,
-    TurnSubmissionCorrelation,
+    AppCommand, AppEvent, AppSnapshot, AppState, ApprovalDecisionAdmission,
+    ApprovalDecisionCorrelation, ConversationLoadCorrelation, CoreEffect, CoreEffectCompletion,
+    CoreInput, ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
+    ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
@@ -21,6 +21,18 @@ pub struct CoreDispatchOutcome {
 struct ActiveTurnSteer {
     correlation: TurnSteerCorrelation,
     expected_turn_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalDecisionPhase {
+    Submitting,
+    Submitted,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveApprovalDecision {
+    correlation: ApprovalDecisionCorrelation,
+    phase: ApprovalDecisionPhase,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +62,8 @@ pub struct CoreController {
     active_turn_submission: Option<TurnSubmissionCorrelation>,
     next_turn_steer_generation: u64,
     active_turn_steer: Option<ActiveTurnSteer>,
+    next_approval_decision_generation: u64,
+    active_approval_decision: Option<ActiveApprovalDecision>,
 }
 
 impl CoreController {
@@ -80,6 +94,8 @@ impl CoreController {
             active_turn_submission: None,
             next_turn_steer_generation: 1,
             active_turn_steer: None,
+            next_approval_decision_generation: 1,
+            active_approval_decision: None,
         }
     }
 
@@ -168,6 +184,7 @@ impl CoreController {
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
                 self.active_turn_steer = None;
+                self.active_approval_decision = None;
                 self.guarded_session_rename_stream = None;
                 self.state.reset_conversation();
                 self.turn_stream_state = TurnStreamState::new();
@@ -338,6 +355,53 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
+            CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id,
+                decision,
+            }) => {
+                if let Some(active) = &self.active_approval_decision {
+                    return CoreDispatchOutcome {
+                        events: vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                            ApprovalDecisionAdmission::RejectedActive {
+                                active_correlation: active.correlation.clone(),
+                            },
+                        )],
+                        effects: Vec::new(),
+                        snapshot: self.snapshot(),
+                    };
+                }
+                let Some(turn_submission) = self.active_turn_submission else {
+                    return self.approval_decision_unavailable_outcome();
+                };
+                if !self
+                    .turn_stream_state
+                    .matches_pending_approval(&approval_id)
+                {
+                    return self.approval_decision_unavailable_outcome();
+                }
+                let correlation = ApprovalDecisionCorrelation::new(
+                    take_generation(
+                        &mut self.next_approval_decision_generation,
+                        "approval decision",
+                    ),
+                    turn_submission,
+                    approval_id,
+                    decision,
+                );
+                self.active_approval_decision = Some(ActiveApprovalDecision {
+                    correlation: correlation.clone(),
+                    phase: ApprovalDecisionPhase::Submitting,
+                });
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                        ApprovalDecisionAdmission::Accepted {
+                            correlation: correlation.clone(),
+                        },
+                    )],
+                    effects: vec![CoreEffect::SubmitApprovalDecision { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::Command(AppCommand::EvaluatePostTurn(request)) => CoreDispatchOutcome {
                 events: Vec::new(),
                 effects: vec![CoreEffect::EvaluatePostTurn(request)],
@@ -442,6 +506,7 @@ impl CoreController {
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
                 self.active_turn_steer = None;
+                self.active_approval_decision = None;
                 self.guarded_session_rename_stream = None;
                 self.state.apply_conversation_result(result);
                 self.turn_stream_state = TurnStreamState::new();
@@ -530,6 +595,33 @@ impl CoreController {
                 });
                 CoreDispatchOutcome {
                     events: vec![AppEvent::TurnSteerCompleted {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation,
+                result,
+            }) => {
+                if self.active_approval_decision.as_ref().is_none_or(|active| {
+                    active.correlation != correlation
+                        || active.phase != ApprovalDecisionPhase::Submitting
+                }) {
+                    return self.unchanged_outcome();
+                }
+                if result.is_ok() {
+                    self.active_approval_decision
+                        .as_mut()
+                        .expect("exact active approval decision must remain present")
+                        .phase = ApprovalDecisionPhase::Submitted;
+                } else {
+                    self.active_approval_decision = None;
+                }
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::ApprovalDecisionSubmissionCompleted {
                         correlation,
                         result,
                     }],
@@ -659,6 +751,7 @@ impl CoreController {
     ) -> CoreDispatchOutcome {
         self.active_turn_submission = None;
         self.active_turn_steer = None;
+        self.active_approval_decision = None;
         self.guarded_session_rename_stream = None;
         let correlation = ConversationLoadCorrelation::new(
             take_generation(
@@ -717,6 +810,7 @@ impl CoreController {
             "turn submission",
         ));
         self.guarded_session_rename_stream = None;
+        self.active_approval_decision = None;
         self.active_turn_submission = Some(correlation);
         self.turn_stream_state.begin_submission();
         correlation
@@ -726,6 +820,16 @@ impl CoreController {
         CoreDispatchOutcome {
             events: vec![AppEvent::TurnSteerAdmissionResolved(
                 TurnSteerAdmission::RejectedUnavailable,
+            )],
+            effects: Vec::new(),
+            snapshot: self.snapshot(),
+        }
+    }
+
+    fn approval_decision_unavailable_outcome(&self) -> CoreDispatchOutcome {
+        CoreDispatchOutcome {
+            events: vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedUnavailable,
             )],
             effects: Vec::new(),
             snapshot: self.snapshot(),
@@ -781,6 +885,18 @@ impl CoreController {
         } else if closes_submission {
             self.active_turn_submission = None;
             self.guarded_session_rename_stream = None;
+        }
+        if self
+            .active_approval_decision
+            .as_ref()
+            .is_some_and(|active| {
+                self.active_turn_submission != Some(active.correlation.turn_submission)
+                    || !self
+                        .turn_stream_state
+                        .matches_pending_approval(&active.correlation.approval_id)
+            })
+        {
+            self.active_approval_decision = None;
         }
 
         CoreDispatchOutcome {
@@ -895,7 +1011,8 @@ mod tests {
         TurnStreamUpdate,
     };
     use crate::domain::conversation::{
-        ConversationMessage, ConversationMessageKind,
+        ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationApprovalResolution, ConversationMessage, ConversationMessageKind,
         ConversationSnapshot as DomainConversationSnapshot, ConversationTurnSteerRequest,
     };
     use crate::domain::conversation_item_lifecycle::{
@@ -1980,6 +2097,323 @@ mod tests {
         ));
         assert!(late.events.is_empty());
         assert!(controller.active_turn_steer.is_none());
+    }
+
+    #[test]
+    fn approval_decision_is_single_flight_until_the_exact_request_resolves() {
+        let mut controller = CoreController::new();
+        let unavailable =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id: "approval-1".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            }));
+        assert_eq!(
+            unavailable.events,
+            vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedUnavailable,
+            )]
+        );
+
+        let turn_submission = start_test_turn(&mut controller, "thread-1", "turn-1");
+        request_test_approval(&mut controller, turn_submission, "approval-1");
+        let mismatched =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id: "approval-other".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            }));
+        assert_eq!(
+            mismatched.events,
+            vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedUnavailable,
+            )]
+        );
+
+        let correlation = ApprovalDecisionCorrelation::new(
+            1,
+            turn_submission,
+            "approval-1",
+            ConversationApprovalDecision::Accept,
+        );
+        let accepted =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id: "approval-1".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            }));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::Accepted {
+                    correlation: correlation.clone(),
+                },
+            )]
+        );
+        assert_eq!(
+            accepted.effects,
+            vec![CoreEffect::SubmitApprovalDecision {
+                correlation: correlation.clone(),
+            }]
+        );
+
+        let duplicate =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id: "approval-1".to_string(),
+                decision: ConversationApprovalDecision::Decline,
+            }));
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedActive {
+                    active_correlation: correlation.clone(),
+                },
+            )]
+        );
+
+        let completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: correlation.clone(),
+                result: Ok(()),
+            },
+        ));
+        assert_eq!(
+            completed.events,
+            vec![AppEvent::ApprovalDecisionSubmissionCompleted {
+                correlation: correlation.clone(),
+                result: Ok(()),
+            }]
+        );
+        assert_eq!(
+            controller
+                .active_approval_decision
+                .as_ref()
+                .map(|active| active.phase),
+            Some(ApprovalDecisionPhase::Submitted)
+        );
+
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalResolved {
+                approval_id: "approval-stale".to_string(),
+                resolution: ConversationApprovalResolution::Declined,
+            },
+        ));
+        let waiting =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id: "approval-1".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            }));
+        assert!(matches!(
+            waiting.events.as_slice(),
+            [AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedActive { .. }
+            )]
+        ));
+
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalResolved {
+                approval_id: "approval-1".to_string(),
+                resolution: ConversationApprovalResolution::Accepted,
+            },
+        ));
+        assert!(controller.active_approval_decision.is_none());
+        let after_resolution =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id: "approval-1".to_string(),
+                decision: ConversationApprovalDecision::Accept,
+            }));
+        assert_eq!(
+            after_resolution.events,
+            vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedUnavailable,
+            )]
+        );
+        let duplicate_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation,
+                result: Err("late duplicate".to_string()),
+            },
+        ));
+        assert!(duplicate_completion.events.is_empty());
+    }
+
+    #[test]
+    fn failed_approval_submission_allows_a_generation_checked_retry() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-1", "turn-1");
+        request_test_approval(&mut controller, turn_submission, "approval-1");
+        let first = ApprovalDecisionCorrelation::new(
+            1,
+            turn_submission,
+            "approval-1",
+            ConversationApprovalDecision::Accept,
+        );
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-1".to_string(),
+            decision: ConversationApprovalDecision::Accept,
+        }));
+
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: first,
+                result: Err("runtime unavailable".to_string()),
+            },
+        ));
+        assert!(matches!(
+            failed.events.as_slice(),
+            [AppEvent::ApprovalDecisionSubmissionCompleted {
+                result: Err(message),
+                ..
+            }] if message == "runtime unavailable"
+        ));
+        assert!(controller.active_approval_decision.is_none());
+
+        let retried =
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                approval_id: "approval-1".to_string(),
+                decision: ConversationApprovalDecision::Decline,
+            }));
+        assert!(matches!(
+            retried.effects.as_slice(),
+            [CoreEffect::SubmitApprovalDecision { correlation }]
+                if correlation.generation == 2
+                    && correlation.turn_submission == turn_submission
+                    && correlation.approval_id == "approval-1"
+                    && correlation.decision == ConversationApprovalDecision::Decline
+        ));
+    }
+
+    #[test]
+    fn approval_decision_same_identity_aba_drops_the_older_completion() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-1", "turn-1");
+        request_test_approval(&mut controller, turn_submission, "approval-a");
+        let old = ApprovalDecisionCorrelation::new(
+            1,
+            turn_submission,
+            "approval-a",
+            ConversationApprovalDecision::Accept,
+        );
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-a".to_string(),
+            decision: ConversationApprovalDecision::Accept,
+        }));
+
+        request_test_approval(&mut controller, turn_submission, "approval-b");
+        assert!(controller.active_approval_decision.is_none());
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-b".to_string(),
+            decision: ConversationApprovalDecision::Accept,
+        }));
+        request_test_approval(&mut controller, turn_submission, "approval-a");
+        assert!(controller.active_approval_decision.is_none());
+        let current = ApprovalDecisionCorrelation::new(
+            3,
+            turn_submission,
+            "approval-a",
+            ConversationApprovalDecision::Accept,
+        );
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-a".to_string(),
+            decision: ConversationApprovalDecision::Accept,
+        }));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: old,
+                result: Ok(()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(
+            controller
+                .active_approval_decision
+                .as_ref()
+                .map(|active| &active.correlation),
+            Some(&current)
+        );
+
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: current.clone(),
+                result: Ok(()),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::ApprovalDecisionSubmissionCompleted {
+                correlation: current,
+                result: Ok(()),
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_and_conversation_invalidation_drop_approval_completions() {
+        let mut terminal = CoreController::new();
+        let terminal_turn = start_test_turn(&mut terminal, "thread-1", "turn-1");
+        request_test_approval(&mut terminal, terminal_turn, "approval-terminal");
+        let terminal_correlation = ApprovalDecisionCorrelation::new(
+            1,
+            terminal_turn,
+            "approval-terminal",
+            ConversationApprovalDecision::Accept,
+        );
+        terminal.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-terminal".to_string(),
+            decision: ConversationApprovalDecision::Accept,
+        }));
+        terminal.handle_input(test_turn_stream_input(
+            terminal_turn,
+            TurnStreamEvent::TurnTerminal {
+                receipt: confirmed_terminal_receipt("thread-1", "turn-1", Vec::new()),
+                execution_snapshot_capture: None,
+            },
+        ));
+        let after_terminal = terminal.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: terminal_correlation,
+                result: Ok(()),
+            },
+        ));
+        assert!(after_terminal.events.is_empty());
+        assert!(terminal.active_approval_decision.is_none());
+
+        let mut invalidated = CoreController::new();
+        let invalidated_turn = start_test_turn(&mut invalidated, "thread-1", "turn-1");
+        request_test_approval(&mut invalidated, invalidated_turn, "approval-invalidated");
+        let invalidated_correlation = ApprovalDecisionCorrelation::new(
+            1,
+            invalidated_turn,
+            "approval-invalidated",
+            ConversationApprovalDecision::Decline,
+        );
+        invalidated.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-invalidated".to_string(),
+            decision: ConversationApprovalDecision::Decline,
+        }));
+        invalidated.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        let after_invalidation = invalidated.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: invalidated_correlation,
+                result: Err("late".to_string()),
+            },
+        ));
+        assert!(after_invalidation.events.is_empty());
+        assert!(invalidated.active_approval_decision.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "approval decision generation exhausted")]
+    fn approval_decision_generation_panics_before_it_can_wrap() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-1", "turn-1");
+        request_test_approval(&mut controller, turn_submission, "approval-1");
+        controller.next_approval_decision_generation = u64::MAX;
+
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-1".to_string(),
+            decision: ConversationApprovalDecision::Accept,
+        }));
     }
 
     #[test]
@@ -3538,6 +3972,26 @@ mod tests {
         event: TurnStreamEvent,
     ) -> CoreInput {
         CoreInput::ConversationStreamUpdated { correlation, event }
+    }
+
+    fn request_test_approval(
+        controller: &mut CoreController,
+        correlation: TurnSubmissionCorrelation,
+        approval_id: &str,
+    ) {
+        controller.handle_input(test_turn_stream_input(
+            correlation,
+            TurnStreamEvent::ApprovalRequested {
+                request: ConversationApprovalRequest {
+                    approval_id: approval_id.to_string(),
+                    server_request_id: format!("server-{approval_id}"),
+                    method: "item/commandExecution/requestApproval".to_string(),
+                    kind: ConversationApprovalRequestKind::CommandExecution,
+                    summary: "Command execution requested.".to_string(),
+                    details: Vec::new(),
+                },
+            },
+        ));
     }
 
     fn test_turn_submission_request(thread_id: Option<&str>) -> TurnSubmissionRequest {

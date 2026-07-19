@@ -454,7 +454,10 @@ pub(crate) fn test_parallel_mode_service_with_github(
     )
 }
 
-struct TestAppServerPort;
+#[derive(Default)]
+struct TestAppServerPort {
+    approval_resolution_error: Option<String>,
+}
 
 impl StartupProbePort for TestAppServerPort {
     fn load_startup_context(&self) -> Result<AppServerStartupContext> {
@@ -507,7 +510,10 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
         _approval_id: &str,
         _decision: crate::domain::conversation::ConversationApprovalDecision,
     ) -> Result<()> {
-        Ok(())
+        match &self.approval_resolution_error {
+            Some(error) => Err(anyhow::anyhow!(error.clone())),
+            None => Ok(()),
+        }
     }
 
     fn run_new_thread_stream(
@@ -545,6 +551,20 @@ pub(super) fn test_native_tui_app() -> NativeTuiApp {
     ))
 }
 
+pub(super) fn test_native_tui_app_with_approval_resolution_error(
+    error: impl Into<String>,
+) -> NativeTuiApp {
+    let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    test_native_tui_app_with_planning_review_center_and_app_server(
+        planning,
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        None,
+        Arc::new(TestAppServerPort {
+            approval_resolution_error: Some(error.into()),
+        }),
+    )
+}
+
 pub(super) fn test_native_tui_app_with_review_center_repository(
     review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
 ) -> NativeTuiApp {
@@ -579,12 +599,25 @@ fn test_native_tui_app_with_planning_and_review_center_repository(
     review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
     session_catalog_port: Option<Arc<dyn SessionCatalogPort>>,
 ) -> NativeTuiApp {
+    test_native_tui_app_with_planning_review_center_and_app_server(
+        planning,
+        review_center_repository,
+        session_catalog_port,
+        Arc::new(TestAppServerPort::default()),
+    )
+}
+
+fn test_native_tui_app_with_planning_review_center_and_app_server(
+    planning: PlanningServices,
+    review_center_repository: Arc<dyn ReviewCenterRepositoryPort>,
+    session_catalog_port: Option<Arc<dyn SessionCatalogPort>>,
+    app_server_port: Arc<TestAppServerPort>,
+) -> NativeTuiApp {
     /*
      * Build the same production-shaped service graph used by TUI fixtures, with app-server IO
      * pinned to deterministic responses. Tests can then seed NativeTuiApp state directly while
      * still exercising reducer and lifecycle wiring through the real constructor.
      */
-    let app_server_port = Arc::new(TestAppServerPort);
     let parallel_mode_binding = NativeTuiParallelModeBinding::from_composition(
         test_parallel_mode_control_plane_composition(planning),
     );
@@ -617,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_app_server_port_fixture_covers_startup_catalog_and_stream_contracts() {
-        let app_server_port = TestAppServerPort;
+        let app_server_port = TestAppServerPort::default();
 
         let startup = app_server_port
             .load_startup_context()

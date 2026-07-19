@@ -116,6 +116,9 @@ the fixed Akra theme.
 - Popup overlays must use the shared Akra panel frame from `AkraTheme::panel_block`.
 - Overlay content should follow this order when the surface needs all sections: header, summary,
   primary content, status, keys.
+- Approval decisions must enter through `AppCommand::SubmitApprovalDecision`. Core owns matching
+  the current pending approval and the submitting/submitted single-flight state; composition
+  performs the provider call. The TUI owns only modal projection and retry status copy.
 - The Review Center read-only overlay controller must dispatch a core load command. Core owns
   latest-wins correlation and completion; composition executes the application authority reads
   into a core-owned snapshot.

@@ -100,15 +100,18 @@ mod tests {
 
     use super::*;
     use crate::core::app::{
-        AppEvent, CoreEffectCompletion, CorePromptOrigin, ManualPromptPreparationAdmission,
-        ManualPromptPreparationIntent, QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot,
-        ReviewCenterLoadCorrelation, ReviewCenterSnapshot, StartupAttachmentSnapshot,
-        StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
-        TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission,
-        TurnSubmissionRequest,
+        AppEvent, ApprovalDecisionAdmission, ApprovalDecisionCorrelation, CoreEffectCompletion,
+        CorePromptOrigin, ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
+        QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot, ReviewCenterLoadCorrelation,
+        ReviewCenterSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
+        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSteerAdmission,
+        TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
-    use crate::domain::conversation::ConversationTurnSteerRequest;
+    use crate::domain::conversation::{
+        ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
+        ConversationTurnSteerRequest,
+    };
     use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
 
     #[test]
@@ -206,6 +209,23 @@ mod tests {
                         planning_revision: 0,
                         tasks: Vec::new(),
                     })),
+                },
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediateApprovalDecisionExecutor;
+
+    impl CoreEffectExecutor for ImmediateApprovalDecisionExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::SubmitApprovalDecision { correlation } = effect else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::ApprovalDecisionSubmitted {
+                    correlation,
+                    result: Ok(()),
                 },
             ))
         }
@@ -411,6 +431,85 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn immediate_approval_effect_emits_admission_before_completion() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediateApprovalDecisionExecutor, rx);
+        let turn_submission = runtime.begin_test_turn_submission();
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-1".to_string(),
+                title: "Core runtime".to_string(),
+                cwd: "/tmp/workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        });
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::TurnStarted {
+                turn_id: "turn-1".to_string(),
+                runtime_request: Box::default(),
+            },
+        });
+        runtime.dispatch_input(CoreInput::ConversationStreamUpdated {
+            correlation: turn_submission,
+            event: TurnStreamEvent::ApprovalRequested {
+                request: ConversationApprovalRequest {
+                    approval_id: "approval-1".to_string(),
+                    server_request_id: "server-approval-1".to_string(),
+                    method: "item/commandExecution/requestApproval".to_string(),
+                    kind: ConversationApprovalRequestKind::CommandExecution,
+                    summary: "Command execution requested.".to_string(),
+                    details: Vec::new(),
+                },
+            },
+        });
+        let correlation = ApprovalDecisionCorrelation::new(
+            1,
+            turn_submission,
+            "approval-1",
+            ConversationApprovalDecision::Accept,
+        );
+
+        let outcome = runtime.dispatch_command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-1".to_string(),
+            decision: ConversationApprovalDecision::Accept,
+        });
+
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::SubmitApprovalDecision {
+                correlation: correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            outcome.events,
+            vec![
+                AppEvent::ApprovalDecisionAdmissionResolved(ApprovalDecisionAdmission::Accepted {
+                    correlation: correlation.clone(),
+                },),
+                AppEvent::ApprovalDecisionSubmissionCompleted {
+                    correlation: correlation.clone(),
+                    result: Ok(()),
+                },
+            ]
+        );
+        let waiting_for_resolution = runtime.dispatch_command(AppCommand::SubmitApprovalDecision {
+            approval_id: "approval-1".to_string(),
+            decision: ConversationApprovalDecision::Decline,
+        });
+        assert_eq!(
+            waiting_for_resolution.events,
+            vec![AppEvent::ApprovalDecisionAdmissionResolved(
+                ApprovalDecisionAdmission::RejectedActive {
+                    active_correlation: correlation,
+                },
+            )]
+        );
+        assert!(waiting_for_resolution.effects.is_empty());
     }
 
     #[test]
