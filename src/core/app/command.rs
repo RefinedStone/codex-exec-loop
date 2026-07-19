@@ -1,4 +1,7 @@
-use super::{ManualPromptPreparationIntent, QueueMutationIntent, TurnSubmissionRequest};
+use super::{
+    ManualPromptPreparationIntent, PlanningWorkspaceResetIntent, QueueMutationIntent,
+    TurnSubmissionRequest,
+};
 use crate::domain::conversation::{ConversationApprovalDecision, ConversationTurnSteerRequest};
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::planning::PostTurnRequest;
@@ -40,6 +43,7 @@ pub enum AppCommand {
     RefreshPlanningRuntime {
         workspace_directory: String,
     },
+    ResetPlanningWorkspace(PlanningWorkspaceResetIntent),
     SubmitQueueMutation(Box<QueueMutationIntent>),
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,

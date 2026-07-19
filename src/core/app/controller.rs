@@ -4,6 +4,7 @@ use super::{
     CoreEffect, CoreEffectCompletion, CoreInput, DirectionsMaintenanceLoadCorrelation,
     GithubReviewPollCorrelation, ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
     ParallelModeProjection, ParallelPeekLoadCorrelation, PlanningRuntimeCoordinator,
+    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCoordinator,
     QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
     SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
     StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
@@ -77,6 +78,7 @@ pub struct CoreController {
     next_directions_maintenance_load_generation: u64,
     active_directions_maintenance_load: Option<DirectionsMaintenanceLoadCorrelation>,
     planning_runtime_refresh: PlanningRuntimeCoordinator,
+    planning_workspace_operations: PlanningWorkspaceOperationCoordinator,
     next_queue_mutation_generation: u64,
     active_queue_mutation: Option<QueueMutationCorrelation>,
     next_manual_prompt_preparation_generation: u64,
@@ -121,6 +123,7 @@ impl CoreController {
             next_directions_maintenance_load_generation: 1,
             active_directions_maintenance_load: None,
             planning_runtime_refresh: PlanningRuntimeCoordinator::new(),
+            planning_workspace_operations: PlanningWorkspaceOperationCoordinator::new(),
             next_queue_mutation_generation: 1,
             active_queue_mutation: None,
             next_manual_prompt_preparation_generation: 1,
@@ -356,6 +359,25 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events,
                     effects: vec![CoreEffect::LoadPlanningRuntime { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::ResetPlanningWorkspace(intent)) => {
+                let admission = self.planning_workspace_operations.begin_reset(intent);
+                let effects = match &admission {
+                    PlanningWorkspaceOperationAdmission::Started { correlation } => {
+                        vec![CoreEffect::ResetPlanningWorkspace {
+                            correlation: correlation.clone(),
+                        }]
+                    }
+                    PlanningWorkspaceOperationAdmission::Coalesced { .. }
+                    | PlanningWorkspaceOperationAdmission::Busy { .. } => Vec::new(),
+                };
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                        admission,
+                    )],
+                    effects,
                     snapshot: self.snapshot(),
                 }
             }
@@ -840,6 +862,33 @@ impl CoreController {
                 });
                 CoreDispatchOutcome {
                     events: vec![AppEvent::PlanningRuntimeRefreshed {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation,
+                result,
+            }) => {
+                if !self.planning_workspace_operations.accept(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                let result = result.and_then(|snapshot| {
+                    if snapshot.target == correlation.reset_target {
+                        Ok(snapshot)
+                    } else {
+                        Err(format!(
+                            "planning workspace reset completion target mismatch: expected {}, received {}",
+                            correlation.reset_target.label(),
+                            snapshot.target.label(),
+                        ))
+                    }
+                });
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::PlanningWorkspaceResetCompleted {
                         correlation,
                         result,
                     }],
@@ -1580,6 +1629,7 @@ mod tests {
         CorePromptOrigin, DirectionsMaintenanceDirectionSnapshot,
         DirectionsMaintenanceSummarySnapshot, DirectionsSupportingFileStatus,
         PlanningDoctorSnapshot, PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
+        PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
         QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
         QueueMutationIntent, QueueMutationKind, QueueMutationResult, QueueMutationTarget,
         ReviewCenterSnapshot, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
@@ -1811,6 +1861,176 @@ mod tests {
         assert!(outcome.effects.is_empty());
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(controller.snapshot(), AppSnapshot::initial());
+    }
+
+    #[test]
+    fn planning_workspace_reset_core_coalesces_busy_and_rejects_stale_aba_completions() {
+        let mut controller = CoreController::new();
+        let intent =
+            PlanningWorkspaceResetIntent::new("/workspace", PlanningWorkspaceResetTarget::Queue);
+        let started = controller.handle_input(CoreInput::Command(
+            AppCommand::ResetPlanningWorkspace(intent.clone()),
+        ));
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = started.events.as_slice()
+        else {
+            panic!("first reset should start");
+        };
+        let first = correlation.clone();
+        assert_eq!(first.generation, 1);
+        assert_eq!(
+            started.effects,
+            vec![CoreEffect::ResetPlanningWorkspace {
+                correlation: first.clone(),
+            }]
+        );
+
+        let duplicate = controller.handle_input(CoreInput::Command(
+            AppCommand::ResetPlanningWorkspace(intent.clone()),
+        ));
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Coalesced {
+                    correlation: first.clone(),
+                },
+            )]
+        );
+        assert!(duplicate.effects.is_empty());
+
+        let requested =
+            PlanningWorkspaceResetIntent::new("/workspace", PlanningWorkspaceResetTarget::All);
+        let busy = controller.handle_input(CoreInput::Command(AppCommand::ResetPlanningWorkspace(
+            requested.clone(),
+        )));
+        assert_eq!(
+            busy.events,
+            vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Busy {
+                    active_correlation: first.clone(),
+                    requested,
+                },
+            )]
+        );
+        assert!(busy.effects.is_empty());
+
+        let mut stale = first.clone();
+        stale.generation = 99;
+        let stale_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation: stale,
+                result: Err("stale".to_string()),
+            },
+        ));
+        assert!(stale_completion.events.is_empty());
+
+        let result = Box::new(PlanningWorkspaceResetSnapshot {
+            target: PlanningWorkspaceResetTarget::Queue,
+            rewritten_paths: vec!["planning/task-authority.json".to_string()],
+            removed_paths: Vec::new(),
+        });
+        let completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation: first.clone(),
+                result: Ok(result.clone()),
+            },
+        ));
+        assert_eq!(
+            completed.events,
+            vec![AppEvent::PlanningWorkspaceResetCompleted {
+                correlation: first.clone(),
+                result: Ok(result),
+            }]
+        );
+
+        let duplicate_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation: first.clone(),
+                result: Err("duplicate".to_string()),
+            },
+        ));
+        assert!(duplicate_completion.events.is_empty());
+
+        let restarted = controller.handle_input(CoreInput::Command(
+            AppCommand::ResetPlanningWorkspace(intent),
+        ));
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started {
+                    correlation: second,
+                },
+            ),
+        ] = restarted.events.as_slice()
+        else {
+            panic!("reset should restart after exact settlement");
+        };
+        assert_eq!(second.generation, 2);
+        let aba_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation: first,
+                result: Err("aba".to_string()),
+            },
+        ));
+        assert!(aba_completion.events.is_empty());
+    }
+
+    #[test]
+    fn planning_workspace_reset_core_rejects_a_mismatched_success_snapshot() {
+        let mut controller = CoreController::new();
+        let started = controller.handle_input(CoreInput::Command(
+            AppCommand::ResetPlanningWorkspace(PlanningWorkspaceResetIntent::new(
+                "/workspace",
+                PlanningWorkspaceResetTarget::Queue,
+            )),
+        ));
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = started.events.as_slice()
+        else {
+            panic!("reset should start");
+        };
+        let correlation = correlation.clone();
+
+        let completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation: correlation.clone(),
+                result: Ok(Box::new(PlanningWorkspaceResetSnapshot {
+                    target: PlanningWorkspaceResetTarget::All,
+                    rewritten_paths: Vec::new(),
+                    removed_paths: Vec::new(),
+                })),
+            },
+        ));
+
+        assert_eq!(
+            completion.events,
+            vec![AppEvent::PlanningWorkspaceResetCompleted {
+                correlation,
+                result: Err(
+                    "planning workspace reset completion target mismatch: expected queue, received all"
+                        .to_string(),
+                ),
+            }]
+        );
+        assert!(matches!(
+            controller
+                .handle_input(CoreInput::Command(AppCommand::ResetPlanningWorkspace(
+                    PlanningWorkspaceResetIntent::new(
+                        "/workspace",
+                        PlanningWorkspaceResetTarget::Queue,
+                    ),
+                )))
+                .events
+                .as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation }
+            )] if correlation.generation == 2
+        ));
     }
 
     #[test]

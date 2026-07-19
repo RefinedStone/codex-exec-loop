@@ -20,7 +20,8 @@ use crate::application::service::planning::{
     DirectionsSupportingFileStatus as ApplicationDirectionsSupportingFileStatus,
     PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
-    PlanningQueueCancellationTransactionResult, PlanningQueueUseCases, PlanningRuntimeProjection,
+    PlanningQueueCancellationTransactionResult, PlanningQueueUseCases,
+    PlanningResetTarget as ApplicationPlanningResetTarget, PlanningRuntimeProjection,
     PlanningRuntimeUseCases, PlanningServices, PlanningTaskMutationCommitResult,
     PlanningWorkspaceUseCases,
 };
@@ -37,12 +38,13 @@ use crate::core::app::{
     DirectionsMaintenanceSummarySnapshot,
     DirectionsSupportingFileStatus as CoreDirectionsSupportingFileStatus,
     GithubReviewPollCorrelation, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
-    PlanningRuntimeRefreshSnapshot, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
-    QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationCorrelation,
-    QueueMutationIntent, QueueMutationResult, ReviewCenterHistoryEntrySnapshot,
-    ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
-    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation,
+    PlanningRuntimeRefreshSnapshot, PlanningWorkspaceOperationCorrelation,
+    PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, QueueAuthorityLoadCorrelation,
+    QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
+    QueueMutationCorrelation, QueueMutationIntent, QueueMutationResult,
+    ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation,
+    ReviewCenterSnapshot, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
+    SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -224,6 +226,10 @@ impl CoreEffectRunner {
             }
             CoreEffect::LoadPlanningRuntime { correlation } => {
                 self.spawn_planning_runtime_projection_load(correlation);
+                None
+            }
+            CoreEffect::ResetPlanningWorkspace { correlation } => {
+                self.spawn_planning_workspace_reset(correlation);
                 None
             }
             CoreEffect::ExecuteQueueMutation { correlation } => {
@@ -422,6 +428,42 @@ impl CoreEffectRunner {
         });
     }
 
+    pub fn spawn_planning_workspace_reset(
+        &self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+    ) {
+        let planning_workspace = self.planning_workspace.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let requested_target = correlation.reset_target;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                planning_workspace.reset_workspace(
+                    &correlation.workspace_directory,
+                    application_planning_reset_target(requested_target),
+                )
+            }))
+            .map_err(|_| anyhow::anyhow!("planning workspace reset worker panicked"))
+            .and_then(|result| result)
+            .map(planning_workspace_reset_snapshot)
+            .and_then(|snapshot| {
+                if snapshot.target == requested_target {
+                    Ok(snapshot)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "planning workspace reset provider returned a different target"
+                    ))
+                }
+            })
+            .map(Box::new)
+            .map_err(|error| error.to_string());
+            let completion = CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation,
+                result,
+            };
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
     pub fn spawn_queue_mutation(&self, correlation: QueueMutationCorrelation) {
         let planning_queue = self.planning_queue.clone();
         let input_sender = self.input_sender.clone();
@@ -591,6 +633,36 @@ fn startup_checks_completion(
             .map(StartupReadySnapshot::from_diagnostics)
             .map(Box::new)
             .map_err(|error| format!("{error:#}")),
+    }
+}
+
+fn application_planning_reset_target(
+    target: PlanningWorkspaceResetTarget,
+) -> ApplicationPlanningResetTarget {
+    match target {
+        PlanningWorkspaceResetTarget::Queue => ApplicationPlanningResetTarget::Queue,
+        PlanningWorkspaceResetTarget::Directions => ApplicationPlanningResetTarget::Directions,
+        PlanningWorkspaceResetTarget::All => ApplicationPlanningResetTarget::All,
+    }
+}
+
+fn core_planning_reset_target(
+    target: ApplicationPlanningResetTarget,
+) -> PlanningWorkspaceResetTarget {
+    match target {
+        ApplicationPlanningResetTarget::Queue => PlanningWorkspaceResetTarget::Queue,
+        ApplicationPlanningResetTarget::Directions => PlanningWorkspaceResetTarget::Directions,
+        ApplicationPlanningResetTarget::All => PlanningWorkspaceResetTarget::All,
+    }
+}
+
+fn planning_workspace_reset_snapshot(
+    result: crate::application::service::planning::PlanningWorkspaceResetResult,
+) -> PlanningWorkspaceResetSnapshot {
+    PlanningWorkspaceResetSnapshot {
+        target: core_planning_reset_target(result.target),
+        rewritten_paths: result.rewritten_paths,
+        removed_paths: result.removed_paths,
     }
 }
 
@@ -976,7 +1048,9 @@ mod tests {
     };
     use crate::core::app::{
         AppCommand, AppEvent, CoreDispatchOutcome, CorePromptOrigin,
-        ManualPromptPreparationAdmission, ManualPromptPreparationIntent, QueueMutationKind,
+        ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
+        PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
+        PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, QueueMutationKind,
         QueueMutationTarget, StopRequestAdmission, TurnStreamEvent, TurnSubmissionAdmission,
         TurnSubmissionCorrelation, TurnSubmissionRequest,
     };
@@ -1449,6 +1523,165 @@ mod tests {
             }],
             receipt_at_start: None,
         }
+    }
+
+    fn planning_reset_intent(workspace_directory: &str) -> PlanningWorkspaceResetIntent {
+        PlanningWorkspaceResetIntent::new(workspace_directory, PlanningWorkspaceResetTarget::Queue)
+    }
+
+    fn planning_reset_correlation(
+        generation: u64,
+        workspace_directory: &str,
+    ) -> PlanningWorkspaceOperationCorrelation {
+        PlanningWorkspaceOperationCorrelation {
+            generation,
+            workspace_directory: workspace_directory.to_string(),
+            reset_target: PlanningWorkspaceResetTarget::Queue,
+        }
+    }
+
+    #[test]
+    fn planning_reset_dispatch_returns_while_provider_remains_gated_for_600ms() {
+        let workspace_directory = "/tmp/gated-planning-reset";
+        let (planning_gate, gate_entered, gate_release) = one_shot_gate();
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: planning_gate,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let runtime = CoreRuntime::new(runner, input_receiver);
+        let (dispatch_tx, dispatch_rx) = mpsc::sync_channel(1);
+        let dispatcher = thread::spawn(move || {
+            let mut runtime = runtime;
+            let outcome = runtime.dispatch_command(AppCommand::ResetPlanningWorkspace(
+                planning_reset_intent(workspace_directory),
+            ));
+            dispatch_tx
+                .send((runtime, outcome))
+                .expect("reset dispatch result should return to the test");
+        });
+
+        gate_entered
+            .recv_timeout(WORKER_COMPLETION_TIMEOUT)
+            .expect("reset provider should reach the gate");
+        let gated_at = Instant::now();
+        thread::sleep(Duration::from_millis(650));
+        let (mut runtime, accepted) = dispatch_rx
+            .recv_timeout(NONBLOCKING_DISPATCH_TIMEOUT)
+            .expect("reset dispatch must return while provider I/O remains blocked");
+        let correlation = planning_reset_correlation(1, workspace_directory);
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started {
+                    correlation: correlation.clone(),
+                },
+            )]
+        );
+
+        let duplicate = runtime.dispatch_command(AppCommand::ResetPlanningWorkspace(
+            planning_reset_intent(workspace_directory),
+        ));
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Coalesced {
+                    correlation: correlation.clone(),
+                },
+            )]
+        );
+        assert!(duplicate.effects.is_empty());
+        assert!(gated_at.elapsed() >= Duration::from_millis(600));
+
+        gate_release
+            .send(())
+            .expect("reset provider gate should release");
+        dispatcher
+            .join()
+            .expect("reset dispatch thread should not panic");
+        let completed = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningWorkspaceResetCompleted {
+                    correlation: completed,
+                    result: Err(error),
+                }] if completed == &correlation
+                    && error.contains("manual preparation authority unavailable after gate release")
+            )
+        });
+        assert!(matches!(
+            completed.events.as_slice(),
+            [AppEvent::PlanningWorkspaceResetCompleted {
+                correlation: completed,
+                result: Err(_),
+            }] if completed == &correlation
+        ));
+    }
+
+    #[test]
+    fn planning_reset_worker_panic_returns_exact_error_and_reopens_admission() {
+        let workspace_directory = "/tmp/panicking-planning-reset";
+        let (planning_gate, gate_entered, gate_release) = one_shot_gate();
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: planning_gate,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(true),
+        });
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let mut runtime = CoreRuntime::new(runner, input_receiver);
+        let first = planning_reset_correlation(1, workspace_directory);
+
+        runtime.dispatch_command(AppCommand::ResetPlanningWorkspace(planning_reset_intent(
+            workspace_directory,
+        )));
+        let panicked = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningWorkspaceResetCompleted {
+                    correlation,
+                    result: Err(error),
+                }] if correlation == &first
+                    && error == "planning workspace reset worker panicked"
+            )
+        });
+        assert!(matches!(
+            panicked.events.as_slice(),
+            [AppEvent::PlanningWorkspaceResetCompleted {
+                correlation,
+                result: Err(error),
+            }] if correlation == &first
+                && error == "planning workspace reset worker panicked"
+        ));
+
+        let reopened = runtime.dispatch_command(AppCommand::ResetPlanningWorkspace(
+            planning_reset_intent(workspace_directory),
+        ));
+        assert!(matches!(
+            reopened.events.as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation }
+            )] if correlation == &planning_reset_correlation(2, workspace_directory)
+        ));
+        gate_entered
+            .recv_timeout(WORKER_COMPLETION_TIMEOUT)
+            .expect("second reset should reach the provider");
+        gate_release
+            .send(())
+            .expect("second reset provider gate should release");
+        let _ = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningWorkspaceResetCompleted { correlation, .. }]
+                    if correlation == &planning_reset_correlation(2, workspace_directory)
+            )
+        });
     }
 
     #[test]

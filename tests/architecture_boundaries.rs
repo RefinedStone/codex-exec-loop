@@ -1122,6 +1122,222 @@ fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
+    assert_no_production_callable_reference_named_in_paths(
+        "TUI planning reset must dispatch a Core command instead of invoking the workspace service",
+        &["src/adapter/inbound/tui"],
+        "reset_workspace",
+    );
+    assert_no_forbidden_references_in_paths(
+        "TUI planning reset controller must leave worker ownership in composition",
+        &["src/adapter/inbound/tui/app/planning/controller.rs"],
+        &["std::thread::spawn"],
+    );
+
+    let planning_controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/planning/controller.rs").unwrap();
+    assert!(
+        planning_controller.contains("AppCommand::ResetPlanningWorkspace(intent)")
+            && planning_controller.contains("PlanningWorkspaceOperationUiSettlement::Applied"),
+        "TUI reset must enter through Core and gate presentation on exact UI settlement"
+    );
+    assert!(
+        planning_controller
+            .contains("fn reset_busy_gate_and_exact_completion_survive_workspace_aba()")
+            && planning_controller.contains(
+                "fn successful_reset_refreshes_runtime_under_newer_busy_status_without_blocking_dispatch()"
+            )
+            && planning_controller.contains(
+                "fn failed_reset_refreshes_runtime_and_preserves_newer_status_presentation()"
+            )
+            && planning_controller
+                .contains("app.sync_draft_shell_workspace(workspace_b.path_str());")
+            && planning_controller
+                .contains("app.sync_draft_shell_workspace(workspace_a.path_str());"),
+        "TUI integration coverage must prove the active reset gate and exact completion across A→B→A workspace drift"
+    );
+    let operation_ui =
+        fs::read_to_string("src/adapter/inbound/tui/app/planning_workspace_operation_ui.rs")
+            .unwrap();
+    assert!(
+        operation_ui.contains("presentation_revision")
+            && operation_ui.contains("current_workspace_directory")
+            && operation_ui.contains("pending.correlation != *correlation")
+            && operation_ui
+                .contains("PlanningWorkspaceOperationUiSettlement::PresentationSuperseded"),
+        "TUI reset settlement must reject stale generation, workspace, and presentation intent"
+    );
+
+    let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    assert!(
+        core_controller
+            .contains("planning_workspace_operations: PlanningWorkspaceOperationCoordinator",)
+            && core_controller.contains(".begin_reset(intent)")
+            && core_controller.contains(".accept(&correlation)")
+            && core_controller.contains("snapshot.target == correlation.reset_target"),
+        "CoreController must delegate reset admission and exact target settlement to one coordinator"
+    );
+    let coordinator = fs::read_to_string("src/core/app/planning_workspace.rs").unwrap();
+    for required in [
+        "PlanningWorkspaceOperationAdmission::Coalesced",
+        "PlanningWorkspaceOperationAdmission::Busy",
+        "checked_add(1)",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "planning workspace coordinator is missing contract: {required}"
+        );
+    }
+    for forbidden in ["VecDeque", "cancel(", "actor"] {
+        assert!(
+            !coordinator.contains(forbidden),
+            "first reset slice must not add queue/actor/cancellation machinery: {forbidden}"
+        );
+    }
+
+    let effect_runner = fs::read_to_string("src/composition/core_effect_runner.rs").unwrap();
+    let reset_worker = effect_runner
+        .split_once("pub fn spawn_planning_workspace_reset(")
+        .and_then(|(_, body)| body.split_once("pub fn spawn_queue_mutation("))
+        .map(|(body, _)| body)
+        .expect("planning reset worker should have a bounded source body");
+    assert!(
+        reset_worker.contains("thread::spawn(move ||")
+            && reset_worker.contains("catch_unwind")
+            && reset_worker.contains("PlanningWorkspaceResetCompleted"),
+        "planning reset provider I/O and panic conversion must stay in the Core effect worker"
+    );
+
+    let tui_root = repo_root().join("src/adapter/inbound/tui");
+    let mut guarded_mutation_methods = Vec::new();
+    let mut direct_workspace_calls = 0;
+    for path in rust_files_under(&tui_root) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        for (method_name, calls, has_leading_busy_return_guard) in
+            top_level_impl_method_calls(&source)
+        {
+            let workspace_lines = calls
+                .iter()
+                .filter_map(|(name, line)| (name == "workspace").then_some(*line))
+                .collect::<Vec<_>>();
+            if workspace_lines.is_empty() {
+                continue;
+            }
+            direct_workspace_calls += workspace_lines.len();
+            assert!(
+                has_leading_busy_return_guard,
+                "{}::{method_name} must begin with `if planning_workspace_operation_blocks_direct_mutation() {{ return; }}` before workspace mutation",
+                path.display()
+            );
+            guarded_mutation_methods.push(method_name);
+        }
+    }
+    assert_eq!(
+        direct_workspace_calls, 10,
+        "this slice must remove only reset from NativeTuiApplicationHandle and leave the other ten direct calls for later slices"
+    );
+    guarded_mutation_methods.sort();
+    assert_eq!(
+        guarded_mutation_methods,
+        [
+            "open_directions_detail_doc_editor",
+            "open_planning_manual_editor",
+            "open_queue_idle_prompt_editor",
+            "open_simple_mode_planning_editor",
+            "promote_directions_manual_editor",
+            "promote_planning_manual_editor",
+            "promote_simple_mode_planning_draft",
+            "save_directions_manual_editor",
+            "save_planning_manual_editor",
+            "stage_simple_mode_planning_init_draft",
+        ],
+        "every remaining direct planning workspace mutation must have a leading reset busy guard"
+    );
+}
+
+#[test]
+fn planning_reset_ast_guard_rejects_text_ufcs_and_ignored_busy_results() {
+    let text_only = r#"
+        fn sample() {
+            // PlanningWorkspaceUseCases::reset_workspace(...)
+            let _copy = "reset_workspace";
+        }
+    "#;
+    assert!(
+        production_callable_reference_lines(text_only, "reset_workspace").is_empty(),
+        "comments and literals must not create a reset call"
+    );
+
+    let ufcs = r#"
+        fn sample(service: &PlanningWorkspaceUseCases) {
+            PlanningWorkspaceUseCases::reset_workspace(service, "/workspace", target);
+        }
+    "#;
+    assert!(
+        !production_callable_reference_lines(ufcs, "reset_workspace").is_empty(),
+        "UFCS reset calls must be detected"
+    );
+
+    let guarded = r#"
+        impl App {
+            fn mutate(&mut self) {
+                if self
+                    .planning_workspace_operation_blocks_direct_mutation()
+                {
+                    return;
+                }
+                self.application.planning().workspace().save();
+            }
+        }
+    "#;
+    let guarded_methods = top_level_impl_method_calls(guarded);
+    assert_eq!(guarded_methods.len(), 1);
+    assert!(guarded_methods[0].2);
+
+    for bypass in [
+        r#"
+            impl App {
+                fn mutate(&mut self) {
+                    self.planning_workspace_operation_blocks_direct_mutation();
+                    self.application.planning().workspace().save();
+                }
+            }
+        "#,
+        r#"
+            impl App {
+                fn mutate(&mut self) {
+                    if self.planning_workspace_operation_blocks_direct_mutation() {
+                        observe_only();
+                    }
+                    self.application.planning().workspace().save();
+                }
+            }
+        "#,
+        r#"
+            impl App {
+                fn mutate(&mut self) {
+                    self.application.planning().workspace().save();
+                    if self.planning_workspace_operation_blocks_direct_mutation() {
+                        return;
+                    }
+                }
+            }
+        "#,
+    ] {
+        let methods = top_level_impl_method_calls(bypass);
+        assert_eq!(methods.len(), 1);
+        assert!(
+            !methods[0].2,
+            "ignored, non-returning, or late busy guards must not satisfy the boundary"
+        );
+    }
+}
+
+#[test]
 fn tui_directions_maintenance_loads_enter_through_core_runtime() {
     assert_no_forbidden_references_in_paths(
         "TUI directions maintenance reads must dispatch a Core command instead of loading planning authority directly",
@@ -3660,6 +3876,174 @@ fn production_lines(source: &str) -> Vec<SourceLine> {
             })
         })
         .collect()
+}
+
+fn assert_no_production_callable_reference_named_in_paths(
+    message: &str,
+    roots: &[&str],
+    callable_name: &str,
+) {
+    let mut violations = Vec::new();
+    for root in roots {
+        for path in rust_files_under(&repo_root().join(root)) {
+            if is_test_only_path(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            for line in production_callable_reference_lines(&source, callable_name) {
+                violations.push(format!("{}:{line}", path.display()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{message}\n{}",
+        violations.join("\n")
+    );
+}
+
+fn production_callable_reference_lines(source: &str, callable_name: &str) -> Vec<usize> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut visitor = ProductionCallableReferenceVisitor {
+        callable_name,
+        lines: Vec::new(),
+    };
+    visitor.visit_file(&syntax);
+    visitor.lines.sort_unstable();
+    visitor.lines.dedup();
+    visitor.lines
+}
+
+struct ProductionCallableReferenceVisitor<'a> {
+    callable_name: &'a str,
+    lines: Vec<usize>,
+}
+
+impl<'ast> Visit<'ast> for ProductionCallableReferenceVisitor<'_> {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_impl_item(self, item);
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if trait_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_trait_item(self, item);
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        if foreign_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_foreign_item(self, item);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == self.callable_name {
+            self.lines.push(call.method.span().start().line);
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == self.callable_name)
+        {
+            self.lines.push(path.path.span().start().line);
+        }
+        visit::visit_expr_path(self, path);
+    }
+}
+
+type MethodCallLocation = (String, usize);
+type ImplMethodCallSummary = (String, Vec<MethodCallLocation>, bool);
+
+fn top_level_impl_method_calls(source: &str) -> Vec<ImplMethodCallSummary> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let mut methods = Vec::new();
+    for item in syntax.items {
+        let syn::Item::Impl(item) = item else {
+            continue;
+        };
+        if attributes_are_test_only(&item.attrs) {
+            continue;
+        }
+        for item in item.items {
+            let syn::ImplItem::Fn(method) = item else {
+                continue;
+            };
+            if attributes_are_test_only(&method.attrs) {
+                continue;
+            }
+            let mut visitor = MethodCallLineVisitor::default();
+            visitor.visit_block(&method.block);
+            methods.push((
+                method.sig.ident.to_string(),
+                visitor.calls,
+                method
+                    .block
+                    .stmts
+                    .first()
+                    .is_some_and(statement_is_planning_reset_busy_return_guard),
+            ));
+        }
+    }
+    methods
+}
+
+fn statement_is_planning_reset_busy_return_guard(statement: &syn::Stmt) -> bool {
+    let syn::Stmt::Expr(syn::Expr::If(guard), None) = statement else {
+        return false;
+    };
+    if guard.else_branch.is_some() {
+        return false;
+    }
+    let syn::Expr::MethodCall(condition) = guard.cond.as_ref() else {
+        return false;
+    };
+    if condition.method != "planning_workspace_operation_blocks_direct_mutation"
+        || !condition.args.is_empty()
+        || !matches!(
+            condition.receiver.as_ref(),
+            syn::Expr::Path(receiver) if receiver.qself.is_none() && receiver.path.is_ident("self")
+        )
+    {
+        return false;
+    }
+    matches!(
+        guard.then_branch.stmts.as_slice(),
+        [syn::Stmt::Expr(syn::Expr::Return(return_expression), Some(_))]
+            if return_expression.expr.is_none()
+    )
+}
+
+#[derive(Default)]
+struct MethodCallLineVisitor {
+    calls: Vec<(String, usize)>,
+}
+
+impl<'ast> Visit<'ast> for MethodCallLineVisitor {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.calls
+            .push((call.method.to_string(), call.method.span().start().line));
+        visit::visit_expr_method_call(self, call);
+    }
 }
 
 fn test_only_item_line_ranges(source: &str) -> Vec<(usize, usize)> {

@@ -126,6 +126,8 @@ mod planning_runtime_refresh_ui;
 mod planning_shell_command;
 #[path = "app/planning_worker_debug_preview.rs"]
 mod planning_worker_debug_preview;
+#[path = "app/planning_workspace_operation_ui.rs"]
+mod planning_workspace_operation_ui;
 #[path = "app/post_turn_continuation.rs"]
 mod post_turn_continuation;
 #[path = "app/progressive_activity_overlay_ui.rs"]
@@ -227,6 +229,9 @@ use planning_init_overlay_ui::{
 use planning_runtime_refresh_ui::{
     PlanningRuntimeRefreshOperation, PlanningRuntimeRefreshUiCompletion,
     PlanningRuntimeRefreshUiState,
+};
+use planning_workspace_operation_ui::{
+    PlanningWorkspaceOperationUiSettlement, PlanningWorkspaceOperationUiState,
 };
 use progressive_activity_overlay_ui::{
     ProgressiveActivityDiffContinuation, ProgressiveActivityDiffCursor,
@@ -404,6 +409,7 @@ struct NativeTuiApp {
     directions_maintenance_overlay_ui_state: DirectionsMaintenanceOverlayUiState,
     planning_init_overlay_ui_state: PlanningInitOverlayUiState,
     planning_runtime_refresh_ui_state: PlanningRuntimeRefreshUiState,
+    planning_workspace_operation_ui_state: PlanningWorkspaceOperationUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
     application: NativeTuiApplicationHandle,
     core_runtime: CoreRuntime<CoreEffectRunner>,

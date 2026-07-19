@@ -10,6 +10,9 @@ use super::*;
 
 impl NativeTuiApp {
     pub(super) fn open_planning_manual_editor(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         /*
          * Detail-mode planning authoring starts by asking the workspace
          * service to stage a manual draft editor session. The shared opener
@@ -28,6 +31,9 @@ impl NativeTuiApp {
     }
 
     pub(super) fn open_directions_detail_doc_editor(&mut self, direction_id: &str) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         /*
          * Directions detail docs use the same editor buffer mechanics, but
          * their service staging path is keyed by direction id and their overlay
@@ -44,6 +50,9 @@ impl NativeTuiApp {
     }
 
     pub(super) fn open_queue_idle_prompt_editor(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         /*
          * Queue-idle prompt editing is modeled as a directions-maintenance
          * draft because it changes planning authority text, not the active
@@ -60,6 +69,9 @@ impl NativeTuiApp {
     }
 
     pub(super) fn save_planning_manual_editor(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         /*
          * Saving planning-init editor content writes the current UI buffers
          * back to the staged draft and refreshes validation. Promotion remains
@@ -125,6 +137,9 @@ impl NativeTuiApp {
     }
 
     pub(super) fn save_directions_manual_editor(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         /*
          * Directions editor save follows the same staged-draft persistence
          * contract as planning-init save. Only the operator-facing copy differs
@@ -185,6 +200,9 @@ impl NativeTuiApp {
     }
 
     pub(super) fn promote_planning_manual_editor(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         /*
          * Promotion writes current editor buffers through the workspace service
          * and, on success, replaces accepted planning authority files. The
@@ -251,6 +269,9 @@ impl NativeTuiApp {
     }
 
     pub(super) fn promote_directions_manual_editor(&mut self) {
+        if self.planning_workspace_operation_blocks_direct_mutation() {
+            return;
+        }
         /*
          * Directions promotion shares the same staged-draft promotion service,
          * but a successful result should reopen the directions maintenance

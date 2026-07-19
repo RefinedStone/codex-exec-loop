@@ -13,6 +13,7 @@ pub mod event;
 pub mod github_review_poll;
 pub mod manual_prompt;
 pub mod planning_runtime;
+pub mod planning_workspace;
 pub mod projection;
 pub mod queue;
 pub mod request;
@@ -47,6 +48,11 @@ pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparatio
 pub(crate) use planning_runtime::PlanningRuntimeCoordinator;
 pub use planning_runtime::{
     PlanningDoctorSnapshot, PlanningDoctorSnapshotState, PlanningRuntimeRefreshSnapshot,
+};
+pub(crate) use planning_workspace::PlanningWorkspaceOperationCoordinator;
+pub use planning_workspace::{
+    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
+    PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
 };
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
 pub use queue::{

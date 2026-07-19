@@ -130,11 +130,11 @@ pub(super) fn planning_reset_preview_text(target: PlanningResetTarget) -> String
 }
 
 /*
- * reset result text는 `PlanningWorkspaceResetResult`의 path 목록을 그대로 노출하지 않고 rewritten/removed
+ * reset result text는 Core reset snapshot의 path 목록을 그대로 노출하지 않고 rewritten/removed
  * 개수만 status line에 남긴다. 상세 파일 목록은 service result와 log의 영역이고, TUI footer는 reset이
  * 어느 범위에 적용됐는지 빠르게 확인하는 데 집중한다.
  */
-pub(super) fn planning_reset_status_text(result: &PlanningWorkspaceResetResult) -> String {
+pub(super) fn planning_reset_status_text(result: &PlanningWorkspaceResetSnapshot) -> String {
     format!(
         "planning reset applied / target: {} / rewritten: {} / removed: {}",
         result.target.label(),

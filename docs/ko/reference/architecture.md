@@ -147,8 +147,21 @@ TUI는 정확한 operation, operation 시작 시점의 presentation revision,
 correlation만 바꾸고 최초 revision을 보존합니다. Stale, duplicate, ABA, 닫힌 overlay, workspace
 drift, 더 최신 UI intent completion은 setup 분기나 status를 바꿀 수 없습니다. Inspection 실패는
 workspace 부재와 구분되고, reset 복구는 reset error와 inspection error를 모두 보존합니다.
-Destructive reset과 draft staging mutation은 별도 동기 경로로 남으며, 이번 slice는 readback과
-recovery inspection만 TUI input thread 밖으로 옮깁니다.
+
+파괴적인 TUI reset은 별도의 Core 소유 planning-workspace operation coordinator를 사용합니다.
+Core가 generation, 정확한 workspace, reset target을 포함한 단조 증가 correlation을 발급합니다.
+완전히 같은 reset을 반복하면 worker를 추가로 시작하지 않고 활성 correlation에 coalesce하며,
+다른 reset은 busy로 응답합니다. Composition은 TUI input thread 밖에서 reset을 실행하고 provider
+panic도 정확히 같은 correlated error completion으로 변환합니다. Coordinator는 정확한 completion만
+완료하고, Core는 success snapshot target이 correlation과 다르면 error로 변환합니다. Stale,
+duplicate, workspace drift, target drift, ABA completion은 결과를 표시할 수 없습니다. Exact
+completion의 workspace가 현재 workspace라면 A→B→A 회귀 뒤에도 TUI는 항상 post-turn
+continuation을 멈추고 Core runtime projection을 다시 읽습니다. 별도 presentation revision은
+status와 overlay 변경만 제한하므로 더 최신 UI intent의 문구는 유지하면서 authority/runtime
+reconciliation은 계속 수행합니다. Overlay를 닫거나 바꿔도 파괴 작업을 취소하지 않습니다. 아직
+Core로 이동하지 않은 stage/open/save/promote 직접 application 호출은 reset 진행 중 visible busy
+status로 거절합니다. 이는 active-operation gate이며 deferred queue, actor, cancellation
+abstraction이 아닙니다.
 
 TUI Queue overlay를 열면 먼저 shell chrome을 반영한 뒤 core load command를 dispatch합니다. Core는
 workspace와 active thread identity에 단조 증가 generation을 부여하고 최신 요청으로 이전 요청을
