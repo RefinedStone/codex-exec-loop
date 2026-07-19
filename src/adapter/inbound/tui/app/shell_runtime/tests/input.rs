@@ -486,7 +486,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     runtime
         .app
         .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                 workspace_directory,
                 epoch_id,
@@ -494,7 +494,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
                 supervisor_snapshot: Box::new(refreshed_snapshot.clone()),
                 orchestrator_tick_signature: None,
             },
-        ))
+        )))
         .expect("supervisor refresh should enqueue");
     runtime.poll_background_messages();
 

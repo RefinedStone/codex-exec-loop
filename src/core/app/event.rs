@@ -6,8 +6,9 @@ use super::{
 };
 use super::{ApprovalDecisionAdmission, ApprovalDecisionCorrelation};
 use super::{
-    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
+    ConversationLoadCorrelation, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 use super::{QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot};
 use super::{StartupReadySnapshot, StartupSnapshot};
@@ -16,6 +17,7 @@ use super::{
     TurnStreamEvent, TurnStreamSnapshot, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation::ConversationTurnSteerReceipt;
+use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::{ManualPromptOutcome, PostTurnExecution, RuntimeProjection};
 
@@ -86,6 +88,10 @@ pub enum CoreEffectCompletion {
         correlation: ApprovalDecisionCorrelation,
         result: Result<(), String>,
     },
+    GithubReviewPollCompleted {
+        correlation: GithubReviewPollCorrelation,
+        result: Result<Box<GithubPullRequestPollResult>, String>,
+    },
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationCompleted(Box<PostTurnExecution>),
 }
@@ -140,6 +146,13 @@ pub enum AppEvent {
     ApprovalDecisionSubmissionCompleted {
         correlation: ApprovalDecisionCorrelation,
         result: Result<(), String>,
+    },
+    GithubReviewPollStarted {
+        correlation: GithubReviewPollCorrelation,
+    },
+    GithubReviewPollCompleted {
+        correlation: GithubReviewPollCorrelation,
+        result: Result<Box<GithubPullRequestPollResult>, String>,
     },
     TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),

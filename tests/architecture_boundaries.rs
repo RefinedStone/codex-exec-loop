@@ -1362,6 +1362,42 @@ fn tui_approval_decisions_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_github_review_polling_enters_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI GitHub review polling must not own worker, cursor, or completion authority",
+        &[
+            "src/adapter/inbound/tui/app/github_polling.rs",
+            "src/adapter/inbound/tui/app/app_runtime.rs",
+            "src/adapter/inbound/tui/app/shell_runtime.rs",
+            "src/adapter/inbound/tui/app/shell_entrypoint.rs",
+        ],
+        &["thread::spawn", ".poll("],
+    );
+    assert_no_forbidden_references_in_paths(
+        "TUI GitHub review polling must not regain cursor or completion authority",
+        &["src/adapter/inbound/tui"],
+        &[
+            "GithubPullRequestPollState",
+            "GithubReviewPollLoaded",
+            "next_github_review_poll_generation",
+            "github_review_poll_generation",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "NativeTuiApp must not retain the raw GitHub review poller service",
+        &["src/adapter/inbound/tui/app.rs"],
+        &["github_review_poller_service:"],
+    );
+    let polling_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/github_polling.rs"))
+            .expect("GitHub polling source should be readable");
+    assert!(
+        polling_source.contains(".dispatch_command(AppCommand::PollGithubReview"),
+        "TUI GitHub polling ticks must positively enter through AppCommand::PollGithubReview"
+    );
+}
+
+#[test]
 fn tui_manual_prompt_preparation_enters_through_core_runtime() {
     // TUI owns editable prompt text and overlay state, while manual planning bootstrap and intake
     // execution must run as a core effect backed by application services.

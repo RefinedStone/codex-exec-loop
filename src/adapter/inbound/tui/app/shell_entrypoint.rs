@@ -23,24 +23,16 @@ fn build_default_app() -> NativeTuiApp {
     let services = production::build_native_tui_application_services();
     let parallel_mode_binding =
         NativeTuiParallelModeBinding::from_composition(services.parallel_mode_control_plane);
-    let mut app = NativeTuiApp::new(
+    let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    let github_review_polling =
+        GithubReviewPollingBootstrap::from_environment(&repo_root, Instant::now());
+    NativeTuiApp::new_with_github_review_polling(
         services.startup_service,
         services.session_service,
         services.conversation_service,
         parallel_mode_binding,
-    );
-    let repo_root = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    /*
-     * GitHub review polling is configured after NativeTuiApp construction because the bootstrap
-     * depends on environment and repository root, not on the app-server service graph. The current
-     * Instant becomes the polling freshness anchor visible in status/footer projections.
-     */
-    app.configure_github_review_polling(GithubReviewPollingBootstrap::from_environment(
-        &repo_root,
-        Instant::now(),
-    ));
-
-    app
+        github_review_polling,
+    )
 }
 
 fn prepare_runtime(mut app: NativeTuiApp) -> ShellRuntime {

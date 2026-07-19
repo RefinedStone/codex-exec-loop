@@ -63,6 +63,12 @@ current pending approval on the active turn, owns its submitting and submitted s
 duplicate provider submissions. Composition performs the provider call and returns its correlated
 completion. The TUI owns only the approval modal projection and retry status copy.
 
+GitHub review polling is core-correlated. Core owns the configured pull-request target, successful
+poll cursor, monotonic generation, and single-flight/stale-completion rules. Reconfiguring polling
+starts a new authority epoch, so an older worker cannot overwrite the new target or cursor.
+Composition executes the poller service. The TUI owns environment and branch discovery, the poll
+interval, and status/recent-change projection only.
+
 Parallel peek loads are core-correlated reads. Core assigns a monotonically increasing generation
 to the requested thread, lets the latest request supersede the previous one, and drops unmatched or
 duplicate completions before they reach the TUI. The TUI owns agent selection, loading/status/scroll

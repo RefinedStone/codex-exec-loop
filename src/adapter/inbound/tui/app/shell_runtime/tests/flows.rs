@@ -1444,7 +1444,7 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
         .runtime
         .app
         .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                 workspace_directory: harness.workspace_dir.clone(),
                 epoch_id: refresh_epoch_id,
@@ -1454,7 +1454,7 @@ fn dispatch_requests_during_entry_loading_coalesce_until_ready() {
                 )),
                 orchestrator_tick_signature: None,
             },
-        ))
+        )))
         .expect("ready supervisor refresh should enqueue");
     harness.runtime.poll_background_messages();
     harness.poll_until_worker_launches(1);
@@ -1585,7 +1585,7 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
         .runtime
         .app
         .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::Entered {
                 workspace_directory: harness.workspace_dir.clone(),
                 epoch_id: 1,
@@ -1604,7 +1604,7 @@ fn late_enter_result_after_parallel_off_does_not_reenable_mode() {
                 has_actionable_queue_head: false,
                 orchestrator_tick_signature: None,
             },
-        ))
+        )))
         .expect("late enter result should enqueue");
     harness.runtime.poll_background_messages();
 
@@ -1633,7 +1633,7 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
         .runtime
         .app
         .tx
-        .send(BackgroundMessage::ParallelModeControlPlaneEvent(
+        .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
             ParallelModeControlPlaneBackgroundEvent::WorkerEvent {
                 event: ParallelModeControlPlaneWorkerEvent::new(
                     harness.workspace_dir.clone(),
@@ -1645,7 +1645,7 @@ fn stale_worker_event_drops_before_ui_notice_or_dispatch_wake() {
                 ),
                 has_actionable_queue_head: true,
             },
-        ))
+        )))
         .expect("stale worker event should enqueue");
     harness.runtime.poll_background_messages();
 

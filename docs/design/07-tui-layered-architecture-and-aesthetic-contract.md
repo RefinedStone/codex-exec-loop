@@ -76,6 +76,9 @@ the fixed Akra theme.
   must not infer priority by parsing localized rendered copy. Queue mutation pending, refresh, and
   undo truth remains pinned across language and modal row budgets, while planning marks only
   projected rows containing an actionable blocker as warnings.
+- GitHub review polling ticks must dispatch `AppCommand::PollGithubReview`. Core owns the configured
+  target, successful cursor, generation, and single-flight completion; composition performs the
+  provider call. The TUI owns only discovery, poll timing, and status/recent-change projection.
 
 ### Conversation Markdown And Diff Detail
 

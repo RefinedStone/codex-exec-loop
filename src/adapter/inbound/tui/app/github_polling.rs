@@ -1,14 +1,14 @@
-use super::{BackgroundMessage, NativeTuiApp};
+use super::NativeTuiApp;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::parallel_mode_integration_branch_for_repo;
 use crate::composition::production;
+use crate::core::app::{AppCommand, AppEvent, GithubReviewPollCorrelation};
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
-    GithubPullRequestPollState, GithubPullRequestTarget, truncate_notice_text,
+    GithubPullRequestTarget, truncate_notice_text,
 };
 use anyhow::{Result, anyhow, bail};
 use std::path::Path;
-use std::thread;
 use std::time::{Duration, Instant};
 
 // GitHub review polling is an optional shell-side watcher for the active PR
@@ -200,21 +200,37 @@ impl GithubReviewPollingState {
         };
         state.recent_change_summary(max_total_len)
     }
-    pub(super) fn take_due_request(&mut self, now: Instant) -> Option<GithubReviewPollRequest> {
+    pub(super) fn configured_target(&self) -> Option<GithubPullRequestTarget> {
         let Self::Active(state) = self else {
             return None;
         };
-        state.take_due_request(now)
+        Some(state.config.target.clone())
     }
-    pub(super) fn record_result(
+
+    pub(super) fn poll_due(&self, now: Instant) -> bool {
+        let Self::Active(state) = self else {
+            return false;
+        };
+        state.poll_due(now)
+    }
+
+    pub(super) fn record_poll_started(&mut self, correlation: GithubReviewPollCorrelation) {
+        let Self::Active(state) = self else {
+            return;
+        };
+        state.record_poll_started(correlation);
+    }
+
+    pub(super) fn record_poll_completion(
         &mut self,
         now: Instant,
+        correlation: GithubReviewPollCorrelation,
         result: Result<GithubPullRequestPollResult, String>,
     ) {
         let Self::Active(state) = self else {
             return;
         };
-        state.record_result(now, result);
+        state.record_poll_completion(now, correlation, result);
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,19 +239,18 @@ pub(super) struct GithubReviewPollingConfig {
     pub(super) interval: Duration,
 }
 
-// Runtime state separates full snapshot, previous poll_state, one-shot recent
-// change notices, and durable last_error so polling can retry without
-// re-announcing old review activity.
+// Runtime state separates the full snapshot, one-shot recent change notices,
+// and durable last_error so polling can retry without re-announcing old review
+// activity. Core owns the poll cursor and single-flight admission.
 #[derive(Debug, Clone)]
 pub(super) struct GithubReviewPollingRuntimeState {
     pub(super) config: GithubReviewPollingConfig,
     pub(super) snapshot: Option<GithubPullRequestActivitySnapshot>,
     pub(super) recent_changes: Vec<GithubPullRequestActivityEvent>,
     recent_change_notice: Option<String>,
-    pub(super) poll_state: Option<GithubPullRequestPollState>,
     pub(super) last_error: Option<String>,
     next_poll_at: Instant,
-    poll_in_flight: bool,
+    pub(super) pending_correlation: Option<GithubReviewPollCorrelation>,
 }
 impl GithubReviewPollingRuntimeState {
     fn new(config: GithubReviewPollingConfig, now: Instant) -> Self {
@@ -244,17 +259,16 @@ impl GithubReviewPollingRuntimeState {
             snapshot: None,
             recent_changes: Vec::new(),
             recent_change_notice: None,
-            poll_state: None,
             last_error: None,
             // The first poll starts immediately after bootstrap; later polls
-            // are spaced from record_result so slow requests do not overlap.
+            // are spaced from completion so slow requests do not overlap.
             next_poll_at: now,
-            poll_in_flight: false,
+            pending_correlation: None,
         }
     }
     fn status_label(&self) -> String {
         let target = format_target_label(&self.config.target);
-        if self.poll_in_flight {
+        if self.pending_correlation.is_some() {
             return format!("polling {target}");
         }
         if let Some(error) = self.last_error.as_deref() {
@@ -298,33 +312,35 @@ impl GithubReviewPollingRuntimeState {
             ))
         }
     }
-    fn take_due_request(&mut self, now: Instant) -> Option<GithubReviewPollRequest> {
-        if self.poll_in_flight || now < self.next_poll_at {
-            return None;
-        }
-
-        // Mark the request before spawning the worker. The TUI tick loop can
-        // call this method frequently, so the in-flight bit is the concurrency
-        // guard rather than the background thread handle.
-        self.poll_in_flight = true;
-        Some(GithubReviewPollRequest {
-            target: self.config.target.clone(),
-            previous_state: self.poll_state.clone(),
-        })
+    fn poll_due(&self, now: Instant) -> bool {
+        self.pending_correlation.is_none() && now >= self.next_poll_at
     }
-    fn record_result(&mut self, now: Instant, result: Result<GithubPullRequestPollResult, String>) {
-        self.poll_in_flight = false;
+
+    fn record_poll_started(&mut self, correlation: GithubReviewPollCorrelation) {
+        if correlation.target == self.config.target && self.pending_correlation.is_none() {
+            self.pending_correlation = Some(correlation);
+        }
+    }
+
+    fn record_poll_completion(
+        &mut self,
+        now: Instant,
+        correlation: GithubReviewPollCorrelation,
+        result: Result<GithubPullRequestPollResult, String>,
+    ) {
+        if self.pending_correlation.as_ref() != Some(&correlation) {
+            return;
+        }
+        self.pending_correlation = None;
         self.next_poll_at = now + self.config.interval;
         match result {
             Ok(result) => {
-                // The service returns deltas relative to poll_state; the TUI
-                // keeps both a compact status notice and the full latest
-                // change list for the shell banner.
+                // Core supplies deltas relative to its cursor; the TUI keeps a
+                // compact status notice and the full latest change list.
                 let recent_change_notice = Self::build_recent_change_notice(&result.changes);
                 self.snapshot = Some(result.snapshot);
                 self.recent_changes = result.changes;
                 self.recent_change_notice = recent_change_notice;
-                self.poll_state = Some(result.next_state);
                 self.last_error = None;
             }
             Err(error) => {
@@ -335,23 +351,10 @@ impl GithubReviewPollingRuntimeState {
         }
     }
 }
-#[derive(Debug, Clone)]
-pub(super) struct GithubReviewPollRequest {
-    target: GithubPullRequestTarget,
-    previous_state: Option<GithubPullRequestPollState>,
-}
 
-// NativeTuiApp owns only the runtime bridge: it decides when a request is due,
-// spawns the service call off the render path, and feeds the result back through
-// the same background-message reducer used by the rest of the TUI.
+// NativeTuiApp owns the interval and presentation projection. Core owns poll
+// admission, cursor continuity, and provider execution.
 impl NativeTuiApp {
-    pub(super) fn configure_github_review_polling(
-        &mut self,
-        bootstrap: GithubReviewPollingBootstrap,
-    ) {
-        self.github_review_poller_service = bootstrap.service;
-        self.github_review_polling_state = bootstrap.state;
-    }
     pub(super) fn github_review_polling_status_label(&self) -> String {
         self.github_review_polling_state.status_label()
     }
@@ -363,30 +366,36 @@ impl NativeTuiApp {
             .recent_change_summary(max_total_len)
     }
     pub(super) fn maybe_start_github_review_poll(&mut self, now: Instant) -> bool {
-        let Some(request) = self.github_review_polling_state.take_due_request(now) else {
+        if !self.github_review_polling_state.poll_due(now) {
             return false;
-        };
-        let Some(service) = self.github_review_poller_service.clone() else {
-            // Bootstrap keeps Active state paired with a service. Reaching this
-            // path means the app state was mutated out of band, so do not report
-            // that a worker was started.
-            return false;
-        };
-        let tx = self.tx.clone();
-        thread::spawn(move || {
-            let result = service
-                .poll(&request.target, request.previous_state.as_ref())
-                .map_err(|error| error.to_string());
-            let _ = tx.send(BackgroundMessage::GithubReviewPollLoaded(result));
-        });
-        true
+        }
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::PollGithubReview);
+        let started = outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, AppEvent::GithubReviewPollStarted { .. }));
+        self.apply_core_dispatch_outcome(outcome);
+        started
     }
-    pub(super) fn record_github_review_poll_result(
+
+    pub(super) fn record_github_review_poll_started(
+        &mut self,
+        correlation: GithubReviewPollCorrelation,
+    ) {
+        self.github_review_polling_state
+            .record_poll_started(correlation);
+    }
+
+    pub(super) fn record_github_review_poll_completion(
         &mut self,
         now: Instant,
+        correlation: GithubReviewPollCorrelation,
         result: Result<GithubPullRequestPollResult, String>,
     ) {
-        self.github_review_polling_state.record_result(now, result);
+        self.github_review_polling_state
+            .record_poll_completion(now, correlation, result);
     }
 }
 

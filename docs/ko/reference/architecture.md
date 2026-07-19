@@ -61,6 +61,12 @@ Approval decision도 core 소유 single-flight 권한입니다. Core는 활성 t
 Composition은 provider 호출을 실행하고 correlation이 유지된 completion을 반환합니다. TUI는 approval
 modal projection과 재시도 상태 문구만 소유합니다.
 
+GitHub review polling도 core-correlated 작업입니다. Core는 설정된 pull request target, 성공한 poll
+cursor, 단조 증가 generation, single-flight와 stale completion 규칙을 소유합니다. Polling을 다시
+설정하면 새 권한 epoch가 시작되므로 이전 worker가 새 target이나 cursor를 덮어쓸 수 없습니다.
+Composition이 poller service를 실행하고, TUI에는 환경·branch discovery, poll 간격,
+status/recent-change projection만 남습니다.
+
 Parallel peek load는 core-correlated read입니다. Core가 요청 thread에 단조 증가 generation을
 부여하고 최신 요청으로 이전 요청을 대체하며, 일치하지 않거나 중복된 completion은 TUI에 도달하기
 전에 버립니다. TUI는 agent 선택과 loading/status/scroll 표현을 소유하고 다른 shell overlay가
