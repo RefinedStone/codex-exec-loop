@@ -2,7 +2,7 @@ use super::{
     ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation, ConversationLoadCorrelation,
     DirectionsMaintenanceLoadCorrelation, GithubReviewPollCorrelation,
     GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupRequest,
-    ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
+    ParallelPeekLoadCorrelation, PlanningEditorMutationRequest, PlanningRuntimeRefreshCorrelation,
     PlanningWorkspaceOperationCorrelation, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
     ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
     StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation, TurnSteerCorrelation,
@@ -52,6 +52,10 @@ pub enum CoreEffect {
     },
     StagePlanningEditor {
         correlation: PlanningWorkspaceOperationCorrelation,
+    },
+    MutatePlanningEditor {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        request: Box<PlanningEditorMutationRequest>,
     },
     LoadSimplePlanningEditor {
         correlation: PlanningWorkspaceOperationCorrelation,

@@ -6,13 +6,14 @@ use super::{
     GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
     GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
     ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ParallelModeProjection,
-    ParallelPeekLoadCorrelation, PlanningRuntimeCoordinator, PlanningWorkspaceOperationAdmission,
-    PlanningWorkspaceOperationCoordinator, PlanningWorkspaceOperationIntent,
-    PlanningWorkspaceOperationKind, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
-    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
-    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    ParallelPeekLoadCorrelation, PlanningEditorMutationRequest, PlanningRuntimeCoordinator,
+    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCoordinator,
+    PlanningWorkspaceOperationIntent, PlanningWorkspaceOperationKind,
+    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
+    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
@@ -390,6 +391,10 @@ impl CoreController {
             }) => self.begin_planning_workspace_operation(
                 PlanningWorkspaceOperationIntent::stage_editor(workspace_directory, target),
             ),
+            CoreInput::Command(AppCommand::MutatePlanningEditor {
+                workspace_directory,
+                request,
+            }) => self.begin_planning_editor_mutation(workspace_directory, request),
             CoreInput::Command(AppCommand::LoadSimplePlanningEditor {
                 workspace_directory,
                 draft_name,
@@ -1025,6 +1030,37 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
+            CoreInput::EffectCompleted(CoreEffectCompletion::PlanningEditorMutationCompleted {
+                correlation,
+                result,
+            }) => {
+                let Some(expected_identity) = correlation.editor_mutation_identity().cloned()
+                else {
+                    return self.unchanged_outcome();
+                };
+                if !self.planning_workspace_operations.accept(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                let result = result.and_then(|result| {
+                    if result.identity() == &expected_identity
+                        && result.action() == expected_identity.action
+                        && !result.draft_name().trim().is_empty()
+                        && result.draft_name() == expected_identity.draft_name
+                    {
+                        Ok(result)
+                    } else {
+                        Err("planning editor mutation completion identity mismatch".to_string())
+                    }
+                });
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::PlanningEditorMutationCompleted {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningSimpleEditorLoaded {
                 correlation,
                 result,
@@ -1549,6 +1585,9 @@ impl CoreController {
                             correlation: correlation.clone(),
                         }
                     }
+                    PlanningWorkspaceOperationKind::MutateEditor { .. } => {
+                        unreachable!("editor mutations carry a redacted effect payload")
+                    }
                     PlanningWorkspaceOperationKind::LoadSimpleEditor { .. } => {
                         CoreEffect::LoadSimplePlanningEditor {
                             correlation: correlation.clone(),
@@ -1561,6 +1600,40 @@ impl CoreController {
                     }
                 };
                 vec![effect]
+            }
+            PlanningWorkspaceOperationAdmission::Coalesced { .. }
+            | PlanningWorkspaceOperationAdmission::Busy { .. } => Vec::new(),
+        };
+        CoreDispatchOutcome {
+            events: vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                admission,
+            )],
+            effects,
+            snapshot: self.snapshot(),
+        }
+    }
+
+    fn begin_planning_editor_mutation(
+        &mut self,
+        workspace_directory: String,
+        request: Box<PlanningEditorMutationRequest>,
+    ) -> CoreDispatchOutcome {
+        let identity = &request.identity;
+        if identity.draft_name.trim().is_empty()
+            || identity.source_session.workspace_directory != workspace_directory
+            || identity.source_session.draft_name != identity.draft_name
+        {
+            return self.unchanged_outcome();
+        }
+        let admission = self.planning_workspace_operations.begin(
+            PlanningWorkspaceOperationIntent::mutate_editor(workspace_directory, identity.clone()),
+        );
+        let effects = match &admission {
+            PlanningWorkspaceOperationAdmission::Started { correlation } => {
+                vec![CoreEffect::MutatePlanningEditor {
+                    correlation: correlation.clone(),
+                    request,
+                }]
             }
             PlanningWorkspaceOperationAdmission::Coalesced { .. }
             | PlanningWorkspaceOperationAdmission::Busy { .. } => Vec::new(),
@@ -1947,7 +2020,9 @@ mod tests {
         ApprovalReviewPersistenceCorrelation, ConversationReadySnapshot, ConversationSnapshot,
         CorePromptOrigin, DirectionsMaintenanceDirectionSnapshot,
         DirectionsMaintenanceSummarySnapshot, DirectionsSupportingFileStatus,
-        PlanningDoctorSnapshot, PlanningEditorFileSnapshot, PlanningEditorSessionIdentity,
+        PlanningDoctorSnapshot, PlanningEditorFileSnapshot, PlanningEditorMutationAction,
+        PlanningEditorMutationIdentity, PlanningEditorMutationRequest,
+        PlanningEditorMutationResult, PlanningEditorMutationTarget, PlanningEditorSessionIdentity,
         PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot, PlanningEditorStageTarget,
         PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
         PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
@@ -2739,6 +2814,171 @@ mod tests {
     }
 
     #[test]
+    fn editor_mutation_accepts_exact_payload_then_settles_malformed_results_for_retry() {
+        let workspace = "/workspace";
+        let source = PlanningEditorSessionIdentity::new(31, workspace, "draft-a");
+        let identity = PlanningEditorMutationIdentity::new(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            "draft-a",
+            source.clone(),
+            4,
+        );
+        let request = || {
+            Box::new(PlanningEditorMutationRequest {
+                identity: identity.clone(),
+                editable_files: vec![PlanningEditorFileSnapshot {
+                    active_path: "active.md".to_string(),
+                    staged_path: "staged.md".to_string(),
+                    body: "body".to_string(),
+                }],
+            })
+        };
+        let command = || AppCommand::MutatePlanningEditor {
+            workspace_directory: workspace.to_string(),
+            request: request(),
+        };
+
+        let mut invalid_controller = CoreController::new();
+        let invalid =
+            invalid_controller.handle_input(CoreInput::Command(AppCommand::MutatePlanningEditor {
+                workspace_directory: workspace.to_string(),
+                request: Box::new(PlanningEditorMutationRequest {
+                    identity: PlanningEditorMutationIdentity::new(
+                        PlanningEditorMutationAction::Save,
+                        PlanningEditorMutationTarget::Planning,
+                        "draft-a",
+                        PlanningEditorSessionIdentity::new(31, "/other", "draft-a"),
+                        4,
+                    ),
+                    editable_files: Vec::new(),
+                }),
+            }));
+        assert!(invalid.events.is_empty());
+        assert!(invalid.effects.is_empty());
+
+        let mut controller = CoreController::new();
+        let started = controller.handle_input(CoreInput::Command(command()));
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = started.events.as_slice()
+        else {
+            panic!("editor mutation should start");
+        };
+        let mut active = correlation.clone();
+        let first = active.clone();
+        assert!(matches!(
+            started.effects.as_slice(),
+            [CoreEffect::MutatePlanningEditor {
+                correlation,
+                request: effect_request,
+            }] if correlation == &active
+                && effect_request.identity == identity
+                && effect_request.editable_files[0].body == "body"
+        ));
+        assert!(matches!(
+            controller
+                .handle_input(CoreInput::Command(command()))
+                .events
+                .as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Coalesced { correlation }
+            )] if correlation == &active
+        ));
+        let mut newer_revision = request();
+        newer_revision.identity.buffer_revision += 1;
+        assert!(matches!(
+            controller
+                .handle_input(CoreInput::Command(AppCommand::MutatePlanningEditor {
+                    workspace_directory: workspace.to_string(),
+                    request: newer_revision,
+                }))
+                .events
+                .as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Busy {
+                    active_correlation,
+                    ..
+                }
+            )] if active_correlation == &active
+        ));
+
+        let malformed = [
+            PlanningEditorMutationResult::Saved {
+                identity: PlanningEditorMutationIdentity {
+                    buffer_revision: identity.buffer_revision + 1,
+                    ..identity.clone()
+                },
+                draft_name: "draft-a".to_string(),
+                validation_report: Default::default(),
+            },
+            PlanningEditorMutationResult::Promoted {
+                identity: identity.clone(),
+                draft_name: "draft-a".to_string(),
+                promoted_file_count: 1,
+                validation_report: Default::default(),
+            },
+            PlanningEditorMutationResult::Saved {
+                identity: identity.clone(),
+                draft_name: "wrong-draft".to_string(),
+                validation_report: Default::default(),
+            },
+        ];
+        for (index, malformed) in malformed.into_iter().enumerate() {
+            let settled = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PlanningEditorMutationCompleted {
+                    correlation: active.clone(),
+                    result: Ok(Box::new(malformed)),
+                },
+            ));
+            assert!(matches!(
+                settled.events.as_slice(),
+                [AppEvent::PlanningEditorMutationCompleted {
+                    correlation,
+                    result: Err(error),
+                }] if correlation == &active
+                    && error == "planning editor mutation completion identity mismatch"
+            ));
+            if index + 1 < 3 {
+                let restarted = controller.handle_input(CoreInput::Command(command()));
+                let [
+                    AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                        PlanningWorkspaceOperationAdmission::Started { correlation },
+                    ),
+                ] = restarted.events.as_slice()
+                else {
+                    panic!("malformed exact completion must reopen admission");
+                };
+                active = correlation.clone();
+                if index == 0 {
+                    assert!(
+                        controller
+                            .handle_input(CoreInput::EffectCompleted(
+                                CoreEffectCompletion::PlanningEditorMutationCompleted {
+                                    correlation: first.clone(),
+                                    result: Err("aba".to_string()),
+                                },
+                            ))
+                            .events
+                            .is_empty()
+                    );
+                }
+            }
+        }
+        assert!(matches!(
+            controller
+                .handle_input(CoreInput::Command(command()))
+                .events
+                .as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation }
+            )] if correlation.generation > first.generation
+        ));
+    }
+
+    #[test]
     fn simple_editor_load_and_promotion_require_exact_draft_and_session_identity() {
         let mut controller = CoreController::new();
         let source = PlanningEditorSessionIdentity::new(41, "/workspace", "draft-a");
@@ -2950,6 +3190,29 @@ mod tests {
                 result: Err("wrong completion variant".to_string()),
             },
             |correlation| CoreEffectCompletion::PlanningEditorStaged {
+                correlation,
+                result: Err("exact completion".to_string()),
+            },
+        );
+        assert_wrong_planning_completion_kind_keeps_active_lease(
+            AppCommand::MutatePlanningEditor {
+                workspace_directory: "/workspace".to_string(),
+                request: Box::new(PlanningEditorMutationRequest {
+                    identity: PlanningEditorMutationIdentity::new(
+                        PlanningEditorMutationAction::Save,
+                        PlanningEditorMutationTarget::Planning,
+                        "draft-a",
+                        PlanningEditorSessionIdentity::new(41, "/workspace", "draft-a"),
+                        0,
+                    ),
+                    editable_files: Vec::new(),
+                }),
+            },
+            |correlation| CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation,
+                result: Err("wrong completion variant".to_string()),
+            },
+            |correlation| CoreEffectCompletion::PlanningEditorMutationCompleted {
                 correlation,
                 result: Err("exact completion".to_string()),
             },

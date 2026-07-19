@@ -74,6 +74,45 @@ impl PlanningEditorStageTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningEditorMutationAction {
+    Save,
+    Promote,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningEditorMutationTarget {
+    Planning,
+    Directions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningEditorMutationIdentity {
+    pub action: PlanningEditorMutationAction,
+    pub target: PlanningEditorMutationTarget,
+    pub draft_name: String,
+    pub source_session: PlanningEditorSessionIdentity,
+    pub buffer_revision: u64,
+}
+
+impl PlanningEditorMutationIdentity {
+    pub fn new(
+        action: PlanningEditorMutationAction,
+        target: PlanningEditorMutationTarget,
+        draft_name: impl Into<String>,
+        source_session: PlanningEditorSessionIdentity,
+        buffer_revision: u64,
+    ) -> Self {
+        Self {
+            action,
+            target,
+            draft_name: draft_name.into(),
+            source_session,
+            buffer_revision,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningWorkspaceOperationKind {
     Reset {
@@ -82,6 +121,9 @@ pub enum PlanningWorkspaceOperationKind {
     StageSimpleDraft,
     StageEditor {
         target: PlanningEditorStageTarget,
+    },
+    MutateEditor {
+        identity: PlanningEditorMutationIdentity,
     },
     LoadSimpleEditor {
         draft_name: String,
@@ -99,6 +141,7 @@ impl PlanningWorkspaceOperationKind {
             Self::Reset { .. } => "reset",
             Self::StageSimpleDraft => "simple draft staging",
             Self::StageEditor { target } => target.label(),
+            Self::MutateEditor { .. } => "editor mutation",
             Self::LoadSimpleEditor { .. } => "simple draft editor loading",
             Self::PromoteSimpleDraft { .. } => "simple draft promotion",
         }
@@ -106,6 +149,7 @@ impl PlanningWorkspaceOperationKind {
 
     pub fn draft_name(&self) -> Option<&str> {
         match self {
+            Self::MutateEditor { identity } => Some(identity.draft_name.as_str()),
             Self::LoadSimpleEditor { draft_name, .. }
             | Self::PromoteSimpleDraft { draft_name, .. } => Some(draft_name),
             Self::Reset { .. } | Self::StageSimpleDraft | Self::StageEditor { .. } => None,
@@ -114,6 +158,7 @@ impl PlanningWorkspaceOperationKind {
 
     pub fn source_session(&self) -> Option<&PlanningEditorSessionIdentity> {
         match self {
+            Self::MutateEditor { identity } => Some(&identity.source_session),
             Self::LoadSimpleEditor { source_session, .. }
             | Self::PromoteSimpleDraft { source_session, .. } => Some(source_session),
             Self::Reset { .. } | Self::StageSimpleDraft | Self::StageEditor { .. } => None,
@@ -151,6 +196,16 @@ impl PlanningWorkspaceOperationIntent {
         Self {
             workspace_directory: workspace_directory.into(),
             operation: PlanningWorkspaceOperationKind::StageEditor { target },
+        }
+    }
+
+    pub fn mutate_editor(
+        workspace_directory: impl Into<String>,
+        identity: PlanningEditorMutationIdentity,
+    ) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            operation: PlanningWorkspaceOperationKind::MutateEditor { identity },
         }
     }
 
@@ -225,6 +280,13 @@ impl PlanningWorkspaceOperationCorrelation {
     pub fn editor_stage_target(&self) -> Option<&PlanningEditorStageTarget> {
         match &self.operation {
             PlanningWorkspaceOperationKind::StageEditor { target } => Some(target),
+            _ => None,
+        }
+    }
+
+    pub fn editor_mutation_identity(&self) -> Option<&PlanningEditorMutationIdentity> {
+        match &self.operation {
+            PlanningWorkspaceOperationKind::MutateEditor { identity } => Some(identity),
             _ => None,
         }
     }
@@ -308,6 +370,69 @@ impl fmt::Debug for PlanningEditorSessionSnapshot {
             .field("editable_file_count", &self.editable_files.len())
             .field("validation_report", &self.validation_report)
             .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PlanningEditorMutationRequest {
+    pub identity: PlanningEditorMutationIdentity,
+    pub editable_files: Vec<PlanningEditorFileSnapshot>,
+}
+
+impl fmt::Debug for PlanningEditorMutationRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PlanningEditorMutationRequest")
+            .field("identity", &self.identity)
+            .field("editable_file_count", &self.editable_files.len())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningEditorMutationResult {
+    Saved {
+        identity: PlanningEditorMutationIdentity,
+        draft_name: String,
+        validation_report: PlanningValidationReport,
+    },
+    Promoted {
+        identity: PlanningEditorMutationIdentity,
+        draft_name: String,
+        promoted_file_count: usize,
+        validation_report: PlanningValidationReport,
+    },
+}
+
+impl PlanningEditorMutationResult {
+    pub fn identity(&self) -> &PlanningEditorMutationIdentity {
+        match self {
+            Self::Saved { identity, .. } | Self::Promoted { identity, .. } => identity,
+        }
+    }
+
+    pub fn draft_name(&self) -> &str {
+        match self {
+            Self::Saved { draft_name, .. } | Self::Promoted { draft_name, .. } => draft_name,
+        }
+    }
+
+    pub const fn action(&self) -> PlanningEditorMutationAction {
+        match self {
+            Self::Saved { .. } => PlanningEditorMutationAction::Save,
+            Self::Promoted { .. } => PlanningEditorMutationAction::Promote,
+        }
+    }
+
+    pub fn validation_report(&self) -> &PlanningValidationReport {
+        match self {
+            Self::Saved {
+                validation_report, ..
+            }
+            | Self::Promoted {
+                validation_report, ..
+            } => validation_report,
+        }
     }
 }
 
@@ -415,6 +540,16 @@ mod tests {
         correlation
     }
 
+    fn mutation_identity(
+        action: PlanningEditorMutationAction,
+        target: PlanningEditorMutationTarget,
+        draft_name: &str,
+        source: PlanningEditorSessionIdentity,
+        buffer_revision: u64,
+    ) -> PlanningEditorMutationIdentity {
+        PlanningEditorMutationIdentity::new(action, target, draft_name, source, buffer_revision)
+    }
+
     #[test]
     fn exact_duplicate_operations_coalesce_without_consuming_a_generation() {
         let mut coordinator = PlanningWorkspaceOperationCoordinator::new();
@@ -481,6 +616,151 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn editor_mutation_coalesces_only_the_exact_identity_and_rejects_aba_completion() {
+        let mut coordinator = PlanningWorkspaceOperationCoordinator::new();
+        let source = session(9, "/workspace", "draft-a");
+        let identity = mutation_identity(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            "draft-a",
+            source.clone(),
+            3,
+        );
+        let intent =
+            PlanningWorkspaceOperationIntent::mutate_editor("/workspace", identity.clone());
+        let first = started(coordinator.begin(intent.clone()));
+        assert_eq!(
+            coordinator.begin(intent.clone()),
+            PlanningWorkspaceOperationAdmission::Coalesced {
+                correlation: first.clone(),
+            }
+        );
+
+        for requested in [
+            PlanningWorkspaceOperationIntent::mutate_editor("/other", identity.clone()),
+            PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    PlanningEditorMutationAction::Promote,
+                    identity.target,
+                    "draft-a",
+                    source.clone(),
+                    3,
+                ),
+            ),
+            PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    identity.action,
+                    PlanningEditorMutationTarget::Directions,
+                    "draft-a",
+                    source.clone(),
+                    3,
+                ),
+            ),
+            PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    identity.action,
+                    identity.target,
+                    "draft-b",
+                    source.clone(),
+                    3,
+                ),
+            ),
+            PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    identity.action,
+                    identity.target,
+                    "draft-a",
+                    session(9, "/other", "draft-a"),
+                    3,
+                ),
+            ),
+            PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    identity.action,
+                    identity.target,
+                    "draft-a",
+                    session(9, "/workspace", "draft-b"),
+                    3,
+                ),
+            ),
+            PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    identity.action,
+                    identity.target,
+                    "draft-a",
+                    session(10, "/workspace", "draft-a"),
+                    3,
+                ),
+            ),
+            PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    identity.action,
+                    identity.target,
+                    "draft-a",
+                    source.clone(),
+                    4,
+                ),
+            ),
+        ] {
+            assert!(matches!(
+                coordinator.begin(requested),
+                PlanningWorkspaceOperationAdmission::Busy {
+                    active_correlation,
+                    ..
+                } if active_correlation == first
+            ));
+        }
+
+        assert!(coordinator.accept(&first));
+        let second = started(
+            coordinator.begin(PlanningWorkspaceOperationIntent::mutate_editor(
+                "/workspace",
+                mutation_identity(
+                    PlanningEditorMutationAction::Promote,
+                    PlanningEditorMutationTarget::Planning,
+                    "draft-a",
+                    source,
+                    3,
+                ),
+            )),
+        );
+        assert!(coordinator.accept(&second));
+        let third = started(coordinator.begin(intent));
+        assert!(!coordinator.accept(&first));
+        assert!(coordinator.accept(&third));
+        assert!(third.generation > first.generation);
+    }
+
+    #[test]
+    fn editor_mutation_debug_never_contains_file_bodies() {
+        let marker = "SENSITIVE-EDITOR-BODY-MARKER";
+        let request = PlanningEditorMutationRequest {
+            identity: mutation_identity(
+                PlanningEditorMutationAction::Save,
+                PlanningEditorMutationTarget::Planning,
+                "draft-a",
+                session(1, "/workspace", "draft-a"),
+                0,
+            ),
+            editable_files: vec![PlanningEditorFileSnapshot {
+                active_path: "active.md".to_string(),
+                staged_path: "staged.md".to_string(),
+                body: marker.to_string(),
+            }],
+        };
+        let rendered = format!("{request:?}");
+        assert!(!rendered.contains(marker));
+        assert!(rendered.contains("editable_file_count"));
     }
 
     #[test]

@@ -1,5 +1,8 @@
 use super::{PlanningDraftEditorCloseRequest, PlanningDraftEditorUiState};
 use crate::application::service::planning::{PlanningDraftEditorFile, PlanningDraftEditorSession};
+use crate::core::app::{
+    PlanningEditorFileSnapshot, PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot,
+};
 use crate::domain::planning::{
     PlanningFileKind, PlanningValidationReport, PlanningValidationSeverity,
 };
@@ -50,6 +53,19 @@ fn single_buffer_session(body: &str) -> PlanningDraftEditorSession {
         draft_name: "bootstrap-test".to_string(),
         draft_directory: "/tmp/bootstrap-test".to_string(),
         editable_files: vec![PlanningDraftEditorFile {
+            active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+            staged_path: "/tmp/bootstrap-test/result-output.md".to_string(),
+            body: body.to_string(),
+        }],
+        validation_report: PlanningValidationReport::default(),
+    }
+}
+
+fn correlated_single_buffer_session(body: &str) -> PlanningEditorSessionSnapshot {
+    PlanningEditorSessionSnapshot {
+        session_identity: PlanningEditorSessionIdentity::new(7, "/tmp/workspace", "bootstrap-test"),
+        draft_directory: "/tmp/bootstrap-test".to_string(),
+        editable_files: vec![PlanningEditorFileSnapshot {
             active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
             staged_path: "/tmp/bootstrap-test/result-output.md".to_string(),
             body: body.to_string(),
@@ -254,4 +270,64 @@ fn sync_editor_scroll_keeps_cursor_visible_without_repinning_every_move() {
     state.move_cursor_up();
     state.sync_editor_scroll(3);
     assert_eq!(state.selected_buffer().expect("buffer").editor_scroll(), 1);
+}
+
+#[test]
+fn buffer_revision_changes_only_for_real_body_mutations_and_never_reuses_a_value() {
+    let mut state = PlanningDraftEditorUiState::default();
+    state.open_correlated_session(correlated_single_buffer_session("A"));
+    assert_eq!(state.buffer_revision(), Some(0));
+
+    state.move_file_selection(1);
+    state.move_cursor_right();
+    state.move_cursor_left();
+    state.sync_editor_scroll(1);
+    state.clear_close_confirmation();
+    assert_eq!(state.buffer_revision(), Some(0));
+
+    state.move_cursor_right();
+    state.insert_character('B');
+    assert_eq!(state.selected_buffer().expect("buffer").body(), "AB");
+    assert_eq!(state.buffer_revision(), Some(1));
+    state.backspace();
+    assert_eq!(state.selected_buffer().expect("buffer").body(), "A");
+    assert_eq!(
+        state.buffer_revision(),
+        Some(2),
+        "A→B→A must retain a new mutation identity"
+    );
+
+    state.move_cursor_left();
+    state.backspace();
+    assert_eq!(state.buffer_revision(), Some(2), "no-op edits stay stable");
+}
+
+#[test]
+fn correlated_save_clears_only_the_exact_revision_and_preserves_newer_edits() {
+    let mut state = PlanningDraftEditorUiState::default();
+    let session = correlated_single_buffer_session("draft");
+    let source = session.session_identity.clone();
+    state.open_correlated_session(session);
+    state.insert_character('!');
+    assert_eq!(state.buffer_revision(), Some(1));
+
+    let mut first_report = PlanningValidationReport::default();
+    first_report.push_warning(
+        PlanningFileKind::Directions,
+        "saved-revision",
+        "saved revision warning",
+    );
+    assert!(state.apply_correlated_save_result(&source, 1, first_report.clone()));
+    assert!(!state.has_dirty_buffers());
+
+    state.insert_character('?');
+    assert_eq!(state.buffer_revision(), Some(2));
+    let latest_body = state.selected_buffer().expect("buffer").body();
+    assert!(state.apply_correlated_save_result(&source, 1, PlanningValidationReport::default()));
+    assert_eq!(state.selected_buffer().expect("buffer").body(), latest_body);
+    assert!(state.has_dirty_buffers());
+
+    let other = PlanningEditorSessionIdentity::new(8, "/tmp/workspace", "bootstrap-test");
+    assert!(!state.apply_correlated_save_result(&other, 2, PlanningValidationReport::default()));
+    assert!(state.has_dirty_buffers());
 }
