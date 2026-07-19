@@ -3,8 +3,8 @@ use super::{
     SessionCatalogSnapshot,
 };
 use super::{
-    ConversationLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
-    StartupCheckCorrelation,
+    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
 use super::{TurnSteerAdmission, TurnSteerCorrelation};
@@ -63,8 +63,7 @@ pub enum CoreEffectCompletion {
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
     ParallelPeekConversationLoaded {
-        request_id: u64,
-        thread_id: String,
+        correlation: ParallelPeekLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
     TurnSteered {
@@ -97,8 +96,7 @@ pub enum AppEvent {
         snapshot: ConversationSnapshot,
     },
     ParallelPeekConversationLoaded {
-        request_id: u64,
-        thread_id: String,
+        correlation: ParallelPeekLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
     TurnSubmissionAdmissionResolved(TurnSubmissionAdmission),

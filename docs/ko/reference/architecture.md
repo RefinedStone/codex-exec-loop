@@ -51,6 +51,11 @@ worker 하나만 시작하며 stale completion을 버립니다. TUI에는 confir
 않은 draft만 지우기 위한 editor revision만 남습니다. 이미 승인된 steer는 turn terminal event만으로
 무효화하지 않지만 conversation identity가 바뀌면 무효화합니다.
 
+Parallel peek load는 core-correlated read입니다. Core가 요청 thread에 단조 증가 generation을
+부여하고 최신 요청으로 이전 요청을 대체하며, 일치하지 않거나 중복된 completion은 TUI에 도달하기
+전에 버립니다. TUI는 agent 선택과 loading/status/scroll 표현을 소유하고 다른 shell overlay가
+대체하면 preview를 지웁니다. Peek 결과는 interactive conversation을 절대 교체하지 않습니다.
+
 Session rename도 core-correlated single-flight 작업입니다. Provider의 성공 응답을 core가 수락하면
 일치하는 catalog row, 불러온 conversation title, stream identity를 함께 갱신합니다. 충돌하는
 catalog load와 같은 thread의 conversation load는 버리지 않고 rename 완료 뒤로 지연하므로 예전

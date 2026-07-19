@@ -51,3 +51,18 @@ impl ConversationLoadCorrelation {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelPeekLoadCorrelation {
+    pub generation: u64,
+    pub requested_thread_id: String,
+}
+
+impl ParallelPeekLoadCorrelation {
+    pub fn new(generation: u64, requested_thread_id: impl Into<String>) -> Self {
+        Self {
+            generation,
+            requested_thread_id: requested_thread_id.into(),
+        }
+    }
+}

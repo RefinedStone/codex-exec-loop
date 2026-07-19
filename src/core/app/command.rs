@@ -23,7 +23,6 @@ pub enum AppCommand {
     },
     InvalidateConversationLoad,
     LoadParallelPeekConversation {
-        request_id: u64,
         thread_id: String,
     },
     PrepareManualPrompt(Box<ManualPromptRequest>),

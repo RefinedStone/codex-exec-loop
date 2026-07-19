@@ -124,6 +124,8 @@ Git common directory so linked worktrees share one authority and independent clo
 
 The board is a read-only projection of readiness, pool slots, active roster, selected lifecycle,
 distributor head, queue state, and withheld-dispatch reason.
+`:peek` opens a read-only active-agent conversation preview; switching agents or overlays prevents
+late results from replacing the latest preview or the interactive conversation.
 
 ## Recovery and Limits
 
