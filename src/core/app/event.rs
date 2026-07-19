@@ -1,3 +1,4 @@
+use super::ManualPromptPreparationAdmission;
 use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
@@ -99,6 +100,7 @@ pub enum AppEvent {
         correlation: ParallelPeekLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
+    ManualPromptPreparationAdmissionResolved(ManualPromptPreparationAdmission),
     TurnSubmissionAdmissionResolved(TurnSubmissionAdmission),
     TurnSteerAdmissionResolved(TurnSteerAdmission),
     TurnSteerCompleted {

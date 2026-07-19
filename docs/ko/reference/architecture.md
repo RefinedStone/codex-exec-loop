@@ -45,6 +45,11 @@ editor를 지우거나 transcript history를 추가하지 않고, core가 accept
 로컬 projection을 확정합니다. 활성 submission이 있으면 core는 명시적 rejection event를 내보내고
 worker effect를 만들지 않으므로 adapter와 core가 가짜 `starting turn` 상태로 갈라지지 않습니다.
 
+Manual prompt preparation도 같은 admission 규칙을 사용합니다. TUI는 correlation 없는 intent를
+보내고 core가 승인한 뒤에만 editor, delivery, parallel-mode 문맥을 결합합니다. Core가 correlation을
+발급하고 preparation 하나만 허용하며 stale 또는 중복 completion을 버립니다. TUI는 승인된
+workspace와 변경되지 않은 draft를 확인한 뒤 prepared result를 적용합니다.
+
 활성 turn steer도 같은 권한 경계를 사용합니다. Core는 정확히 일치하는 활성
 submission/thread/turn identity만 승인하고, 해당 submission에 귀속된 correlation을 발급해 provider
 worker 하나만 시작하며 stale completion을 버립니다. TUI에는 confirmation modal과 성공 시 변경되지

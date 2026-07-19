@@ -503,6 +503,7 @@ fn future_core_app_public_contracts_are_core_owned() {
             "src/core/app/command.rs",
             "src/core/app/effect.rs",
             "src/core/app/event.rs",
+            "src/core/app/manual_prompt.rs",
             "src/core/app/projection.rs",
             "src/core/app/snapshot.rs",
             "src/core/app/state.rs",
@@ -1303,6 +1304,15 @@ fn tui_manual_prompt_preparation_enters_through_core_runtime() {
             "fn ensure_manual_planning_workspace",
             ".stage_simple_mode_draft(",
             ".promote_staged_draft(",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "TUI manual prompt correlation authority must stay core-owned",
+        &["src/adapter/inbound/tui"],
+        &[
+            "next_manual_prompt_preparation_request_id",
+            "manual_prompt_preparation_generation",
+            "next_manual_prompt_preparation_correlation",
         ],
     );
 }

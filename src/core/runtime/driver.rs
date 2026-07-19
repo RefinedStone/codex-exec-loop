@@ -99,15 +99,15 @@ mod tests {
     use std::sync::mpsc::TrySendError;
 
     use super::*;
-    use crate::application::service::manual_prompt_preparation::ManualPromptPreparationRequest;
     use crate::core::app::{
-        AppEvent, CoreEffectCompletion, CorePromptOrigin, StartupAttachmentSnapshot,
-        StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
-        TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission,
-        TurnSubmissionRequest,
+        AppEvent, CoreEffectCompletion, CorePromptOrigin, ManualPromptPreparationAdmission,
+        ManualPromptPreparationIntent, StartupAttachmentSnapshot, StartupCheckCorrelation,
+        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSteerAdmission,
+        TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::ConversationTurnSteerRequest;
+    use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
 
     #[test]
     fn core_input_channel_applies_backpressure_and_reports_disconnect() {
@@ -373,21 +373,32 @@ mod tests {
         let (_tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
-        let request = ManualPromptPreparationRequest {
-            correlation: crate::domain::planning::ManualPromptCorrelation {
-                request_id: 1,
-                generation: 1,
-                workspace_directory: "/tmp/workspace".to_string(),
-            },
+        let intent = ManualPromptPreparationIntent {
+            workspace_directory: "/tmp/workspace".to_string(),
             raw_prompt: "ship it".to_string(),
             parent_thread_id: Some("thread-1".to_string()),
             parent_turn_id: None,
         };
+        let correlation = ManualPromptCorrelation {
+            request_id: 1,
+            generation: 1,
+            workspace_directory: "/tmp/workspace".to_string(),
+        };
+        let request = ManualPromptRequest {
+            correlation: correlation.clone(),
+            raw_prompt: intent.raw_prompt.clone(),
+            parent_thread_id: intent.parent_thread_id.clone(),
+            parent_turn_id: intent.parent_turn_id.clone(),
+        };
 
-        let outcome =
-            runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(request.clone())));
+        let outcome = runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(intent)));
 
-        assert!(outcome.events.is_empty());
+        assert_eq!(
+            outcome.events,
+            vec![AppEvent::ManualPromptPreparationAdmissionResolved(
+                ManualPromptPreparationAdmission::Accepted { correlation },
+            )]
+        );
         assert_eq!(outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             effects.recorded_effects(),
@@ -399,19 +410,26 @@ mod tests {
     fn immediate_manual_prompt_effect_is_accepted_before_dispatch_returns() {
         let (_tx, rx) = core_input_channel();
         let mut runtime = CoreRuntime::new(ImmediateManualPromptExecutor, rx);
-        let request = ManualPromptPreparationRequest {
-            correlation: crate::domain::planning::ManualPromptCorrelation {
-                request_id: 1,
-                generation: 1,
-                workspace_directory: "/tmp/workspace".to_string(),
-            },
+        let intent = ManualPromptPreparationIntent {
+            workspace_directory: "/tmp/workspace".to_string(),
             raw_prompt: "ship it".to_string(),
+            parent_thread_id: None,
+            parent_turn_id: None,
+        };
+        let correlation = ManualPromptCorrelation {
+            request_id: 1,
+            generation: 1,
+            workspace_directory: "/tmp/workspace".to_string(),
+        };
+        let request = ManualPromptRequest {
+            correlation: correlation.clone(),
+            raw_prompt: intent.raw_prompt.clone(),
             parent_thread_id: None,
             parent_turn_id: None,
         };
 
         let outcome =
-            runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(request.clone())));
+            runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(intent.clone())));
 
         assert_eq!(
             outcome.effects,
@@ -419,11 +437,29 @@ mod tests {
         );
         assert!(matches!(
             outcome.events.as_slice(),
-            [AppEvent::ManualPromptPrepared(result)]
-                if result.correlation() == &request.correlation
+            [
+                AppEvent::ManualPromptPreparationAdmissionResolved(
+                    ManualPromptPreparationAdmission::Accepted {
+                        correlation: accepted,
+                    },
+                ),
+                AppEvent::ManualPromptPrepared(result),
+            ] if accepted == &correlation && result.correlation() == &correlation
         ));
-        let second = runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(request)));
-        assert_eq!(second.events.len(), 1);
+        let second = runtime.dispatch_command(AppCommand::PrepareManualPrompt(Box::new(intent)));
+        assert!(matches!(
+            second.events.as_slice(),
+            [
+                AppEvent::ManualPromptPreparationAdmissionResolved(
+                    ManualPromptPreparationAdmission::Accepted {
+                        correlation: accepted,
+                    },
+                ),
+                AppEvent::ManualPromptPrepared(result),
+            ] if accepted.generation == 2
+                && accepted.request_id == accepted.generation
+                && result.correlation() == accepted
+        ));
     }
 
     #[test]

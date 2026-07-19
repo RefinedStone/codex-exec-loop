@@ -1,6 +1,6 @@
-use super::TurnSubmissionRequest;
+use super::{ManualPromptPreparationIntent, TurnSubmissionRequest};
 use crate::domain::conversation::ConversationTurnSteerRequest;
-use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
+use crate::domain::planning::PostTurnRequest;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub enum AppCommand {
     LoadParallelPeekConversation {
         thread_id: String,
     },
-    PrepareManualPrompt(Box<ManualPromptRequest>),
+    PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
     SubmitTurn(TurnSubmissionRequest),
     SteerTurn(ConversationTurnSteerRequest),
