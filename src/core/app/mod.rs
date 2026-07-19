@@ -3,6 +3,7 @@
  * through CoreInput, then read AppEvent/AppSnapshot without depending on TUI
  * state or terminal framework types.
  */
+pub mod approval;
 pub mod command;
 pub mod controller;
 pub mod conversation;
@@ -21,6 +22,7 @@ pub mod turn_steer;
 pub mod turn_stream;
 pub mod turn_submission;
 
+pub use approval::{ApprovalDecisionAdmission, ApprovalDecisionCorrelation};
 pub use command::AppCommand;
 pub use controller::{CoreController, CoreDispatchOutcome};
 pub use conversation::{

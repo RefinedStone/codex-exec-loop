@@ -1,8 +1,8 @@
 use super::{
-    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
-    StartupCheckCorrelation, TurnSteerCorrelation, TurnSubmissionCorrelation,
-    TurnSubmissionRequest,
+    ApprovalDecisionCorrelation, ConversationLoadCorrelation, ParallelPeekLoadCorrelation,
+    QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameCorrelation, StartupCheckCorrelation, TurnSteerCorrelation,
+    TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::planning::{ManualPromptRequest, PostTurnRequest};
@@ -41,6 +41,9 @@ pub enum CoreEffect {
     SteerTurn {
         correlation: TurnSteerCorrelation,
         request: ConversationTurnSteerRequest,
+    },
+    SubmitApprovalDecision {
+        correlation: ApprovalDecisionCorrelation,
     },
     EvaluatePostTurn(Box<PostTurnRequest>),
 }

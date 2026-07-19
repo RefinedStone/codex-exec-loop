@@ -4,6 +4,7 @@ use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
 };
+use super::{ApprovalDecisionAdmission, ApprovalDecisionCorrelation};
 use super::{
     ConversationLoadCorrelation, ParallelPeekLoadCorrelation, ReviewCenterLoadCorrelation,
     SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
@@ -81,6 +82,10 @@ pub enum CoreEffectCompletion {
         correlation: TurnSteerCorrelation,
         result: Result<ConversationTurnSteerReceipt, String>,
     },
+    ApprovalDecisionSubmitted {
+        correlation: ApprovalDecisionCorrelation,
+        result: Result<(), String>,
+    },
     ManualPromptPrepared(Box<ManualPromptOutcome>),
     PostTurnEvaluationCompleted(Box<PostTurnExecution>),
 }
@@ -130,6 +135,11 @@ pub enum AppEvent {
     TurnSteerCompleted {
         correlation: TurnSteerCorrelation,
         result: Result<ConversationTurnSteerReceipt, String>,
+    },
+    ApprovalDecisionAdmissionResolved(ApprovalDecisionAdmission),
+    ApprovalDecisionSubmissionCompleted {
+        correlation: ApprovalDecisionCorrelation,
+        result: Result<(), String>,
     },
     TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),

@@ -33,6 +33,7 @@ pub struct TurnStreamState {
     item_lifecycle: ConversationItemLifecycleProjection,
     progressive_activity: ConversationProgressiveActivityProjection,
     active_turn_id: Option<String>,
+    pending_approval_id: Option<String>,
     status_text: Option<String>,
     terminal: Option<TurnStreamTerminalSnapshot>,
     last_applied_post_turn_evaluation_id: Option<String>,
@@ -49,6 +50,7 @@ impl TurnStreamState {
             item_lifecycle: ConversationItemLifecycleProjection::default(),
             progressive_activity: ConversationProgressiveActivityProjection::default(),
             active_turn_id: None,
+            pending_approval_id: None,
             status_text: None,
             terminal: None,
             last_applied_post_turn_evaluation_id: None,
@@ -95,6 +97,7 @@ impl TurnStreamState {
         self.item_lifecycle = item_lifecycle;
         self.progressive_activity = ConversationProgressiveActivityProjection::default();
         self.active_turn_id = None;
+        self.pending_approval_id = None;
         self.status_text = None;
         self.terminal = None;
         self.last_applied_post_turn_evaluation_id = None;
@@ -102,6 +105,7 @@ impl TurnStreamState {
 
     pub fn begin_submission(&mut self) {
         self.active_turn_id = None;
+        self.pending_approval_id = None;
         self.status_text = Some("starting turn".to_string());
         self.terminal = None;
         self.last_applied_post_turn_evaluation_id = None;
@@ -114,6 +118,10 @@ impl TurnStreamState {
     pub fn matches_active_turn(&self, thread_id: &str, turn_id: &str) -> bool {
         self.thread_id.as_deref() == Some(thread_id)
             && self.active_turn_id.as_deref() == Some(turn_id)
+    }
+
+    pub fn matches_pending_approval(&self, approval_id: &str) -> bool {
+        self.pending_approval_id.as_deref() == Some(approval_id)
     }
 
     pub fn apply_session_rename(
@@ -152,6 +160,7 @@ impl TurnStreamState {
                 }
                 self.progressive_activity = ConversationProgressiveActivityProjection::default();
                 self.active_turn_id = None;
+                self.pending_approval_id = None;
                 self.terminal = None;
                 self.last_applied_post_turn_evaluation_id = None;
                 self.status_text = Some("thread started".to_string());
@@ -167,6 +176,7 @@ impl TurnStreamState {
                 runtime_request,
             } => {
                 self.active_turn_id = Some(turn_id.clone());
+                self.pending_approval_id = None;
                 self.progressive_activity = ConversationProgressiveActivityProjection::default();
                 self.runtime_envelope
                     .get_or_insert_with(ConversationRuntimeEnvelope::unobserved)
@@ -208,16 +218,22 @@ impl TurnStreamState {
                 TurnStreamUpdate::ApprovalReviewUpdated { review }
             }
             TurnStreamEvent::ApprovalRequested { request } => {
+                self.pending_approval_id = Some(request.approval_id.clone());
                 self.status_text = Some("approval required".to_string());
                 TurnStreamUpdate::ApprovalRequested { request }
             }
             TurnStreamEvent::ApprovalResolved {
                 approval_id,
                 resolution,
-            } => TurnStreamUpdate::ApprovalResolved {
-                approval_id,
-                resolution,
-            },
+            } => {
+                if self.pending_approval_id.as_deref() == Some(approval_id.as_str()) {
+                    self.pending_approval_id = None;
+                }
+                TurnStreamUpdate::ApprovalResolved {
+                    approval_id,
+                    resolution,
+                }
+            }
             TurnStreamEvent::TurnInterruptRequestFailed { message } => {
                 self.status_text = Some(message.clone());
                 TurnStreamUpdate::TurnInterruptRequestFailed { message }
@@ -236,6 +252,7 @@ impl TurnStreamState {
                     TurnStreamUpdate::RuntimeFailureIgnored { message }
                 } else {
                     self.active_turn_id = None;
+                    self.pending_approval_id = None;
                     self.status_text = Some("turn failed".to_string());
                     self.terminal = Some(TurnStreamTerminalSnapshot::Failed {
                         message: message.clone(),
@@ -405,6 +422,7 @@ impl TurnStreamState {
         execution_snapshot_capture: Option<TurnSnapshotCapture>,
     ) -> TurnStreamUpdate {
         self.active_turn_id = None;
+        self.pending_approval_id = None;
         let status_text = terminal_status_text(&receipt).to_string();
         self.status_text = Some(status_text.clone());
         self.terminal = Some(TurnStreamTerminalSnapshot::Turn {
@@ -1729,7 +1747,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_request_and_resolution_cross_the_core_stream_unchanged() {
+    fn pending_approval_identity_ignores_stale_resolution_and_clears_exact_resolution() {
         let mut state = TurnStreamState::new();
         let request = ConversationApprovalRequest {
             approval_id: "approval-core".to_string(),
@@ -1748,6 +1766,13 @@ mod tests {
             TurnStreamUpdate::ApprovalRequested { request }
         );
         assert_eq!(requested.status_text.as_deref(), Some("approval required"));
+        assert!(state.matches_pending_approval("approval-core"));
+
+        state.apply_stream_event(TurnStreamEvent::ApprovalResolved {
+            approval_id: "approval-stale".to_string(),
+            resolution: ConversationApprovalResolution::Declined,
+        });
+        assert!(state.matches_pending_approval("approval-core"));
 
         let resolved = state.apply_stream_event(TurnStreamEvent::ApprovalResolved {
             approval_id: "approval-core".to_string(),
@@ -1760,6 +1785,7 @@ mod tests {
                 ..
             }
         ));
+        assert!(!state.matches_pending_approval("approval-core"));
     }
 
     #[test]

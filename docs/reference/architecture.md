@@ -58,6 +58,11 @@ provider worker, and drops stale completions. The TUI owns only the confirmation
 editor revision needed to clear an unchanged draft after success. A terminal turn event does not
 invalidate an already accepted steer, but a conversation identity transition does.
 
+Approval decisions are also core-owned and single-flight. Core admits a decision only for the
+current pending approval on the active turn, owns its submitting and submitted states, and prevents
+duplicate provider submissions. Composition performs the provider call and returns its correlated
+completion. The TUI owns only the approval modal projection and retry status copy.
+
 Parallel peek loads are core-correlated reads. Core assigns a monotonically increasing generation
 to the requested thread, lets the latest request supersede the previous one, and drops unmatched or
 duplicate completions before they reach the TUI. The TUI owns agent selection, loading/status/scroll

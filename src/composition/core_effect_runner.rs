@@ -21,11 +21,12 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
-    ConversationLoadCorrelation, ConversationReadySnapshot, ConversationThreadReviewSnapshot,
-    ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
-    QueueAuthoritySnapshot, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
-    ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
-    SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    ApprovalDecisionCorrelation, ConversationLoadCorrelation, ConversationReadySnapshot,
+    ConversationThreadReviewSnapshot, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
+    QueueAuthorityLoadError, QueueAuthoritySnapshot, ReviewCenterHistoryEntrySnapshot,
+    ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
+    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -124,6 +125,10 @@ impl CoreEffectRunner {
                     self.manual_prompt_preparation_service.prepare(*request),
                 )),
             )),
+            CoreEffect::SubmitApprovalDecision { correlation } => {
+                self.spawn_approval_decision_submission(correlation);
+                None
+            }
             CoreEffect::SubmitTurn {
                 correlation,
                 request,
@@ -228,6 +233,17 @@ impl CoreEffectRunner {
                     result: result.map(Box::new),
                 },
             ));
+        });
+    }
+
+    pub fn spawn_approval_decision_submission(&self, correlation: ApprovalDecisionCorrelation) {
+        let conversation_service = self.conversation_service.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = conversation_service
+                .resolve_approval_request(&correlation.approval_id, correlation.decision);
+            let completion = approval_decision_completion(correlation, result);
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
 
@@ -365,6 +381,16 @@ fn turn_steer_completion(
     result: Result<crate::domain::conversation::ConversationTurnSteerReceipt>,
 ) -> CoreEffectCompletion {
     CoreEffectCompletion::TurnSteered {
+        correlation,
+        result: result.map_err(|error| error.to_string()),
+    }
+}
+
+fn approval_decision_completion(
+    correlation: ApprovalDecisionCorrelation,
+    result: Result<()>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::ApprovalDecisionSubmitted {
         correlation,
         result: result.map_err(|error| error.to_string()),
     }
@@ -533,6 +559,15 @@ mod tests {
         crate::core::app::TurnSteerCorrelation::new(
             3,
             crate::core::app::TurnSubmissionCorrelation::new(2),
+        )
+    }
+
+    fn approval_decision_correlation() -> ApprovalDecisionCorrelation {
+        ApprovalDecisionCorrelation::new(
+            4,
+            crate::core::app::TurnSubmissionCorrelation::new(2),
+            "approval-1",
+            crate::domain::conversation::ConversationApprovalDecision::Accept,
         )
     }
 
@@ -713,6 +748,27 @@ mod tests {
             CoreEffectCompletion::TurnSteered {
                 correlation: turn_steer_correlation(),
                 result: Err("steer unavailable".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn approval_decision_result_maps_to_exact_core_completion() {
+        assert_eq!(
+            approval_decision_completion(approval_decision_correlation(), Ok(())),
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: approval_decision_correlation(),
+                result: Ok(()),
+            }
+        );
+        assert_eq!(
+            approval_decision_completion(
+                approval_decision_correlation(),
+                Err(anyhow::anyhow!("approval unavailable")),
+            ),
+            CoreEffectCompletion::ApprovalDecisionSubmitted {
+                correlation: approval_decision_correlation(),
+                result: Err("approval unavailable".to_string()),
             }
         );
     }

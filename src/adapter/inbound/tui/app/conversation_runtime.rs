@@ -99,10 +99,6 @@ pub(super) enum ConversationRuntimeEffect {
         thread_id: String,
         review: ConversationApprovalReview,
     },
-    ResolveApprovalRequest {
-        approval_id: String,
-        decision: ConversationApprovalDecision,
-    },
     ShowApprovalOverlay,
     CloseApprovalOverlay,
     // A Ctrl-C can arrive while turn/start is still in flight. Once TurnStarted
@@ -650,10 +646,6 @@ pub(super) fn reduce_conversation_runtime(
                     "approval decision submitted: {} / waiting for runtime resolution",
                     approval_decision_label(decision)
                 );
-                effects.push(ConversationRuntimeEffect::ResolveApprovalRequest {
-                    approval_id,
-                    decision,
-                });
             }
         }
         ConversationRuntimeEvent::ApprovalDecisionSubmissionFailed { approval_id, error } => {
@@ -1319,13 +1311,7 @@ mod tests {
                 decision: ConversationApprovalDecision::Accept,
             },
         );
-        assert_eq!(
-            submitted.effects,
-            vec![ConversationRuntimeEffect::ResolveApprovalRequest {
-                approval_id: "approval-7".to_string(),
-                decision: ConversationApprovalDecision::Accept,
-            }]
-        );
+        assert!(submitted.effects.is_empty());
         assert!(submitted.state.pending_approval_request.is_some());
         assert_eq!(
             submitted.state.pending_approval_decision(),
@@ -1413,13 +1399,7 @@ mod tests {
                 decision: ConversationApprovalDecision::Decline,
             },
         );
-        assert_eq!(
-            retried.effects,
-            vec![ConversationRuntimeEffect::ResolveApprovalRequest {
-                approval_id: "approval-retry".to_string(),
-                decision: ConversationApprovalDecision::Decline,
-            }]
-        );
+        assert!(retried.effects.is_empty());
     }
 
     #[test]
