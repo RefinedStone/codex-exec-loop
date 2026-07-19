@@ -14,7 +14,8 @@ use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntime
 use crate::adapter::outbound::github::{GithubAutomationAdapter, GithubReviewPollerAdapter};
 use crate::adapter::outbound::telegram::CurlTelegramBotAdapter;
 use crate::application::port::outbound::app_server_prompt_log_port::{
-    AppServerPromptLogPort, NoopAppServerPromptLogPort,
+    AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
+    NoopAppServerPromptLogPort,
 };
 use crate::application::port::outbound::github_automation_port::GithubAutomationPort;
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
@@ -82,6 +83,7 @@ struct ProductionSharedPorts {
     planning_worker_port: Arc<dyn PlanningWorkerPort>,
     parallel_agent_worker_port: Arc<dyn ParallelAgentWorkerPort>,
     parallel_agent_profile_repository_port: Arc<dyn ParallelAgentProfileRepositoryPort>,
+    app_server_prompt_log_maintenance_port: Arc<dyn AppServerPromptLogMaintenancePort>,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
     telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
@@ -197,9 +199,13 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| ".".to_string());
     let capture_enabled = app_server_prompt_logging_enabled();
-    maintain_prompt_logs_best_effort(&workspace_dir, capture_enabled);
     let ports = build_shared_ports_for_prompt_logging(capture_enabled);
-    let startup_service = StartupService::new(ports.app_server_adapter.clone());
+    let maintenance_mode = native_tui_prompt_log_maintenance_mode(capture_enabled);
+    let startup_service = StartupService::new(ports.app_server_adapter.clone())
+        .with_prompt_log_maintenance(
+            ports.app_server_prompt_log_maintenance_port.clone(),
+            maintenance_mode,
+        );
     let session_service = SessionService::new(ports.app_server_adapter.clone());
     let review_center_read_service =
         ReviewCenterReadService::new(workspace_dir, ports.review_center_repository_port.clone());
@@ -219,6 +225,16 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
         conversation_service,
         review_center_read_service,
         parallel_mode_control_plane,
+    }
+}
+
+fn native_tui_prompt_log_maintenance_mode(
+    capture_enabled: bool,
+) -> AppServerPromptLogMaintenanceMode {
+    if capture_enabled {
+        AppServerPromptLogMaintenanceMode::PurgeExpired
+    } else {
+        AppServerPromptLogMaintenanceMode::ClearAll
     }
 }
 
@@ -306,6 +322,8 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
         planning_authority_adapter.clone(),
         prompt_logging_enabled,
     );
+    let app_server_prompt_log_maintenance_port: Arc<dyn AppServerPromptLogMaintenancePort> =
+        planning_authority_adapter.clone();
     let app_server_adapter = app_server_adapter(app_server_prompt_log_port.clone());
     let planning_task_repository_port: Arc<dyn PlanningTaskRepositoryPort> =
         planning_authority_adapter.clone();
@@ -335,6 +353,7 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
         planning_worker_port,
         parallel_agent_worker_port,
         parallel_agent_profile_repository_port,
+        app_server_prompt_log_maintenance_port,
         app_server_prompt_log_port,
         telegram_update_ledger_port,
         telegram_global_runner_lease_port,
@@ -751,5 +770,17 @@ mod tests {
             )
             .expect("enabled prompt records should remain readable");
         assert_eq!(snapshot.records.len(), 1);
+    }
+
+    #[test]
+    fn native_tui_prompt_log_maintenance_mode_preserves_capture_policy() {
+        assert_eq!(
+            native_tui_prompt_log_maintenance_mode(true),
+            AppServerPromptLogMaintenanceMode::PurgeExpired
+        );
+        assert_eq!(
+            native_tui_prompt_log_maintenance_mode(false),
+            AppServerPromptLogMaintenanceMode::ClearAll
+        );
     }
 }

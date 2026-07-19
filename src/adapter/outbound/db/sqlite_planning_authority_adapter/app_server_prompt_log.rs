@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use rusqlite::params;
 
 use crate::application::port::outbound::app_server_prompt_log_port::{
-    AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot, AppServerPromptLogPort,
+    AppServerPromptInteractionRecord, AppServerPromptInteractionSnapshot,
+    AppServerPromptLogMaintenanceMode, AppServerPromptLogMaintenancePort, AppServerPromptLogPort,
 };
 
 use super::store::upsert_authority_metadata;
@@ -181,5 +182,23 @@ impl AppServerPromptLogPort for SqlitePlanningAuthorityAdapter {
         limit: usize,
     ) -> Result<AppServerPromptInteractionSnapshot> {
         Self::load_recent_app_server_prompt_interaction_records(workspace_dir, limit)
+    }
+}
+
+impl AppServerPromptLogMaintenancePort for SqlitePlanningAuthorityAdapter {
+    fn maintain_app_server_prompt_logs(
+        &self,
+        workspace_dir: &str,
+        mode: AppServerPromptLogMaintenanceMode,
+    ) -> Result<()> {
+        match mode {
+            AppServerPromptLogMaintenanceMode::PurgeExpired => {
+                Self::purge_expired_app_server_prompt_interaction_records(workspace_dir)
+            }
+            AppServerPromptLogMaintenanceMode::ClearAll => {
+                Self::clear_app_server_prompt_interaction_records(workspace_dir)
+            }
+        }
+        .map(|_| ())
     }
 }

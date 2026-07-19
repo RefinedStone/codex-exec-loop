@@ -40,6 +40,20 @@ Mapping은 adapter에, policy는 domain 또는 application service에 둡니다.
 사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.
 Core는 projection을 복사할 수 있지만 두 번째 parallel runtime을 소유하면 안 됩니다.
 
+Native TUI의 prompt-log privacy maintenance도 이 effect 경로가 소유합니다. Production composition은
+typed maintenance port를 `StartupService`에 주입하지만 app을 build하는 동안 SQLite purge/clear를
+실행하지 않습니다. Startup command는 단조 증가 generation과 요청된 정확한 workspace를 캡처하고,
+기존 Core startup worker가 같은 workspace에서 maintenance를 먼저 실행한 뒤 startup check를
+순서대로 실행합니다. Capture가 켜져 있으면 retention purge, 꺼져 있으면 전체 clear를 선택합니다.
+Maintenance error 또는 panic은 원문을 포함하지 않는 고정된 non-fatal startup warning이 됩니다.
+Startup provider panic은 같은 correlation을 가진 redacted failure completion 하나로 돌아옵니다.
+민감한 Core worker 범위는 process 전체에 한 번 설치되는 delegating panic hook을 공유합니다.
+표시된 worker panic은 고정된 redacted 관측만 남기고, 일반 panic은 기존 hook으로 계속 전달합니다.
+Core는 활성 generation/workspace 쌍만 받아들이므로 stale A→B→A 결과와 duplicate completion이 최신
+요청을 완료할 수 없습니다. Maintenance나 startup probe가 막혀 있어도 app construction,
+`prepare_runtime`, 첫 draw는 계속 가능합니다. CLI, Admin, Telegram 등 TUI 밖 composition의 기존
+동기 maintenance semantics는 그대로 유지합니다.
+
 Turn submission admission은 core가 소유하는 single-flight 권한입니다. TUI는 prompt intent 단계에서
 editor를 지우거나 transcript history를 추가하지 않고, core가 accepted admission을 반환한 뒤에만
 로컬 projection을 확정합니다. 활성 submission이 있으면 core는 명시적 rejection event를 내보내고

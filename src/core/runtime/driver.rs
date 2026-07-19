@@ -351,20 +351,22 @@ mod tests {
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
 
-        let outcome = runtime.dispatch_command(AppCommand::RunStartupChecks);
+        let outcome = runtime.dispatch_command(AppCommand::RunStartupChecks {
+            workspace_directory: "/tmp/workspace".to_string(),
+        });
 
         assert_eq!(outcome.snapshot.startup, StartupSnapshot::Loading);
         assert_eq!(
             outcome.events,
             vec![AppEvent::StartupChanged {
-                correlation: StartupCheckCorrelation::new(1),
+                correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
                 snapshot: StartupSnapshot::Loading,
             }]
         );
         assert_eq!(
             effects.recorded_effects(),
             vec![CoreEffect::RunStartupChecks {
-                correlation: StartupCheckCorrelation::new(1),
+                correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
             }]
         );
         assert_eq!(runtime.snapshot().startup, StartupSnapshot::Loading);
@@ -1060,7 +1062,9 @@ mod tests {
         let (tx, rx) = core_input_channel();
         let effects = RecordingEffectExecutor::default();
         let mut runtime = CoreRuntime::new(effects.clone(), rx);
-        runtime.dispatch_command(AppCommand::RunStartupChecks);
+        runtime.dispatch_command(AppCommand::RunStartupChecks {
+            workspace_directory: "/tmp/workspace".to_string(),
+        });
         let ready = StartupReadySnapshot {
             cwd: "/tmp/workspace".to_string(),
             workspace_path: "/tmp/workspace".to_string(),
@@ -1091,7 +1095,7 @@ mod tests {
 
         tx.send(CoreInput::EffectCompleted(
             CoreEffectCompletion::StartupChecksLoaded {
-                correlation: StartupCheckCorrelation::new(1),
+                correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
                 result: Ok(Box::new(ready.clone())),
             },
         ))
@@ -1103,7 +1107,7 @@ mod tests {
         assert_eq!(
             outcomes[0].events,
             vec![AppEvent::StartupChanged {
-                correlation: StartupCheckCorrelation::new(1),
+                correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
                 snapshot: StartupSnapshot::Ready(Box::new(ready.clone())),
             }]
         );
@@ -1114,7 +1118,7 @@ mod tests {
         assert_eq!(
             effects.recorded_effects(),
             vec![CoreEffect::RunStartupChecks {
-                correlation: StartupCheckCorrelation::new(1),
+                correlation: StartupCheckCorrelation::new(1, "/tmp/workspace"),
             }]
         );
     }

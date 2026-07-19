@@ -159,15 +159,17 @@ impl CoreController {
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
-            CoreInput::Command(AppCommand::RunStartupChecks) => {
-                let correlation = StartupCheckCorrelation::new(take_generation(
-                    &mut self.next_startup_check_generation,
-                    "startup check",
-                ));
-                self.in_flight_startup_check = Some(correlation);
+            CoreInput::Command(AppCommand::RunStartupChecks {
+                workspace_directory,
+            }) => {
+                let correlation = StartupCheckCorrelation::new(
+                    take_generation(&mut self.next_startup_check_generation, "startup check"),
+                    workspace_directory,
+                );
+                self.in_flight_startup_check = Some(correlation.clone());
                 self.state.mark_startup_loading();
                 self.startup_changed_outcome(
-                    correlation,
+                    correlation.clone(),
                     vec![CoreEffect::RunStartupChecks { correlation }],
                 )
             }
@@ -665,7 +667,7 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.in_flight_startup_check != Some(correlation) {
+                if self.in_flight_startup_check.as_ref() != Some(&correlation) {
                     return self.unchanged_outcome();
                 }
                 self.in_flight_startup_check = None;
@@ -1687,7 +1689,20 @@ mod tests {
     }
 
     fn startup_check_correlation(generation: u64) -> StartupCheckCorrelation {
-        StartupCheckCorrelation::new(generation)
+        StartupCheckCorrelation::new(generation, "/tmp/workspace")
+    }
+
+    fn startup_check_correlation_for(
+        generation: u64,
+        workspace_directory: &str,
+    ) -> StartupCheckCorrelation {
+        StartupCheckCorrelation::new(generation, workspace_directory)
+    }
+
+    fn run_startup_checks_command(workspace_directory: &str) -> CoreInput {
+        CoreInput::Command(AppCommand::RunStartupChecks {
+            workspace_directory: workspace_directory.to_string(),
+        })
     }
 
     fn conversation_load_correlation(
@@ -2037,7 +2052,7 @@ mod tests {
     fn run_startup_checks_marks_startup_loading() {
         let mut controller = CoreController::new();
 
-        let outcome = controller.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        let outcome = controller.handle_input(run_startup_checks_command("/tmp/workspace"));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(outcome.snapshot.startup, StartupSnapshot::Loading);
@@ -2060,7 +2075,7 @@ mod tests {
     fn startup_completion_marks_startup_ready() {
         let mut controller = CoreController::new();
         let ready_snapshot = sample_startup_ready_snapshot();
-        controller.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        controller.handle_input(run_startup_checks_command("/tmp/workspace"));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::StartupChecksLoaded {
@@ -2087,7 +2102,7 @@ mod tests {
     #[test]
     fn startup_completion_marks_startup_failed() {
         let mut controller = CoreController::new();
-        controller.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        controller.handle_input(run_startup_checks_command("/tmp/workspace"));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::StartupChecksLoaded {
@@ -2118,8 +2133,8 @@ mod tests {
     #[test]
     fn startup_completion_only_accepts_latest_generation_in_both_orders() {
         let mut stale_success = CoreController::new();
-        stale_success.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
-        stale_success.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        stale_success.handle_input(run_startup_checks_command("/tmp/workspace"));
+        stale_success.handle_input(run_startup_checks_command("/tmp/workspace"));
 
         let dropped = stale_success.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::StartupChecksLoaded {
@@ -2142,8 +2157,8 @@ mod tests {
         ));
 
         let mut stale_failure = CoreController::new();
-        stale_failure.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
-        stale_failure.handle_input(CoreInput::Command(AppCommand::RunStartupChecks));
+        stale_failure.handle_input(run_startup_checks_command("/tmp/workspace"));
+        stale_failure.handle_input(run_startup_checks_command("/tmp/workspace"));
         let accepted = stale_failure.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::StartupChecksLoaded {
                 correlation: startup_check_correlation(2),
@@ -2159,6 +2174,49 @@ mod tests {
         ));
         assert!(dropped.events.is_empty());
         assert_eq!(dropped.snapshot.startup, accepted_snapshot);
+    }
+
+    #[test]
+    fn startup_completion_requires_exact_aba_workspace_correlation_and_is_single_use() {
+        let mut controller = CoreController::new();
+        controller.handle_input(run_startup_checks_command("/tmp/workspace-a"));
+        controller.handle_input(run_startup_checks_command("/tmp/workspace-b"));
+        controller.handle_input(run_startup_checks_command("/tmp/workspace-a"));
+
+        for correlation in [
+            startup_check_correlation_for(1, "/tmp/workspace-a"),
+            startup_check_correlation_for(2, "/tmp/workspace-b"),
+            startup_check_correlation_for(3, "/tmp/workspace-b"),
+        ] {
+            let stale = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::StartupChecksLoaded {
+                    correlation,
+                    result: Err("stale startup failure".to_string()),
+                },
+            ));
+            assert!(stale.events.is_empty());
+            assert_eq!(stale.snapshot.startup, StartupSnapshot::Loading);
+        }
+
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation_for(3, "/tmp/workspace-a"),
+                result: Ok(Box::new(sample_startup_ready_snapshot())),
+            },
+        ));
+        assert!(matches!(
+            accepted.snapshot.startup,
+            StartupSnapshot::Ready(_)
+        ));
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::StartupChecksLoaded {
+                correlation: startup_check_correlation_for(3, "/tmp/workspace-a"),
+                result: Err("duplicate startup failure".to_string()),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert_eq!(duplicate.snapshot.startup, accepted.snapshot.startup);
     }
 
     #[test]

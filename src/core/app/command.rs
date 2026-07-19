@@ -15,7 +15,9 @@ pub enum AppCommand {
      * as startup/session/conversation orchestration.
      */
     Noop,
-    RunStartupChecks,
+    RunStartupChecks {
+        workspace_directory: String,
+    },
     LoadSessionCatalog {
         limit: usize,
         workspace_directory: String,
