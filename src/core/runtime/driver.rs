@@ -101,16 +101,21 @@ mod tests {
     use super::*;
     use crate::core::app::{
         AppEvent, ApprovalDecisionAdmission, ApprovalDecisionCorrelation, CoreEffectCompletion,
-        CorePromptOrigin, ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
-        QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot, ReviewCenterLoadCorrelation,
-        ReviewCenterSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
-        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSteerAdmission,
-        TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
+        CorePromptOrigin, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
+        ManualPromptPreparationIntent, QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot,
+        ReviewCenterLoadCorrelation, ReviewCenterSnapshot, StartupAttachmentSnapshot,
+        StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
+        TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission,
+        TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::{
         ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
         ConversationTurnSteerRequest,
+    };
+    use crate::domain::github_review::{
+        GithubPullRequestActivitySnapshot, GithubPullRequestPollResult, GithubPullRequestPollState,
+        GithubPullRequestTarget,
     };
     use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
 
@@ -226,6 +231,38 @@ mod tests {
                 CoreEffectCompletion::ApprovalDecisionSubmitted {
                     correlation,
                     result: Ok(()),
+                },
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediateGithubReviewPollExecutor;
+
+    impl CoreEffectExecutor for ImmediateGithubReviewPollExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::PollGithubReview { correlation, .. } = effect else {
+                return None;
+            };
+            let target = correlation.target.clone();
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::GithubReviewPollCompleted {
+                    correlation,
+                    result: Ok(Box::new(GithubPullRequestPollResult {
+                        snapshot: GithubPullRequestActivitySnapshot {
+                            target,
+                            title: "Review poll".to_string(),
+                            url: "https://github.com/acme/widgets/pull/42".to_string(),
+                            head_branch: "feature".to_string(),
+                            base_branch: "prerelease".to_string(),
+                            events: Vec::new(),
+                        },
+                        changes: Vec::new(),
+                        next_state: GithubPullRequestPollState {
+                            latest_submitted_at: Some("2026-07-19T10:00:00Z".to_string()),
+                            seen_events_at_latest_timestamp: Vec::new(),
+                        },
+                    })),
                 },
             ))
         }
@@ -510,6 +547,53 @@ mod tests {
             )]
         );
         assert!(waiting_for_resolution.effects.is_empty());
+    }
+
+    #[test]
+    fn immediate_github_review_poll_emits_started_before_completed() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediateGithubReviewPollExecutor, rx);
+        let target = GithubPullRequestTarget::new("acme/widgets", 42);
+        runtime.dispatch_command(AppCommand::ConfigureGithubReviewPolling {
+            target: Some(target.clone()),
+        });
+        let correlation = GithubReviewPollCorrelation::new(1, target.clone());
+
+        let outcome = runtime.dispatch_command(AppCommand::PollGithubReview);
+
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::PollGithubReview {
+                correlation: correlation.clone(),
+                previous_state: None,
+            }]
+        );
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                AppEvent::GithubReviewPollStarted {
+                    correlation: started,
+                },
+                AppEvent::GithubReviewPollCompleted {
+                    correlation: completed,
+                    result: Ok(result),
+                },
+            ] if started == &correlation
+                && completed == &correlation
+                && result.snapshot.target == target
+        ));
+
+        let next = runtime.dispatch_command(AppCommand::PollGithubReview);
+        assert!(matches!(
+            next.effects.as_slice(),
+            [CoreEffect::PollGithubReview {
+                correlation: GithubReviewPollCorrelation { generation: 2, .. },
+                previous_state: Some(GithubPullRequestPollState {
+                    latest_submitted_at: Some(latest),
+                    ..
+                }),
+            }] if latest == "2026-07-19T10:00:00Z"
+        ));
     }
 
     #[test]

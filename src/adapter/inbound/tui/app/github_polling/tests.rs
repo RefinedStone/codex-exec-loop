@@ -23,6 +23,21 @@ impl GithubReviewPollerPort for FakeGithubReviewPollerPort {
     }
 }
 
+fn poll_correlation(generation: u64) -> GithubReviewPollCorrelation {
+    GithubReviewPollCorrelation::new(generation, GithubPullRequestTarget::new("acme/widgets", 42))
+}
+
+fn start_poll(
+    state: &mut GithubReviewPollingState,
+    now: Instant,
+    generation: u64,
+) -> GithubReviewPollCorrelation {
+    assert!(state.poll_due(now));
+    let correlation = poll_correlation(generation);
+    state.record_poll_started(correlation.clone());
+    correlation
+}
+
 // Bootstrap has three front doors: explicit PR env, branch auto-discovery, and
 // disabled. Malformed PR identifiers should become setup errors so shell chrome
 // can tell operators what to fix instead of silently turning polling off.
@@ -195,27 +210,33 @@ fn active_state_schedules_immediately_then_waits_for_interval() {
     };
     let start = Instant::now();
     let mut state = GithubReviewPollingState::active(config, start);
-    let first_request = state
-        .take_due_request(start)
-        .expect("initial request should be due");
-    assert_eq!(first_request.target, target);
-    assert!(first_request.previous_state.is_none());
+    assert!(state.poll_due(start));
+    assert!(state.poll_due(start), "due checks must not self-admit");
+    let first_correlation = start_poll(&mut state, start, 1);
+    assert!(!state.poll_due(start));
 
-    state.record_result(
+    state.record_poll_completion(
+        start + Duration::from_millis(500),
+        poll_correlation(2),
+        Err("stale completion".to_string()),
+    );
+    let GithubReviewPollingState::Active(runtime) = &state else {
+        panic!("expected active state");
+    };
+    assert_eq!(
+        runtime.pending_correlation.as_ref(),
+        Some(&first_correlation)
+    );
+    assert!(runtime.last_error.is_none());
+
+    state.record_poll_completion(
         start + Duration::from_secs(1),
+        first_correlation,
         Ok(sample_poll_result("2026-04-08T09:00:00Z")),
     );
 
-    assert!(
-        state
-            .take_due_request(start + Duration::from_secs(15))
-            .is_none()
-    );
-    assert!(
-        state
-            .take_due_request(start + Duration::from_secs(31))
-            .is_some()
-    );
+    assert!(!state.poll_due(start + Duration::from_secs(15)));
+    assert!(state.poll_due(start + Duration::from_secs(31)));
 }
 
 // Poll failures should not collapse the watcher. The error stays on active
@@ -229,9 +250,10 @@ fn active_state_keeps_last_error_visible() {
     };
     let start = Instant::now();
     let mut state = GithubReviewPollingState::active(config, start);
-    let _ = state.take_due_request(start);
-    state.record_result(
+    let correlation = start_poll(&mut state, start, 1);
+    state.record_poll_completion(
         start + Duration::from_secs(1),
+        correlation,
         Err("curl timed out while contacting github".to_string()),
     );
     match state {
@@ -255,9 +277,10 @@ fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
     let mut disabled = GithubReviewPollingState::Disabled;
     assert_eq!(disabled.status_label(), "off");
     assert!(disabled.recent_change_summary(40).is_none());
-    assert!(disabled.take_due_request(Instant::now()).is_none());
-    disabled.record_result(
+    assert!(!disabled.poll_due(Instant::now()));
+    disabled.record_poll_completion(
         Instant::now(),
+        poll_correlation(1),
         Err("ignored because polling is disabled".to_string()),
     );
     assert_eq!(disabled.status_label(), "off");
@@ -287,9 +310,11 @@ fn state_copy_covers_disabled_setup_starting_polling_and_ignored_updates() {
     let start = Instant::now();
     let mut active = GithubReviewPollingState::active(config, start);
     assert_eq!(active.status_label(), "starting acme/widgets#42");
-    assert!(active.take_due_request(start).is_some());
+    assert!(active.poll_due(start));
+    assert_eq!(active.status_label(), "starting acme/widgets#42");
+    active.record_poll_started(poll_correlation(1));
     assert_eq!(active.status_label(), "polling acme/widgets#42");
-    assert!(active.take_due_request(start).is_none());
+    assert!(!active.poll_due(start));
 }
 
 // Recent-change copy is driven by the polling service's delta, not by every
@@ -303,9 +328,10 @@ fn active_state_surfaces_single_recent_change_notice() {
     };
     let start = Instant::now();
     let mut state = GithubReviewPollingState::active(config, start);
-    let _ = state.take_due_request(start);
-    state.record_result(
+    let correlation = start_poll(&mut state, start, 1);
+    state.record_poll_completion(
         start + Duration::from_secs(1),
+        correlation,
         Ok(poll_result(
             vec![
                 event(
@@ -342,9 +368,10 @@ fn active_state_summarizes_multiple_recent_changes() {
     };
     let start = Instant::now();
     let mut state = GithubReviewPollingState::active(config, start);
-    let _ = state.take_due_request(start);
-    state.record_result(
+    let correlation = start_poll(&mut state, start, 1);
+    state.record_poll_completion(
         start + Duration::from_secs(1),
+        correlation,
         Ok(poll_result(
             vec![
                 event(
@@ -391,27 +418,26 @@ fn active_state_clears_recent_change_notice_after_quiet_poll() {
     };
     let start = Instant::now();
     let mut state = GithubReviewPollingState::active(config, start);
-    let _ = state.take_due_request(start);
+    let first_correlation = start_poll(&mut state, start, 1);
     let first_snapshot_event = event(
         101,
         GithubPullRequestActivityKind::Review,
         "2026-04-08T10:00:00Z",
     )
     .with_state("APPROVED");
-    state.record_result(
+    state.record_poll_completion(
         start + Duration::from_secs(1),
+        first_correlation,
         Ok(poll_result(
             vec![first_snapshot_event.clone()],
             vec![first_snapshot_event.clone()],
         )),
     );
-    let second_request = state
-        .take_due_request(start + Duration::from_secs(31))
-        .expect("follow-up poll should be due");
-    assert!(second_request.previous_state.is_some());
+    let second_correlation = start_poll(&mut state, start + Duration::from_secs(31), 2);
 
-    state.record_result(
+    state.record_poll_completion(
         start + Duration::from_secs(32),
+        second_correlation,
         Ok(poll_result(vec![first_snapshot_event], Vec::new())),
     );
     let GithubReviewPollingState::Active(runtime) = state else {
@@ -428,9 +454,10 @@ fn active_state_exposes_compact_recent_change_summary() {
     };
     let start = Instant::now();
     let mut state = GithubReviewPollingState::active(config, start);
-    let _ = state.take_due_request(start);
-    state.record_result(
+    let correlation = start_poll(&mut state, start, 1);
+    state.record_poll_completion(
         start + Duration::from_secs(1),
+        correlation,
         Ok(sample_poll_result("2026-04-08T09:00:00Z")),
     );
     let GithubReviewPollingState::Active(runtime) = state else {
@@ -450,9 +477,10 @@ fn active_state_exposes_multiple_recent_change_summary() {
     };
     let start = Instant::now();
     let mut state = GithubReviewPollingState::active(config, start);
-    let _ = state.take_due_request(start);
-    state.record_result(
+    let correlation = start_poll(&mut state, start, 1);
+    state.record_poll_completion(
         start + Duration::from_secs(1),
+        correlation,
         Ok(poll_result(
             vec![
                 event(

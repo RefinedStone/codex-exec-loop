@@ -31,7 +31,6 @@ use crate::core::app::{
 use crate::core::runtime::{CoreRuntime, core_input_channel};
 #[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
-use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::queue_overlay_ui::QueueMutationWorkerResult;
@@ -41,9 +40,9 @@ use super::{
     ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
     ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
     ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
-    NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState,
-    SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay,
-    StartupState, reduce_auto_follow_controls, reduce_auto_follow_overlay_ui,
+    GithubReviewPollingBootstrap, NativeTuiApp, PlanningInitOverlayUiState, SESSION_PAGE_SIZE,
+    SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
+    ShellOverlay, StartupState, reduce_auto_follow_controls, reduce_auto_follow_overlay_ui,
     reduce_conversation_input, reduce_conversation_intents, reduce_conversation_lifecycle,
     reduce_conversation_runtime, reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
 };
@@ -77,10 +76,9 @@ pub(super) enum BackgroundMessage {
     QueueMutationCompleted(Box<QueueMutationWorkerResult>),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
-    ParallelModeControlPlaneEvent(ParallelModeControlPlaneBackgroundEvent),
+    ParallelModeControlPlaneEvent(Box<ParallelModeControlPlaneBackgroundEvent>),
     #[cfg(test)]
     PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
-    GithubReviewPollLoaded(Result<GithubPullRequestPollResult, String>),
 }
 
 #[derive(Clone)]
@@ -92,7 +90,9 @@ impl ParallelModeControlPlaneEventSink for TuiParallelModeControlPlaneEventSink 
     fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
         let _ = self
             .tx
-            .send(BackgroundMessage::ParallelModeControlPlaneEvent(event));
+            .send(BackgroundMessage::ParallelModeControlPlaneEvent(Box::new(
+                event,
+            )));
     }
 }
 
@@ -389,14 +389,16 @@ mod tests {
         );
 
         match channels.rx.try_recv().expect("event should be queued") {
-            BackgroundMessage::ParallelModeControlPlaneEvent(
-                ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
+            BackgroundMessage::ParallelModeControlPlaneEvent(event) => {
+                let ParallelModeControlPlaneBackgroundEvent::ConversationRuntimeNotice {
                     workspace_directory,
                     epoch_id,
                     effect_id: received_effect_id,
                     notice,
-                },
-            ) => {
+                } = *event
+                else {
+                    panic!("unexpected control-plane event");
+                };
                 assert_eq!(workspace_directory, "/repo");
                 assert_eq!(epoch_id, 3);
                 assert_eq!(received_effect_id, effect_id);
@@ -1253,12 +1255,37 @@ impl NativeTuiParallelModeBinding {
 }
 
 impl NativeTuiApp {
+    #[cfg(test)]
     pub(super) fn new(
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
         parallel_mode_binding: NativeTuiParallelModeBinding,
     ) -> Self {
+        Self::new_with_github_review_polling(
+            startup_service,
+            session_service,
+            conversation_service,
+            parallel_mode_binding,
+            GithubReviewPollingBootstrap {
+                service: None,
+                state: super::GithubReviewPollingState::Disabled,
+            },
+        )
+    }
+
+    pub(super) fn new_with_github_review_polling(
+        startup_service: StartupService,
+        session_service: SessionService,
+        conversation_service: ConversationService,
+        parallel_mode_binding: NativeTuiParallelModeBinding,
+        github_review_polling: GithubReviewPollingBootstrap,
+    ) -> Self {
+        let GithubReviewPollingBootstrap {
+            service: github_review_poller_service,
+            state: github_review_polling_state,
+        } = github_review_polling;
+        let github_review_polling_target = github_review_polling_state.configured_target();
         let NativeTuiParallelModeBinding {
             parallel_turns,
             planning_feature,
@@ -1274,7 +1301,8 @@ impl NativeTuiApp {
             parallel_turns.clone(),
             PostTurnEvaluationService::new(planning_feature.clone(), parallel_turns.clone()),
             core_input_sender,
-        );
+        )
+        .with_github_review_poller_service(github_review_poller_service);
         let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
         let application = NativeTuiApplicationHandle::new(conversation_service, planning_feature);
 
@@ -1334,8 +1362,7 @@ impl NativeTuiApp {
             post_turn_continuation_gate: crate::domain::planning::PostTurnContinuationGate::default(
             ),
             planning_worker_visibility: super::PlanningWorkerVisibility::from_environment(),
-            github_review_poller_service: None,
-            github_review_polling_state: super::GithubReviewPollingState::Disabled,
+            github_review_polling_state,
             inline_history_render_mode: super::InlineHistoryRenderMode::from_environment(),
             history_insert_mode: super::HistoryInsertionMode::from_environment(),
             show_startup_ascii_art: startup_ascii_art_enabled_from_environment(),
@@ -1343,6 +1370,9 @@ impl NativeTuiApp {
             rx: runtime_channels.rx,
         };
         app.sync_core_planning_runtime_projection(initial_planning_runtime_projection);
+        app.dispatch_core_command(AppCommand::ConfigureGithubReviewPolling {
+            target: github_review_polling_target,
+        });
         app
     }
 
@@ -1443,6 +1473,19 @@ impl NativeTuiApp {
                 result,
             } => {
                 self.apply_parallel_peek_conversation_load(correlation, result);
+            }
+            AppEvent::GithubReviewPollStarted { correlation } => {
+                self.record_github_review_poll_started(correlation);
+            }
+            AppEvent::GithubReviewPollCompleted {
+                correlation,
+                result,
+            } => {
+                self.record_github_review_poll_completion(
+                    std::time::Instant::now(),
+                    correlation,
+                    result.map(|result| *result),
+                );
             }
             AppEvent::ReviewCenterLoadStarted { .. } => {}
             AppEvent::ReviewCenterLoaded {

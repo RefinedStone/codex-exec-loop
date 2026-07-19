@@ -177,16 +177,13 @@ impl ShellRuntime {
                 }
                 BackgroundMessage::ParallelModeControlPlaneEvent(event) => {
                     self.app
-                        .apply_parallel_mode_control_plane_background_event(event);
+                        .apply_parallel_mode_control_plane_background_event(*event);
                 }
                 #[cfg(test)]
                 BackgroundMessage::PostTurnEvaluationCompleted(execution) => {
                     self.app.dispatch_core_input(CoreInput::EffectCompleted(
                         CoreEffectCompletion::PostTurnEvaluationCompleted(execution),
                     ));
-                }
-                BackgroundMessage::GithubReviewPollLoaded(result) => {
-                    self.app.record_github_review_poll_result(now, result)
                 }
             }
         }

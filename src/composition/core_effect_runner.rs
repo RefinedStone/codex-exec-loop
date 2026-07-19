@@ -8,6 +8,7 @@ use crate::application::port::outbound::review_center_repository_port::{
 use crate::application::service::conversation_service::{
     ConversationService, LoadedConversationThreadSnapshot,
 };
+use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::manual_prompt_preparation::ManualPromptPreparationService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
@@ -22,11 +23,11 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, ConversationReadySnapshot,
-    ConversationThreadReviewSnapshot, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
-    QueueAuthorityLoadError, QueueAuthoritySnapshot, ReviewCenterHistoryEntrySnapshot,
-    ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
-    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation,
+    ConversationThreadReviewSnapshot, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
+    QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
+    ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation,
+    ReviewCenterSnapshot, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
+    SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -44,6 +45,7 @@ pub struct CoreEffectRunner {
     parallel_mode_turn_service: ParallelModeTurnService,
     manual_prompt_preparation_service: ManualPromptPreparationService,
     post_turn_evaluation_service: PostTurnEvaluationService,
+    github_review_poller_service: Option<GithubReviewPollerService>,
     input_sender: CoreInputSender,
 }
 
@@ -70,8 +72,17 @@ impl CoreEffectRunner {
             parallel_mode_turn_service,
             manual_prompt_preparation_service,
             post_turn_evaluation_service,
+            github_review_poller_service: None,
             input_sender,
         }
+    }
+
+    pub fn with_github_review_poller_service(
+        mut self,
+        service: Option<GithubReviewPollerService>,
+    ) -> Self {
+        self.github_review_poller_service = service;
+        self
     }
 
     pub fn spawn_startup_checks(&self, correlation: StartupCheckCorrelation) {
@@ -118,6 +129,19 @@ impl CoreEffectRunner {
             }
             CoreEffect::LoadQueueAuthority { correlation } => {
                 self.spawn_queue_authority_load(correlation);
+                None
+            }
+            CoreEffect::PollGithubReview {
+                correlation,
+                previous_state,
+            } => {
+                let Some(service) = self.github_review_poller_service.clone() else {
+                    return Some(CoreInput::EffectCompleted(github_review_poll_completion(
+                        correlation,
+                        Err(anyhow::anyhow!("github review poller is not configured")),
+                    )));
+                };
+                self.spawn_github_review_poll(service, correlation, previous_state);
                 None
             }
             CoreEffect::PrepareManualPrompt(request) => Some(CoreInput::EffectCompleted(
@@ -233,6 +257,20 @@ impl CoreEffectRunner {
                     result: result.map(Box::new),
                 },
             ));
+        });
+    }
+
+    fn spawn_github_review_poll(
+        &self,
+        service: GithubReviewPollerService,
+        correlation: GithubReviewPollCorrelation,
+        previous_state: Option<crate::domain::github_review::GithubPullRequestPollState>,
+    ) {
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = service.poll(&correlation.target, previous_state.as_ref());
+            let completion = github_review_poll_completion(correlation, result);
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
 
@@ -393,6 +431,16 @@ fn approval_decision_completion(
     CoreEffectCompletion::ApprovalDecisionSubmitted {
         correlation,
         result: result.map_err(|error| error.to_string()),
+    }
+}
+
+fn github_review_poll_completion(
+    correlation: GithubReviewPollCorrelation,
+    result: Result<crate::domain::github_review::GithubPullRequestPollResult>,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::GithubReviewPollCompleted {
+        correlation,
+        result: result.map(Box::new).map_err(|error| error.to_string()),
     }
 }
 
@@ -569,6 +617,31 @@ mod tests {
             "approval-1",
             crate::domain::conversation::ConversationApprovalDecision::Accept,
         )
+    }
+
+    fn github_review_poll_correlation() -> GithubReviewPollCorrelation {
+        GithubReviewPollCorrelation::new(
+            5,
+            crate::domain::github_review::GithubPullRequestTarget::new("acme/widgets", 42),
+        )
+    }
+
+    fn github_review_poll_result() -> crate::domain::github_review::GithubPullRequestPollResult {
+        crate::domain::github_review::GithubPullRequestPollResult {
+            snapshot: crate::domain::github_review::GithubPullRequestActivitySnapshot {
+                target: crate::domain::github_review::GithubPullRequestTarget::new(
+                    "acme/widgets",
+                    42,
+                ),
+                title: "Move polling authority".to_string(),
+                url: "https://example.invalid/acme/widgets/pull/42".to_string(),
+                head_branch: "refactor/poll".to_string(),
+                base_branch: "prerelease".to_string(),
+                events: Vec::new(),
+            },
+            changes: Vec::new(),
+            next_state: crate::domain::github_review::GithubPullRequestPollState::default(),
+        }
     }
 
     fn queue_task() -> TaskDefinition {
@@ -769,6 +842,28 @@ mod tests {
             CoreEffectCompletion::ApprovalDecisionSubmitted {
                 correlation: approval_decision_correlation(),
                 result: Err("approval unavailable".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn github_review_poll_result_maps_to_exact_core_completion() {
+        let result = github_review_poll_result();
+        assert_eq!(
+            github_review_poll_completion(github_review_poll_correlation(), Ok(result.clone()),),
+            CoreEffectCompletion::GithubReviewPollCompleted {
+                correlation: github_review_poll_correlation(),
+                result: Ok(Box::new(result)),
+            }
+        );
+        assert_eq!(
+            github_review_poll_completion(
+                github_review_poll_correlation(),
+                Err(anyhow::anyhow!("github unavailable")),
+            ),
+            CoreEffectCompletion::GithubReviewPollCompleted {
+                correlation: github_review_poll_correlation(),
+                result: Err("github unavailable".to_string()),
             }
         );
     }

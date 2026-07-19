@@ -208,6 +208,27 @@ fn make_test_runtime() -> ShellRuntime {
     );
     ShellRuntime::new(app)
 }
+
+fn make_test_runtime_with_github_review_polling(
+    github_review_polling: super::super::github_polling::GithubReviewPollingBootstrap,
+) -> ShellRuntime {
+    let codex_port = Arc::new(FakeAppServerPort);
+    let planning =
+        test_helpers::test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let parallel_mode_control_plane_composition =
+        test_helpers::test_parallel_mode_control_plane_composition(planning);
+    let parallel_mode_binding =
+        NativeTuiParallelModeBinding::from_composition(parallel_mode_control_plane_composition);
+    let app = NativeTuiApp::new_with_github_review_polling(
+        StartupService::new(codex_port.clone()),
+        SessionService::new(codex_port.clone()),
+        ConversationService::new(codex_port),
+        parallel_mode_binding,
+        github_review_polling,
+    );
+    ShellRuntime::new(app)
+}
+
 fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>) -> ShellRuntime {
     let codex_port = Arc::new(FakeAppServerPort);
     let planning =
@@ -1478,8 +1499,8 @@ fn manual_turn_elapsed_pulse_requests_redraw() {
 // same background-message cadence as app-server and session-catalog work.
 #[test]
 fn poll_background_messages_starts_github_review_polling_when_due() {
-    let mut runtime = make_test_runtime();
-    runtime.app_mut().configure_github_review_polling(
+    let start = Instant::now();
+    let mut runtime = make_test_runtime_with_github_review_polling(
         super::super::github_polling::GithubReviewPollingBootstrap {
             service: Some(GithubReviewPollerService::new(Arc::new(
                 FakeGithubReviewPollerPort,
@@ -1489,14 +1510,32 @@ fn poll_background_messages_starts_github_review_polling_when_due() {
                     target: GithubPullRequestTarget::new("acme/widgets", 42),
                     interval: Duration::from_secs(30),
                 },
-                Instant::now(),
+                start,
             ),
         },
     );
 
     runtime.poll_background_messages();
-    thread::sleep(Duration::from_millis(20));
-    runtime.poll_background_messages();
+    let super::super::github_polling::GithubReviewPollingState::Active(polling_state) =
+        &runtime.app().github_review_polling_state
+    else {
+        panic!("expected active github review polling state");
+    };
+    assert!(polling_state.pending_correlation.is_some());
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        runtime.poll_background_messages();
+        let super::super::github_polling::GithubReviewPollingState::Active(polling_state) =
+            &runtime.app().github_review_polling_state
+        else {
+            panic!("expected active github review polling state");
+        };
+        if polling_state.snapshot.is_some() {
+            break;
+        }
+        thread::yield_now();
+    }
     let super::super::github_polling::GithubReviewPollingState::Active(polling_state) =
         &runtime.app().github_review_polling_state
     else {
@@ -1504,4 +1543,47 @@ fn poll_background_messages_starts_github_review_polling_when_due() {
     };
     assert!(polling_state.snapshot.is_some());
     assert!(polling_state.last_error.is_none());
+    assert!(polling_state.pending_correlation.is_none());
+    assert!(
+        !runtime
+            .app()
+            .github_review_polling_state
+            .poll_due(Instant::now())
+    );
+}
+
+#[test]
+fn missing_github_review_service_completes_immediately_and_reopens_the_interval() {
+    let start = Instant::now();
+    let mut runtime = make_test_runtime_with_github_review_polling(
+        super::super::github_polling::GithubReviewPollingBootstrap {
+            service: None,
+            state: super::super::github_polling::GithubReviewPollingState::active(
+                super::super::github_polling::GithubReviewPollingConfig {
+                    target: GithubPullRequestTarget::new("acme/widgets", 42),
+                    interval: Duration::from_secs(30),
+                },
+                start,
+            ),
+        },
+    );
+
+    runtime.poll_background_messages();
+
+    let super::super::github_polling::GithubReviewPollingState::Active(polling_state) =
+        &runtime.app().github_review_polling_state
+    else {
+        panic!("expected active github review polling state");
+    };
+    assert!(polling_state.pending_correlation.is_none());
+    assert_eq!(
+        polling_state.last_error.as_deref(),
+        Some("github review poller is not configured")
+    );
+    assert!(
+        !runtime
+            .app()
+            .github_review_polling_state
+            .poll_due(Instant::now())
+    );
 }

@@ -1,5 +1,6 @@
 use super::{ManualPromptPreparationIntent, TurnSubmissionRequest};
 use crate::domain::conversation::{ConversationApprovalDecision, ConversationTurnSteerRequest};
+use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::planning::PostTurnRequest;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
@@ -41,5 +42,9 @@ pub enum AppCommand {
         approval_id: String,
         decision: ConversationApprovalDecision,
     },
+    ConfigureGithubReviewPolling {
+        target: Option<GithubPullRequestTarget>,
+    },
+    PollGithubReview,
     EvaluatePostTurn(Box<PostTurnRequest>),
 }

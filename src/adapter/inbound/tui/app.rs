@@ -3,7 +3,6 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
-use crate::application::service::github_review_poller_service::GithubReviewPollerService;
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::composition::core_effect_runner::CoreEffectRunner;
@@ -196,7 +195,7 @@ use conversation_runtime::{
 use directions_maintenance_ui::{
     DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, DirectionsMaintenanceOverlayUiState,
 };
-use github_polling::GithubReviewPollingState;
+use github_polling::{GithubReviewPollingBootstrap, GithubReviewPollingState};
 use history_insertion::HistoryInsertionMode;
 use inline_shell_commands::{
     InlineShellCommand, InlineShellCommandInput, is_turn_option_clear_argument,
@@ -379,7 +378,6 @@ struct NativeTuiApp {
     planning_worker_panel_state: PlanningWorkerPanelState,
     post_turn_continuation_gate: PostTurnContinuationGate,
     planning_worker_visibility: PlanningWorkerVisibility,
-    github_review_poller_service: Option<GithubReviewPollerService>,
     github_review_polling_state: GithubReviewPollingState,
     inline_history_render_mode: InlineHistoryRenderMode,
     history_insert_mode: HistoryInsertionMode,
