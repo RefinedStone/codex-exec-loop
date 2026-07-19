@@ -16,7 +16,8 @@ use super::{
     ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffect,
     ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEvent,
     ParallelModeControlPlaneRuntime, ParallelModeControlPlaneRuntimeOutcome,
-    ParallelModeControlPlaneRuntimeStore,
+    ParallelModeControlPlaneRuntimeStore, ParallelModeSupervisorInspectionCorrelation,
+    ParallelModeSupervisorInspectionSnapshot, ParallelModeSupervisorInspectionState,
 };
 
 const CONTROL_PLANE_TICK_INTERVAL: Duration = Duration::from_secs(1);
@@ -67,6 +68,7 @@ where
     last_dispatch_withheld_reason: Option<String>,
     last_supervisor_refresh_at: Option<Instant>,
     last_orchestrator_wake_poll_at: Option<Instant>,
+    supervisor_inspection_state: ParallelModeSupervisorInspectionState,
 }
 
 pub(crate) struct ParallelModeControlPlaneService<S>
@@ -126,6 +128,7 @@ where
             last_dispatch_withheld_reason: None,
             last_supervisor_refresh_at: None,
             last_orchestrator_wake_poll_at: None,
+            supervisor_inspection_state: ParallelModeSupervisorInspectionState::Idle,
         }
     }
 
@@ -164,6 +167,11 @@ where
             || self.supervisor_refresh_in_flight()
             || self.orchestrator_wake_in_flight()
             || self.orchestrator_tick_in_flight()
+            || self.supervisor_inspection_state.is_loading()
+    }
+
+    pub fn supervisor_inspection_state(&self) -> &ParallelModeSupervisorInspectionState {
+        &self.supervisor_inspection_state
     }
 
     pub fn last_automation_trigger(&self) -> Option<ParallelModeAutomationTrigger> {
@@ -267,6 +275,10 @@ where
                 has_actionable_queue_head,
                 follow_up_tick_signature: orchestrator_tick_signature,
             }),
+            ParallelModeControlPlaneBackgroundEvent::SupervisorInspectionCompleted {
+                correlation,
+                result,
+            } => self.supervisor_inspection_completed(correlation, result),
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                 workspace_directory,
                 epoch_id,
@@ -612,6 +624,80 @@ where
         events
     }
 
+    fn supervisor_inspection_completed(
+        &mut self,
+        correlation: ParallelModeSupervisorInspectionCorrelation,
+        result: Result<ParallelModeSupervisorInspectionSnapshot, String>,
+    ) -> Vec<ParallelModeControlPlanePresentationEvent> {
+        let show_status = match &self.supervisor_inspection_state {
+            ParallelModeSupervisorInspectionState::Loading {
+                correlation: pending,
+                show_status,
+            } if pending == &correlation => *show_status,
+            _ => false,
+        };
+        let outcome = self.runtime.handle(
+            ParallelModeControlPlaneCommand::SupervisorInspectionCompleted {
+                correlation: correlation.clone(),
+                succeeded: result.is_ok(),
+            },
+        );
+        let Some(projection_current) =
+            outcome_supervisor_inspection_projection_is_current(&outcome, &correlation)
+        else {
+            return self.drain_outcome(outcome);
+        };
+        if !projection_current {
+            self.supervisor_inspection_state = ParallelModeSupervisorInspectionState::Idle;
+            return self.drain_outcome(outcome);
+        }
+
+        let mut events = match result {
+            Ok(snapshot) => {
+                self.supervisor_inspection_state = ParallelModeSupervisorInspectionState::Ready {
+                    correlation: correlation.clone(),
+                };
+                if correlation.epoch_id.is_some() {
+                    self.readiness_snapshot = Some(snapshot.readiness_snapshot.clone());
+                }
+                let mut events = vec![
+                    ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
+                        workspace_directory: correlation.workspace_directory.clone(),
+                        snapshot: snapshot.readiness_snapshot.clone(),
+                    },
+                    ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
+                        workspace_directory: correlation.workspace_directory.clone(),
+                        snapshot: snapshot.supervisor_snapshot,
+                    },
+                ];
+                if show_status {
+                    events.push(ParallelModeControlPlanePresentationEvent::StatusShown {
+                        workspace_directory: correlation.workspace_directory,
+                        status_text: format!(
+                            "parallel readiness refreshed / state: {}",
+                            snapshot.readiness_snapshot.readiness_label()
+                        ),
+                    });
+                }
+                events
+            }
+            Err(error) => {
+                self.supervisor_inspection_state = ParallelModeSupervisorInspectionState::Failed {
+                    correlation: correlation.clone(),
+                    error: error.clone(),
+                };
+                vec![ParallelModeControlPlanePresentationEvent::StatusShown {
+                    workspace_directory: correlation.workspace_directory,
+                    status_text: format!(
+                        "parallel readiness refresh failed / {error} / press Ctrl+R to retry"
+                    ),
+                }]
+            }
+        };
+        events.extend(self.drain_outcome(outcome));
+        events
+    }
+
     fn orchestrator_wake_completed(
         &mut self,
         workspace_directory: String,
@@ -854,6 +940,7 @@ where
                 } => {
                     self.effect_runner.cancel_epoch(&workspace_directory);
                     self.readiness_snapshot = None;
+                    self.supervisor_inspection_state = ParallelModeSupervisorInspectionState::Idle;
                     presentation_events.push(
                         ParallelModeControlPlanePresentationEvent::ModeDisabled {
                             workspace_directory,
@@ -864,6 +951,7 @@ where
                     workspace_directory,
                     epoch_id,
                 } => {
+                    self.supervisor_inspection_state = ParallelModeSupervisorInspectionState::Idle;
                     self.effect_runner
                         .activate_epoch(&workspace_directory, epoch_id);
                 }
@@ -873,6 +961,27 @@ where
                 } => {
                     self.effect_runner.cancel_epoch(&workspace_directory);
                     self.readiness_snapshot = None;
+                    self.supervisor_inspection_state = ParallelModeSupervisorInspectionState::Idle;
+                }
+                ParallelModeControlPlaneEvent::SupervisorInspectionStarted {
+                    correlation,
+                    show_status,
+                } => {
+                    self.supervisor_inspection_state =
+                        ParallelModeSupervisorInspectionState::Loading {
+                            correlation: correlation.clone(),
+                            show_status,
+                        };
+                    if show_status {
+                        presentation_events.push(
+                            ParallelModeControlPlanePresentationEvent::StatusShown {
+                                workspace_directory: correlation.workspace_directory,
+                                status_text:
+                                    "parallel readiness refresh: loading / current board preserved"
+                                        .to_string(),
+                            },
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -927,35 +1036,16 @@ where
                 Vec::new()
             }
             ParallelModeControlPlaneEffect::InspectSupervisor {
-                workspace_directory,
+                correlation,
                 mode_enabled,
                 reconcile_pool,
-                show_status,
             } => {
-                let (readiness_snapshot, supervisor_snapshot) = self
-                    .effect_runner
-                    .inspect_supervisor(&workspace_directory, mode_enabled, reconcile_pool);
-                self.readiness_snapshot = Some(readiness_snapshot.clone());
-                let mut events = vec![
-                    ParallelModeControlPlanePresentationEvent::ReadinessSnapshotChanged {
-                        workspace_directory: workspace_directory.clone(),
-                        snapshot: readiness_snapshot.clone(),
-                    },
-                    ParallelModeControlPlanePresentationEvent::SupervisorSnapshotChanged {
-                        workspace_directory: workspace_directory.clone(),
-                        snapshot: Box::new(supervisor_snapshot),
-                    },
-                ];
-                if show_status {
-                    events.push(ParallelModeControlPlanePresentationEvent::StatusShown {
-                        workspace_directory,
-                        status_text: format!(
-                            "parallel readiness refreshed / state: {}",
-                            readiness_snapshot.readiness_label()
-                        ),
-                    });
-                }
-                events
+                self.effect_runner.spawn_supervisor_inspection(
+                    correlation,
+                    mode_enabled,
+                    reconcile_pool,
+                );
+                Vec::new()
             }
             ParallelModeControlPlaneEffect::RunOrchestrator { effect_id, wake } => {
                 if wake.enqueue_trigger.is_some() || self.last_automation_trigger.is_none() {
@@ -1166,5 +1256,23 @@ fn outcome_effect_completed(
                 effect_id: completed,
             } if *completed == effect_id
         )
+    })
+}
+
+fn outcome_supervisor_inspection_projection_is_current(
+    outcome: &ParallelModeControlPlaneRuntimeOutcome,
+    correlation: &ParallelModeSupervisorInspectionCorrelation,
+) -> Option<bool> {
+    outcome.events.iter().find_map(|event| {
+        if let ParallelModeControlPlaneEvent::SupervisorInspectionCompleted {
+            correlation: completed,
+            projection_current,
+            ..
+        } = event
+            && completed == correlation
+        {
+            return Some(*projection_current);
+        }
+        None
     })
 }
