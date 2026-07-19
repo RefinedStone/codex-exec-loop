@@ -216,9 +216,8 @@ mod tests {
     use crate::adapter::inbound::tui::app::{
         ConversationInputState, ConversationState, ShellActionAvailability, TuiLanguage,
     };
-    use crate::application::service::planning::{
-        PlanningQueueCancellationRequest, PlanningRuntimeProjection,
-    };
+    use crate::application::service::planning::PlanningRuntimeProjection;
+    use crate::core::app::{QueueMutationCorrelation, QueueMutationIntent};
 
     #[test]
     fn one_screen_model_produces_stable_cjk_copy_layout_and_live_lines() {
@@ -272,17 +271,17 @@ mod tests {
 
         let context = app.current_queue_mutation_context();
         app.queue_mutation_ui_state
-            .begin(
-                context.clone(),
-                QueueMutationKind::RemoveSelected,
-                PlanningQueueCancellationRequest {
+            .record_started(QueueMutationCorrelation::new(
+                1,
+                QueueMutationIntent {
                     workspace_directory: context.workspace_directory,
+                    active_thread_id: context.active_thread_id,
+                    kind: QueueMutationKind::RemoveSelected,
                     expected_planning_revision: 1,
                     targets: Vec::new(),
+                    receipt_at_start: None,
                 },
-                None,
-            )
-            .expect("queue mutation should enter the pending gate");
+            ));
 
         let mut screen_model = ConversationScreenModel::from_app(&app);
         screen_model.shell_action_availability = ShellActionAvailability::Ready;

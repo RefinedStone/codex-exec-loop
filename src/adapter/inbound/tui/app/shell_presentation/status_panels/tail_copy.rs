@@ -930,8 +930,7 @@ mod coverage_tests {
     use crate::adapter::inbound::tui::app::{
         AutoFollowRuntimePhase, ConversationState, InlineShellCommand, NativeTuiApp,
     };
-    use crate::application::service::planning::PlanningQueueCancellationRequest;
-    use crate::core::app::StartupReadySnapshot;
+    use crate::core::app::{QueueMutationCorrelation, QueueMutationIntent, StartupReadySnapshot};
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::planning::{
         PlanningQueueMutationKind, PlanningQueueMutationReceipt, PlanningQueueMutationReceiptEntry,
@@ -1415,17 +1414,17 @@ mod coverage_tests {
         conversation.latest_queue_mutation_receipt = Some(receipt.clone());
         let context = app.current_queue_mutation_context();
         app.queue_mutation_ui_state
-            .begin(
-                context.clone(),
-                QueueMutationKind::UndoLatestRegistration,
-                PlanningQueueCancellationRequest {
+            .record_started(QueueMutationCorrelation::new(
+                1,
+                QueueMutationIntent {
                     workspace_directory: context.workspace_directory,
+                    active_thread_id: context.active_thread_id,
+                    kind: QueueMutationKind::UndoLatestRegistration,
                     expected_planning_revision: 9,
                     targets: Vec::new(),
+                    receipt_at_start: Some(receipt),
                 },
-                Some(receipt),
-            )
-            .expect("queue mutation should enter the pending gate");
+            ));
 
         let screen_model = ConversationScreenModel::from_app(&app);
         let tail_view = super::super::live_status_layout::build_inline_tail_view(&screen_model, 96);

@@ -906,6 +906,39 @@ fn tui_queue_authority_loads_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_queue_mutations_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI Queue mutations must not schedule or execute their application transaction",
+        &["src/adapter/inbound/tui/app"],
+        &[
+            "thread::spawn",
+            ".execute_cancellation_transaction(",
+            "PlanningQueueCancellationRequest",
+            "PlanningQueueCancellationTarget",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "TUI Queue mutation correlation and completion must be core-owned",
+        &["src/adapter/inbound/tui/app"],
+        &[
+            "BackgroundMessage::QueueMutationCompleted",
+            "QueueMutationOperation",
+            "QueueMutationWorkerResult",
+            "next_operation_id",
+        ],
+    );
+
+    let controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/queue_overlay_controller.rs").unwrap();
+    assert!(
+        controller.contains("QueueMutationIntent {")
+            && controller
+                .contains(".dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent)))",),
+        "TUI Queue mutations must positively enter through AppCommand::SubmitQueueMutation"
+    );
+}
+
+#[test]
 fn tui_generic_shell_controller_does_not_own_queue_mutation_effects() {
     assert_no_forbidden_references_in_paths(
         "TUI generic shell controller must delegate queue mutation effects",
@@ -932,7 +965,7 @@ fn tui_generic_shell_controller_does_not_own_queue_mutation_effects() {
 #[test]
 fn tui_queue_adapter_does_not_own_cancellation_authority_transaction() {
     assert_no_forbidden_references_in_paths(
-        "TUI queue controller must schedule the application-owned cancellation and authority transaction",
+        "TUI queue controller must not schedule or compose the application-owned cancellation and authority transaction",
         &["src/adapter/inbound/tui/app/queue_overlay_controller.rs"],
         &[
             ".cancel_tasks(",

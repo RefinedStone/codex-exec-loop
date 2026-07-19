@@ -12,8 +12,10 @@ use crate::application::service::github_review_poller_service::GithubReviewPolle
 use crate::application::service::manual_prompt_preparation::ManualPromptPreparationService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
-    PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError, PlanningQueueUseCases,
-    PlanningRuntimeUseCases, PlanningServices,
+    PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
+    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
+    PlanningQueueCancellationTransactionResult, PlanningQueueUseCases, PlanningRuntimeUseCases,
+    PlanningServices, PlanningTaskMutationCommitResult,
 };
 use crate::application::service::post_turn_evaluation::{
     POST_TURN_EVALUATION_TIMEOUT, PostTurnEvaluationService,
@@ -25,9 +27,10 @@ use crate::core::app::{
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, ConversationReadySnapshot,
     ConversationThreadReviewSnapshot, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
     QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
-    ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation,
-    ReviewCenterSnapshot, SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
+    QueueMutationResult, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
+    ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
+    SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -129,6 +132,10 @@ impl CoreEffectRunner {
             }
             CoreEffect::LoadQueueAuthority { correlation } => {
                 self.spawn_queue_authority_load(correlation);
+                None
+            }
+            CoreEffect::ExecuteQueueMutation { correlation } => {
+                self.spawn_queue_mutation(correlation);
                 None
             }
             CoreEffect::PollGithubReview {
@@ -257,6 +264,19 @@ impl CoreEffectRunner {
                     result: result.map(Box::new),
                 },
             ));
+        });
+    }
+
+    pub fn spawn_queue_mutation(&self, correlation: QueueMutationCorrelation) {
+        let planning_queue = self.planning_queue.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let request = planning_queue_cancellation_request(&correlation.intent);
+            let completion = queue_mutation_completion(
+                correlation,
+                planning_queue.execute_cancellation_transaction(request),
+            );
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
 
@@ -561,6 +581,55 @@ fn queue_authority_result(
         })
 }
 
+fn planning_queue_cancellation_request(
+    intent: &QueueMutationIntent,
+) -> PlanningQueueCancellationRequest {
+    PlanningQueueCancellationRequest {
+        workspace_directory: intent.workspace_directory.clone(),
+        expected_planning_revision: intent.expected_planning_revision,
+        targets: intent
+            .targets
+            .iter()
+            .map(|target| PlanningQueueCancellationTarget {
+                task_id: target.task_id.clone(),
+                expected_status: target.expected_status,
+                expected_updated_at: target.expected_updated_at.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn queue_mutation_commit_snapshot(
+    result: PlanningTaskMutationCommitResult,
+) -> QueueMutationCommitSnapshot {
+    QueueMutationCommitSnapshot {
+        committed_planning_revision: result.committed_planning_revision,
+        committed_task_ids: result.committed_task_ids,
+    }
+}
+
+fn queue_mutation_result(
+    result: PlanningQueueCancellationTransactionResult,
+) -> QueueMutationResult {
+    QueueMutationResult {
+        mutation: result
+            .mutation
+            .map(queue_mutation_commit_snapshot)
+            .map_err(|error| error.to_string()),
+        authority: queue_authority_result(result.authority),
+    }
+}
+
+fn queue_mutation_completion(
+    correlation: QueueMutationCorrelation,
+    result: PlanningQueueCancellationTransactionResult,
+) -> CoreEffectCompletion {
+    CoreEffectCompletion::QueueMutationCompleted {
+        correlation,
+        result: Box::new(queue_mutation_result(result)),
+    }
+}
+
 fn conversation_ready_snapshot(
     snapshot: LoadedConversationThreadSnapshot,
 ) -> ConversationReadySnapshot {
@@ -578,6 +647,7 @@ fn conversation_ready_snapshot(
 mod tests {
     use super::*;
     use crate::application::service::planning::PlanningQueueAuthoritySnapshot;
+    use crate::core::app::{QueueMutationKind, QueueMutationTarget};
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::planning::{
         RuntimeProjection, TaskActor, TaskDefinition, TaskMutationProvenance, TaskStatus,
@@ -662,6 +732,21 @@ mod tests {
             source_turn_id: None,
             provenance: TaskMutationProvenance::default(),
             updated_at: "2026-07-19T00:00:00Z".to_string(),
+        }
+    }
+
+    fn queue_mutation_intent() -> QueueMutationIntent {
+        QueueMutationIntent {
+            workspace_directory: "/tmp/workspace".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+            kind: QueueMutationKind::RemoveSelected,
+            expected_planning_revision: 41,
+            targets: vec![QueueMutationTarget {
+                task_id: "task-1".to_string(),
+                expected_status: TaskStatus::Ready,
+                expected_updated_at: "2026-07-19T00:00:00Z".to_string(),
+            }],
+            receipt_at_start: None,
         }
     }
 
@@ -1018,6 +1103,87 @@ mod tests {
                 Err(core_error)
             );
         }
+    }
+
+    #[test]
+    fn queue_mutation_intent_maps_to_application_cancellation_request() {
+        assert_eq!(
+            planning_queue_cancellation_request(&queue_mutation_intent()),
+            PlanningQueueCancellationRequest {
+                workspace_directory: "/tmp/workspace".to_string(),
+                expected_planning_revision: 41,
+                targets: vec![PlanningQueueCancellationTarget {
+                    task_id: "task-1".to_string(),
+                    expected_status: TaskStatus::Ready,
+                    expected_updated_at: "2026-07-19T00:00:00Z".to_string(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn queue_mutation_transaction_maps_commit_and_coherent_authority() {
+        let runtime_projection =
+            RuntimeProjection::ready("prompt".to_string(), "queue".to_string(), None)
+                .with_planning_revision(Some(42));
+        let task = queue_task();
+        let correlation = QueueMutationCorrelation::new(7, queue_mutation_intent());
+
+        assert_eq!(
+            queue_mutation_completion(
+                correlation.clone(),
+                PlanningQueueCancellationTransactionResult {
+                    mutation: Ok(PlanningTaskMutationCommitResult {
+                        committed_planning_revision: 42,
+                        queue_head: None,
+                        task_authority_changed: true,
+                        applied_command_count: 1,
+                        committed_task_ids: vec!["task-1".to_string()],
+                    }),
+                    authority: Ok(PlanningQueueAuthorityProjection {
+                        runtime_projection: runtime_projection.clone(),
+                        queue_authority: PlanningQueueAuthoritySnapshot {
+                            planning_revision: 42,
+                            tasks: vec![task.clone()],
+                        },
+                    }),
+                },
+            ),
+            CoreEffectCompletion::QueueMutationCompleted {
+                correlation,
+                result: Box::new(QueueMutationResult {
+                    mutation: Ok(QueueMutationCommitSnapshot {
+                        committed_planning_revision: 42,
+                        committed_task_ids: vec!["task-1".to_string()],
+                    }),
+                    authority: Ok(QueueAuthoritySnapshot {
+                        runtime_projection,
+                        planning_revision: 42,
+                        tasks: vec![task],
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn queue_mutation_transaction_preserves_mutation_and_authority_failures() {
+        assert_eq!(
+            queue_mutation_result(PlanningQueueCancellationTransactionResult {
+                mutation: Err(anyhow::anyhow!("revision conflict")),
+                authority: Err(PlanningQueueAuthorityRefreshError::RevisionsKeptChanging {
+                    projection_revision: 41,
+                    authority_revision: 42,
+                }),
+            }),
+            QueueMutationResult {
+                mutation: Err("revision conflict".to_string()),
+                authority: Err(QueueAuthorityLoadError::RevisionsKeptChanging {
+                    projection_revision: 41,
+                    authority_revision: 42,
+                }),
+            }
+        );
     }
 
     #[test]

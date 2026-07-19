@@ -119,14 +119,16 @@ Presentation은 이 immutable screen model만 읽습니다. Loading과 failed �
 묶습니다. Workspace, thread, visible revision이 바뀌면 새 correlated load를 시작하며 redraw와
 resize에서는 authority I/O를 수행하지 않습니다.
 
-TUI queue remove와 undo intent는 overlay와 독립적인 pending gate 하나를 엽니다. Adapter correlation은
-operation ID, workspace와 active thread identity, cancellation request의 base planning revision,
-정확한 task status/update token을 보관합니다. Controller는 visible projection을 낙관적으로 변경하지
-않으며 terminal input path에서 cancellation service를 호출하지 않습니다. `PlanningQueueUseCases`가
-cancellation과 성공/실패 뒤 coherent authority readback을 한 transaction으로 소유합니다. TUI는
-mutation worker scheduling, operation/context correlation, settlement만 소유하며 같은 workspace/thread의
-정확한 pending operation만 반환된 authority를 projection에 반영할 수 있습니다. Queue overlay를
-닫아도 pending mutation은 유지되고 completion을 소비할 때까지 중복 destructive intent를 차단합니다.
+TUI queue remove와 undo intent는 core command로 진입합니다. Core는 workspace, active thread identity,
+base planning revision, 정확한 task status/update token에 단조 증가 generation을 부여하고 mutation
+하나만 승인하며 stale, duplicate, ABA completion을 버립니다. Composition은 이 core 소유 intent를
+`PlanningQueueUseCases`로 매핑합니다. Application cancellation transaction은 request 제출과 성공/실패
+뒤 coherent runtime 및 queue-authority readback을 함께 수행합니다. TUI controller는 remove/undo
+presentation만 소유하고 승인된 correlation의 mutation kind와 captured receipt로 settlement를
+projection하며, worker를 예약하거나 operation ID를 만들지 않습니다. 같은 workspace/thread context의
+정확히 승인된 correlation만 반환된 authority를 projection에 반영할 수 있습니다. Queue overlay를
+닫아도 승인된 mutation은 유지되고 Core가 completion을 소비할 때까지 중복 destructive intent를
+차단합니다.
 
 `AKRA_HOME`은 신뢰할 수 있는 절대 경로여야 합니다. SQLite DB와 sidecar는 private regular
 single-link file이어야 합니다. Repository incarnation marker는 재사용된 checkout 경로가 예전

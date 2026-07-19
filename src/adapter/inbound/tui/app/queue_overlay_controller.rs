@@ -2,14 +2,13 @@ use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use crate::application::service::planning::{
     PlanningQueueAuthorityProjection, PlanningQueueAuthoritySnapshot,
-    PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
 };
-use crate::core::app::{AppCommand, AppEvent, QueueAuthorityLoadCorrelation};
+use crate::core::app::{
+    AppCommand, AppEvent, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
+    QueueMutationIntent, QueueMutationResult, QueueMutationTarget,
+};
 
-use super::{
-    BackgroundMessage, ConversationState, NativeTuiApp, ShellChromeEvent, ShellOverlay,
-    queue_overlay_ui,
-};
+use super::{ConversationState, NativeTuiApp, ShellChromeEvent, ShellOverlay, queue_overlay_ui};
 
 impl NativeTuiApp {
     pub(super) fn show_queue_overlay(&mut self) {
@@ -201,18 +200,19 @@ impl NativeTuiApp {
             );
             return;
         };
-        self.start_queue_cancellation(
-            PlanningQueueCancellationRequest {
-                workspace_directory: self.planning_workspace_directory(),
-                expected_planning_revision: planning_revision,
-                targets: vec![PlanningQueueCancellationTarget {
-                    task_id,
-                    expected_status: status,
-                    expected_updated_at: updated_at,
-                }],
-            },
-            queue_overlay_ui::QueueMutationKind::RemoveSelected,
-        );
+        let context = self.current_queue_mutation_context();
+        self.submit_queue_mutation(QueueMutationIntent {
+            workspace_directory: context.workspace_directory,
+            active_thread_id: context.active_thread_id,
+            kind: queue_overlay_ui::QueueMutationKind::RemoveSelected,
+            expected_planning_revision: planning_revision,
+            targets: vec![QueueMutationTarget {
+                task_id,
+                expected_status: status,
+                expected_updated_at: updated_at,
+            }],
+            receipt_at_start: self.latest_queue_mutation_receipt(),
+        });
     }
 
     pub(super) fn undo_latest_queue_registration(&mut self) -> bool {
@@ -265,20 +265,21 @@ impl NativeTuiApp {
         }
         let targets = receipt
             .created_entries()
-            .map(|entry| PlanningQueueCancellationTarget {
+            .map(|entry| QueueMutationTarget {
                 task_id: entry.task_id.clone(),
                 expected_status: entry.after_status,
                 expected_updated_at: entry.after_updated_at.clone(),
             })
             .collect::<Vec<_>>();
-        self.start_queue_cancellation(
-            PlanningQueueCancellationRequest {
-                workspace_directory: self.planning_workspace_directory(),
-                expected_planning_revision: receipt.planning_revision,
-                targets,
-            },
-            queue_overlay_ui::QueueMutationKind::UndoLatestRegistration,
-        )
+        let context = self.current_queue_mutation_context();
+        self.submit_queue_mutation(QueueMutationIntent {
+            workspace_directory: context.workspace_directory,
+            active_thread_id: context.active_thread_id,
+            kind: queue_overlay_ui::QueueMutationKind::UndoLatestRegistration,
+            expected_planning_revision: receipt.planning_revision,
+            targets,
+            receipt_at_start: Some(receipt),
+        })
     }
 
     fn reload_queue_overlay_authority_before_action(&mut self) -> bool {
@@ -312,76 +313,86 @@ impl NativeTuiApp {
         }
     }
 
-    fn start_queue_cancellation(
-        &mut self,
-        request: PlanningQueueCancellationRequest,
-        kind: queue_overlay_ui::QueueMutationKind,
-    ) -> bool {
-        let receipt_at_start = match &self.conversation_state {
+    fn latest_queue_mutation_receipt(
+        &self,
+    ) -> Option<crate::domain::planning::PlanningQueueMutationReceipt> {
+        match &self.conversation_state {
             ConversationState::Ready(conversation) => {
                 conversation.latest_queue_mutation_receipt.clone()
             }
             ConversationState::Loading | ConversationState::Failed(_) => None,
-        };
-        let context = self.current_queue_mutation_context();
-        let Some(operation) =
-            self.queue_mutation_ui_state
-                .begin(context, kind, request, receipt_at_start)
-        else {
-            return false;
-        };
-        let operation_id = operation.operation_id;
+        }
+    }
+
+    fn submit_queue_mutation(&mut self, intent: QueueMutationIntent) -> bool {
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent)));
+        let started = outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, AppEvent::QueueMutationStarted { .. }));
+        self.apply_core_dispatch_outcome(outcome);
+        started
+    }
+
+    pub(super) fn apply_queue_mutation_started(&mut self, correlation: QueueMutationCorrelation) {
+        if !self
+            .queue_mutation_ui_state
+            .record_started(correlation.clone())
+        {
+            return;
+        }
         self.queue_overlay_ui_state.set_feedback(
             self.tui_language
-                .queue_mutation_pending_feedback(operation_id),
+                .queue_mutation_pending_feedback(correlation.generation),
         );
         self.clear_queue_receipt_undo_hit_area();
-        let planning = self.application.planning().clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let transaction = planning
-                .queue()
-                .execute_cancellation_transaction(operation.request.clone());
-            let result = queue_overlay_ui::QueueMutationWorkerResult {
-                operation,
-                mutation: transaction.mutation.map_err(|error| error.to_string()),
-                authority: transaction.authority,
-            };
-            let _ = tx.send(BackgroundMessage::QueueMutationCompleted(Box::new(result)));
-        });
-        true
     }
 
     pub(super) fn apply_queue_mutation_completion(
         &mut self,
-        completion: queue_overlay_ui::QueueMutationWorkerResult,
+        correlation: QueueMutationCorrelation,
+        completion: QueueMutationResult,
     ) {
-        let Some(operation) = self
-            .queue_mutation_ui_state
-            .take_matching(&completion.operation)
-        else {
+        let Some(correlation) = self.queue_mutation_ui_state.take_matching(&correlation) else {
             return;
+        };
+        let operation_context = queue_overlay_ui::QueueMutationContext {
+            workspace_directory: correlation.intent.workspace_directory.clone(),
+            active_thread_id: correlation.intent.active_thread_id.clone(),
         };
         let current_context = self.current_queue_mutation_context();
         if !matches!(self.conversation_state, ConversationState::Ready(_))
-            || current_context != operation.context
+            || current_context != operation_context
         {
-            if current_context.workspace_directory == operation.context.workspace_directory {
+            self.queue_overlay_ui_state.clear_feedback_if(
+                &self
+                    .tui_language
+                    .queue_mutation_pending_feedback(correlation.generation),
+            );
+            if current_context.workspace_directory == operation_context.workspace_directory {
                 self.queue_mutation_ui_state.require_authority_refresh();
                 self.queue_overlay_ui_state.clear_authority_binding();
             }
             return;
         }
 
-        let operation_id = operation.operation_id;
+        let operation_id = correlation.generation;
         let authority = match completion.authority {
-            Ok(authority) => authority,
+            Ok(authority) => PlanningQueueAuthorityProjection {
+                runtime_projection: authority.runtime_projection,
+                queue_authority: PlanningQueueAuthoritySnapshot {
+                    planning_revision: authority.planning_revision,
+                    tasks: authority.tasks,
+                },
+            },
             Err(refresh_error) => {
                 self.queue_mutation_ui_state.require_authority_refresh();
                 self.queue_overlay_ui_state.clear_authority_binding();
                 let refresh_error = self
                     .tui_language
-                    .queue_mutation_authority_refresh_error(&refresh_error);
+                    .queue_overlay_authority_load_error(&refresh_error);
                 let feedback = match completion.mutation {
                     Ok(_) => self
                         .tui_language
@@ -399,8 +410,8 @@ impl NativeTuiApp {
             }
         };
 
-        let authority_confirms_cancellation = !operation.request.targets.is_empty()
-            && operation.request.targets.iter().all(|target| {
+        let authority_confirms_cancellation = !correlation.intent.targets.is_empty()
+            && correlation.intent.targets.iter().all(|target| {
                 authority.queue_authority.tasks.iter().any(|task| {
                     task.id == target.task_id
                         && task.status == crate::domain::planning::TaskStatus::Cancelled
@@ -418,27 +429,27 @@ impl NativeTuiApp {
 
         let feedback = match completion.mutation {
             Ok(result) if authority_confirms_cancellation => {
-                self.settle_correlated_queue_receipt(&operation, &authority.queue_authority);
+                self.settle_correlated_queue_receipt(&correlation, &authority.queue_authority);
                 self.tui_language.queue_mutation_acknowledged(
                     operation_id,
                     self.tui_language
-                        .queue_mutation_success_label(operation.kind),
+                        .queue_mutation_success_label(correlation.intent.kind),
                     result.committed_task_ids.len(),
                     result.committed_planning_revision,
                 )
             }
             Ok(_) => {
-                self.reconcile_correlated_queue_receipt(&operation, &authority.queue_authority);
+                self.reconcile_correlated_queue_receipt(&correlation, &authority.queue_authority);
                 self.tui_language
                     .queue_mutation_acknowledged_without_confirmation(operation_id)
             }
             Err(error) if authority_confirms_cancellation => {
-                self.settle_correlated_queue_receipt(&operation, &authority.queue_authority);
+                self.settle_correlated_queue_receipt(&correlation, &authority.queue_authority);
                 self.tui_language
                     .queue_mutation_authority_confirmed_after_error(operation_id, &error)
             }
             Err(error) => {
-                self.reconcile_correlated_queue_receipt(&operation, &authority.queue_authority);
+                self.reconcile_correlated_queue_receipt(&correlation, &authority.queue_authority);
                 self.tui_language
                     .queue_mutation_rejected(operation_id, &error)
             }
@@ -530,7 +541,7 @@ impl NativeTuiApp {
 
     pub(super) fn settle_correlated_queue_receipt(
         &mut self,
-        operation: &queue_overlay_ui::QueueMutationOperation,
+        correlation: &QueueMutationCorrelation,
         authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
     ) {
         let ConversationState::Ready(conversation) = &mut self.conversation_state else {
@@ -539,7 +550,7 @@ impl NativeTuiApp {
         let Some(current_receipt) = conversation.latest_queue_mutation_receipt.clone() else {
             return;
         };
-        if operation.receipt_at_start.as_ref() != Some(&current_receipt) {
+        if correlation.intent.receipt_at_start.as_ref() != Some(&current_receipt) {
             if authority.planning_revision >= current_receipt.planning_revision {
                 conversation.latest_queue_mutation_receipt = Some(
                     Self::queue_receipt_reconciled_with_authority(&current_receipt, authority),
@@ -547,13 +558,14 @@ impl NativeTuiApp {
             }
             return;
         }
-        let receipt_at_start = operation
+        let receipt_at_start = correlation
+            .intent
             .receipt_at_start
             .as_ref()
             .expect("matching captured receipt should exist");
-        let invalidates_receipt = operation.kind
+        let invalidates_receipt = correlation.intent.kind
             == queue_overlay_ui::QueueMutationKind::UndoLatestRegistration
-            || operation.request.targets.iter().any(|target| {
+            || correlation.intent.targets.iter().any(|target| {
                 receipt_at_start
                     .created_entries()
                     .any(|entry| entry.task_id == target.task_id)
@@ -569,7 +581,7 @@ impl NativeTuiApp {
 
     pub(super) fn reconcile_correlated_queue_receipt(
         &mut self,
-        operation: &queue_overlay_ui::QueueMutationOperation,
+        correlation: &QueueMutationCorrelation,
         authority: &crate::application::service::planning::PlanningQueueAuthoritySnapshot,
     ) {
         let ConversationState::Ready(conversation) = &mut self.conversation_state else {
@@ -578,7 +590,7 @@ impl NativeTuiApp {
         let Some(current_receipt) = conversation.latest_queue_mutation_receipt.clone() else {
             return;
         };
-        if operation.receipt_at_start.as_ref() != Some(&current_receipt) {
+        if correlation.intent.receipt_at_start.as_ref() != Some(&current_receipt) {
             if authority.planning_revision >= current_receipt.planning_revision {
                 conversation.latest_queue_mutation_receipt = Some(
                     Self::queue_receipt_reconciled_with_authority(&current_receipt, authority),
@@ -586,7 +598,8 @@ impl NativeTuiApp {
             }
             return;
         }
-        let receipt_at_start = operation
+        let receipt_at_start = correlation
+            .intent
             .receipt_at_start
             .as_ref()
             .expect("matching captured receipt should exist");

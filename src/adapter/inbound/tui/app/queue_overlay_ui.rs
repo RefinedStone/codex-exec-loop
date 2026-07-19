@@ -6,12 +6,11 @@ use ratatui::layout::{Position, Rect};
 use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 use crate::application::service::planning::{
     PlanningApplicationProjection, PlanningApplicationQueueTask, PlanningApplicationSkippedTask,
-    PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
-    PlanningQueueAuthoritySnapshot, PlanningQueueCancellationRequest, PlanningRuntimeProjection,
-    PlanningTaskMutationCommitResult,
+    PlanningQueueAuthorityProjection, PlanningQueueAuthoritySnapshot, PlanningRuntimeProjection,
 };
-use crate::core::app::QueueAuthorityLoadCorrelation;
-use crate::domain::planning::{PlanningQueueMutationReceipt, TaskStatus};
+pub(super) use crate::core::app::QueueMutationKind;
+use crate::core::app::{QueueAuthorityLoadCorrelation, QueueMutationCorrelation};
+use crate::domain::planning::TaskStatus;
 
 use super::{ConversationInputState, ConversationState, NativeTuiApp, TuiLanguage};
 
@@ -35,31 +34,7 @@ pub(super) struct QueueMutationContext {
     pub(super) active_thread_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum QueueMutationKind {
-    RemoveSelected,
-    UndoLatestRegistration,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct QueueMutationOperation {
-    pub(super) operation_id: u64,
-    pub(super) context: QueueMutationContext,
-    pub(super) kind: QueueMutationKind,
-    pub(super) request: PlanningQueueCancellationRequest,
-    pub(super) receipt_at_start: Option<PlanningQueueMutationReceipt>,
-}
-
 pub(super) type QueueMutationAuthoritySnapshot = PlanningQueueAuthorityProjection;
-pub(super) type QueueMutationAuthorityRefreshError = PlanningQueueAuthorityRefreshError;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct QueueMutationWorkerResult {
-    pub(super) operation: QueueMutationOperation,
-    pub(super) mutation: Result<PlanningTaskMutationCommitResult, String>,
-    pub(super) authority:
-        Result<QueueMutationAuthoritySnapshot, QueueMutationAuthorityRefreshError>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueOverlayAuthorityLoadRequest {
@@ -149,41 +124,23 @@ pub(super) struct QueueOverlayScreenModel {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct QueueMutationUiState {
-    next_operation_id: u64,
-    pending: Option<QueueMutationOperation>,
+    pending: Option<QueueMutationCorrelation>,
     authority_refresh_required: bool,
 }
 
 impl QueueMutationUiState {
-    pub(super) fn begin(
-        &mut self,
-        context: QueueMutationContext,
-        kind: QueueMutationKind,
-        request: PlanningQueueCancellationRequest,
-        receipt_at_start: Option<PlanningQueueMutationReceipt>,
-    ) -> Option<QueueMutationOperation> {
-        if self.pending.is_some()
-            || self.authority_refresh_required
-            || request.workspace_directory != context.workspace_directory
-        {
-            return None;
+    pub(super) fn record_started(&mut self, correlation: QueueMutationCorrelation) -> bool {
+        if self.pending.is_some() {
+            return false;
         }
-        self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
-        let operation = QueueMutationOperation {
-            operation_id: self.next_operation_id,
-            context,
-            kind,
-            request,
-            receipt_at_start,
-        };
-        self.pending = Some(operation.clone());
-        Some(operation)
+        self.pending = Some(correlation);
+        true
     }
 
     pub(super) fn pending_operation_id(&self) -> Option<u64> {
         self.pending
             .as_ref()
-            .map(|operation| operation.operation_id)
+            .map(|correlation| correlation.generation)
     }
 
     pub(super) fn authority_refresh_required(&self) -> bool {
@@ -200,8 +157,8 @@ impl QueueMutationUiState {
 
     pub(super) fn take_matching(
         &mut self,
-        completed: &QueueMutationOperation,
-    ) -> Option<QueueMutationOperation> {
+        completed: &QueueMutationCorrelation,
+    ) -> Option<QueueMutationCorrelation> {
         if self.pending.as_ref() != Some(completed) {
             return None;
         }
@@ -375,6 +332,12 @@ impl QueueOverlayUiState {
 
     pub(super) fn set_feedback(&mut self, feedback: impl Into<String>) {
         self.feedback = Some(feedback.into());
+    }
+
+    pub(super) fn clear_feedback_if(&mut self, feedback: &str) {
+        if self.feedback.as_deref() == Some(feedback) {
+            self.feedback = None;
+        }
     }
 
     pub(super) fn bind_authority_snapshot(
@@ -830,10 +793,10 @@ mod tests {
         QueueOverlayAuthorityScreenModel, QueueOverlayAuthorityToken, QueueOverlayUiState,
     };
     use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
-    use crate::application::service::planning::{
-        PlanningQueueCancellationRequest, PlanningRuntimeProjection,
+    use crate::application::service::planning::PlanningRuntimeProjection;
+    use crate::core::app::{
+        QueueAuthorityLoadCorrelation, QueueMutationCorrelation, QueueMutationIntent,
     };
-    use crate::core::app::QueueAuthorityLoadCorrelation;
     use crate::domain::planning::TaskStatus;
 
     fn context(workspace_directory: &str, active_thread_id: Option<&str>) -> QueueMutationContext {
@@ -860,6 +823,25 @@ mod tests {
         context: QueueMutationContext,
     ) -> super::QueueOverlayAuthorityLoadRequest {
         state.begin_authority_load(correlation_for(generation, &context))
+    }
+
+    fn mutation_correlation(
+        generation: u64,
+        context: &QueueMutationContext,
+        kind: QueueMutationKind,
+        expected_planning_revision: i64,
+    ) -> QueueMutationCorrelation {
+        QueueMutationCorrelation::new(
+            generation,
+            QueueMutationIntent {
+                workspace_directory: context.workspace_directory.clone(),
+                active_thread_id: context.active_thread_id.clone(),
+                kind,
+                expected_planning_revision,
+                targets: Vec::new(),
+                receipt_at_start: None,
+            },
+        )
     }
 
     #[test]
@@ -1055,76 +1037,36 @@ mod tests {
     }
 
     #[test]
-    fn queue_mutation_gate_allows_one_operation_and_ignores_stale_completion() {
+    fn queue_mutation_projection_accepts_one_core_correlation_and_ignores_stale_completion() {
         let mut state = QueueMutationUiState::default();
         let context = QueueMutationContext {
             workspace_directory: "/tmp/workspace".to_string(),
             active_thread_id: Some("thread-a".to_string()),
         };
-        let request = PlanningQueueCancellationRequest {
-            workspace_directory: context.workspace_directory.clone(),
-            expected_planning_revision: 7,
-            targets: Vec::new(),
-        };
-        let first = state
-            .begin(
-                context.clone(),
-                QueueMutationKind::RemoveSelected,
-                request.clone(),
-                None,
-            )
-            .expect("first mutation should start");
-        assert_eq!(first.operation_id, 1);
+        let first = mutation_correlation(1, &context, QueueMutationKind::RemoveSelected, 7);
+        assert!(state.record_started(first.clone()));
         assert_eq!(state.pending_operation_id(), Some(1));
-        assert!(
-            state
-                .begin(
-                    context.clone(),
-                    QueueMutationKind::UndoLatestRegistration,
-                    request.clone(),
-                    None,
-                )
-                .is_none()
-        );
+        assert!(!state.record_started(mutation_correlation(
+            2,
+            &context,
+            QueueMutationKind::UndoLatestRegistration,
+            7,
+        )));
 
-        let mut stale = first.clone();
-        stale.operation_id = 99;
+        let stale = mutation_correlation(99, &context, QueueMutationKind::RemoveSelected, 7);
         assert!(state.take_matching(&stale).is_none());
         let mut forged = first.clone();
-        forged.request.expected_planning_revision = 8;
+        forged.intent.expected_planning_revision = 8;
         assert!(state.take_matching(&forged).is_none());
         assert_eq!(state.pending_operation_id(), Some(1));
         assert_eq!(state.take_matching(&first), Some(first.clone()));
         assert_eq!(state.pending_operation_id(), None);
 
-        let second = state
-            .begin(
-                context.clone(),
-                QueueMutationKind::UndoLatestRegistration,
-                request.clone(),
-                None,
-            )
-            .expect("gate should reopen after matching completion");
-        assert_eq!(second.operation_id, 2);
+        let second =
+            mutation_correlation(2, &context, QueueMutationKind::UndoLatestRegistration, 7);
+        assert!(state.record_started(second.clone()));
         assert!(state.take_matching(&first).is_none());
         assert_eq!(state.pending_operation_id(), Some(2));
         assert_eq!(state.take_matching(&second), Some(second));
-
-        state.require_authority_refresh();
-        assert!(
-            state
-                .begin(
-                    context.clone(),
-                    QueueMutationKind::RemoveSelected,
-                    request.clone(),
-                    None,
-                )
-                .is_none()
-        );
-        state.record_authority_refresh();
-        let third = state
-            .begin(context, QueueMutationKind::RemoveSelected, request, None)
-            .expect("authority refresh should reopen the mutation gate");
-        assert_eq!(third.operation_id, 3);
     }
 }

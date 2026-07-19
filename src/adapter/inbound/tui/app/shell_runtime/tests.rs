@@ -269,10 +269,9 @@ fn native_tui_app_keeps_parallel_control_plane_behind_application_handle() {
 #[test]
 fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     /*
-     * Queue remove/undo input may only open the adapter correlation gate. The
-     * planning queue use case performs the blocking cancellation and refresh, then
-     * ShellRuntime settles the exact pending operation from a background
-     * completion. Queue chrome is disposable; the pending gate is not.
+     * Queue remove/undo input only submits a core intent. Core owns the
+     * generation, worker effect, and exact completion gate; the TUI projects
+     * started/completed events. Queue chrome is disposable; pending projection is not.
      */
     const APP_RS: &str = include_str!("../../app.rs");
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
@@ -296,10 +295,17 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     ] {
         assert!(!input_path.contains(".cancel_tasks("));
     }
-    assert!(QUEUE_CONTROLLER_RS.contains("std::thread::spawn"));
-    assert!(QUEUE_CONTROLLER_RS.contains("BackgroundMessage::QueueMutationCompleted"));
-    assert!(SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueMutationCompleted(result)"));
-    assert!(SHELL_RUNTIME_RS.contains("apply_queue_mutation_completion(*result)"));
+    assert!(!QUEUE_CONTROLLER_RS.contains("std::thread::spawn"));
+    assert!(!QUEUE_CONTROLLER_RS.contains("BackgroundMessage::QueueMutationCompleted"));
+    assert!(!SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueMutationCompleted"));
+    assert!(
+        QUEUE_CONTROLLER_RS
+            .contains(".dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent)))")
+    );
+    assert!(APP_RUNTIME_RS.contains("AppEvent::QueueMutationStarted { correlation }"));
+    assert!(APP_RUNTIME_RS.contains("self.apply_queue_mutation_started(correlation)"));
+    assert!(APP_RUNTIME_RS.contains("AppEvent::QueueMutationCompleted"));
+    assert!(APP_RUNTIME_RS.contains("self.apply_queue_mutation_completion(correlation, *result)"));
     assert!(!APP_RUNTIME_RS.contains("QueueOverlayAuthorityLoaded"));
     assert!(!QUEUE_CONTROLLER_RS.contains("QueueOverlayAuthorityLoaded"));
     assert!(!SHELL_RUNTIME_RS.contains("QueueOverlayAuthorityLoaded"));
@@ -308,10 +314,12 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     assert!(APP_RUNTIME_RS.contains("AppEvent::QueueAuthorityLoaded"));
     assert!(APP_RUNTIME_RS.contains("apply_queue_overlay_authority_loaded(correlation, result)"));
 
-    assert!(QUEUE_UI_RS.contains("operation_id: u64"));
+    assert!(!QUEUE_UI_RS.contains("next_operation_id"));
+    assert!(!QUEUE_UI_RS.contains("QueueMutationWorkerResult"));
+    assert!(!QUEUE_UI_RS.contains("QueueMutationOperation"));
+    assert!(QUEUE_UI_RS.contains("pending: Option<QueueMutationCorrelation>"));
     assert!(QUEUE_UI_RS.contains("workspace_directory: String"));
     assert!(QUEUE_UI_RS.contains("active_thread_id: Option<String>"));
-    assert!(QUEUE_UI_RS.contains("request: PlanningQueueCancellationRequest"));
     assert!(QUEUE_UI_RS.contains("if self.pending.as_ref() != Some(completed)"));
     assert!(QUEUE_CONTROLLER_RS.contains("expected_planning_revision: planning_revision"));
     assert!(QUEUE_CONTROLLER_RS.contains("expected_status: status"));
@@ -322,7 +330,7 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     assert!(
         QUEUE_CONTROLLER_RS.contains("let current_context = self.current_queue_mutation_context()")
     );
-    assert!(QUEUE_CONTROLLER_RS.contains("current_context != operation.context"));
+    assert!(QUEUE_CONTROLLER_RS.contains("current_context != operation_context"));
     let show_queue = QUEUE_CONTROLLER_RS
         .split("pub(super) fn show_queue_overlay")
         .nth(1)
@@ -337,7 +345,7 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
 
     assert!(!APP_RUNTIME_RS.contains("execute_queue_mutation"));
     assert!(!APP_RUNTIME_RS.contains("load_queue_authority"));
-    assert!(QUEUE_CONTROLLER_RS.contains(".execute_cancellation_transaction("));
+    assert!(!QUEUE_CONTROLLER_RS.contains(".execute_cancellation_transaction("));
     assert!(!QUEUE_CONTROLLER_RS.contains(".load_coherent_authority("));
 
     assert!(APP_RS.contains("queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState"));
