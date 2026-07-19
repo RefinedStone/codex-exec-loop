@@ -753,6 +753,14 @@ impl PlanningRuntimeUseCases {
     ) -> ManualPromptIntakeOutcome {
         self.manual_intake.prepare_manual_turn(request)
     }
+    pub(crate) fn prepare_manual_prompt_intake_guarded(
+        &self,
+        request: ManualPromptIntakeRequest,
+        is_current: &dyn Fn() -> bool,
+    ) -> ManualPromptIntakeOutcome {
+        self.manual_intake
+            .prepare_manual_turn_guarded(request, is_current)
+    }
     pub fn build_queued_task_handoff(
         &self,
         projection: &PlanningRuntimeProjection,

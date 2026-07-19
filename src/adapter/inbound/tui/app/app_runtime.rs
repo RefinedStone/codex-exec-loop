@@ -1761,6 +1761,17 @@ impl NativeTuiApp {
             } => {
                 self.apply_stop_request_attempt_completion(correlation, attempt, result);
             }
+            AppEvent::TurnSubmissionAdmissionResolved(
+                crate::core::app::TurnSubmissionAdmission::RejectedStopPending { .. },
+            ) => {
+                self.dispatch_conversation_input(
+                    super::ConversationInputEvent::StatusMessageShown {
+                        status_text:
+                            "turn start is waiting for the pending stop request to settle; retry shortly"
+                                .to_string(),
+                    },
+                );
+            }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnSteerAdmissionResolved(_) => {}
             AppEvent::ApprovalDecisionAdmissionResolved(_) => {}

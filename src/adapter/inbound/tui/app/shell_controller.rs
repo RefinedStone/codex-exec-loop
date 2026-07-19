@@ -1660,6 +1660,18 @@ mod tests {
         &ready_conversation(app).status_text
     }
 
+    fn poll_core_until_status_contains(app: &mut NativeTuiApp, expected: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !status_text(app).contains(expected) && Instant::now() < deadline {
+            app.poll_core_runtime_inputs(16);
+            std::thread::yield_now();
+        }
+        assert!(
+            status_text(app).contains(expected),
+            "Core completion should update status with `{expected}`"
+        );
+    }
+
     #[test]
     fn startup_action_availability_drives_submission_status_copy() {
         let mut app = test_native_tui_app();
@@ -2119,6 +2131,7 @@ mod tests {
             "only an explicit positive :turns command should re-arm automation"
         );
 
+        let mut app = test_native_tui_app();
         let turn_submission = app.core_runtime.begin_test_turn_submission();
         app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
@@ -2128,7 +2141,11 @@ mod tests {
             },
         });
         app.execute_inline_shell_command_input(command(":stop"));
-        assert!(status_text(&app).contains("active app-server sessions"));
+        assert!(
+            status_text(&app).contains("active app-server sessions"),
+            "unexpected stop status: {}",
+            status_text(&app)
+        );
         app.execute_inline_shell_command_input(command(":stop"));
         assert!(status_text(&app).contains("stop already requested"));
     }
@@ -2148,7 +2165,7 @@ mod tests {
                 runtime_request: Box::default(),
             },
         });
-        assert!(status_text(&app).contains("stop synchronized"));
+        poll_core_until_status_contains(&mut app, "stop synchronized");
         assert_eq!(app.exit_confirmation_state, ExitConfirmationState::Hidden);
 
         app.handle_ctrl_c();

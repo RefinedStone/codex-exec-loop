@@ -44,6 +44,13 @@ struct ActiveStopRequest {
     correlation: StopRequestCorrelation,
     pending_attempt: Option<StopRequestAttempt>,
     synchronize_after_turn_started: bool,
+    invalidated: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveManualPromptPreparation {
+    correlation: ManualPromptCorrelation,
+    cancelled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -73,7 +80,7 @@ pub struct CoreController {
     next_queue_mutation_generation: u64,
     active_queue_mutation: Option<QueueMutationCorrelation>,
     next_manual_prompt_preparation_generation: u64,
-    in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
+    in_flight_manual_prompt_preparation: Option<ActiveManualPromptPreparation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
@@ -206,6 +213,20 @@ impl CoreController {
                 thread_id,
                 fallback_workspace_directory,
             }) => {
+                let mut stop_effects = Vec::new();
+                self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
+                if self.stop_request_settlement_pending() {
+                    self.deferred_conversation_load =
+                        Some((thread_id, fallback_workspace_directory));
+                    let mut outcome = self.unchanged_outcome();
+                    outcome.effects = stop_effects;
+                    if let Some(correlation) = self.planning_runtime_refresh.cancel() {
+                        outcome
+                            .events
+                            .push(AppEvent::PlanningRuntimeRefreshCancelled { correlation });
+                    }
+                    return outcome;
+                }
                 if self
                     .in_flight_session_rename
                     .as_ref()
@@ -230,13 +251,14 @@ impl CoreController {
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
                 self.approval_review_persistence.invalidate_conversation();
-                self.active_stop_request = None;
+                let mut effects = Vec::new();
+                self.invalidate_stop_request_for_lifecycle(&mut effects);
                 self.active_turn_steer = None;
                 self.active_approval_decision = None;
                 self.guarded_session_rename_stream = None;
                 self.state.reset_conversation();
                 self.turn_stream_state = TurnStreamState::new();
-                let mut outcome = self.conversation_changed_outcome(None, Vec::new());
+                let mut outcome = self.conversation_changed_outcome(None, effects);
                 if let Some(correlation) = cancelled_refresh {
                     outcome
                         .events
@@ -355,11 +377,11 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::PrepareManualPrompt(intent)) => {
-                if let Some(active_correlation) = &self.in_flight_manual_prompt_preparation {
+                if let Some(active) = &self.in_flight_manual_prompt_preparation {
                     return CoreDispatchOutcome {
                         events: vec![AppEvent::ManualPromptPreparationAdmissionResolved(
                             ManualPromptPreparationAdmission::RejectedActive {
-                                active_correlation: active_correlation.clone(),
+                                active_correlation: active.correlation.clone(),
                             },
                         )],
                         effects: Vec::new(),
@@ -387,7 +409,10 @@ impl CoreController {
                     parent_thread_id,
                     parent_turn_id,
                 };
-                self.in_flight_manual_prompt_preparation = Some(correlation.clone());
+                self.in_flight_manual_prompt_preparation = Some(ActiveManualPromptPreparation {
+                    correlation: correlation.clone(),
+                    cancelled: false,
+                });
                 CoreDispatchOutcome {
                     events: vec![AppEvent::ManualPromptPreparationAdmissionResolved(
                         ManualPromptPreparationAdmission::Accepted { correlation },
@@ -397,14 +422,40 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::CancelManualPromptPreparation) => {
-                self.in_flight_manual_prompt_preparation = None;
-                self.unchanged_outcome()
+                let Some(active) = self.in_flight_manual_prompt_preparation.as_mut() else {
+                    return self.unchanged_outcome();
+                };
+                if active.cancelled {
+                    return self.unchanged_outcome();
+                }
+                active.cancelled = true;
+                CoreDispatchOutcome {
+                    events: Vec::new(),
+                    effects: vec![CoreEffect::CancelManualPromptPreparation {
+                        correlation: active.correlation.clone(),
+                    }],
+                    snapshot: self.snapshot(),
+                }
             }
             CoreInput::Command(AppCommand::SubmitTurn(request)) => {
                 if let Some(active_correlation) = self.active_turn_submission {
                     return CoreDispatchOutcome {
                         events: vec![AppEvent::TurnSubmissionAdmissionResolved(
                             TurnSubmissionAdmission::RejectedActive { active_correlation },
+                        )],
+                        effects: Vec::new(),
+                        snapshot: self.snapshot(),
+                    };
+                }
+                if let Some(active_stop) = self
+                    .active_stop_request
+                    .filter(|active| active.pending_attempt.is_some())
+                {
+                    return CoreDispatchOutcome {
+                        events: vec![AppEvent::TurnSubmissionAdmissionResolved(
+                            TurnSubmissionAdmission::RejectedStopPending {
+                                stop_correlation: active_stop.correlation,
+                            },
                         )],
                         effects: Vec::new(),
                         snapshot: self.snapshot(),
@@ -446,6 +497,7 @@ impl CoreController {
                     pending_attempt: Some(StopRequestAttempt::Initial),
                     synchronize_after_turn_started: correlation.turn_submission.is_some()
                         && !self.turn_stream_state.has_active_turn(),
+                    invalidated: false,
                 });
                 CoreDispatchOutcome {
                     events: vec![AppEvent::StopRequestAdmissionResolved(
@@ -686,7 +738,8 @@ impl CoreController {
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
                 self.approval_review_persistence.invalidate_conversation();
-                self.active_stop_request = None;
+                let mut effects = Vec::new();
+                self.invalidate_stop_request_for_lifecycle(&mut effects);
                 self.active_turn_steer = None;
                 self.active_approval_decision = None;
                 self.guarded_session_rename_stream = None;
@@ -700,7 +753,7 @@ impl CoreController {
                         item_lifecycle,
                     );
                 }
-                self.conversation_changed_outcome(Some(correlation), Vec::new())
+                self.conversation_changed_outcome(Some(correlation), effects)
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ParallelPeekConversationLoaded {
                 correlation,
@@ -826,19 +879,29 @@ impl CoreController {
                     .expect("exact active stop request must remain present")
                     .pending_attempt = None;
                 let failed = result.is_err();
-                if failed || correlation.turn_submission.is_none() {
+                let invalidated = self
+                    .active_stop_request
+                    .is_some_and(|active| active.invalidated);
+                if failed || invalidated || correlation.turn_submission.is_none() {
                     self.active_stop_request = None;
                 }
                 let mut effects = Vec::new();
-                if !failed {
+                if !failed && !invalidated {
                     self.schedule_stop_synchronization_after_turn_started(&mut effects);
                 }
-                CoreDispatchOutcome {
-                    events: vec![AppEvent::StopRequestAttemptCompleted {
+                let mut events = (!invalidated)
+                    .then_some(AppEvent::StopRequestAttemptCompleted {
                         correlation,
                         attempt,
                         result,
-                    }],
+                    })
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                if self.active_stop_request.is_none() {
+                    self.start_deferred_session_reads(&mut events, &mut effects);
+                }
+                CoreDispatchOutcome {
+                    events,
                     effects,
                     snapshot: self.snapshot(),
                 }
@@ -963,17 +1026,24 @@ impl CoreController {
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
-                if self.in_flight_manual_prompt_preparation.as_ref() != Some(result.correlation()) {
+                let Some(active) = self.in_flight_manual_prompt_preparation.as_ref() else {
                     return CoreDispatchOutcome {
                         events: Vec::new(),
                         effects: Vec::new(),
                         snapshot: self.snapshot(),
                     };
+                };
+                if active.correlation != *result.correlation() {
+                    return self.unchanged_outcome();
                 }
+                let cancelled = active.cancelled;
                 self.in_flight_manual_prompt_preparation = None;
                 let snapshot = self.snapshot();
                 CoreDispatchOutcome {
-                    events: vec![AppEvent::ManualPromptPrepared(result)],
+                    events: (!cancelled)
+                        .then_some(AppEvent::ManualPromptPrepared(result))
+                        .into_iter()
+                        .collect(),
                     effects: Vec::new(),
                     snapshot,
                 }
@@ -1141,6 +1211,14 @@ impl CoreController {
         thread_id: String,
         fallback_workspace_directory: String,
     ) -> CoreDispatchOutcome {
+        if self.stop_request_settlement_pending() {
+            self.deferred_conversation_load = Some((thread_id, fallback_workspace_directory));
+            let mut effects = Vec::new();
+            self.invalidate_stop_request_for_lifecycle(&mut effects);
+            let mut outcome = self.unchanged_outcome();
+            outcome.effects = effects;
+            return outcome;
+        }
         let cancelled_refresh = self.planning_runtime_refresh.cancel();
         self.active_turn_submission = None;
         self.approval_review_persistence.invalidate_conversation();
@@ -1183,8 +1261,10 @@ impl CoreController {
             events.extend(outcome.events);
             effects.extend(outcome.effects);
         }
-        if let Some((thread_id, fallback_workspace_directory)) =
-            self.deferred_conversation_load.take()
+        if self.in_flight_session_rename.is_none()
+            && !self.stop_request_settlement_pending()
+            && let Some((thread_id, fallback_workspace_directory)) =
+                self.deferred_conversation_load.take()
         {
             let outcome = self.start_conversation_load(thread_id, fallback_workspace_directory);
             events.extend(outcome.events);
@@ -1211,7 +1291,6 @@ impl CoreController {
             "turn submission",
         ));
         self.guarded_session_rename_stream = None;
-        self.active_stop_request = None;
         self.active_approval_decision = None;
         self.active_turn_submission = Some(correlation);
         self.approval_review_persistence
@@ -1313,15 +1392,15 @@ impl CoreController {
                         .to_string(),
                 });
             events.push(AppEvent::turn_stream_snapshot_changed(failed));
-            self.clear_stop_request_for_turn(correlation);
+            self.clear_stop_request_for_turn(correlation, &mut effects);
             self.active_turn_submission = None;
             self.guarded_session_rename_stream = None;
         } else if closes_submission {
-            self.clear_stop_request_for_turn(correlation);
+            self.clear_stop_request_for_turn(correlation, &mut effects);
             self.active_turn_submission = None;
             self.guarded_session_rename_stream = None;
         } else if retry_reopens_stop {
-            self.clear_stop_request_for_turn(correlation);
+            self.clear_stop_request_for_turn(correlation, &mut effects);
         } else if turn_started {
             self.schedule_stop_synchronization_after_turn_started(&mut effects);
         }
@@ -1349,7 +1428,8 @@ impl CoreController {
         let Some(active) = self.active_stop_request.as_mut() else {
             return;
         };
-        if !active.synchronize_after_turn_started
+        if active.invalidated
+            || !active.synchronize_after_turn_started
             || active.pending_attempt.is_some()
             || active.correlation.turn_submission != self.active_turn_submission
             || !self.turn_stream_state.has_active_turn()
@@ -1364,13 +1444,41 @@ impl CoreController {
         });
     }
 
-    fn clear_stop_request_for_turn(&mut self, correlation: TurnSubmissionCorrelation) {
+    fn clear_stop_request_for_turn(
+        &mut self,
+        correlation: TurnSubmissionCorrelation,
+        effects: &mut Vec<CoreEffect>,
+    ) {
         if self
             .active_stop_request
-            .is_some_and(|active| active.correlation.turn_submission == Some(correlation))
+            .is_none_or(|active| active.correlation.turn_submission != Some(correlation))
         {
-            self.active_stop_request = None;
+            return;
         }
+        self.invalidate_stop_request_for_lifecycle(effects);
+    }
+
+    fn stop_request_settlement_pending(&self) -> bool {
+        self.active_stop_request
+            .is_some_and(|active| active.pending_attempt.is_some())
+    }
+
+    fn invalidate_stop_request_for_lifecycle(&mut self, effects: &mut Vec<CoreEffect>) {
+        let Some(active) = self.active_stop_request.as_mut() else {
+            return;
+        };
+        if active.pending_attempt.is_none() {
+            self.active_stop_request = None;
+            return;
+        }
+        if active.invalidated {
+            return;
+        }
+        active.invalidated = true;
+        active.synchronize_after_turn_started = false;
+        effects.push(CoreEffect::InvalidateStopRequest {
+            correlation: active.correlation,
+        });
     }
 
     #[cfg(test)]
@@ -4436,7 +4544,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_manual_prompt_preparation_reopens_dispatch_and_drops_late_completion() {
+    fn cancelling_manual_prompt_preparation_keeps_the_physical_lease_until_settlement() {
         let mut controller = CoreController::new();
         let first_correlation = manual_prompt_correlation(1, "/tmp/workspace");
         let _ = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
@@ -4450,29 +4558,37 @@ mod tests {
             AppCommand::CancelManualPromptPreparation,
         ));
         assert!(cancelled.events.is_empty());
-        assert!(cancelled.effects.is_empty());
-        assert!(controller.in_flight_manual_prompt_preparation.is_none());
+        assert_eq!(
+            cancelled.effects,
+            vec![CoreEffect::CancelManualPromptPreparation {
+                correlation: first_correlation.clone(),
+            }]
+        );
+        assert!(
+            controller
+                .in_flight_manual_prompt_preparation
+                .as_ref()
+                .is_some_and(|active| {
+                    active.correlation == first_correlation && active.cancelled
+                })
+        );
 
         let second_correlation = manual_prompt_correlation(2, "/tmp/other-workspace");
-        let second = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
-            Box::new(manual_prompt_intent(
+        let blocked_second = controller.handle_input(CoreInput::Command(
+            AppCommand::PrepareManualPrompt(Box::new(manual_prompt_intent(
                 "/tmp/other-workspace",
                 "new workspace prompt",
-            )),
-        )));
+            ))),
+        ));
         assert_eq!(
-            second.events,
+            blocked_second.events,
             vec![AppEvent::ManualPromptPreparationAdmissionResolved(
-                ManualPromptPreparationAdmission::Accepted {
-                    correlation: second_correlation.clone(),
+                ManualPromptPreparationAdmission::RejectedActive {
+                    active_correlation: first_correlation.clone(),
                 },
             )]
         );
-        assert!(matches!(
-            second.effects.as_slice(),
-            [CoreEffect::PrepareManualPrompt(request)]
-                if request.correlation == second_correlation
-        ));
+        assert!(blocked_second.effects.is_empty());
 
         let late = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::ManualPromptPrepared(Box::new(ManualPromptOutcome::Rejected {
@@ -4483,10 +4599,19 @@ mod tests {
             })),
         ));
         assert!(late.events.is_empty());
-        assert_eq!(
-            controller.in_flight_manual_prompt_preparation,
-            Some(second_correlation.clone())
-        );
+        assert!(controller.in_flight_manual_prompt_preparation.is_none());
+
+        let second = controller.handle_input(CoreInput::Command(AppCommand::PrepareManualPrompt(
+            Box::new(manual_prompt_intent(
+                "/tmp/other-workspace",
+                "new workspace prompt",
+            )),
+        )));
+        assert!(matches!(
+            second.effects.as_slice(),
+            [CoreEffect::PrepareManualPrompt(request)]
+                if request.correlation == second_correlation
+        ));
 
         let current = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::ManualPromptPrepared(Box::new(ManualPromptOutcome::Rejected {
@@ -4501,6 +4626,18 @@ mod tests {
             [AppEvent::ManualPromptPrepared(_)]
         ));
         assert!(controller.in_flight_manual_prompt_preparation.is_none());
+
+        let back_to_first = controller.handle_input(CoreInput::Command(
+            AppCommand::PrepareManualPrompt(Box::new(manual_prompt_intent(
+                "/tmp/workspace",
+                "new prompt in the first workspace",
+            ))),
+        ));
+        assert!(matches!(
+            back_to_first.effects.as_slice(),
+            [CoreEffect::PrepareManualPrompt(request)]
+                if request.correlation == manual_prompt_correlation(3, "/tmp/workspace")
+        ));
     }
 
     #[test]

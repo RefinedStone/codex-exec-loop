@@ -84,7 +84,12 @@ the fixed Akra theme.
 - `:stop` and running-turn Ctrl-C must pause local automation first, then dispatch
   `AppCommand::RequestStopAllSessions`. Core owns stop generation, active-submission correlation,
   single-flight admission, and the one `TurnStarted` synchronization attempt. The TUI must not keep
-  a second pending-interrupt boolean or call the provider directly.
+  a second pending-interrupt boolean or call the provider directly. A lifecycle transition may
+  invalidate the worker permit, but new turn admission and newly requested conversation loading
+  remain behind the physical stop lease until the exact worker completion settles.
+- Cancelled manual-prompt preparation keeps its physical Core lease until exact worker settlement.
+  Its worker must recheck cancellation after blocking reads and before bootstrap or task-authority
+  mutations; stale completion filtering alone is not a side-effect guard.
 
 ### Conversation Markdown And Diff Detail
 

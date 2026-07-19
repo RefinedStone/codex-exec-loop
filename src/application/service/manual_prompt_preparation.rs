@@ -28,17 +28,35 @@ impl ManualPromptPreparationService {
         &self,
         request: ManualPromptPreparationRequest,
     ) -> ManualPromptPreparationResult {
+        self.prepare_guarded(request, &|| true)
+    }
+
+    pub fn prepare_guarded(
+        &self,
+        request: ManualPromptPreparationRequest,
+        is_current: &dyn Fn() -> bool,
+    ) -> ManualPromptPreparationResult {
+        if !is_current() {
+            return cancelled_preparation_result(
+                request,
+                PlanningRuntimeProjection::invalid("manual prompt preparation was cancelled"),
+            );
+        }
         let runtime_projection = self
             .planning
             .runtime
             .load_runtime_projection_or_invalid(&request.correlation.workspace_directory);
-        self.prepare_with_runtime_projection(request, runtime_projection)
+        if !is_current() {
+            return cancelled_preparation_result(request, runtime_projection);
+        }
+        self.prepare_with_runtime_projection(request, runtime_projection, is_current)
     }
 
     fn prepare_with_runtime_projection(
         &self,
         request: ManualPromptPreparationRequest,
         mut runtime_projection: PlanningRuntimeProjection,
+        is_current: &dyn Fn() -> bool,
     ) -> ManualPromptPreparationResult {
         let transcript_text = request.raw_prompt.trim().to_string();
         if transcript_text.is_empty() {
@@ -55,6 +73,7 @@ impl ManualPromptPreparationService {
                 &request.correlation,
                 &transcript_text,
                 runtime_projection,
+                is_current,
             );
             match workspace_preparation {
                 ManualWorkspacePreparation::Ready(prepared_projection) => {
@@ -66,16 +85,27 @@ impl ManualPromptPreparationService {
             };
         }
 
-        let intake =
-            self.planning
-                .runtime
-                .prepare_manual_prompt_intake(ManualPromptIntakeRequest {
-                    workspace_directory: request.correlation.workspace_directory.clone(),
-                    raw_prompt: transcript_text.clone(),
-                    legacy_source_turn_id: None,
-                    parent_thread_id: request.parent_thread_id,
-                    parent_turn_id: request.parent_turn_id,
-                });
+        if !is_current() {
+            return cancelled_preparation_result(request, runtime_projection);
+        }
+        let intake = self.planning.runtime.prepare_manual_prompt_intake_guarded(
+            ManualPromptIntakeRequest {
+                workspace_directory: request.correlation.workspace_directory.clone(),
+                raw_prompt: transcript_text.clone(),
+                legacy_source_turn_id: None,
+                parent_thread_id: request.parent_thread_id,
+                parent_turn_id: request.parent_turn_id,
+            },
+            is_current,
+        );
+        if !is_current() {
+            return ManualPromptPreparationResult::Rejected {
+                correlation: request.correlation,
+                transcript_text,
+                runtime_projection: Box::new(runtime_projection),
+                reason: "manual prompt preparation was cancelled".to_string(),
+            };
+        }
         if matches!(
             intake,
             ManualPromptIntakeOutcome::TaskCommitted { .. }
@@ -104,8 +134,16 @@ impl ManualPromptPreparationService {
         correlation: &crate::domain::planning::ManualPromptCorrelation,
         transcript_text: &str,
         initial_projection: PlanningRuntimeProjection,
+        is_current: &dyn Fn() -> bool,
     ) -> ManualWorkspacePreparation {
         let workspace_directory = correlation.workspace_directory.as_str();
+        if !is_current() {
+            return cancelled_workspace_preparation(
+                correlation,
+                transcript_text,
+                initial_projection,
+            );
+        }
         let stage_result = match self
             .planning
             .workspace
@@ -124,6 +162,13 @@ impl ManualPromptPreparationService {
                 );
             }
         };
+        if !is_current() {
+            return cancelled_workspace_preparation(
+                correlation,
+                transcript_text,
+                initial_projection,
+            );
+        }
         let promote_result = match self
             .planning
             .workspace
@@ -142,6 +187,13 @@ impl ManualPromptPreparationService {
                 );
             }
         };
+        if !is_current() {
+            return cancelled_workspace_preparation(
+                correlation,
+                transcript_text,
+                initial_projection,
+            );
+        }
         let runtime_projection = self
             .planning
             .runtime
@@ -168,6 +220,31 @@ impl ManualPromptPreparationService {
 enum ManualWorkspacePreparation {
     Ready(Box<PlanningRuntimeProjection>),
     Blocked(ManualPromptPreparationResult),
+}
+
+fn cancelled_preparation_result(
+    request: ManualPromptPreparationRequest,
+    runtime_projection: PlanningRuntimeProjection,
+) -> ManualPromptPreparationResult {
+    ManualPromptPreparationResult::Rejected {
+        correlation: request.correlation,
+        transcript_text: request.raw_prompt.trim().to_string(),
+        runtime_projection: Box::new(runtime_projection),
+        reason: "manual prompt preparation was cancelled".to_string(),
+    }
+}
+
+fn cancelled_workspace_preparation(
+    correlation: &crate::domain::planning::ManualPromptCorrelation,
+    transcript_text: &str,
+    runtime_projection: PlanningRuntimeProjection,
+) -> ManualWorkspacePreparation {
+    ManualWorkspacePreparation::Blocked(ManualPromptPreparationResult::Rejected {
+        correlation: correlation.clone(),
+        transcript_text: transcript_text.to_string(),
+        runtime_projection: Box::new(runtime_projection),
+        reason: "manual prompt preparation was cancelled".to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -519,6 +596,7 @@ mod tests {
         let outcome = service_for(WorkspaceBehavior::Normal).prepare_with_runtime_projection(
             request("recover the manual turn"),
             PlanningRuntimeProjection::invalid("transient authority read failure"),
+            &|| true,
         );
 
         assert!(matches!(
@@ -542,6 +620,7 @@ mod tests {
         let outcome = service_for(WorkspaceBehavior::Normal).prepare_with_runtime_projection(
             request("  bootstrap planning  "),
             PlanningRuntimeProjection::uninitialized(),
+            &|| true,
         );
 
         assert!(matches!(
@@ -560,6 +639,7 @@ mod tests {
         let outcome = service_for(WorkspaceBehavior::StageFailure).prepare_with_runtime_projection(
             request("bootstrap planning"),
             PlanningRuntimeProjection::uninitialized(),
+            &|| true,
         );
 
         assert!(matches!(
@@ -582,6 +662,7 @@ mod tests {
             &correlation(unique_workspace("stage-failure")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
+            &|| true,
         );
 
         assert!(matches!(
@@ -607,6 +688,7 @@ mod tests {
             &correlation(unique_workspace("promote-failure")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
+            &|| true,
         );
 
         assert!(matches!(
@@ -629,6 +711,7 @@ mod tests {
             &correlation(unique_workspace("review")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
+            &|| true,
         );
 
         assert!(matches!(
@@ -656,6 +739,7 @@ mod tests {
             &correlation(unique_workspace("ready")),
             "start planning",
             PlanningRuntimeProjection::uninitialized(),
+            &|| true,
         );
 
         assert!(matches!(

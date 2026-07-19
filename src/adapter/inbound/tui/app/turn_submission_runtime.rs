@@ -354,10 +354,17 @@ impl NativeTuiApp {
                     });
                 }
             }
-            Some(ManualPromptPreparationAdmission::RejectedActive { .. }) | None => {}
+            Some(ManualPromptPreparationAdmission::RejectedActive { .. }) => {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text:
+                        "previous turn preparation is still settling; retry after it finishes"
+                            .to_string(),
+                });
+            }
+            None => {}
         }
-        // Install adapter-local prompt metadata before applying a completion
-        // from the immediate manual preparation executor.
+        // Install adapter-local prompt metadata before the background completion
+        // can be polled from the Core mailbox.
         self.apply_core_dispatch_outcome(outcome);
     }
 
@@ -961,7 +968,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
     struct FakeAppServerPort;
@@ -1133,6 +1140,18 @@ mod tests {
 
     fn set_input(app: &mut NativeTuiApp, input: &str) {
         ready_conversation_mut(app).input_buffer = input.to_string();
+    }
+
+    fn poll_manual_prompt_preparation_completion(app: &mut NativeTuiApp) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app.pending_manual_prompt_preparation.is_some() && Instant::now() < deadline {
+            app.poll_core_runtime_inputs(16);
+            std::thread::yield_now();
+        }
+        assert!(
+            app.pending_manual_prompt_preparation.is_none(),
+            "manual prompt preparation should complete through the Core mailbox"
+        );
     }
 
     fn arm_manual_prompt_preparation(
@@ -1330,6 +1349,7 @@ mod tests {
         pending_app.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
         pending_app.resolve_startup_submit_queue();
+        poll_manual_prompt_preparation_completion(&mut pending_app);
 
         assert!(!ready_conversation(&pending_app).startup_submit_armed);
         assert_eq!(ready_conversation(&pending_app).input_buffer, "");
@@ -1343,6 +1363,7 @@ mod tests {
         set_input(&mut app, "  ship it  ");
 
         app.submit_manual_prompt_from_text("  ship it  ".to_string());
+        poll_manual_prompt_preparation_completion(&mut app);
 
         let conversation = ready_conversation(&app);
         assert_eq!(conversation.input_buffer, "");
@@ -1428,6 +1449,7 @@ mod tests {
         });
 
         app.resolve_startup_submit_queue();
+        poll_manual_prompt_preparation_completion(&mut app);
 
         let conversation = ready_conversation(&app);
         assert!(app.pending_manual_prompt_preparation.is_none());
@@ -1648,6 +1670,7 @@ mod tests {
         set_input(&mut app, "ship it");
 
         app.submit_manual_prompt_from_text("ship it".to_string());
+        poll_manual_prompt_preparation_completion(&mut app);
 
         app.start_turn_submission();
 
