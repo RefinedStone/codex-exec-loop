@@ -1,11 +1,12 @@
 use super::ManualPromptPreparationAdmission;
+use super::ReviewCenterSnapshot;
 use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, SessionCatalogReadySnapshot,
     SessionCatalogSnapshot,
 };
 use super::{
-    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    ConversationLoadCorrelation, ParallelPeekLoadCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use super::{StartupReadySnapshot, StartupSnapshot};
 use super::{TurnSteerAdmission, TurnSteerCorrelation};
@@ -67,6 +68,10 @@ pub enum CoreEffectCompletion {
         correlation: ParallelPeekLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,
     },
+    ReviewCenterLoaded {
+        correlation: ReviewCenterLoadCorrelation,
+        snapshot: ReviewCenterSnapshot,
+    },
     TurnSteered {
         correlation: TurnSteerCorrelation,
         result: Result<ConversationTurnSteerReceipt, String>,
@@ -99,6 +104,13 @@ pub enum AppEvent {
     ParallelPeekConversationLoaded {
         correlation: ParallelPeekLoadCorrelation,
         result: Result<Box<ConversationReadySnapshot>, String>,
+    },
+    ReviewCenterLoadStarted {
+        correlation: ReviewCenterLoadCorrelation,
+    },
+    ReviewCenterLoaded {
+        correlation: ReviewCenterLoadCorrelation,
+        snapshot: ReviewCenterSnapshot,
     },
     ManualPromptPreparationAdmissionResolved(ManualPromptPreparationAdmission),
     TurnSubmissionAdmissionResolved(TurnSubmissionAdmission),

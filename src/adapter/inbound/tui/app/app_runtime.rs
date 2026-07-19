@@ -35,7 +35,6 @@ use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 
 use super::queue_overlay_ui::{QueueMutationWorkerResult, QueueOverlayAuthorityLoadResult};
-use super::reviews_overlay_ui::{ReviewsOverlayAuthoritySnapshot, ReviewsOverlayLoadRequest};
 use super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowOverlayUiState,
     ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
@@ -75,10 +74,6 @@ pub(super) enum BackgroundMessage {
         event: ConversationStreamEvent,
     },
     ConversationRuntimeNotice(String),
-    ReviewsOverlayLoaded {
-        request: ReviewsOverlayLoadRequest,
-        authority: ReviewsOverlayAuthoritySnapshot,
-    },
     QueueOverlayAuthorityLoaded(Box<QueueOverlayAuthorityLoadResult>),
     QueueMutationCompleted(Box<QueueMutationWorkerResult>),
     OperatorAlert(OperatorAlert),
@@ -1172,13 +1167,6 @@ impl NativeTuiApplicationHandle {
         self.conversations
             .resolve_approval_request(approval_id, decision)
     }
-    pub(super) fn load_reviews_overlay_authority(
-        &self,
-        request: &ReviewsOverlayLoadRequest,
-    ) -> ReviewsOverlayAuthoritySnapshot {
-        self.conversations.load_reviews_overlay_authority(request)
-    }
-
     pub(super) fn persist_review_center_approval_review_for_workspace(
         &self,
         workspace_dir: &str,
@@ -1219,34 +1207,6 @@ impl NativeTuiConversationHandle {
             .resolve_approval_request(approval_id, decision)
             .map_err(|error| error.to_string())
     }
-    fn load_reviews_overlay_authority(
-        &self,
-        request: &ReviewsOverlayLoadRequest,
-    ) -> ReviewsOverlayAuthoritySnapshot {
-        let workspace_directory = request.context.workspace_directory.as_str();
-        let current_thread_reviews = match request.context.active_thread.as_ref() {
-            Some(active_thread) => self
-                .service
-                .load_review_center_thread_reviews_for_workspace(
-                    workspace_directory,
-                    &active_thread.thread_id,
-                )
-                .map_err(|error| error.to_string()),
-            None => Ok(Vec::new()),
-        };
-        ReviewsOverlayAuthoritySnapshot {
-            current_thread_reviews,
-            pending_inbox: self
-                .service
-                .load_review_center_pending_inbox_for_workspace(workspace_directory)
-                .map_err(|error| error.to_string()),
-            recent_history: self
-                .service
-                .load_review_center_recent_history_for_workspace(workspace_directory)
-                .map_err(|error| error.to_string()),
-        }
-    }
-
     pub(super) fn persist_review_center_approval_review_for_workspace(
         &self,
         workspace_dir: &str,
@@ -1501,6 +1461,17 @@ impl NativeTuiApp {
                 result,
             } => {
                 self.apply_parallel_peek_conversation_load(correlation, result);
+            }
+            AppEvent::ReviewCenterLoadStarted { .. } => {}
+            AppEvent::ReviewCenterLoaded {
+                correlation,
+                snapshot,
+            } => {
+                if self.apply_reviews_overlay_loaded(correlation, snapshot)
+                    == super::reviews_overlay_ui::ReviewsOverlayLoadCompletion::ReloadRequired
+                {
+                    self.start_reviews_overlay_authority_load();
+                }
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}
             AppEvent::TurnSteerAdmissionResolved(_) => {}

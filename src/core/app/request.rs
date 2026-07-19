@@ -66,3 +66,24 @@ impl ParallelPeekLoadCorrelation {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewCenterLoadCorrelation {
+    pub generation: u64,
+    pub workspace_directory: String,
+    pub active_thread_id: Option<String>,
+}
+
+impl ReviewCenterLoadCorrelation {
+    pub fn new(
+        generation: u64,
+        workspace_directory: impl Into<String>,
+        active_thread_id: Option<String>,
+    ) -> Self {
+        Self {
+            generation,
+            workspace_directory: workspace_directory.into(),
+            active_thread_id,
+        }
+    }
+}

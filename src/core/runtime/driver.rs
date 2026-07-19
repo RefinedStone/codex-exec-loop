@@ -101,9 +101,10 @@ mod tests {
     use super::*;
     use crate::core::app::{
         AppEvent, CoreEffectCompletion, CorePromptOrigin, ManualPromptPreparationAdmission,
-        ManualPromptPreparationIntent, StartupAttachmentSnapshot, StartupCheckCorrelation,
-        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, TurnSteerAdmission,
-        TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
+        ManualPromptPreparationIntent, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
+        StartupAttachmentSnapshot, StartupCheckCorrelation, StartupDiagnosticSnapshot,
+        StartupReadySnapshot, StartupSnapshot, TurnSteerAdmission, TurnSteerCorrelation,
+        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::ConversationTurnSteerRequest;
@@ -162,6 +163,27 @@ mod tests {
                         reason: "blocked".to_string(),
                     },
                 )),
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediateReviewCenterExecutor;
+
+    impl CoreEffectExecutor for ImmediateReviewCenterExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::LoadReviewCenter { correlation } = effect else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::ReviewCenterLoaded {
+                    correlation,
+                    snapshot: ReviewCenterSnapshot {
+                        current_thread_reviews: Ok(Vec::new()),
+                        pending_inbox: Ok(Vec::new()),
+                        recent_history: Ok(Vec::new()),
+                    },
+                },
             ))
         }
     }
@@ -460,6 +482,62 @@ mod tests {
                 && accepted.request_id == accepted.generation
                 && result.correlation() == accepted
         ));
+    }
+
+    #[test]
+    fn immediate_review_center_effect_is_started_before_loaded_and_advances_generation() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediateReviewCenterExecutor, rx);
+        let snapshot = ReviewCenterSnapshot {
+            current_thread_reviews: Ok(Vec::new()),
+            pending_inbox: Ok(Vec::new()),
+            recent_history: Ok(Vec::new()),
+        };
+        let first_correlation =
+            ReviewCenterLoadCorrelation::new(1, "/tmp/workspace", Some("thread-1".to_string()));
+
+        let first = runtime.dispatch_command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/workspace".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+        });
+
+        assert_eq!(
+            first.events,
+            vec![
+                AppEvent::ReviewCenterLoadStarted {
+                    correlation: first_correlation.clone(),
+                },
+                AppEvent::ReviewCenterLoaded {
+                    correlation: first_correlation.clone(),
+                    snapshot: snapshot.clone(),
+                },
+            ]
+        );
+        assert_eq!(
+            first.effects,
+            vec![CoreEffect::LoadReviewCenter {
+                correlation: first_correlation,
+            }]
+        );
+
+        let second_correlation =
+            ReviewCenterLoadCorrelation::new(2, "/tmp/workspace", Some("thread-1".to_string()));
+        let second = runtime.dispatch_command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/workspace".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+        });
+        assert_eq!(
+            second.events,
+            vec![
+                AppEvent::ReviewCenterLoadStarted {
+                    correlation: second_correlation.clone(),
+                },
+                AppEvent::ReviewCenterLoaded {
+                    correlation: second_correlation,
+                    snapshot,
+                },
+            ]
+        );
     }
 
     #[test]

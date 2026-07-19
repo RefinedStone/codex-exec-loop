@@ -61,6 +61,12 @@ Parallel peek load는 core-correlated read입니다. Core가 요청 thread에 �
 전에 버립니다. TUI는 agent 선택과 loading/status/scroll 표현을 소유하고 다른 shell overlay가
 대체하면 preview를 지웁니다. Peek 결과는 interactive conversation을 절대 교체하지 않습니다.
 
+Review Center read도 같은 latest-wins 경계를 따릅니다. Core가 workspace와 선택적 active thread를
+correlation으로 묶고 effect runner에서 authority read를 시작하며 stale 또는 중복 completion을
+버립니다. Section별 실패는 core 소유 snapshot의 data로 남으므로 한 source의 실패가 다른 section을
+숨기지 않습니다. TUI는 overlay lifecycle과 표시용 thread 문맥만 소유하고 현재 workspace 또는
+thread identity가 바뀌면 새 load를 요청합니다.
+
 Session rename도 core-correlated single-flight 작업입니다. Provider의 성공 응답을 core가 수락하면
 일치하는 catalog row, 불러온 conversation title, stream identity를 함께 갱신합니다. 충돌하는
 catalog load와 같은 thread의 conversation load는 버리지 않고 rename 완료 뒤로 지연하므로 예전

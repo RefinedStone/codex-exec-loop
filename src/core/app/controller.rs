@@ -1,10 +1,10 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
     CoreEffectCompletion, CoreInput, ManualPromptPreparationAdmission,
-    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
-    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
-    TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
@@ -39,6 +39,8 @@ pub struct CoreController {
     deferred_conversation_load: Option<(String, String)>,
     next_parallel_peek_load_generation: u64,
     active_parallel_peek_load: Option<ParallelPeekLoadCorrelation>,
+    next_review_center_load_generation: u64,
+    active_review_center_load: Option<ReviewCenterLoadCorrelation>,
     next_manual_prompt_preparation_generation: u64,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
@@ -65,6 +67,8 @@ impl CoreController {
             deferred_conversation_load: None,
             next_parallel_peek_load_generation: 1,
             active_parallel_peek_load: None,
+            next_review_center_load_generation: 1,
+            active_review_center_load: None,
             next_manual_prompt_preparation_generation: 1,
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
@@ -176,6 +180,27 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events: Vec::new(),
                     effects: vec![CoreEffect::LoadParallelPeekConversation { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::LoadReviewCenter {
+                workspace_directory,
+                active_thread_id,
+            }) => {
+                let correlation = ReviewCenterLoadCorrelation::new(
+                    take_generation(
+                        &mut self.next_review_center_load_generation,
+                        "review center load",
+                    ),
+                    workspace_directory,
+                    active_thread_id,
+                );
+                self.active_review_center_load = Some(correlation.clone());
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::ReviewCenterLoadStarted {
+                        correlation: correlation.clone(),
+                    }],
+                    effects: vec![CoreEffect::LoadReviewCenter { correlation }],
                     snapshot: self.snapshot(),
                 }
             }
@@ -416,6 +441,23 @@ impl CoreController {
                     events: vec![AppEvent::ParallelPeekConversationLoaded {
                         correlation,
                         result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::ReviewCenterLoaded {
+                correlation,
+                snapshot,
+            }) => {
+                if self.active_review_center_load.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.active_review_center_load = None;
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::ReviewCenterLoaded {
+                        correlation,
+                        snapshot,
                     }],
                     effects: Vec::new(),
                     snapshot: self.snapshot(),
@@ -800,7 +842,7 @@ mod tests {
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
-        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
+        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin, ReviewCenterSnapshot,
         SessionCatalogReadySnapshot, SessionCatalogSnapshot, TurnSubmissionRequest,
     };
     use crate::core::app::{
@@ -861,6 +903,26 @@ mod tests {
         thread_id: &str,
     ) -> ParallelPeekLoadCorrelation {
         ParallelPeekLoadCorrelation::new(generation, thread_id)
+    }
+
+    fn review_center_load_correlation(
+        generation: u64,
+        workspace_directory: &str,
+        active_thread_id: Option<&str>,
+    ) -> ReviewCenterLoadCorrelation {
+        ReviewCenterLoadCorrelation::new(
+            generation,
+            workspace_directory,
+            active_thread_id.map(str::to_string),
+        )
+    }
+
+    fn empty_review_center_snapshot() -> ReviewCenterSnapshot {
+        ReviewCenterSnapshot {
+            current_thread_reviews: Ok(Vec::new()),
+            pending_inbox: Ok(Vec::new()),
+            recent_history: Ok(Vec::new()),
+        }
     }
 
     fn session_rename_correlation(
@@ -1533,6 +1595,46 @@ mod tests {
             outcome.effects,
             vec![CoreEffect::LoadParallelPeekConversation {
                 correlation: parallel_peek_load_correlation(2, "thread-new"),
+            }]
+        );
+    }
+
+    #[test]
+    fn newer_review_center_load_supersedes_the_active_correlation() {
+        let mut controller = CoreController::new();
+        let first = controller.handle_input(CoreInput::Command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/old".to_string(),
+            active_thread_id: Some("thread-old".to_string()),
+        }));
+        let second = controller.handle_input(CoreInput::Command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/new".to_string(),
+            active_thread_id: Some("thread-new".to_string()),
+        }));
+        let first_correlation = review_center_load_correlation(1, "/tmp/old", Some("thread-old"));
+        let second_correlation = review_center_load_correlation(2, "/tmp/new", Some("thread-new"));
+
+        assert_eq!(
+            first.events,
+            vec![AppEvent::ReviewCenterLoadStarted {
+                correlation: first_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            first.effects,
+            vec![CoreEffect::LoadReviewCenter {
+                correlation: first_correlation,
+            }]
+        );
+        assert_eq!(
+            second.events,
+            vec![AppEvent::ReviewCenterLoadStarted {
+                correlation: second_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            second.effects,
+            vec![CoreEffect::LoadReviewCenter {
+                correlation: second_correlation,
             }]
         );
     }
@@ -2426,6 +2528,93 @@ mod tests {
             vec![AppEvent::ParallelPeekConversationLoaded {
                 correlation: parallel_peek_load_correlation(2, "thread-peek"),
                 result: Err("latest result".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn review_center_completion_accepts_only_the_latest_generation_once() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/old".to_string(),
+            active_thread_id: Some("thread-old".to_string()),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/new".to_string(),
+            active_thread_id: Some("thread-new".to_string()),
+        }));
+        let snapshot = empty_review_center_snapshot();
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ReviewCenterLoaded {
+                correlation: review_center_load_correlation(1, "/tmp/old", Some("thread-old")),
+                snapshot: snapshot.clone(),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let correlation = review_center_load_correlation(2, "/tmp/new", Some("thread-new"));
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ReviewCenterLoaded {
+                correlation: correlation.clone(),
+                snapshot: snapshot.clone(),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::ReviewCenterLoaded {
+                correlation: correlation.clone(),
+                snapshot: snapshot.clone(),
+            }]
+        );
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ReviewCenterLoaded {
+                correlation,
+                snapshot,
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+    }
+
+    #[test]
+    fn review_center_same_identity_aba_rejects_the_older_generation() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/a".to_string(),
+            active_thread_id: Some("thread-a".to_string()),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/b".to_string(),
+            active_thread_id: Some("thread-b".to_string()),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadReviewCenter {
+            workspace_directory: "/tmp/a".to_string(),
+            active_thread_id: Some("thread-a".to_string()),
+        }));
+        let snapshot = empty_review_center_snapshot();
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ReviewCenterLoaded {
+                correlation: review_center_load_correlation(1, "/tmp/a", Some("thread-a")),
+                snapshot: snapshot.clone(),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let correlation = review_center_load_correlation(3, "/tmp/a", Some("thread-a"));
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ReviewCenterLoaded {
+                correlation: correlation.clone(),
+                snapshot: snapshot.clone(),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::ReviewCenterLoaded {
+                correlation,
+                snapshot,
             }]
         );
     }

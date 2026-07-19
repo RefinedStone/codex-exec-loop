@@ -505,6 +505,7 @@ fn future_core_app_public_contracts_are_core_owned() {
             "src/core/app/event.rs",
             "src/core/app/manual_prompt.rs",
             "src/core/app/projection.rs",
+            "src/core/app/review_center.rs",
             "src/core/app/snapshot.rs",
             "src/core/app/state.rs",
             "src/core/app/turn_steer.rs",
@@ -766,6 +767,7 @@ fn tui_review_presentation_reads_screen_model_without_effects() {
         &["src/adapter/inbound/tui/app/shell_presentation/overlays/popup/reviews.rs"],
         &[
             "NativeTuiApp",
+            "crate::application::",
             ".application",
             "load_review_center_",
             "ReviewCenterRepositoryPort",
@@ -773,6 +775,33 @@ fn tui_review_presentation_reads_screen_model_without_effects() {
             "std::thread",
             "std::sync",
         ],
+    );
+}
+
+#[test]
+fn tui_review_center_loads_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI Review Center authority reads must run as core effects from every TUI ownership module",
+        &["src/adapter/inbound/tui/app"],
+        &[
+            "load_reviews_overlay_authority",
+            ".load_review_center_thread_reviews_for_workspace(",
+            ".load_review_center_pending_inbox_for_workspace(",
+            ".load_review_center_recent_history_for_workspace(",
+            "BackgroundMessage::ReviewsOverlayLoaded",
+            "next_request_id",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "TUI Review Center controller must not spawn its own authority worker",
+        &["src/adapter/inbound/tui/app/shell_controller.rs"],
+        &["std::thread::spawn"],
+    );
+
+    let controller = fs::read_to_string("src/adapter/inbound/tui/app/shell_controller.rs").unwrap();
+    assert!(
+        controller.contains("AppCommand::LoadReviewCenter {"),
+        "TUI Review Center loads must positively enter through AppCommand::LoadReviewCenter"
     );
 }
 
