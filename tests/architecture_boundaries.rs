@@ -847,7 +847,7 @@ fn parallel_pending_dispatch_poll_never_reads_authority_under_the_control_plane_
             .expect("parallel control-plane effect runner source should load");
     let poll_worker = runner
         .split_once("pub fn spawn_pending_dispatch_wake_poll(")
-        .and_then(|(_, body)| body.split_once("pub fn enqueue_slot_capacity_dispatch("))
+        .and_then(|(_, body)| body.split_once("pub fn spawn_dispatch_command_mutation("))
         .map(|(body, _)| body)
         .expect("pending dispatch poll worker should have a bounded source body");
     assert!(
@@ -863,6 +863,167 @@ fn parallel_pending_dispatch_poll_never_reads_authority_under_the_control_plane_
         runtime.contains("ParallelModePendingDispatchPollCorrelation")
             && runtime.contains("pending_dispatch_poll_in_flight"),
         "pending dispatch polling must retain typed operation/workspace/epoch correlation before worker dispatch"
+    );
+}
+
+#[test]
+fn parallel_dispatch_mutations_never_run_inline_under_the_control_plane_mutex() {
+    assert_no_forbidden_references_in_paths(
+        "parallel dispatch enqueue and cancellation must dispatch a worker before touching durable authority",
+        &[
+            "src/application/service/parallel_mode/control_plane/controller.rs",
+            "src/application/service/parallel_mode/control_plane/host.rs",
+            "src/adapter/inbound/tui/app/parallel_mode.rs",
+        ],
+        &[
+            ".load_runtime_projection_or_invalid(",
+            ".enqueue_dispatch_commands_for_event(",
+            ".enqueue_dispatch_commands_for_trigger(",
+            ".cancel_dispatch_commands(",
+        ],
+    );
+
+    let runner =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
+            .expect("parallel control-plane effect runner source should load");
+    let mutation_worker = runner
+        .split_once("pub fn spawn_dispatch_command_mutation(")
+        .and_then(|(_, body)| {
+            body.split_once("\n    }\n}\n\nfn supervisor_refresh_started_payload")
+        })
+        .map(|(body, _)| body)
+        .expect("parallel dispatch mutation worker should have a bounded source body");
+    let (before_spawn, worker_closure) = mutation_worker
+        .split_once("thread::spawn(move || {")
+        .expect("parallel dispatch mutation must have an explicit worker closure");
+    for forbidden in [
+        ".load_runtime_projection_or_invalid(",
+        ".enqueue_dispatch_commands_for_event(",
+        ".enqueue_dispatch_commands_for_trigger(",
+        ".cancel_dispatch_commands(",
+    ] {
+        assert!(
+            !before_spawn.contains(forbidden),
+            "parallel dispatch mutation must not perform {forbidden} before spawning its worker"
+        );
+    }
+    for required in [
+        ".load_runtime_projection_or_invalid(",
+        ".enqueue_dispatch_commands_for_event(",
+        ".enqueue_dispatch_commands_for_trigger(",
+        ".cancel_dispatch_commands(",
+        "ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted",
+    ] {
+        assert!(
+            worker_closure.contains(required),
+            "parallel dispatch mutation closure must exclusively own {required}"
+        );
+    }
+
+    let runtime = fs::read_to_string("src/application/service/parallel_mode/control_plane/mod.rs")
+        .expect("parallel control-plane runtime source should load");
+    for required in [
+        "ParallelModeDispatchMutationCorrelation",
+        "ParallelModeDispatchCleanupCorrelation",
+        "dispatch_mutation_in_flight",
+        "next_dispatch_mutation_operation_id",
+        "pending_dispatch_mutations: VecDeque",
+        "canonical_enqueue_trigger",
+        "RetryUnsettledDispatchCleanup",
+        "unsettled_dispatch_cleanups: VecDeque",
+        "MAX_UNSETTLED_DISPATCH_CLEANUPS",
+    ] {
+        assert!(
+            runtime.contains(required),
+            "dispatch mutation ordering must retain {required}"
+        );
+    }
+
+    let tui = fs::read_to_string("src/adapter/inbound/tui/app/parallel_mode.rs")
+        .expect("TUI parallel adapter source should load");
+    for required in [
+        "record_global_runtime_notice",
+        "clear_global_runtime_notice",
+        "surface_global_runtime_notices_if_ready",
+    ] {
+        assert!(
+            tui.contains(required),
+            "global cleanup notice lifecycle must retain {required}"
+        );
+    }
+
+    let controller =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/controller.rs")
+            .expect("parallel control-plane controller source should load");
+    let pulse = controller
+        .split_once("    pub fn tick(")
+        .and_then(|(_, body)| body.split_once("    fn cleanup_retry_interval_due("))
+        .map(|(body, _)| body)
+        .expect("parallel control-plane pulse should have a bounded source body");
+    let refresh_position = pulse
+        .find("ParallelModeControlPlaneCommand::RefreshSupervisor")
+        .expect("pulse should retain supervisor refresh");
+    let poll_position = pulse
+        .find("poll_pending_dispatch_wake")
+        .expect("pulse should retain pending wake poll");
+    let cleanup_fallback_position = pulse
+        .rfind("start_cleanup_retry")
+        .expect("pulse should retain a bounded cleanup fallback");
+    assert!(
+        pulse.contains("oldest_unsettled_dispatch_cleanup")
+            && pulse.contains("cleanup_retry_deferred")
+            && refresh_position < poll_position
+            && poll_position < cleanup_fallback_position,
+        "the production pulse must preserve refresh then poll priority before its fair cleanup fallback"
+    );
+    let cleanup_driver = controller
+        .split_once("    fn start_cleanup_retry(")
+        .and_then(|(_, body)| body.split_once("    pub fn supervisor_refresh_due("))
+        .map(|(body, _)| body)
+        .expect("cleanup retry driver should have a bounded source body");
+    assert!(
+        cleanup_driver.contains("RetryUnsettledDispatchCleanup")
+            && cleanup_driver.contains("last_cleanup_retry_at")
+            && !cleanup_driver.contains("last_orchestrator_wake_poll_at"),
+        "typed cleanup retry cadence must not consume the pending-wake poll cadence"
+    );
+
+    let shell_runtime = fs::read_to_string("src/adapter/inbound/tui/app/shell_runtime.rs")
+        .expect("TUI shell runtime source should load");
+    assert!(
+        shell_runtime
+            .contains("tick_parallel_mode_control_plane(now, &parallel_presentation_sample)",),
+        "the production TUI shell pulse must drive the parallel control plane"
+    );
+}
+
+#[test]
+fn parallel_post_turn_continuation_reuses_the_accepted_runtime_projection() {
+    let runner =
+        fs::read_to_string("src/application/service/parallel_mode/control_plane/effect_runner.rs")
+            .expect("parallel control-plane effect runner source should load");
+    assert!(
+        !runner.contains("continue_post_turn_queue_command"),
+        "post-turn continuation must not rebuild its command by rereading planning authority"
+    );
+
+    let post_turn_execution = fs::read_to_string(
+        "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
+    )
+    .expect("TUI post-turn execution source should load");
+    assert!(
+        post_turn_execution.contains("outcome.runtime_projection.has_actionable_queue_head()")
+            && post_turn_execution.contains(".with_runtime_projection_routing("),
+        "the exact accepted post-turn runtime projection must carry workspace and queue-head authority into routing"
+    );
+
+    let parallel_adapter = fs::read_to_string("src/adapter/inbound/tui/app/parallel_mode.rs")
+        .expect("TUI parallel adapter source should load");
+    assert!(
+        parallel_adapter.contains("evaluation.provenance.has_actionable_queue_head")
+            && parallel_adapter.contains("runtime_projection_workspace_directory")
+            && parallel_adapter.contains("has_actionable_queue_head,"),
+        "parallel continuation must pass the accepted queue-head fact into the control-plane command"
     );
 }
 

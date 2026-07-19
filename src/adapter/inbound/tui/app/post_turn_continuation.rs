@@ -22,6 +22,8 @@ pub(super) struct PostTurnEvaluationCompletionPayload {
 pub(super) struct PostTurnContinuationRoutingContext {
     route_after_reduction: bool,
     parallel_mode_post_turn_queue_signal: Option<ParallelModePostTurnQueueSignal>,
+    runtime_projection_workspace_directory: Option<String>,
+    has_actionable_queue_head: bool,
 }
 
 impl NativeTuiApp {
@@ -46,12 +48,19 @@ impl NativeTuiApp {
             ConversationRuntimeEvent::StreamSnapshotApplied(snapshot)
                 if matches!(&snapshot.update, TurnStreamUpdate::Failed { .. })
         );
+        let (
+            parallel_mode_post_turn_queue_signal,
+            runtime_projection_workspace_directory,
+            has_actionable_queue_head,
+        ) = self.parallel_mode_post_turn_queue_projection(event);
         PostTurnContinuationRoutingContext {
             route_after_reduction: matches!(
                 event,
                 ConversationRuntimeEvent::PostTurnEvaluationCompleted { .. }
             ) || failed_stream_snapshot,
-            parallel_mode_post_turn_queue_signal: self.parallel_mode_post_turn_queue_signal(event),
+            parallel_mode_post_turn_queue_signal,
+            runtime_projection_workspace_directory,
+            has_actionable_queue_head,
         }
     }
 
@@ -66,8 +75,10 @@ impl NativeTuiApp {
         let queued_auto_prompt_available = conversation_runtime_auto_prompt_queued(effects);
         let parallel_dispatch_consumed_auto_prompt = self
             .apply_parallel_mode_post_turn_queue_continuation(
+                context.runtime_projection_workspace_directory,
                 queued_auto_prompt_available,
                 context.parallel_mode_post_turn_queue_signal,
+                context.has_actionable_queue_head,
             );
         let stale_parallel_only_prompt = queued_auto_prompt_available
             && !parallel_dispatch_consumed_auto_prompt

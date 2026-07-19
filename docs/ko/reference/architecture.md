@@ -196,6 +196,25 @@ accounting, stale completion drop, wake coalescing, durable backpressure, 단일
 disable, workspace 전환, duplicate, ABA completion은 폐기합니다. 읽기 실패는 현재 projection을
 보존하고 다음 주기 tick이 재시도가 됩니다.
 
+Post-turn continuation은 승인된 완료 평가와 같은 runtime projection의 queue-head 값을 그대로
+사용하며 facade lock 안에서 planning authority를 다시 읽지 않습니다. Durable dispatch enqueue와
+cancel도 effect-runner worker에서만 실행합니다. Runtime은 이를 단조 증가
+operation/workspace/epoch correlation으로 직렬화하고 supervisor refresh, queued wake, pending poll
+순서를 보존합니다. 첫 worker가 실행 중이어도 workspace/epoch/canonical durable trigger가 같은
+enqueue 의도는 하나로 합칩니다. 따라서 slot-capacity와 task-intake 요청은 동일한 durable
+task-intake mutation을 공유합니다. Cancel은 대기 enqueue보다 먼저 정확히 닫힌 epoch에 대해
+끝까지 실행합니다. 현재 workspace의 cancel 실패는 상태에 표시합니다. 모든 cleanup 실패는
+원래 operation/workspace/epoch/command identity와 함께 bounded unsettled-cleanup ledger에
+남습니다. 대응하는 전역 runtime notice는 conversation의 Loading/Failed 상태와 독립적으로
+보존되므로, 나중에 Ready conversation이 생기면 대체 workspace projection을 바꾸지 않고
+표시됩니다. 정확한 correlation 재시도는 control-plane effect runner를 통해 원래 cancellation을
+다시 실행합니다. Production TUI control-plane pulse는 conversation의 Loading/Failed 상태와
+무관하게 기존 bounded 주기마다 가장 오래된 미정산 exact correlation을 재시도합니다. 활성
+replacement epoch 작업은 refresh, queued wake, pending poll 우선순위를 유지하고, cleanup은 한 번
+bounded defer한 뒤 다음 idle pulse를 받아 어느 lane도 굶지 않습니다. Cleanup cadence는 pending
+poll cadence와 분리하며 mutation coalescing이 재시도를 single-flight로 유지합니다. 성공하면
+ledger를 정산하고 notice를 지웁니다. 그 밖의 늦거나 ABA인 completion은 진단에만 남습니다.
+
 Pool mutation은 repository-scoped OS lock도 획득합니다. 각 allocation은 추측할 수 없는 정확한
 generation을 받고 lease, session, event, delivery, cleanup까지 전달됩니다. 지연 event는 mutation
 전에 같은 generation인지 비교합니다. 모든 지원 플랫폼에서 SQLite가 권한을 가집니다.

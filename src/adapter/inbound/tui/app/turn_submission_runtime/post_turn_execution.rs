@@ -75,8 +75,12 @@ impl NativeTuiApp {
         &mut self,
         execution: PostTurnEvaluationExecution,
     ) {
+        let workspace_directory = execution.runtime_projection_workspace_directory;
         self.apply_post_turn_evaluation_completion_payload(PostTurnEvaluationCompletionPayload {
-            evaluation: Box::new(tui_post_turn_evaluation_outcome(execution.evaluation)),
+            evaluation: Box::new(tui_post_turn_evaluation_outcome(
+                execution.evaluation,
+                workspace_directory,
+            )),
             planning_worker_panel_state: execution.planning_worker_panel_state,
         });
     }
@@ -178,9 +182,12 @@ fn apply_post_turn_start_state(
 
 fn tui_post_turn_evaluation_outcome(
     outcome: ApplicationPostTurnEvaluationOutcome,
+    workspace_directory: String,
 ) -> PostTurnEvaluationOutcome {
+    let has_actionable_queue_head = outcome.runtime_projection.has_actionable_queue_head();
     PostTurnEvaluationOutcome {
-        provenance: tui_post_turn_evaluation_provenance(outcome.provenance),
+        provenance: tui_post_turn_evaluation_provenance(outcome.provenance)
+            .with_runtime_projection_routing(workspace_directory, has_actionable_queue_head),
         planning_repair_state: outcome
             .planning_repair_state
             .map(|state| PlanningRepairState {

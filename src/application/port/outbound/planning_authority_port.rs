@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 
@@ -700,6 +700,10 @@ pub struct NoopPlanningAuthorityPort {
     resolve_authority_location_error: Option<&'static str>,
     runtime_projection: Option<PlanningAuthorityRuntimeProjectionSnapshot>,
     shared_runtime_projection: Option<Arc<Mutex<PlanningAuthorityRuntimeProjectionSnapshot>>>,
+    shared_runtime_dispatch_mutation_gate: Option<Arc<Mutex<()>>>,
+    shared_runtime_dispatch_mutation_count: Option<Arc<AtomicUsize>>,
+    cancel_runtime_dispatch_commands_error: Option<&'static str>,
+    shared_cancel_runtime_dispatch_commands_error: Option<Arc<Mutex<Option<String>>>>,
     clear_parallel_runtime_projections_error: Option<&'static str>,
     clear_parallel_runtime_projections_for_tasks_error: Option<&'static str>,
     apply_parallel_pool_reset_report_error: Option<&'static str>,
@@ -725,6 +729,29 @@ impl NoopPlanningAuthorityPort {
         snapshot: Arc<Mutex<PlanningAuthorityRuntimeProjectionSnapshot>>,
     ) -> Self {
         self.shared_runtime_projection = Some(snapshot);
+        self
+    }
+
+    pub fn with_shared_runtime_dispatch_mutation_gate(mut self, gate: Arc<Mutex<()>>) -> Self {
+        self.shared_runtime_dispatch_mutation_gate = Some(gate);
+        self
+    }
+
+    pub fn with_shared_runtime_dispatch_mutation_count(mut self, count: Arc<AtomicUsize>) -> Self {
+        self.shared_runtime_dispatch_mutation_count = Some(count);
+        self
+    }
+
+    pub fn with_cancel_runtime_dispatch_commands_error(mut self, message: &'static str) -> Self {
+        self.cancel_runtime_dispatch_commands_error = Some(message);
+        self
+    }
+
+    pub fn with_shared_cancel_runtime_dispatch_commands_error(
+        mut self,
+        error: Arc<Mutex<Option<String>>>,
+    ) -> Self {
+        self.shared_cancel_runtime_dispatch_commands_error = Some(error);
         self
     }
 
@@ -959,6 +986,17 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
         _command: &ParallelModeDispatchCommandSnapshot,
     ) -> Result<bool> {
+        if let Some(count) = &self.shared_runtime_dispatch_mutation_count {
+            count.fetch_add(1, Ordering::SeqCst);
+        }
+        let _guard = self
+            .shared_runtime_dispatch_mutation_gate
+            .as_ref()
+            .map(|gate| {
+                gate.lock()
+                    .map_err(|_| anyhow!("shared runtime dispatch mutation gate is poisoned"))
+            })
+            .transpose()?;
         Ok(true)
     }
 
@@ -983,6 +1021,34 @@ impl PlanningAuthorityPort for NoopPlanningAuthorityPort {
         _workspace_dir: &str,
         _reason: &str,
     ) -> Result<usize> {
+        if let Some(count) = &self.shared_runtime_dispatch_mutation_count {
+            count.fetch_add(1, Ordering::SeqCst);
+        }
+        let _guard = self
+            .shared_runtime_dispatch_mutation_gate
+            .as_ref()
+            .map(|gate| {
+                gate.lock()
+                    .map_err(|_| anyhow!("shared runtime dispatch mutation gate is poisoned"))
+            })
+            .transpose()?;
+        if let Some(message) = self.cancel_runtime_dispatch_commands_error {
+            anyhow::bail!(message);
+        }
+        if let Some(error) = self
+            .shared_cancel_runtime_dispatch_commands_error
+            .as_ref()
+            .map(|error| {
+                error
+                    .lock()
+                    .map_err(|_| anyhow!("shared cancel dispatch error is poisoned"))
+                    .map(|mut error| error.take())
+            })
+            .transpose()?
+            .flatten()
+        {
+            anyhow::bail!(error);
+        }
         Ok(0)
     }
 

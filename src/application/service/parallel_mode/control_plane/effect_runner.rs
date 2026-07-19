@@ -17,13 +17,13 @@ use crate::diagnostics::event_log;
 use crate::domain::parallel_mode::{
     ParallelModeControlPlaneWorkerEvent, ParallelModeDispatchOutcome,
     ParallelModeOrchestratorStateMachine, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
-    ParallelModePoolResetRunId, ParallelModePoolResetScope, ParallelModePostTurnQueueSignal,
-    ParallelModeReadinessSnapshot, ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
+    ParallelModePoolResetRunId, ParallelModePoolResetScope, ParallelModeReadinessSnapshot,
+    ParallelModeRuntimeEvent, ParallelModeSupervisorSnapshot,
 };
 
 use super::{
-    ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffectId,
-    ParallelModeControlPlaneWake, ParallelModePendingDispatchPollCorrelation,
+    ParallelModeControlPlaneEffectId, ParallelModeControlPlaneWake, ParallelModeDispatchMutation,
+    ParallelModeDispatchMutationCorrelation, ParallelModePendingDispatchPollCorrelation,
     ParallelModeSupervisorInspectionCorrelation,
 };
 
@@ -67,6 +67,10 @@ pub enum ParallelModeControlPlaneBackgroundEvent {
     PendingDispatchWakePolled {
         correlation: ParallelModePendingDispatchPollCorrelation,
         result: Result<Option<ParallelModeControlPlaneWake>, String>,
+    },
+    DispatchMutationCompleted {
+        correlation: ParallelModeDispatchMutationCorrelation,
+        result: Result<usize, String>,
     },
     SupervisorSnapshotRefreshed {
         workspace_directory: String,
@@ -616,31 +620,6 @@ where
         });
     }
 
-    pub fn cancel_dispatch_commands(&self, workspace_directory: &str, reason: &str) {
-        let _ = self
-            .parallel_mode_service
-            .cancel_dispatch_commands(workspace_directory, reason);
-    }
-
-    pub fn continue_post_turn_queue_command(
-        &self,
-        workspace_directory: String,
-        signal: Option<ParallelModePostTurnQueueSignal>,
-        auto_follow_prompt_queued: bool,
-    ) -> ParallelModeControlPlaneCommand {
-        let has_actionable_queue_head = self
-            .planning
-            .runtime
-            .load_runtime_projection_or_invalid(&workspace_directory)
-            .has_actionable_queue_head();
-        ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
-            workspace_directory,
-            signal,
-            auto_follow_prompt_queued,
-            has_actionable_queue_head,
-        }
-    }
-
     pub fn spawn_pending_dispatch_wake_poll(
         &self,
         correlation: ParallelModePendingDispatchPollCorrelation,
@@ -672,41 +651,60 @@ where
         });
     }
 
-    pub fn enqueue_slot_capacity_dispatch(
+    pub fn spawn_dispatch_command_mutation(
         &self,
-        workspace_directory: &str,
-        epoch_id: u64,
-    ) -> Result<usize, String> {
-        let planning_projection = self
-            .planning
-            .runtime
-            .load_runtime_projection_or_invalid(workspace_directory);
-        self.parallel_mode_service
-            .enqueue_dispatch_commands_for_event(
-                workspace_directory,
-                ParallelModeRuntimeEvent::SlotCapacityAvailable,
-                &planning_projection,
-                Some(epoch_id),
-            )
-    }
+        correlation: ParallelModeDispatchMutationCorrelation,
+        mutation: ParallelModeDispatchMutation,
+    ) {
+        let parallel_mode_service = self.parallel_mode_service.clone();
+        let planning = self.planning.clone();
+        let event_sink = self.event_sink.clone();
 
-    pub fn enqueue_dispatch_for_trigger(
-        &self,
-        workspace_directory: &str,
-        trigger: crate::domain::parallel_mode::ParallelModeAutomationTrigger,
-        epoch_id: u64,
-    ) -> Result<usize, String> {
-        let planning_projection = self
-            .planning
-            .runtime
-            .load_runtime_projection_or_invalid(workspace_directory);
-        self.parallel_mode_service
-            .enqueue_dispatch_commands_for_trigger(
-                workspace_directory,
-                trigger,
-                &planning_projection,
-                Some(epoch_id),
-            )
+        thread::spawn(move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| match &mutation {
+                ParallelModeDispatchMutation::EnqueueSlotCapacity => {
+                    let planning_projection = planning
+                        .runtime
+                        .load_runtime_projection_or_invalid(&correlation.workspace_directory);
+                    parallel_mode_service.enqueue_dispatch_commands_for_event(
+                        &correlation.workspace_directory,
+                        ParallelModeRuntimeEvent::SlotCapacityAvailable,
+                        &planning_projection,
+                        Some(correlation.epoch_id),
+                    )
+                }
+                ParallelModeDispatchMutation::EnqueueForTrigger { trigger, .. } => {
+                    let planning_projection = planning
+                        .runtime
+                        .load_runtime_projection_or_invalid(&correlation.workspace_directory);
+                    parallel_mode_service.enqueue_dispatch_commands_for_trigger(
+                        &correlation.workspace_directory,
+                        *trigger,
+                        &planning_projection,
+                        Some(correlation.epoch_id),
+                    )
+                }
+                ParallelModeDispatchMutation::Cancel { reason } => parallel_mode_service
+                    .cancel_dispatch_commands(&correlation.workspace_directory, reason),
+                ParallelModeDispatchMutation::RetryCancel { original_cleanup } => {
+                    parallel_mode_service.cancel_dispatch_commands(
+                        &original_cleanup.workspace_directory,
+                        &format!(
+                            "retry unsettled cleanup operation {}",
+                            original_cleanup.operation_id
+                        ),
+                    )
+                }
+            }))
+            .map_err(|_| "parallel dispatch mutation failed unexpectedly".to_string())
+            .and_then(|result| result);
+            event_sink.send_control_plane_event(
+                ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+                    correlation,
+                    result,
+                },
+            );
+        });
     }
 }
 

@@ -89,11 +89,13 @@ where
         workspace_directory: String,
         signal: Option<ParallelModePostTurnQueueSignal>,
         auto_follow_prompt_queued: bool,
+        has_actionable_queue_head: bool,
     ) -> ParallelModePostTurnQueueContinuationOutcome {
         self.service().continue_post_turn_queue(
             workspace_directory,
             signal,
             auto_follow_prompt_queued,
+            has_actionable_queue_head,
         )
     }
 

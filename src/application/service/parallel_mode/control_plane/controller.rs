@@ -16,9 +16,9 @@ use super::{
     ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffect,
     ParallelModeControlPlaneEffectId, ParallelModeControlPlaneEvent,
     ParallelModeControlPlaneRuntime, ParallelModeControlPlaneRuntimeOutcome,
-    ParallelModeControlPlaneRuntimeStore, ParallelModePendingDispatchPollCorrelation,
-    ParallelModeSupervisorInspectionCorrelation, ParallelModeSupervisorInspectionSnapshot,
-    ParallelModeSupervisorInspectionState,
+    ParallelModeControlPlaneRuntimeStore, ParallelModeDispatchCleanupCorrelation,
+    ParallelModePendingDispatchPollCorrelation, ParallelModeSupervisorInspectionCorrelation,
+    ParallelModeSupervisorInspectionSnapshot, ParallelModeSupervisorInspectionState,
 };
 
 const CONTROL_PLANE_TICK_INTERVAL: Duration = Duration::from_secs(1);
@@ -49,6 +49,13 @@ pub enum ParallelModeControlPlanePresentationEvent {
         workspace_directory: String,
         notice: String,
     },
+    GlobalRuntimeNotice {
+        cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
+        notice: String,
+    },
+    GlobalRuntimeNoticeCleared {
+        cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
+    },
     PostTurnAutoFollowPromptConsumed,
     PlanningRuntimeRefreshRequested {
         workspace_directory: String,
@@ -69,6 +76,8 @@ where
     last_dispatch_withheld_reason: Option<String>,
     last_supervisor_refresh_at: Option<Instant>,
     last_orchestrator_wake_poll_at: Option<Instant>,
+    last_cleanup_retry_at: Option<Instant>,
+    cleanup_retry_deferred: bool,
     supervisor_inspection_state: ParallelModeSupervisorInspectionState,
 }
 
@@ -129,6 +138,8 @@ where
             last_dispatch_withheld_reason: None,
             last_supervisor_refresh_at: None,
             last_orchestrator_wake_poll_at: None,
+            last_cleanup_retry_at: None,
+            cleanup_retry_deferred: false,
             supervisor_inspection_state: ParallelModeSupervisorInspectionState::Idle,
         }
     }
@@ -168,6 +179,7 @@ where
             || self.supervisor_refresh_in_flight()
             || self.orchestrator_wake_in_flight()
             || self.orchestrator_tick_in_flight()
+            || self.runtime.store().dispatch_mutation_in_flight.is_some()
             || self.supervisor_inspection_state.is_loading()
     }
 
@@ -201,11 +213,13 @@ where
         workspace_directory: String,
         signal: Option<ParallelModePostTurnQueueSignal>,
         auto_follow_prompt_queued: bool,
+        has_actionable_queue_head: bool,
     ) -> ParallelModePostTurnQueueContinuationOutcome {
         self.handle_post_turn_queue_continuation(
             workspace_directory,
             signal,
             auto_follow_prompt_queued,
+            has_actionable_queue_head,
         )
     }
 
@@ -214,12 +228,14 @@ where
         workspace_directory: String,
         signal: Option<ParallelModePostTurnQueueSignal>,
         auto_follow_prompt_queued: bool,
+        has_actionable_queue_head: bool,
     ) -> ParallelModePostTurnQueueContinuationOutcome {
-        let command = self.effect_runner.continue_post_turn_queue_command(
+        let command = ParallelModeControlPlaneCommand::ContinuePostTurnQueue {
             workspace_directory,
             signal,
             auto_follow_prompt_queued,
-        );
+            has_actionable_queue_head,
+        };
         let outcome = self.runtime.handle(command);
         let consume_auto_follow_prompt = outcome.events.iter().any(|event| {
             matches!(
@@ -293,6 +309,18 @@ where
                 correlation,
                 result,
             } => self.pending_dispatch_wake_polled(correlation, result),
+            ParallelModeControlPlaneBackgroundEvent::DispatchMutationCompleted {
+                correlation,
+                result,
+            } => {
+                let outcome = self.runtime.handle(
+                    ParallelModeControlPlaneCommand::DispatchMutationCompleted {
+                        correlation,
+                        result,
+                    },
+                );
+                self.drain_outcome(outcome)
+            }
             ParallelModeControlPlaneBackgroundEvent::SupervisorSnapshotRefreshed {
                 workspace_directory,
                 epoch_id,
@@ -354,6 +382,15 @@ where
         activity_pulse_visible: bool,
     ) -> Vec<ParallelModeControlPlanePresentationEvent> {
         let mut events = Vec::new();
+        let original_cleanup = self.runtime.oldest_unsettled_dispatch_cleanup();
+        let cleanup_retry_due = original_cleanup.is_some() && self.cleanup_retry_interval_due(now);
+        if cleanup_retry_due && self.cleanup_retry_deferred && !self.control_effect_in_flight() {
+            events.extend(self.start_cleanup_retry(
+                now,
+                original_cleanup.expect("due cleanup retry must retain its correlation"),
+            ));
+            return events;
+        }
         if self.supervisor_refresh_due(now, activity_pulse_visible) {
             self.last_supervisor_refresh_at = Some(now);
             events.extend(self.handle_command(
@@ -366,7 +403,36 @@ where
             self.last_orchestrator_wake_poll_at = Some(now);
             events.extend(self.poll_pending_dispatch_wake(workspace_directory, None));
         }
+        if cleanup_retry_due {
+            if self.control_effect_in_flight() {
+                self.cleanup_retry_deferred = true;
+            } else {
+                events.extend(self.start_cleanup_retry(
+                    now,
+                    original_cleanup.expect("due cleanup retry must retain its correlation"),
+                ));
+            }
+        } else if original_cleanup.is_none() {
+            self.cleanup_retry_deferred = false;
+        }
         events
+    }
+
+    fn cleanup_retry_interval_due(&self, now: Instant) -> bool {
+        self.last_cleanup_retry_at
+            .is_none_or(|last_retry| now.duration_since(last_retry) >= CONTROL_PLANE_TICK_INTERVAL)
+    }
+
+    fn start_cleanup_retry(
+        &mut self,
+        now: Instant,
+        original_cleanup: ParallelModeDispatchCleanupCorrelation,
+    ) -> Vec<ParallelModeControlPlanePresentationEvent> {
+        self.last_cleanup_retry_at = Some(now);
+        self.cleanup_retry_deferred = false;
+        self.handle_command(
+            ParallelModeControlPlaneCommand::RetryUnsettledDispatchCleanup { original_cleanup },
+        )
     }
 
     pub fn supervisor_refresh_due(&self, now: Instant, activity_pulse_visible: bool) -> bool {
@@ -918,20 +984,104 @@ where
                     }
                 }
                 ParallelModeControlPlaneEvent::DispatchCommandQueued {
+                    workspace_directory,
                     trigger,
                     inserted_count,
+                    reason,
                 } => {
                     self.last_automation_trigger = Some(trigger);
                     self.last_dispatch_withheld_reason = None;
                     event_log::emit_lazy("parallel_orchestrator_wake_queued", || {
                         serde_json::json!({
                             "trigger": trigger.label(),
-                            "workspace": self.runtime.store().workspace_directory.as_deref(),
+                            "workspace": &workspace_directory,
                             "epoch_id": self.current_epoch_id(),
                             "inserted_count": inserted_count,
                             "reason": "application control-plane effect",
                         })
                     });
+                    presentation_events.push(
+                        ParallelModeControlPlanePresentationEvent::StatusShown {
+                            workspace_directory,
+                            status_text: format!("parallel mode: dispatch deferred / {reason}"),
+                        },
+                    );
+                }
+                ParallelModeControlPlaneEvent::DispatchCommandsCancelled {
+                    workspace_directory,
+                    epoch_id,
+                    cancelled_count,
+                } => {
+                    event_log::emit_lazy("parallel_dispatch_commands_cancelled", || {
+                        serde_json::json!({
+                            "workspace": workspace_directory,
+                            "epoch_id": epoch_id,
+                            "cancelled_count": cancelled_count,
+                        })
+                    });
+                }
+                ParallelModeControlPlaneEvent::DispatchMutationFailed {
+                    operation_id,
+                    workspace_directory,
+                    epoch_id,
+                    trigger,
+                    reason,
+                    presentation_current,
+                    cleanup_correlation,
+                } => {
+                    event_log::emit_lazy("parallel_dispatch_mutation_failed", || {
+                        serde_json::json!({
+                            "workspace": &workspace_directory,
+                            "epoch_id": epoch_id,
+                            "operation_id": operation_id,
+                            "trigger": trigger.map(|value| value.label()),
+                            "reason": &reason,
+                            "presentation_current": presentation_current,
+                            "cleanup_correlation": &cleanup_correlation,
+                        })
+                    });
+                    if presentation_current {
+                        self.record_dispatch_withheld(trigger, &reason);
+                        presentation_events.push(
+                            ParallelModeControlPlanePresentationEvent::StatusShown {
+                                workspace_directory,
+                                status_text: format!("parallel mode: dispatch withheld / {reason}"),
+                            },
+                        );
+                    }
+                    if let Some(cleanup_correlation) = cleanup_correlation {
+                        presentation_events.push(
+                            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
+                                cleanup_correlation: cleanup_correlation.clone(),
+                                notice: format!(
+                                    "parallel mode: dispatch cleanup remains unsettled / workspace: {} / epoch: {} / operation: {} / command: {} / {reason} / retry this exact cleanup correlation",
+                                    cleanup_correlation.workspace_directory,
+                                    cleanup_correlation.epoch_id,
+                                    cleanup_correlation.operation_id,
+                                    cleanup_correlation.command_identity,
+                                ),
+                            },
+                        );
+                    }
+                }
+                ParallelModeControlPlaneEvent::DispatchCleanupSettled {
+                    original_cleanup,
+                    retry_operation_id,
+                } => {
+                    event_log::emit_lazy("parallel_dispatch_cleanup_settled", || {
+                        serde_json::json!({
+                            "workspace": &original_cleanup.workspace_directory,
+                            "epoch_id": original_cleanup.epoch_id,
+                            "operation_id": original_cleanup.operation_id,
+                            "command_identity": &original_cleanup.command_identity,
+                            "retry_operation_id": retry_operation_id,
+                        })
+                    });
+                    presentation_events.push(
+                        ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticeCleared {
+                            cleanup_correlation: original_cleanup,
+                        },
+                    );
                 }
                 ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed => {
                     presentation_events.push(
@@ -1116,67 +1266,12 @@ where
                     .spawn_pending_dispatch_wake_poll(correlation);
                 Vec::new()
             }
-            ParallelModeControlPlaneEffect::EnqueueSlotCapacityDispatch {
-                workspace_directory,
-                epoch_id,
-            } => match self
-                .effect_runner
-                .enqueue_slot_capacity_dispatch(&workspace_directory, epoch_id)
-            {
-                Ok(_) => Vec::new(),
-                Err(error) => self.drain_outcome(ParallelModeControlPlaneRuntimeOutcome {
-                    events: vec![ParallelModeControlPlaneEvent::DispatchWithheld {
-                        trigger: Some(ParallelModeAutomationTrigger::TaskIntakeAfterEpoch),
-                        reason: format!("slot-capacity dispatch queue failed: {error}"),
-                    }],
-                    effects: Vec::new(),
-                }),
-            },
-            ParallelModeControlPlaneEffect::EnqueueDispatchForTrigger {
-                workspace_directory,
-                trigger,
-                epoch_id,
-                reason,
-            } => match self.effect_runner.enqueue_dispatch_for_trigger(
-                &workspace_directory,
-                trigger,
-                epoch_id,
-            ) {
-                Ok(0) => self.drain_outcome(ParallelModeControlPlaneRuntimeOutcome {
-                    events: vec![ParallelModeControlPlaneEvent::DispatchWithheld {
-                        trigger: Some(trigger),
-                        reason: "orchestrator wake already queued".to_string(),
-                    }],
-                    effects: Vec::new(),
-                }),
-                Ok(inserted_count) => {
-                    let mut events = self.drain_outcome(ParallelModeControlPlaneRuntimeOutcome {
-                        events: vec![ParallelModeControlPlaneEvent::DispatchCommandQueued {
-                            trigger,
-                            inserted_count,
-                        }],
-                        effects: Vec::new(),
-                    });
-                    events.push(ParallelModeControlPlanePresentationEvent::StatusShown {
-                        workspace_directory,
-                        status_text: format!("parallel mode: dispatch deferred / {reason}"),
-                    });
-                    events
-                }
-                Err(error) => self.drain_outcome(ParallelModeControlPlaneRuntimeOutcome {
-                    events: vec![ParallelModeControlPlaneEvent::DispatchWithheld {
-                        trigger: Some(trigger),
-                        reason: format!("orchestrator wake queue failed: {error}"),
-                    }],
-                    effects: Vec::new(),
-                }),
-            },
-            ParallelModeControlPlaneEffect::CancelDispatchCommands {
-                workspace_directory,
-                reason,
+            ParallelModeControlPlaneEffect::MutateDispatchCommands {
+                correlation,
+                mutation,
             } => {
                 self.effect_runner
-                    .cancel_dispatch_commands(&workspace_directory, &reason);
+                    .spawn_dispatch_command_mutation(correlation, mutation);
                 Vec::new()
             }
         }

@@ -390,9 +390,12 @@ fn parallel_control_plane_presentation_bridge_maps_events_outside_tui_controller
      */
     const PARALLEL_MODE_RS: &str = include_str!("../parallel_mode.rs");
     const PRESENTATION_BRIDGE_RS: &str = include_str!("../parallel_mode/presentation_bridge.rs");
+    let production_controller = PARALLEL_MODE_RS
+        .split_once("#[cfg(test)]\nmod global_runtime_notice_tests")
+        .map_or(PARALLEL_MODE_RS, |(production, _)| production);
 
-    assert!(PARALLEL_MODE_RS.contains("parallel_mode_presentation_actions"));
-    assert!(!PARALLEL_MODE_RS.contains("ParallelModeControlPlanePresentationEvent::"));
+    assert!(production_controller.contains("parallel_mode_presentation_actions"));
+    assert!(!production_controller.contains("ParallelModeControlPlanePresentationEvent::"));
     assert!(PRESENTATION_BRIDGE_RS.contains("ParallelModePresentationAction"));
     assert!(PRESENTATION_BRIDGE_RS.contains("ParallelModeControlPlanePresentationEvent::"));
 }
