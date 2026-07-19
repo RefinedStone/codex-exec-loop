@@ -5,17 +5,14 @@ use super::super::{
     ConversationInputEvent, DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep,
     DirectionsMaintenanceProjectionKind, NativeTuiApp, PlanningInitDetailSelection,
     PlanningInitModeSelection, PlanningInitOverlayStep, PlanningInitRuntimeRefreshIntent,
-    ShellChromeEvent, ShellOverlay,
+    PlanningRuntimeRefreshOperation, ShellChromeEvent, ShellOverlay,
 };
 use crate::application::service::planning::{
-    PlanningDoctorReport, PlanningDoctorState, PlanningDraftEditorSession, PlanningResetTarget,
-    PlanningWorkspaceResetResult,
+    PlanningDraftEditorSession, PlanningResetTarget, PlanningWorkspaceResetResult,
 };
-use crate::core::app::{AppCommand, AppEvent};
+use crate::core::app::{AppCommand, AppEvent, PlanningDoctorSnapshot, PlanningDoctorSnapshotState};
 use crossterm::event::{self, KeyCode, KeyModifiers};
 type PlanningEditorSessionResult = anyhow::Result<PlanningDraftEditorSession>;
-const PLANNING_RUNTIME_LOADING_STATUS: &str =
-    "operator surface: planning setup / loading workspace";
 mod directions_overlay;
 mod editor;
 mod planning_init_overlay;
@@ -120,6 +117,7 @@ impl NativeTuiApp {
 
     // Planning init binds one Core-owned runtime refresh to the loading surface.
     // Only that accepted completion may choose setup versus existing-workspace controls.
+    #[cfg(test)]
     pub(in crate::adapter::inbound::tui::app) fn show_planning_init_overlay(&mut self) {
         self.begin_planning_init_overlay_refresh(PlanningInitRuntimeRefreshIntent::Inspect);
     }
@@ -134,50 +132,75 @@ impl NativeTuiApp {
             });
             return;
         };
-        self.planning_init_overlay_ui_state
-            .begin_runtime_refresh(correlation, intent);
+        self.planning_init_overlay_ui_state.begin_runtime_refresh();
         self.planning_draft_editor_ui_state.reset();
         self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: PLANNING_RUNTIME_LOADING_STATUS.to_string(),
+            status_text: "operator surface: planning setup / loading workspace".to_string(),
         });
+        self.planning_runtime_refresh_ui_state.begin(
+            correlation,
+            PlanningRuntimeRefreshOperation::Init(intent),
+            self.planning_ui_intent_revision,
+        );
         // Bind the overlay generation before any immediate test executor completion is applied.
         self.apply_core_dispatch_outcome(outcome);
     }
-    pub(in crate::adapter::inbound::tui::app) fn apply_planning_init_runtime_projection_refresh(
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_planning_runtime_refresh_completion(
         &mut self,
-        correlation: crate::core::app::PlanningRuntimeRefreshCorrelation,
-        error: Option<&str>,
+        operation: PlanningRuntimeRefreshOperation,
+        result: Result<PlanningDoctorSnapshot, String>,
     ) {
-        if self.shell_overlay != ShellOverlay::PlanningInit
-            || correlation.workspace_directory != self.planning_workspace_directory()
-        {
-            return;
-        }
-        let runtime_projection = self.planning_runtime_projection_snapshot();
-        let loading_status_is_current = matches!(
-            &self.conversation_state,
-            super::super::ConversationState::Ready(conversation)
-                if conversation.status_text == PLANNING_RUNTIME_LOADING_STATUS
-        );
-        if let Some(error) = error {
-            if !self
-                .planning_init_overlay_ui_state
-                .apply_runtime_refresh_error(&correlation)
-            {
-                return;
+        match operation {
+            PlanningRuntimeRefreshOperation::Init(intent) => {
+                self.apply_planning_init_runtime_refresh(intent, result)
             }
+            PlanningRuntimeRefreshOperation::Doctor => self.apply_planning_doctor_refresh(result),
+            PlanningRuntimeRefreshOperation::ResetRecovery { reset_error } => {
+                self.apply_planning_reset_recovery_refresh(reset_error, result)
+            }
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn discard_superseded_planning_runtime_refresh(
+        &mut self,
+        operation: PlanningRuntimeRefreshOperation,
+    ) {
+        if matches!(
+            operation,
+            PlanningRuntimeRefreshOperation::Init(_) | PlanningRuntimeRefreshOperation::Doctor
+        ) && self.shell_overlay == ShellOverlay::PlanningInit
+            && self.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::Loading
+        {
             self.close_shell_overlay();
-            if loading_status_is_current {
+        }
+    }
+
+    fn apply_planning_init_runtime_refresh(
+        &mut self,
+        intent: PlanningInitRuntimeRefreshIntent,
+        result: Result<PlanningDoctorSnapshot, String>,
+    ) {
+        let doctor = match result {
+            Ok(doctor) => doctor,
+            Err(error) => {
+                if self.shell_overlay != ShellOverlay::PlanningInit {
+                    return;
+                }
+                self.close_shell_overlay();
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: format!("planning setup unavailable: {error}"),
                 });
+                return;
             }
+        };
+        if self.shell_overlay != ShellOverlay::PlanningInit {
             return;
         }
         let Some(should_open_simple_review) = self
             .planning_init_overlay_ui_state
-            .apply_runtime_refresh(&correlation, runtime_projection.workspace_present())
+            .apply_runtime_refresh(doctor.workspace_present(), intent)
         else {
             return;
         };
@@ -185,18 +208,78 @@ impl NativeTuiApp {
             self.stage_simple_mode_planning_init_draft();
             return;
         }
-        if !loading_status_is_current {
-            return;
-        }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: if let Some(reason) = runtime_projection.failure_reason() {
+            status_text: if let Some(reason) = doctor.issue() {
                 format!("planning setup unavailable: {reason}")
-            } else if runtime_projection.workspace_present() {
+            } else if doctor.workspace_present() {
                 "operator surface: planning setup / existing workspace".to_string()
             } else {
                 "operator surface: planning setup / workspace: not initialized".to_string()
             },
         });
+    }
+
+    fn apply_planning_doctor_refresh(&mut self, result: Result<PlanningDoctorSnapshot, String>) {
+        let doctor = match result {
+            Ok(doctor) => doctor,
+            Err(error) => {
+                if self.shell_overlay == ShellOverlay::PlanningInit
+                    && self.planning_init_overlay_ui_state.step()
+                        == PlanningInitOverlayStep::Loading
+                {
+                    self.close_shell_overlay();
+                }
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("planning doctor unavailable: {error}"),
+                });
+                return;
+            }
+        };
+        if doctor.planning_state() == PlanningDoctorSnapshotState::Absent
+            || self.shell_overlay == ShellOverlay::PlanningInit
+        {
+            self.open_planning_init_from_doctor(&doctor);
+        }
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: planning_doctor_status_text(&doctor),
+        });
+    }
+
+    fn apply_planning_reset_recovery_refresh(
+        &mut self,
+        reset_error: String,
+        result: Result<PlanningDoctorSnapshot, String>,
+    ) {
+        let status_text = match result {
+            Ok(doctor) if doctor.planning_state() == PlanningDoctorSnapshotState::Absent => {
+                self.open_planning_init_from_doctor(&doctor);
+                format!(
+                    "planning reset failed: {reset_error} / planning workspace: missing / next action: open :planning to initialize it"
+                )
+            }
+            Ok(doctor) => doctor.issue().map_or_else(
+                || format!("planning reset failed: {reset_error}"),
+                |issue| {
+                    format!("planning reset failed: {reset_error} / workspace inspection: {issue}")
+                },
+            ),
+            Err(inspection_error) => format!(
+                "planning reset failed: {reset_error} / workspace inspection failed: {inspection_error}"
+            ),
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    fn open_planning_init_from_doctor(&mut self, doctor: &PlanningDoctorSnapshot) {
+        self.planning_draft_editor_ui_state.reset();
+        self.planning_init_overlay_ui_state.begin_runtime_refresh();
+        self.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        let _ = self.planning_init_overlay_ui_state.apply_runtime_refresh(
+            doctor.workspace_present(),
+            PlanningInitRuntimeRefreshIntent::Inspect,
+        );
     }
     pub(in crate::adapter::inbound::tui::app) fn open_first_run_planning_simple_review(&mut self) {
         self.begin_planning_init_overlay_refresh(
@@ -229,24 +312,27 @@ impl NativeTuiApp {
     }
     pub(in crate::adapter::inbound::tui::app) fn run_planning_doctor(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
-        let report = self
-            .application
-            .planning()
-            .workspace()
-            .inspect_workspace(&workspace_directory);
-
-        if report.planning_state() == PlanningDoctorState::Absent
-            || self.shell_overlay == ShellOverlay::PlanningInit
-        {
-            self.show_planning_init_overlay();
-        } else {
-            self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
-                &workspace_directory,
-            );
+        let Some((correlation, outcome)) =
+            self.begin_planning_runtime_projection_refresh(&workspace_directory)
+        else {
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: "planning doctor unavailable while conversation is loading"
+                    .to_string(),
+            });
+            return;
+        };
+        if self.shell_overlay == ShellOverlay::PlanningInit {
+            self.planning_init_overlay_ui_state.begin_runtime_refresh();
         }
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: planning_doctor_status_text(&report),
+            status_text: "planning doctor: loading workspace".to_string(),
         });
+        self.planning_runtime_refresh_ui_state.begin(
+            correlation,
+            PlanningRuntimeRefreshOperation::Doctor,
+            self.planning_ui_intent_revision,
+        );
+        self.apply_core_dispatch_outcome(outcome);
     }
     // Reset is a destructive workspace operation, so directions/all resets use
     // a preview status unless the command argument already carried confirmation.
@@ -292,22 +378,23 @@ impl NativeTuiApp {
                 });
             }
             Err(error) => {
-                let fallback_status = if !self
-                    .application
-                    .planning()
-                    .workspace()
-                    .has_planning_workspace(&workspace_directory)
-                    .unwrap_or(false)
-                {
-                    self.show_planning_init_overlay();
-                    "planning workspace: missing / next action: open :planning to initialize it"
-                        .to_string()
-                } else {
-                    format!("planning reset failed: {error}")
+                let reset_error = error.to_string();
+                let Some((correlation, outcome)) =
+                    self.begin_planning_runtime_projection_refresh(&workspace_directory)
+                else {
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: format!(
+                            "planning reset failed: {reset_error} / workspace inspection unavailable while conversation is loading"
+                        ),
+                    });
+                    return;
                 };
-                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                    status_text: fallback_status,
-                });
+                self.planning_runtime_refresh_ui_state.begin(
+                    correlation,
+                    PlanningRuntimeRefreshOperation::ResetRecovery { reset_error },
+                    self.planning_ui_intent_revision,
+                );
+                self.apply_core_dispatch_outcome(outcome);
             }
         }
     }
@@ -529,7 +616,7 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{
         ConversationState, DirectionsMaintenanceScreenModel, NativeTuiParallelModeBinding,
-        PendingResumedSessionPlanningRefresh,
+        PendingResumedSessionPlanningRefresh, PlanningRuntimeRefreshUiState,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -558,7 +645,8 @@ mod tests {
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const CONTROLLER_RS: &str = include_str!("controller.rs");
@@ -695,6 +783,37 @@ mod tests {
     struct FailingPlanningWorkspacePort {
         inner: FilesystemPlanningWorkspaceAdapter,
         failure: PlanningWorkspacePortFailure,
+        load_observation: Option<PlanningWorkspaceLoadObservation>,
+    }
+
+    #[derive(Clone)]
+    struct PlanningWorkspaceLoadObservation {
+        load_count: Arc<AtomicUsize>,
+        slow: Arc<AtomicBool>,
+        fail: Arc<AtomicBool>,
+        target_workspace: Arc<Mutex<Option<String>>>,
+    }
+
+    impl PlanningWorkspaceLoadObservation {
+        fn new() -> Self {
+            Self {
+                load_count: Arc::new(AtomicUsize::new(0)),
+                slow: Arc::new(AtomicBool::new(false)),
+                fail: Arc::new(AtomicBool::new(false)),
+                target_workspace: Arc::new(Mutex::new(None)),
+            }
+        }
+
+        fn reset_and_enable(&self, workspace_directory: &str, fail: bool) {
+            self.load_count.store(0, Ordering::SeqCst);
+            self.fail.store(fail, Ordering::SeqCst);
+            *self
+                .target_workspace
+                .lock()
+                .expect("workspace observation target should not be poisoned") =
+                Some(workspace_directory.to_string());
+            self.slow.store(true, Ordering::SeqCst);
+        }
     }
 
     impl FailingPlanningWorkspacePort {
@@ -702,7 +821,26 @@ mod tests {
             Self {
                 inner: FilesystemPlanningWorkspaceAdapter::new(),
                 failure,
+                load_observation: None,
             }
+        }
+
+        fn observed() -> (Self, PlanningWorkspaceLoadObservation) {
+            Self::observed_with_failure(PlanningWorkspacePortFailure::SlowOptionalLoad)
+        }
+
+        fn observed_with_failure(
+            failure: PlanningWorkspacePortFailure,
+        ) -> (Self, PlanningWorkspaceLoadObservation) {
+            let observation = PlanningWorkspaceLoadObservation::new();
+            (
+                Self {
+                    inner: FilesystemPlanningWorkspaceAdapter::new(),
+                    failure,
+                    load_observation: Some(observation.clone()),
+                },
+                observation,
+            )
         }
 
         fn fail_if(&self, failure: PlanningWorkspacePortFailure) -> anyhow::Result<()> {
@@ -751,6 +889,22 @@ mod tests {
             &self,
             workspace_dir: &str,
         ) -> anyhow::Result<PlanningWorkspaceLoadRecord> {
+            if let Some(observation) = &self.load_observation
+                && observation
+                    .target_workspace
+                    .lock()
+                    .expect("workspace observation target should not be poisoned")
+                    .as_deref()
+                    .is_none_or(|target| target == workspace_dir)
+            {
+                observation.load_count.fetch_add(1, Ordering::SeqCst);
+                if observation.slow.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(600));
+                }
+                if observation.fail.load(Ordering::SeqCst) {
+                    anyhow::bail!("forced observed workspace inspection failure");
+                }
+            }
             self.fail_if(PlanningWorkspacePortFailure::LoadWorkspace)?;
             self.inner.load_planning_workspace_files(workspace_dir)
         }
@@ -848,6 +1002,43 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         panic!("planning init runtime refresh should complete");
+    }
+
+    fn wait_for_planning_runtime_refresh(app: &mut NativeTuiApp) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            app.poll_core_runtime_inputs(16);
+            if !matches!(
+                app.planning_runtime_refresh_ui_state,
+                PlanningRuntimeRefreshUiState::Loading { .. }
+            ) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("planning runtime refresh should complete");
+    }
+
+    fn wait_for_observed_loads_to_settle(
+        app: &mut NativeTuiApp,
+        observation: &PlanningWorkspaceLoadObservation,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut last_count = observation.load_count.load(Ordering::SeqCst);
+        let mut stable_since = Instant::now();
+        while Instant::now() < deadline {
+            app.poll_core_runtime_inputs(16);
+            let count = observation.load_count.load(Ordering::SeqCst);
+            if count != last_count {
+                last_count = count;
+                stable_since = Instant::now();
+            }
+            if count > 0 && stable_since.elapsed() >= Duration::from_millis(300) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("initial planning runtime loads should settle");
     }
 
     fn wait_for_directions_maintenance_load(app: &mut NativeTuiApp) {
@@ -1117,8 +1308,13 @@ mod tests {
         let absent_doctor_workspace = TempPlanningWorkspace::new("tui-planning-doctor-absent");
         let mut absent_doctor_app = make_test_app(&absent_doctor_workspace);
         absent_doctor_app.handle_planning_shell_command(Some("doctor"));
-        assert_eq!(absent_doctor_app.shell_overlay, ShellOverlay::Hidden);
-        assert!(ready_status(&absent_doctor_app).starts_with("planning state: ready_without_task"));
+        assert!(matches!(
+            absent_doctor_app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Loading { .. }
+        ));
+        wait_for_planning_runtime_refresh(&mut absent_doctor_app);
+        assert_eq!(absent_doctor_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert!(ready_status(&absent_doctor_app).starts_with("planning state: absent"));
     }
 
     #[test]
@@ -1177,6 +1373,212 @@ mod tests {
     }
 
     #[test]
+    fn planning_doctor_dispatch_is_non_blocking_and_reads_absent_workspace_once() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-doctor-non-blocking");
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+
+        let started_at = Instant::now();
+        app.run_planning_doctor();
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "doctor dispatch waited for 600ms workspace I/O: {elapsed:?}"
+        );
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Loading { .. }
+        ));
+        wait_for_planning_runtime_refresh(&mut app);
+        assert_eq!(observation.load_count.load(Ordering::SeqCst), 1);
+        assert!(
+            matches!(
+                app.planning_runtime_refresh_ui_state,
+                PlanningRuntimeRefreshUiState::Ready { .. }
+            ),
+            "state: {:?}",
+            app.planning_runtime_refresh_ui_state
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+        assert!(ready_status(&app).starts_with("planning state: absent"));
+    }
+
+    #[test]
+    fn planning_doctor_reads_a_present_workspace_once() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-doctor-present-one-read");
+        FilesystemPlanningWorkspaceAdapter::new()
+            .replace_planning_workspace_file(
+                workspace.path_str(),
+                crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+                Some("# Result Output\n\n- Report completed work.\n"),
+            )
+            .expect("present planning workspace should be seeded");
+        let (port, observation) = FailingPlanningWorkspacePort::observed_with_failure(
+            PlanningWorkspacePortFailure::LoadDraft,
+        );
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+
+        let started_at = Instant::now();
+        app.run_planning_doctor();
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "present-workspace doctor dispatch waited for 600ms I/O: {elapsed:?}"
+        );
+        wait_for_planning_runtime_refresh(&mut app);
+        assert_eq!(observation.load_count.load(Ordering::SeqCst), 1);
+        assert!(
+            matches!(
+                app.planning_runtime_refresh_ui_state,
+                PlanningRuntimeRefreshUiState::Ready { .. }
+            ),
+            "state: {:?}",
+            app.planning_runtime_refresh_ui_state
+        );
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert!(ready_status(&app).starts_with("planning state: ready_"));
+    }
+
+    #[test]
+    fn planning_projection_writer_restarts_doctor_and_stale_success_cannot_complete_it() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-doctor-writer-race");
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+
+        app.run_planning_doctor();
+        let first_generation = match &app.planning_runtime_refresh_ui_state {
+            PlanningRuntimeRefreshUiState::Loading { correlation, .. } => correlation.generation,
+            state => panic!("doctor should start loading, got {state:?}"),
+        };
+        app.sync_core_planning_runtime_projection(
+            crate::application::service::planning::PlanningRuntimeProjection::invalid(
+                "unrelated writer",
+            ),
+        );
+
+        let replacement_generation = match &app.planning_runtime_refresh_ui_state {
+            PlanningRuntimeRefreshUiState::Loading { correlation, .. } => correlation.generation,
+            state => panic!("writer should rebind the doctor inspection, got {state:?}"),
+        };
+        assert!(replacement_generation > first_generation);
+        assert_eq!(ready_status(&app), "planning doctor: loading workspace");
+        wait_for_planning_runtime_refresh(&mut app);
+        assert_eq!(observation.load_count.load(Ordering::SeqCst), 2);
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Ready {
+                ref correlation,
+                ..
+            } if correlation.generation == replacement_generation
+        ));
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+        assert!(ready_status(&app).starts_with("planning state: absent"));
+    }
+
+    #[test]
+    fn planning_projection_writer_restart_preserves_newer_doctor_status() {
+        for (suffix, fail) in [("success", false), ("failure", true)] {
+            let workspace =
+                TempPlanningWorkspace::new(&format!("tui-planning-doctor-writer-drift-{suffix}"));
+            let (port, observation) = FailingPlanningWorkspacePort::observed();
+            let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+            wait_for_observed_loads_to_settle(&mut app, &observation);
+            observation.reset_and_enable(workspace.path_str(), fail);
+
+            app.run_planning_doctor();
+            let (first_generation, operation_revision) =
+                match &app.planning_runtime_refresh_ui_state {
+                    PlanningRuntimeRefreshUiState::Loading {
+                        correlation,
+                        presentation_revision,
+                        ..
+                    } => (correlation.generation, *presentation_revision),
+                    state => panic!("doctor should start loading, got {state:?}"),
+                };
+            let status_text = format!("newer operator status after {suffix}");
+            app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: status_text.clone(),
+            });
+            assert_ne!(app.planning_ui_intent_revision, operation_revision);
+
+            app.sync_core_planning_runtime_projection(
+                crate::application::service::planning::PlanningRuntimeProjection::invalid(
+                    "same-workspace writer",
+                ),
+            );
+            assert!(matches!(
+                app.planning_runtime_refresh_ui_state,
+                PlanningRuntimeRefreshUiState::Loading {
+                    ref correlation,
+                    presentation_revision,
+                    ..
+                } if correlation.generation > first_generation
+                    && presentation_revision == operation_revision
+            ));
+
+            wait_for_planning_runtime_refresh(&mut app);
+
+            assert_eq!(observation.load_count.load(Ordering::SeqCst), 2);
+            assert!(matches!(
+                app.planning_runtime_refresh_ui_state,
+                PlanningRuntimeRefreshUiState::Idle
+            ));
+            assert_eq!(ready_status(&app), status_text);
+            assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        }
+    }
+
+    #[test]
+    fn planning_doctor_failure_preserves_newer_status_after_background_inspection() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-doctor-failure");
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), true);
+
+        app.run_planning_doctor();
+        app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "newer unrelated status".to_string(),
+        });
+        wait_for_planning_runtime_refresh(&mut app);
+
+        assert_eq!(observation.load_count.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Idle
+        ));
+        assert_eq!(ready_status(&app), "newer unrelated status");
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+    }
+
+    #[test]
+    fn planning_doctor_completion_preserves_a_newer_overlay_intent() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-doctor-overlay-intent");
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+
+        app.run_planning_doctor();
+        app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
+        wait_for_planning_runtime_refresh(&mut app);
+
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Idle
+        ));
+        assert_eq!(app.shell_overlay, ShellOverlay::Queue);
+    }
+
+    #[test]
     fn planning_init_loading_blocks_keys_and_reopen_accepts_only_the_latest_refresh() {
         let workspace = TempPlanningWorkspace::new("tui-planning-init-loading");
         let mut app = make_test_app(&workspace);
@@ -1204,6 +1606,10 @@ mod tests {
         }
 
         app.close_shell_overlay();
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Idle
+        ));
         app.show_planning_init_overlay();
         assert_eq!(
             app.planning_init_overlay_ui_state.step(),
@@ -1227,6 +1633,56 @@ mod tests {
             app.planning_init_overlay_ui_state.step(),
             PlanningInitOverlayStep::ModeSelection
         );
+    }
+
+    #[test]
+    fn planning_init_completion_closes_loading_overlay_after_workspace_drift() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-init-workspace-drift");
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+        app.show_planning_init_overlay();
+
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should have a ready conversation");
+        };
+        conversation.cwd = "/tmp/replacement-planning-workspace".to_string();
+        conversation.draft_workspace_directory = "/tmp/replacement-planning-workspace".to_string();
+
+        wait_for_planning_runtime_refresh(&mut app);
+
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Idle
+        ));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            ready_status(&app),
+            "planning setup closed because its workspace context changed"
+        );
+    }
+
+    #[test]
+    fn planning_init_completion_preserves_a_newer_status_intent() {
+        let workspace = TempPlanningWorkspace::new("tui-planning-init-status-intent");
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+        app.show_planning_init_overlay();
+        app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "newer operator status".to_string(),
+        });
+
+        wait_for_planning_runtime_refresh(&mut app);
+
+        assert!(matches!(
+            app.planning_runtime_refresh_ui_state,
+            PlanningRuntimeRefreshUiState::Idle
+        ));
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(ready_status(&app), "newer operator status");
     }
 
     #[test]
@@ -1279,10 +1735,9 @@ mod tests {
         fs::remove_dir_all(workspace.path()).expect("seeded planning fixture should be removable");
         fs::create_dir_all(workspace.path()).expect("planning fixture should be recreated");
         app.handle_reset_shell_command(Some("queue"));
-        assert_eq!(
-            ready_status(&app),
-            "planning workspace: missing / next action: open :planning to initialize it"
-        );
+        wait_for_planning_runtime_refresh(&mut app);
+        assert!(ready_status(&app).contains("planning reset failed:"));
+        assert!(ready_status(&app).contains("planning workspace: missing"));
         assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
 
         let success_workspace = TempPlanningWorkspace::new("tui-reset-command-success");
@@ -1305,19 +1760,27 @@ mod tests {
         seed_app.open_first_run_planning_simple_review();
         wait_for_planning_init_refresh(&mut seed_app);
         seed_app.promote_simple_mode_planning_draft();
-        let mut failure_app = make_test_app_with_planning_workspace_port(
-            &failure_workspace,
-            Arc::new(FailingPlanningWorkspacePort::new(
-                PlanningWorkspacePortFailure::ReplaceWorkspace,
-            )),
+        let (failure_port, observation) = FailingPlanningWorkspacePort::observed_with_failure(
+            PlanningWorkspacePortFailure::ReplaceWorkspace,
         );
+        let mut failure_app =
+            make_test_app_with_planning_workspace_port(&failure_workspace, Arc::new(failure_port));
+        wait_for_observed_loads_to_settle(&mut failure_app, &observation);
+        observation.reset_and_enable(failure_workspace.path_str(), true);
 
         failure_app.handle_reset_shell_command(Some("all confirm"));
+        wait_for_planning_runtime_refresh(&mut failure_app);
         assert!(
             ready_status(&failure_app).starts_with("planning reset failed: forced "),
             "status: {}",
             ready_status(&failure_app)
         );
+        assert!(
+            ready_status(&failure_app).contains(
+                "workspace inspection failed: forced observed workspace inspection failure"
+            )
+        );
+        assert_eq!(failure_app.shell_overlay, ShellOverlay::Hidden);
     }
 
     #[test]
@@ -2271,7 +2734,7 @@ mod tests {
     #[test]
     fn editor_overlay_keymaps_stay_tui_local_and_delegate_mutations() {
         let controller_runtime_source = CONTROLLER_RS
-            .split("#[cfg(test)]")
+            .split("\n#[cfg(test)]\nmod tests")
             .next()
             .unwrap_or(CONTROLLER_RS);
 

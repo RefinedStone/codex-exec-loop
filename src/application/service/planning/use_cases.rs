@@ -812,6 +812,13 @@ impl PlanningRuntimeUseCases {
         self.runtime_facade
             .load_runtime_projection_or_invalid(workspace_dir)
     }
+    pub fn inspect_runtime_projection(
+        &self,
+        workspace_dir: &str,
+    ) -> anyhow::Result<PlanningRuntimeProjection> {
+        self.runtime_facade
+            .inspect_runtime_projection(workspace_dir)
+    }
     pub fn prepare_task_intake(
         &self,
         request: PlanningTaskIntakeRequest,

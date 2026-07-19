@@ -140,6 +140,7 @@ impl NativeTuiApp {
                 self.planning_draft_editor_ui_state.reset();
             }
             ShellOverlay::PlanningInit => {
+                self.planning_runtime_refresh_ui_state.clear_loading();
                 self.planning_init_overlay_ui_state.reset();
                 self.planning_draft_editor_ui_state.reset();
             }

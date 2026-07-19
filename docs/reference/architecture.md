@@ -132,6 +132,24 @@ The private SQLite store is authoritative. Planning workspace files are operator
 prompts, staged drafts, exports, and recovery evidence. Accepted changes use revision-aware
 validation and mutation; hidden worker output never writes SQL or protected planning files directly.
 
+Planning setup, Planning Doctor, and reset-failure recovery share the existing Core planning-runtime
+refresh effect. One application inspection use case reads one coherent aggregate workspace record
+for either present or absent state, then returns one runtime projection together with a Core-owned
+doctor snapshot; the TUI does not perform a second workspace inspection. Core owns generation and
+active-correlation state in one planning-runtime coordinator. Only the exact correlated effect
+completion can settle that coordinator; post-turn and generic projection writers cannot impersonate
+an init, doctor, or reset-recovery result. A newer same-workspace writer explicitly supersedes the
+in-flight read and schedules a replacement inspection, so the old successful read cannot overwrite
+the writer projection or complete the operation. The TUI keeps typed
+`Idle | Loading | Ready | Failed` presentation state and the exact init, doctor, or reset-recovery
+operation plus a presentation revision captured when that operation starts. Rebinding a replacement
+inspection changes only its correlation and preserves that initial revision. Stale, duplicate, ABA,
+closed-overlay, workspace-drifted, or newer-UI-intent completions cannot choose a setup branch or
+replace status. Inspection failures remain distinct from an absent workspace, and reset recovery
+preserves both the reset error and any inspection error. Destructive reset and draft-staging
+mutations remain separate synchronous paths; this slice moves only readback and recovery inspection
+off the TUI input thread.
+
 Opening the TUI Queue overlay first applies shell chrome, then dispatches a core load command. Core
 assigns a monotonically increasing generation to the workspace and active-thread identity, lets the
 latest request supersede the previous one, and drops stale or duplicate completions. Composition

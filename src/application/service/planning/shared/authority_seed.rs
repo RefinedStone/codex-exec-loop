@@ -58,6 +58,22 @@ impl PlanningAuthoritySeedService {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningAuthoritySeedOutcome> {
+        let mut workspace = self
+            .planning_workspace_port
+            .load_planning_workspace_files(workspace_dir)?;
+        self.ensure_default_authority_with_workspace(workspace_dir, &mut workspace)
+    }
+
+    /*
+     * Runtime inspection already owns a coherent workspace record. Reusing that
+     * record keeps seeding and projection building on one authority read instead
+     * of checking presence and then reopening the aggregate workspace.
+     */
+    pub(crate) fn ensure_default_authority_with_workspace(
+        &self,
+        workspace_dir: &str,
+        workspace: &mut PlanningWorkspaceLoadRecord,
+    ) -> Result<PlanningAuthoritySeedOutcome> {
         /*
          * Seeding is ordered from files to authorities.  Task authority
          * validation needs result output markdown, and queue projection needs a
@@ -67,15 +83,12 @@ impl PlanningAuthoritySeedService {
         let bootstrap = self
             .planning_bootstrap_service
             .build_artifacts_for_mode(PlanningBootstrapMode::Simple);
-        let mut workspace = self
-            .planning_workspace_port
-            .load_planning_workspace_files(workspace_dir)?;
-        let workspace_files_seeded = self.ensure_workspace_files(workspace_dir, &mut workspace)?;
+        let workspace_files_seeded = self.ensure_workspace_files(workspace_dir, workspace)?;
         let direction_authority_seeded =
             self.ensure_direction_authority(workspace_dir, &bootstrap.directions)?;
         let task_authority_seeded = self.ensure_task_authority(
             workspace_dir,
-            &workspace,
+            workspace,
             &bootstrap.directions,
             &bootstrap.task_authority,
         )?;

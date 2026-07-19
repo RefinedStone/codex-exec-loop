@@ -141,6 +141,7 @@ and remove it when the corresponding tests move or disappear.
 - `src/adapter/inbound/tui/app/planning_init_overlay_ui.rs`
 - `src/adapter/inbound/tui/app/planning_overlay_shell_command.rs`
 - `src/adapter/inbound/tui/app/planning_reset_shell_command.rs`
+- `src/adapter/inbound/tui/app/planning_runtime_refresh_ui.rs`
 - `src/adapter/inbound/tui/app/planning_shell_command.rs`
 - `src/adapter/inbound/tui/app/planning_worker_debug_preview.rs`
 - `src/adapter/inbound/tui/app/progressive_activity_overlay_ui.rs`

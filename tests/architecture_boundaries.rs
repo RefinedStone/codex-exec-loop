@@ -858,6 +858,9 @@ fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
         &[
             ".load_runtime_projection_or_invalid(",
             "fn load_planning_runtime_projection(",
+            ".inspect_workspace(",
+            ".has_planning_workspace(",
+            "PLANNING_RUNTIME_LOADING_STATUS",
         ],
     );
 
@@ -866,6 +869,42 @@ fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
     assert!(
         controller.contains("AppCommand::RefreshPlanningRuntime {"),
         "TUI planning runtime refreshes must positively enter through the typed Core command"
+    );
+    let planning_controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/planning/controller.rs").unwrap();
+    assert!(
+        planning_controller.contains("PlanningRuntimeRefreshOperation::Doctor")
+            && planning_controller.contains("PlanningRuntimeRefreshOperation::ResetRecovery"),
+        "Planning doctor and reset recovery must share the typed Core refresh effect"
+    );
+    let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    assert!(
+        core_controller.contains("planning_runtime_refresh: PlanningRuntimeCoordinator"),
+        "CoreController must delegate planning runtime generation and active-correlation ownership to one coordinator"
+    );
+    assert!(
+        !core_controller.contains("next_planning_runtime_refresh_generation:")
+            && !core_controller.contains(
+                "active_planning_runtime_refresh: Option<PlanningRuntimeRefreshCorrelation>",
+            ),
+        "CoreController must not restore raw planning runtime generation or active-correlation fields"
+    );
+    assert!(
+        !core_controller.contains(".settle_workspace(")
+            && core_controller.contains(".restart_if_matches("),
+        "planning projection writers must supersede and replace, never settle, an exact refresh operation"
+    );
+    let effect_runner = fs::read_to_string("src/composition/core_effect_runner.rs").unwrap();
+    assert!(
+        effect_runner.contains(".inspect_runtime_projection(")
+            && !effect_runner.contains(".has_planning_workspace("),
+        "the Core planning refresh worker must use one coherent inspection use case"
+    );
+    let refresh_ui =
+        fs::read_to_string("src/adapter/inbound/tui/app/planning_runtime_refresh_ui.rs").unwrap();
+    assert!(
+        refresh_ui.contains("presentation_revision") && refresh_ui.contains("fn rebind("),
+        "planning runtime completion must be gated by a typed presentation revision and rebind replacement inspections"
     );
 }
 

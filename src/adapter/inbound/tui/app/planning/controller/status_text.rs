@@ -71,11 +71,11 @@ pub(super) fn directions_manual_editor_closed_status(risk: PlanningDraftEditorCl
 }
 
 /*
- * planning doctor report는 application service가 workspace, queue, proposal, health를 검사한 projection이다.
- * TUI controller는 report 구조 전체를 footer에 밀어 넣지 않고 이 compact status line만 보낸다.
+ * Core planning refresh가 반환한 doctor snapshot은 workspace, queue, proposal, health를 한 projection에 담는다.
+ * TUI controller는 snapshot 구조 전체를 footer에 밀어 넣지 않고 이 compact status line만 보낸다.
  * absent workspace일 때만 다음 행동까지 붙여 첫 실행 사용자가 `:planning`으로 넘어갈 수 있게 한다.
  */
-pub(super) fn planning_doctor_status_text(report: &PlanningDoctorReport) -> String {
+pub(super) fn planning_doctor_status_text(report: &PlanningDoctorSnapshot) -> String {
     let mut parts = vec![format!(
         "planning state: {}",
         report.planning_state().label()
@@ -106,7 +106,7 @@ pub(super) fn planning_doctor_status_text(report: &PlanningDoctorReport) -> Stri
     if let Some(note) = report.note() {
         parts.push(format!("note: {note}"));
     }
-    if report.planning_state() == PlanningDoctorState::Absent {
+    if report.planning_state() == PlanningDoctorSnapshotState::Absent {
         parts.push("next action: run :planning to stage the default planning scaffold".to_string());
     }
 

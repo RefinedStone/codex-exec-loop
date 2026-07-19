@@ -582,6 +582,7 @@ impl NativeTuiApp {
             conversation.status_text = status_text.clone();
             conversation.append_status_message(status_text.clone());
         }
+        self.advance_planning_ui_intent_revision();
         self.queue_overlay_ui_state.set_feedback(status_text);
     }
 

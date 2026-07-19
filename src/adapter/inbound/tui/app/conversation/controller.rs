@@ -139,6 +139,7 @@ impl NativeTuiApp {
             resumed_thread_manual_handoff_context.as_deref(),
         ));
         self.conversation_state = ConversationState::ready(conversation);
+        self.advance_planning_ui_intent_revision();
     }
 
     pub(in crate::adapter::inbound::tui::app) fn surface_resumed_session_planning_context_if_unchanged(
