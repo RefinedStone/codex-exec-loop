@@ -418,11 +418,11 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
+    use crate::adapter::inbound::tui::app::ConversationState;
     use crate::adapter::inbound::tui::app::language::TuiLanguage;
     use crate::adapter::inbound::tui::app::test_helpers::{
         test_native_tui_app, test_native_tui_app_with_session_catalog_port,
     };
-    use crate::adapter::inbound::tui::app::{ConversationState, StartupState};
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::core::app::TurnStreamState;
     use crate::domain::recent_sessions::{
@@ -597,10 +597,12 @@ mod tests {
     }
 
     fn load_recording_catalog(app: &mut NativeTuiApp) {
-        app.dispatch_core_command(AppCommand::RunStartupChecks);
+        app.dispatch_core_command(AppCommand::LoadSessionCatalog {
+            limit: SESSION_PAGE_SIZE,
+            workspace_directory: "/tmp/root".to_string(),
+        });
         poll_until(app, |app| {
-            matches!(app.startup_state, StartupState::Ready(_))
-                && matches!(app.session_state, SessionState::Ready(_))
+            matches!(app.session_state, SessionState::Ready(_))
         });
         app.shell_overlay = ShellOverlay::Sessions;
     }
@@ -1012,7 +1014,13 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("rename worker should reach the test gate");
 
-        app.dispatch_shell_chrome(ShellChromeEvent::SessionsRequested { limit: 10 });
+        // Shell chrome tests own startup-gated reload admission. Model the accepted
+        // reload effect directly so this test stays focused on rename deferral.
+        app.session_state = SessionState::Loading;
+        app.dispatch_core_command(AppCommand::LoadSessionCatalog {
+            limit: 10,
+            workspace_directory: "/tmp/root".to_string(),
+        });
         assert!(matches!(app.session_state, SessionState::Loading));
         release_rename_tx
             .send(())
