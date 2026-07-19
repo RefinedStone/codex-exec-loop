@@ -10,7 +10,7 @@ use super::{
 use super::{
     ConversationLoadCorrelation, GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
     GithubReviewPollingSetupResult, ParallelPeekLoadCorrelation, PlanningDoctorSnapshot,
-    PlanningEditorSessionSnapshot, PlanningRuntimeRefreshCorrelation,
+    PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot, PlanningRuntimeRefreshCorrelation,
     PlanningRuntimeRefreshSnapshot, PlanningSimpleDraftPromotionSnapshot,
     PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationAdmission,
     PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetSnapshot,
@@ -110,6 +110,10 @@ pub enum CoreEffectCompletion {
     PlanningSimpleDraftStaged {
         correlation: PlanningWorkspaceOperationCorrelation,
         result: Result<Box<PlanningSimpleDraftStageSnapshot>, String>,
+    },
+    PlanningEditorStaged {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorStageSnapshot>, String>,
     },
     PlanningSimpleEditorLoaded {
         correlation: PlanningWorkspaceOperationCorrelation,
@@ -216,6 +220,10 @@ pub enum AppEvent {
     PlanningSimpleDraftStaged {
         correlation: PlanningWorkspaceOperationCorrelation,
         result: Result<Box<PlanningSimpleDraftStageSnapshot>, String>,
+    },
+    PlanningEditorStaged {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorStageSnapshot>, String>,
     },
     PlanningSimpleEditorLoaded {
         correlation: PlanningWorkspaceOperationCorrelation,

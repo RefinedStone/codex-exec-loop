@@ -1253,6 +1253,18 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     for (callable_name, operation) in [
         ("reset_workspace", "reset"),
         ("stage_simple_mode_draft", "simple draft stage"),
+        (
+            "stage_manual_editor_session",
+            "planning manual editor stage",
+        ),
+        (
+            "stage_detail_doc_editor_session",
+            "direction detail editor stage",
+        ),
+        (
+            "stage_queue_idle_prompt_editor_session",
+            "queue-idle prompt editor stage",
+        ),
         ("load_manual_editor_session", "simple editor load"),
         ("promote_staged_draft", "simple draft promotion"),
     ] {
@@ -1272,9 +1284,12 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
 
     let planning_controller =
         fs::read_to_string("src/adapter/inbound/tui/app/planning/controller.rs").unwrap();
+    let planning_editor_controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/planning/controller/editor.rs").unwrap();
     assert!(
         planning_controller.contains("AppCommand::ResetPlanningWorkspace(intent)")
             && planning_controller.contains("AppCommand::StageSimplePlanningDraft")
+            && planning_editor_controller.contains("AppCommand::StagePlanningEditor")
             && planning_controller.contains("AppCommand::LoadSimplePlanningEditor")
             && planning_controller.contains("AppCommand::PromoteSimplePlanningDraft")
             && planning_controller.contains("PlanningWorkspaceOperationUiSettlement::Applied"),
@@ -1298,6 +1313,12 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
             && planning_controller.contains(
                 "fn late_simple_editor_load_cannot_replace_a_newer_editor_session_identity()"
             )
+            && planning_controller.contains(
+                "fn coalesced_planning_editor_retry_rebinds_current_revision_and_reopens_loading()"
+            )
+            && planning_controller.contains(
+                "fn approval_during_direction_editor_staging_restores_confirm_without_opening_editor()"
+            )
             && planning_controller
                 .contains("app.sync_draft_shell_workspace(workspace_b.path_str());")
             && planning_controller
@@ -1315,6 +1336,21 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
                 .contains("PlanningWorkspaceOperationUiSettlement::PresentationSuperseded"),
         "TUI reset settlement must reject stale generation, workspace, and presentation intent"
     );
+    let editor_stage_settlement = planning_controller
+        .split_once("fn apply_planning_editor_stage_completion(")
+        .and_then(|(_, body)| body.split_once("fn planning_editor_stage_presentation_is_current("))
+        .map(|(body, _)| body)
+        .expect("planning editor stage settlement should have a bounded source body");
+    for forbidden in [
+        "pause_post_turn_continuation_after_authority_mutation",
+        "refresh_ready_conversation_planning_runtime_projection",
+        "begin_planning_runtime_projection_refresh",
+    ] {
+        assert!(
+            !editor_stage_settlement.contains(forbidden),
+            "editor staging must not trigger runtime refresh or post-turn pause: {forbidden}"
+        );
+    }
 
     let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
     assert!(
@@ -1324,6 +1360,7 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
             && core_controller.contains(".accept(&correlation)")
             && core_controller.contains("correlation.reset_target() == Some(snapshot.target)")
             && core_controller.contains("PlanningWorkspaceOperationKind::StageSimpleDraft")
+            && core_controller.contains("PlanningWorkspaceOperationKind::StageEditor")
             && core_controller.contains("PlanningWorkspaceOperationKind::LoadSimpleEditor")
             && core_controller.contains("PlanningWorkspaceOperationKind::PromoteSimpleDraft"),
         "CoreController must delegate reset and simple-authoring admission plus exact settlement to one coordinator"
@@ -1333,6 +1370,8 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         "PlanningWorkspaceOperationAdmission::Coalesced",
         "PlanningWorkspaceOperationAdmission::Busy",
         "PlanningEditorSessionIdentity",
+        "PlanningEditorStageTarget",
+        "StageEditor",
         "LoadSimpleEditor",
         "PromoteSimpleDraft",
         "checked_add(1)",
@@ -1363,12 +1402,15 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     );
     for required in [
         "pub fn spawn_simple_planning_draft_stage(",
+        "pub fn spawn_planning_editor_stage(",
         "pub fn spawn_simple_planning_editor_load(",
         "pub fn spawn_simple_planning_draft_promotion(",
         "PlanningSimpleDraftStaged",
+        "PlanningEditorStaged",
         "PlanningSimpleEditorLoaded",
         "PlanningSimpleDraftPromoted",
         "planning simple draft stage worker panicked",
+        "planning editor stage worker panicked",
         "planning simple editor load worker panicked",
         "planning simple draft promotion worker panicked",
     ] {
@@ -1380,6 +1422,12 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     assert!(
         effect_runner.contains(
             "fn simple_draft_stage_dispatch_returns_within_300ms_while_provider_stays_gated()"
+        ) && effect_runner.contains(
+            "fn planning_editor_stage_dispatch_is_non_blocking_and_exact_duplicates_coalesce()"
+        ) && effect_runner.contains(
+            "fn planning_editor_stage_runner_rejects_wrong_operation_target_session_and_draft()"
+        ) && effect_runner.contains(
+            "fn planning_editor_stage_worker_panic_is_redacted_and_reopens_admission()"
         ) && effect_runner.contains(
             "fn simple_editor_worker_panic_returns_one_redacted_completion_and_reopens_admission()"
         ) && effect_runner
@@ -1416,16 +1464,13 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         }
     }
     assert_eq!(
-        direct_workspace_calls, 7,
-        "this slice must remove simple stage/load/promotion from NativeTuiApplicationHandle and leave only seven direct calls for later slices"
+        direct_workspace_calls, 4,
+        "this slice must move all editor staging behind Core and leave only four direct save/promote calls for later slices"
     );
     guarded_mutation_methods.sort();
     assert_eq!(
         guarded_mutation_methods,
         [
-            "open_directions_detail_doc_editor",
-            "open_planning_manual_editor",
-            "open_queue_idle_prompt_editor",
             "promote_directions_manual_editor",
             "promote_planning_manual_editor",
             "save_directions_manual_editor",
@@ -1440,6 +1485,9 @@ fn planning_workspace_ast_guard_rejects_all_callable_forms_and_ignored_busy_resu
     for callable_name in [
         "reset_workspace",
         "stage_simple_mode_draft",
+        "stage_manual_editor_session",
+        "stage_detail_doc_editor_session",
+        "stage_queue_idle_prompt_editor_session",
         "load_manual_editor_session",
         "promote_staged_draft",
     ] {

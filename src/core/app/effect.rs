@@ -50,6 +50,9 @@ pub enum CoreEffect {
     StageSimplePlanningDraft {
         correlation: PlanningWorkspaceOperationCorrelation,
     },
+    StagePlanningEditor {
+        correlation: PlanningWorkspaceOperationCorrelation,
+    },
     LoadSimplePlanningEditor {
         correlation: PlanningWorkspaceOperationCorrelation,
     },

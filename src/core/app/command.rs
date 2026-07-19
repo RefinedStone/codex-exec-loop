@@ -1,6 +1,7 @@
 use super::{
     GithubReviewPollingSetupRequest, ManualPromptPreparationIntent, PlanningEditorSessionIdentity,
-    PlanningWorkspaceResetIntent, QueueMutationIntent, TurnSubmissionRequest,
+    PlanningEditorStageTarget, PlanningWorkspaceResetIntent, QueueMutationIntent,
+    TurnSubmissionRequest,
 };
 use crate::domain::conversation::{ConversationApprovalDecision, ConversationTurnSteerRequest};
 use crate::domain::planning::PostTurnRequest;
@@ -47,6 +48,10 @@ pub enum AppCommand {
     ResetPlanningWorkspace(PlanningWorkspaceResetIntent),
     StageSimplePlanningDraft {
         workspace_directory: String,
+    },
+    StagePlanningEditor {
+        workspace_directory: String,
+        target: PlanningEditorStageTarget,
     },
     LoadSimplePlanningEditor {
         workspace_directory: String,

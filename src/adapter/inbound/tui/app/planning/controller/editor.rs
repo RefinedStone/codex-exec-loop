@@ -2,70 +2,46 @@
  * Draft editor controller glue connects three surfaces that deliberately share
  * one text-buffer UI state: planning-init manual editor, simple-draft editor,
  * and directions maintenance editors. The pure editor state owns cursor,
- * dirty flags, close guards, and editable file bodies; this module chooses the
- * correct planning workspace service call and the correct overlay/status
- * transition for each caller.
+ * dirty flags, close guards, and editable file bodies; this module submits the
+ * target-specific Core command and delegates correlated overlay settlement to
+ * the planning controller.
  */
 use super::*;
 
 impl NativeTuiApp {
     pub(super) fn open_planning_manual_editor(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
-            return;
-        }
-        /*
-         * Detail-mode planning authoring starts by asking the workspace
-         * service to stage a manual draft editor session. The shared opener
-         * then installs the returned buffers into PlanningDraftEditorUiState
-         * and moves planning-init into ManualEditor mode.
-         */
         let workspace_directory = self.planning_workspace_directory();
-        self.open_guided_planning_editor_session(
-            self.application
-                .planning()
-                .workspace()
-                .stage_manual_editor_session(&workspace_directory),
-            "planning draft editor ready",
-            PlanningInitModeSelection::Detail,
-        );
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::StagePlanningEditor {
+                workspace_directory,
+                target: PlanningEditorStageTarget::PlanningManual,
+            });
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn open_directions_detail_doc_editor(&mut self, direction_id: &str) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
-            return;
-        }
-        /*
-         * Directions detail docs use the same editor buffer mechanics, but
-         * their service staging path is keyed by direction id and their overlay
-         * returns to directions maintenance rather than planning init.
-         */
         let workspace_directory = self.planning_workspace_directory();
-        self.open_directions_editor_session(
-            self.application
-                .planning()
-                .workspace()
-                .stage_detail_doc_editor_session(&workspace_directory, direction_id),
-            "directions detail doc editor ready",
-        );
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::StagePlanningEditor {
+                workspace_directory,
+                target: PlanningEditorStageTarget::DirectionDetail {
+                    direction_id: direction_id.to_string(),
+                },
+            });
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn open_queue_idle_prompt_editor(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
-            return;
-        }
-        /*
-         * Queue-idle prompt editing is modeled as a directions-maintenance
-         * draft because it changes planning authority text, not the active
-         * task queue. It still enters the shared manual editor UI.
-         */
         let workspace_directory = self.planning_workspace_directory();
-        self.open_directions_editor_session(
-            self.application
-                .planning()
-                .workspace()
-                .stage_queue_idle_prompt_editor_session(&workspace_directory),
-            "queue-idle prompt editor ready",
-        );
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::StagePlanningEditor {
+                workspace_directory,
+                target: PlanningEditorStageTarget::QueueIdlePrompt,
+            });
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn save_planning_manual_editor(&mut self) {

@@ -193,6 +193,7 @@ impl NativeTuiApp {
                 }
                 _ => {}
             },
+            DirectionsMaintenanceOverlayStep::EditorLoading => {}
             DirectionsMaintenanceOverlayStep::ManualEditor => {
                 /*
                  * ManualEditor nests the shared draft editor inside the directions overlay.
