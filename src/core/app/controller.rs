@@ -1,13 +1,14 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ApprovalDecisionAdmission,
-    ApprovalDecisionCorrelation, ConversationLoadCorrelation, CoreEffect, CoreEffectCompletion,
-    CoreInput, DirectionsMaintenanceLoadCorrelation, GithubReviewPollCorrelation,
-    ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ParallelPeekLoadCorrelation,
-    PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
-    SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
-    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
-    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    ApprovalDecisionCorrelation, ApprovalReviewPersistenceCoordinator, ConversationLoadCorrelation,
+    CoreEffect, CoreEffectCompletion, CoreInput, DirectionsMaintenanceLoadCorrelation,
+    GithubReviewPollCorrelation, ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
+    ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation,
+    QueueMutationCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission,
+    TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
@@ -76,6 +77,7 @@ pub struct CoreController {
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
+    approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     next_stop_request_generation: u64,
     active_stop_request: Option<ActiveStopRequest>,
     next_turn_steer_generation: u64,
@@ -120,6 +122,7 @@ impl CoreController {
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
+            approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             next_stop_request_generation: 1,
             active_stop_request: None,
             next_turn_steer_generation: 1,
@@ -224,6 +227,7 @@ impl CoreController {
                 self.deferred_conversation_load = None;
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.approval_review_persistence.invalidate_conversation();
                 self.active_stop_request = None;
                 self.active_turn_steer = None;
                 self.active_approval_decision = None;
@@ -687,6 +691,7 @@ impl CoreController {
                 };
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
+                self.approval_review_persistence.invalidate_conversation();
                 self.active_stop_request = None;
                 self.active_turn_steer = None;
                 self.active_approval_decision = None;
@@ -902,6 +907,39 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
+            CoreInput::EffectCompleted(CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation,
+                result,
+            }) => {
+                let Some(settlement) = self.approval_review_persistence.complete(&correlation)
+                else {
+                    return self.unchanged_outcome();
+                };
+                let mut events = Vec::new();
+                if let Err(error) = result
+                    && settlement.completion_matches_current_turn
+                    && self.turn_stream_state.matches_conversation(
+                        &correlation.workspace_directory,
+                        &correlation.thread_id,
+                    )
+                {
+                    events.push(AppEvent::turn_stream_snapshot_changed(
+                        self.turn_stream_state.apply_runtime_notice(format!(
+                            "review-center persistence failed: {error}"
+                        )),
+                    ));
+                }
+                let effects = settlement
+                    .next
+                    .into_iter()
+                    .map(|correlation| CoreEffect::PersistApprovalReview { correlation })
+                    .collect();
+                CoreDispatchOutcome {
+                    events,
+                    effects,
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::GithubReviewPollCompleted {
                 correlation,
                 mut result,
@@ -1107,6 +1145,7 @@ impl CoreController {
     ) -> CoreDispatchOutcome {
         let cancelled_refresh = self.active_planning_runtime_refresh.take();
         self.active_turn_submission = None;
+        self.approval_review_persistence.invalidate_conversation();
         self.active_stop_request = None;
         self.active_turn_steer = None;
         self.active_approval_decision = None;
@@ -1177,6 +1216,8 @@ impl CoreController {
         self.active_stop_request = None;
         self.active_approval_decision = None;
         self.active_turn_submission = Some(correlation);
+        self.approval_review_persistence
+            .begin_conversation_turn(correlation);
         self.turn_stream_state.begin_submission();
         correlation
     }
@@ -1246,8 +1287,25 @@ impl CoreController {
                 ..
             }
         );
+        let approval_review_persistence = match &stream_snapshot.update {
+            TurnStreamUpdate::ApprovalReviewUpdated { review } => stream_snapshot
+                .cwd
+                .clone()
+                .zip(stream_snapshot.thread_id.clone())
+                .map(|(workspace_directory, thread_id)| {
+                    (workspace_directory, thread_id, review.clone())
+                }),
+            _ => None,
+        };
         let mut events = vec![AppEvent::turn_stream_snapshot_changed(stream_snapshot)];
         let mut effects = Vec::new();
+        if let Some((workspace_directory, thread_id, review)) = approval_review_persistence {
+            effects.extend(
+                self.approval_review_persistence
+                    .enqueue(correlation, workspace_directory, thread_id, review)
+                    .map(|correlation| CoreEffect::PersistApprovalReview { correlation }),
+            );
+        }
 
         if rejected_terminal {
             let failed = self
@@ -1412,12 +1470,13 @@ mod tests {
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
-        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin,
-        DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
-        DirectionsSupportingFileStatus, QueueAuthorityLoadError, QueueAuthoritySnapshot,
-        QueueMutationCommitSnapshot, QueueMutationIntent, QueueMutationKind, QueueMutationResult,
-        QueueMutationTarget, ReviewCenterSnapshot, SessionCatalogReadySnapshot,
-        SessionCatalogSnapshot, TurnSubmissionRequest,
+        ApprovalReviewPersistenceCorrelation, ConversationReadySnapshot, ConversationSnapshot,
+        CorePromptOrigin, DirectionsMaintenanceDirectionSnapshot,
+        DirectionsMaintenanceSummarySnapshot, DirectionsSupportingFileStatus,
+        QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
+        QueueMutationIntent, QueueMutationKind, QueueMutationResult, QueueMutationTarget,
+        ReviewCenterSnapshot, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
+        TurnSubmissionRequest,
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
@@ -1426,7 +1485,8 @@ mod tests {
     };
     use crate::domain::conversation::{
         ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
-        ConversationApprovalResolution, ConversationMessage, ConversationMessageKind,
+        ConversationApprovalResolution, ConversationApprovalReview,
+        ConversationApprovalReviewStatus, ConversationMessage, ConversationMessageKind,
         ConversationSnapshot as DomainConversationSnapshot, ConversationTurnSteerRequest,
     };
     use crate::domain::conversation_item_lifecycle::{
@@ -3613,6 +3673,242 @@ mod tests {
     }
 
     #[test]
+    fn approval_review_persistence_uses_exact_stream_workspace_and_thread() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-review", "turn-1");
+        let review = test_approval_review("tool-1");
+
+        let scheduled = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: review.clone(),
+            },
+        ));
+        let correlation = ApprovalReviewPersistenceCorrelation::new(
+            1,
+            turn_submission,
+            "/tmp/workspace",
+            "thread-review",
+            review,
+        );
+        assert_eq!(
+            scheduled.effects,
+            vec![CoreEffect::PersistApprovalReview {
+                correlation: correlation.clone(),
+            }]
+        );
+
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation,
+                result: Err("authority unavailable".to_string()),
+            },
+        ));
+        assert!(matches!(
+            failed.events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if matches!(
+                    &snapshot.update,
+                    TurnStreamUpdate::RuntimeNotice { notice }
+                        if notice == "review-center persistence failed: authority unavailable"
+                )
+        ));
+    }
+
+    #[test]
+    fn approval_review_persistence_coalesces_only_pending_duplicate_updates() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-review", "turn-1");
+        let review = test_approval_review("tool-duplicate");
+
+        let first = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: review.clone(),
+            },
+        ));
+        let [
+            CoreEffect::PersistApprovalReview {
+                correlation: first_correlation,
+            },
+        ] = first.effects.as_slice()
+        else {
+            panic!("first review update should start one persistence effect");
+        };
+        let first_correlation = first_correlation.clone();
+
+        let duplicate = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: review.clone(),
+            },
+        ));
+        assert!(duplicate.effects.is_empty());
+
+        let first_completed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation: first_correlation,
+                result: Ok(()),
+            },
+        ));
+        assert!(first_completed.effects.is_empty());
+
+        let repeated_after_completion = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: review.clone(),
+            },
+        ));
+        let [
+            CoreEffect::PersistApprovalReview {
+                correlation: duplicate_correlation,
+            },
+        ] = repeated_after_completion.effects.as_slice()
+        else {
+            panic!("a later duplicate should still reach the idempotent service");
+        };
+        assert_eq!(duplicate_correlation.generation, 2);
+        assert_eq!(duplicate_correlation.turn_submission, turn_submission);
+        assert_eq!(duplicate_correlation.workspace_directory, "/tmp/workspace");
+        assert_eq!(duplicate_correlation.thread_id, "thread-review");
+        assert_eq!(duplicate_correlation.review, review);
+    }
+
+    #[test]
+    fn approval_review_persistence_error_requires_current_workspace() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-review", "turn-1");
+        let scheduled = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: test_approval_review("tool-workspace"),
+            },
+        ));
+        let [CoreEffect::PersistApprovalReview { correlation }] = scheduled.effects.as_slice()
+        else {
+            panic!("review update should start one persistence effect");
+        };
+        let correlation = correlation.clone();
+
+        controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ThreadPrepared {
+                thread_id: "thread-review".to_string(),
+                title: "Moved workspace".to_string(),
+                cwd: "/tmp/other-workspace".to_string(),
+                runtime_envelope: Box::default(),
+            },
+        ));
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation,
+                result: Err("late workspace failure".to_string()),
+            },
+        ));
+
+        assert!(stale.events.is_empty());
+        assert!(stale.effects.is_empty());
+    }
+
+    #[test]
+    fn approval_review_persistence_error_requires_current_turn_submission() {
+        let mut controller = CoreController::new();
+        let old_turn = start_test_turn(&mut controller, "thread-review", "turn-1");
+        let scheduled = controller.handle_input(test_turn_stream_input(
+            old_turn,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: test_approval_review("tool-old-turn"),
+            },
+        ));
+        let [CoreEffect::PersistApprovalReview { correlation }] = scheduled.effects.as_slice()
+        else {
+            panic!("review update should start one persistence effect");
+        };
+        let correlation = correlation.clone();
+
+        controller.handle_input(test_turn_stream_input(
+            old_turn,
+            TurnStreamEvent::Failed {
+                message: "old turn closed".to_string(),
+            },
+        ));
+        let new_turn = start_test_turn(&mut controller, "thread-review", "turn-2");
+        assert_ne!(new_turn, old_turn);
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation,
+                result: Err("late turn failure".to_string()),
+            },
+        ));
+
+        assert!(stale.events.is_empty());
+        assert!(stale.effects.is_empty());
+    }
+
+    #[test]
+    fn stale_approval_review_persistence_error_does_not_reach_a_new_conversation() {
+        let mut controller = CoreController::new();
+        let turn_submission = start_test_turn(&mut controller, "thread-old", "turn-1");
+        let scheduled = controller.handle_input(test_turn_stream_input(
+            turn_submission,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: test_approval_review("tool-old"),
+            },
+        ));
+        let [CoreEffect::PersistApprovalReview { correlation }] = scheduled.effects.as_slice()
+        else {
+            panic!("review update should start one persistence effect");
+        };
+        let correlation = correlation.clone();
+
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-new".to_string(),
+            fallback_workspace_directory: "/tmp/new-workspace".to_string(),
+        }));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-new"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for(
+                    "thread-new",
+                ))),
+            },
+        ));
+        let new_turn = start_test_turn(&mut controller, "thread-new", "turn-2");
+        let queued_new_review = controller.handle_input(test_turn_stream_input(
+            new_turn,
+            TurnStreamEvent::ApprovalReviewUpdated {
+                review: test_approval_review("tool-new"),
+            },
+        ));
+        assert!(queued_new_review.effects.is_empty());
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation: correlation.clone(),
+                result: Err("late authority failure".to_string()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert!(matches!(
+            stale.effects.as_slice(),
+            [CoreEffect::PersistApprovalReview { correlation }]
+                if correlation.generation == 2
+                    && correlation.turn_submission == new_turn
+                    && correlation.thread_id == "thread-new"
+                    && correlation.review.target_item_id == "tool-new"
+        ));
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ApprovalReviewPersisted {
+                correlation,
+                result: Err("duplicate late failure".to_string()),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+    }
+
+    #[test]
     #[should_panic(expected = "approval decision generation exhausted")]
     fn approval_decision_generation_panics_before_it_can_wrap() {
         let mut controller = CoreController::new();
@@ -5731,6 +6027,15 @@ mod tests {
                 },
             },
         ));
+    }
+
+    fn test_approval_review(target_item_id: &str) -> ConversationApprovalReview {
+        ConversationApprovalReview {
+            target_item_id: target_item_id.to_string(),
+            status: ConversationApprovalReviewStatus::Unknown("human_review_requested".to_string()),
+            risk_level: Some("medium".to_string()),
+            rationale: Some("operator review required".to_string()),
+        }
     }
 
     fn test_turn_submission_request(thread_id: Option<&str>) -> TurnSubmissionRequest {

@@ -25,7 +25,10 @@ pub mod turn_steer;
 pub mod turn_stream;
 pub mod turn_submission;
 
-pub use approval::{ApprovalDecisionAdmission, ApprovalDecisionCorrelation};
+pub(crate) use approval::ApprovalReviewPersistenceCoordinator;
+pub use approval::{
+    ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
+};
 pub use command::AppCommand;
 pub use controller::{CoreController, CoreDispatchOutcome};
 pub use conversation::{

@@ -115,6 +115,11 @@ impl TurnStreamState {
         self.thread_id.as_deref() == Some(thread_id)
     }
 
+    pub fn matches_conversation(&self, workspace_directory: &str, thread_id: &str) -> bool {
+        self.thread_id.as_deref() == Some(thread_id)
+            && self.cwd.as_deref() == Some(workspace_directory)
+    }
+
     pub fn matches_active_turn(&self, thread_id: &str, turn_id: &str) -> bool {
         self.thread_id.as_deref() == Some(thread_id)
             && self.active_turn_id.as_deref() == Some(turn_id)

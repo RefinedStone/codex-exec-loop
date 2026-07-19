@@ -500,6 +500,7 @@ fn future_core_app_public_contracts_are_core_owned() {
     assert_no_forbidden_references_in_paths(
         "future core/app public contracts must be core-owned and application DTO free",
         &[
+            "src/core/app/approval.rs",
             "src/core/app/command.rs",
             "src/core/app/effect.rs",
             "src/core/app/event.rs",
@@ -1412,6 +1413,24 @@ fn tui_conversation_stream_events_enter_through_core_runtime() {
         "TUI conversation stream events must re-enter core before reducer application",
         &["src/adapter/inbound/tui/app/shell_runtime.rs"],
         &["ConversationRuntimeEvent::StreamUpdated"],
+    );
+}
+
+#[test]
+fn tui_approval_review_persistence_enters_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI approval review updates must not persist review authority on the UI thread",
+        &["src/adapter/inbound/tui"],
+        &[
+            "PersistApprovalReview",
+            ".persist_review_center_approval_review_for_workspace(",
+        ],
+    );
+    let controller_source = fs::read_to_string(repo_root().join("src/core/app/controller.rs"))
+        .expect("core controller source should be readable");
+    assert!(
+        controller_source.contains("CoreEffect::PersistApprovalReview { correlation }"),
+        "approval review persistence must positively enter through the typed Core effect"
     );
 }
 
