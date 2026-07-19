@@ -177,6 +177,12 @@ writer, effect accounting, stale-completion dropping, wake coalescing, durable b
 single projection source. Do not add a mailbox actor, raw parallel service owner in TUI/core, or a
 second dispatch queue without revisiting that decision.
 
+Periodic pending-dispatch polling is admitted by that facade but reads durable authority only in
+the effect runner. The runtime assigns a monotonic operation correlated to the exact workspace and
+epoch, keeps one poll in flight, and coalesces later ticks. Only the matching completion may start a
+wake or follow-up tick; disable, workspace switch, duplicate, and ABA completions are dropped.
+Read failures preserve the current projection and the next scheduled tick remains a retry.
+
 Pool mutations also take a repository-scoped OS lock. Every allocation gets an unguessable exact
 generation carried through leases, sessions, events, delivery, and cleanup; delayed events compare
 that generation before mutation. SQLite remains authoritative on every supported platform.

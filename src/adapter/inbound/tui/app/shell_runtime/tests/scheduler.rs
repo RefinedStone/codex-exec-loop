@@ -211,10 +211,16 @@ fn active_supersession_supervisor_refreshes_periodically() {
     );
     runtime.poll_background_messages_at(now);
     assert!(
+        runtime.app().parallel_mode_control_effect_in_flight(),
+        "the passive pending-dispatch poll should remain correlated until its event is drained"
+    );
+    assert!(
         !runtime
             .app()
             .parallel_mode_supervisor_refresh_due_for_test(now + Duration::from_millis(999))
     );
+    // A passive authority poll may serialize the actual refresh, but it must not
+    // suppress the periodic refresh request that queues the newer presentation work.
     assert!(
         runtime
             .app()

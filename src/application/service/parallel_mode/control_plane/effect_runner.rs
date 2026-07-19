@@ -23,7 +23,8 @@ use crate::domain::parallel_mode::{
 
 use super::{
     ParallelModeControlPlaneCommand, ParallelModeControlPlaneEffectId,
-    ParallelModeControlPlaneWake, ParallelModeSupervisorInspectionCorrelation,
+    ParallelModeControlPlaneWake, ParallelModePendingDispatchPollCorrelation,
+    ParallelModeSupervisorInspectionCorrelation,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,10 @@ pub enum ParallelModeControlPlaneBackgroundEvent {
     SupervisorInspectionCompleted {
         correlation: ParallelModeSupervisorInspectionCorrelation,
         result: Result<ParallelModeSupervisorInspectionSnapshot, String>,
+    },
+    PendingDispatchWakePolled {
+        correlation: ParallelModePendingDispatchPollCorrelation,
+        result: Result<Option<ParallelModeControlPlaneWake>, String>,
     },
     SupervisorSnapshotRefreshed {
         workspace_directory: String,
@@ -636,13 +641,35 @@ where
         }
     }
 
-    pub fn pending_dispatch_wake(
+    pub fn spawn_pending_dispatch_wake_poll(
         &self,
-        workspace_directory: &str,
-        epoch_id: u64,
-    ) -> Result<Option<ParallelModeControlPlaneWake>, String> {
-        self.parallel_mode_service
-            .pending_dispatch_wake(workspace_directory, epoch_id)
+        correlation: ParallelModePendingDispatchPollCorrelation,
+    ) {
+        let parallel_mode_service = self.parallel_mode_service.clone();
+        let event_sink = self.event_sink.clone();
+        let automation_guard = self.automation_guard.clone();
+
+        thread::spawn(move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                if !automation_guard
+                    .is_active(&correlation.workspace_directory, correlation.epoch_id)
+                {
+                    return Err(
+                        "pending dispatch poll belongs to an inactive automation epoch".to_string(),
+                    );
+                }
+                parallel_mode_service
+                    .pending_dispatch_wake(&correlation.workspace_directory, correlation.epoch_id)
+            }))
+            .map_err(|_| "pending dispatch poll failed unexpectedly".to_string())
+            .and_then(|result| result);
+            event_sink.send_control_plane_event(
+                ParallelModeControlPlaneBackgroundEvent::PendingDispatchWakePolled {
+                    correlation,
+                    result,
+                },
+            );
+        });
     }
 
     pub fn enqueue_slot_capacity_dispatch(

@@ -67,6 +67,23 @@ impl ParallelModeSupervisorInspectionCorrelation {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelModePendingDispatchPollCorrelation {
+    pub operation_id: u64,
+    pub workspace_directory: String,
+    pub epoch_id: u64,
+}
+
+impl ParallelModePendingDispatchPollCorrelation {
+    fn new(operation_id: u64, workspace_directory: String, epoch_id: u64) -> Self {
+        Self {
+            operation_id,
+            workspace_directory,
+            epoch_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParallelModeSupervisorInspectionState {
     Idle,
@@ -162,11 +179,8 @@ pub enum ParallelModeControlPlaneCommand {
         follow_up_tick_signature: Option<String>,
     },
     PendingDispatchWakePolled {
-        workspace_directory: String,
-        epoch_id: u64,
-        wake: Option<ParallelModeControlPlaneWake>,
-        error: Option<String>,
-        follow_up_tick_signature: Option<String>,
+        correlation: ParallelModePendingDispatchPollCorrelation,
+        result: Result<Option<ParallelModeControlPlaneWake>, String>,
     },
     WorkerCompleted {
         workspace_directory: String,
@@ -325,9 +339,7 @@ pub enum ParallelModeControlPlaneEffect {
         signature: String,
     },
     PollPendingDispatchWake {
-        workspace_directory: String,
-        epoch_id: u64,
-        follow_up_tick_signature: Option<String>,
+        correlation: ParallelModePendingDispatchPollCorrelation,
     },
     EnqueueSlotCapacityDispatch {
         workspace_directory: String,
@@ -403,6 +415,8 @@ pub struct ParallelModeControlPlaneRuntimeStore {
     supervisor_inspection_in_flight: Option<ParallelModeSupervisorInspectionInFlight>,
     pending_supervisor_inspection: Option<ParallelModeSupervisorInspectionIntent>,
     next_supervisor_inspection_operation_id: u64,
+    pending_dispatch_poll_in_flight: Option<ParallelModePendingDispatchPollInFlight>,
+    next_pending_dispatch_poll_operation_id: u64,
     next_effect_sequence: u64,
 }
 
@@ -427,6 +441,12 @@ struct ParallelModeSupervisorInspectionInFlight {
     mode_enabled: bool,
     reconcile_pool: bool,
     show_status: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelModePendingDispatchPollInFlight {
+    correlation: ParallelModePendingDispatchPollCorrelation,
+    follow_up_tick_signature: Option<String>,
 }
 
 struct ParallelModeEntryCompletion {
@@ -460,6 +480,8 @@ impl Default for ParallelModeControlPlaneRuntimeStore {
             supervisor_inspection_in_flight: None,
             pending_supervisor_inspection: None,
             next_supervisor_inspection_operation_id: 1,
+            pending_dispatch_poll_in_flight: None,
+            next_pending_dispatch_poll_operation_id: 1,
             next_effect_sequence: 1,
         }
     }
@@ -631,19 +653,9 @@ impl ParallelModeControlPlaneRuntime {
                 &mut outcome,
             ),
             ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
-                workspace_directory,
-                epoch_id,
-                wake,
-                error,
-                follow_up_tick_signature,
-            } => self.pending_dispatch_wake_polled(
-                workspace_directory,
-                epoch_id,
-                wake,
-                error,
-                follow_up_tick_signature,
-                &mut outcome,
-            ),
+                correlation,
+                result,
+            } => self.pending_dispatch_wake_polled(correlation, result, &mut outcome),
             ParallelModeControlPlaneCommand::WorkerCompleted {
                 workspace_directory,
                 epoch_id,
@@ -1466,30 +1478,60 @@ impl ParallelModeControlPlaneRuntime {
         let Some(epoch_id) = self.current_epoch_for_workspace(&workspace_directory, outcome) else {
             return;
         };
+        if let Some(in_flight) = self.store.pending_dispatch_poll_in_flight.as_mut() {
+            if in_flight.correlation.workspace_directory == workspace_directory
+                && in_flight.correlation.epoch_id == epoch_id
+                && follow_up_tick_signature.is_some()
+            {
+                in_flight.follow_up_tick_signature = follow_up_tick_signature;
+            }
+            return;
+        }
         if self.has_in_flight_effect() {
             return;
         }
-        outcome
-            .effects
-            .push(ParallelModeControlPlaneEffect::PollPendingDispatchWake {
-                workspace_directory,
-                epoch_id,
-                follow_up_tick_signature,
-            });
+        self.start_pending_dispatch_poll(
+            workspace_directory,
+            epoch_id,
+            follow_up_tick_signature,
+            outcome,
+        );
     }
 
     fn pending_dispatch_wake_polled(
         &mut self,
-        workspace_directory: String,
-        epoch_id: u64,
-        wake: Option<ParallelModeControlPlaneWake>,
-        error: Option<String>,
-        follow_up_tick_signature: Option<String>,
+        correlation: ParallelModePendingDispatchPollCorrelation,
+        result: Result<Option<ParallelModeControlPlaneWake>, String>,
         outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
     ) {
-        if !self.command_epoch_is_current(&workspace_directory, epoch_id, outcome) {
+        let Some(in_flight) = self
+            .store
+            .pending_dispatch_poll_in_flight
+            .as_ref()
+            .filter(|in_flight| in_flight.correlation == correlation)
+            .cloned()
+        else {
+            self.stale_command(
+                correlation.workspace_directory,
+                correlation.epoch_id,
+                "unknown pending dispatch poll",
+                outcome,
+            );
+            return;
+        };
+        if !self.command_epoch_is_current(
+            &correlation.workspace_directory,
+            correlation.epoch_id,
+            outcome,
+        ) {
+            self.store.pending_dispatch_poll_in_flight = None;
             return;
         }
+        self.store.pending_dispatch_poll_in_flight = None;
+        let (wake, error) = match result {
+            Ok(wake) => (wake, None),
+            Err(error) => (None, Some(error)),
+        };
         if let Some(error) = error {
             outcome
                 .events
@@ -1498,9 +1540,21 @@ impl ParallelModeControlPlaneRuntime {
                     reason: format!("pending dispatch command poll failed: {error}"),
                 });
         }
+        let workspace_directory = correlation.workspace_directory;
+        let epoch_id = correlation.epoch_id;
+        let has_queued_continuation = self.store.pending_parallel_entry.is_some()
+            || self.store.pending_supervisor_refresh
+            || self.store.pending_orchestrator_wake.is_some();
+        if has_queued_continuation {
+            if self.store.pending_orchestrator_wake.is_none() {
+                self.store.pending_orchestrator_wake = wake;
+            }
+            self.continue_after_effect_completed(workspace_directory, epoch_id, outcome);
+            return;
+        }
         match ParallelModeControlPlaneAggregate::pending_dispatch_wake_decision(
             wake.is_some(),
-            follow_up_tick_signature.is_some(),
+            in_flight.follow_up_tick_signature.is_some(),
         ) {
             ParallelModePendingDispatchWakeDecision::StartWake => {
                 if let Some(wake) = wake {
@@ -1508,11 +1562,14 @@ impl ParallelModeControlPlaneRuntime {
                 }
             }
             ParallelModePendingDispatchWakeDecision::RunFollowUpTick => {
-                if let Some(signature) = follow_up_tick_signature {
-                    self.run_orchestrator_tick(workspace_directory, signature, outcome);
+                if let Some(signature) = in_flight.follow_up_tick_signature {
+                    self.run_orchestrator_tick(workspace_directory.clone(), signature, outcome);
                 }
             }
             ParallelModePendingDispatchWakeDecision::Idle => {}
+        }
+        if !self.has_in_flight_effect() {
+            self.continue_after_effect_completed(workspace_directory, epoch_id, outcome);
         }
     }
 
@@ -1539,13 +1596,41 @@ impl ParallelModeControlPlaneRuntime {
             }
             ParallelModeProjectionReadyContinuation::PollPendingDispatchWake => {}
         }
-        outcome
-            .effects
-            .push(ParallelModeControlPlaneEffect::PollPendingDispatchWake {
-                workspace_directory,
-                epoch_id,
+        self.start_pending_dispatch_poll(
+            workspace_directory,
+            epoch_id,
+            follow_up_tick_signature,
+            outcome,
+        );
+    }
+
+    fn start_pending_dispatch_poll(
+        &mut self,
+        workspace_directory: String,
+        epoch_id: u64,
+        follow_up_tick_signature: Option<String>,
+        outcome: &mut ParallelModeControlPlaneRuntimeOutcome,
+    ) {
+        if self.has_in_flight_effect() {
+            return;
+        }
+        let operation_id = self.store.next_pending_dispatch_poll_operation_id;
+        self.store.next_pending_dispatch_poll_operation_id = operation_id
+            .checked_add(1)
+            .expect("pending dispatch poll operation id exhausted");
+        let correlation = ParallelModePendingDispatchPollCorrelation::new(
+            operation_id,
+            workspace_directory,
+            epoch_id,
+        );
+        self.store.pending_dispatch_poll_in_flight =
+            Some(ParallelModePendingDispatchPollInFlight {
+                correlation: correlation.clone(),
                 follow_up_tick_signature,
             });
+        outcome
+            .effects
+            .push(ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation });
     }
 
     fn drain_pending_orchestrator_wake(
@@ -1720,6 +1805,7 @@ impl ParallelModeControlPlaneRuntime {
             || self.store.orchestrator_wake_in_flight.is_some()
             || self.store.orchestrator_tick_in_flight.is_some()
             || self.store.supervisor_inspection_in_flight.is_some()
+            || self.store.pending_dispatch_poll_in_flight.is_some()
     }
 
     fn clear_process_effect_state(&mut self) {
@@ -1729,6 +1815,7 @@ impl ParallelModeControlPlaneRuntime {
         self.store.orchestrator_tick_in_flight = None;
         self.store.supervisor_inspection_in_flight = None;
         self.store.pending_supervisor_inspection = None;
+        self.store.pending_dispatch_poll_in_flight = None;
         self.store.pending_parallel_entry = None;
         self.store.projection_ready = false;
         self.store.pending_supervisor_refresh = false;
@@ -2363,11 +2450,17 @@ mod tests {
 
         assert!(matches!(
             completed.effects.as_slice(),
-            [ParallelModeControlPlaneEffect::PollPendingDispatchWake {
-                follow_up_tick_signature: Some(signature),
-                ..
-            }] if signature == "tick-sig"
+            [ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation }]
+                if correlation.workspace_directory == "/repo" && correlation.epoch_id == 1
         ));
+        assert_eq!(
+            runtime
+                .store
+                .pending_dispatch_poll_in_flight
+                .as_ref()
+                .and_then(|in_flight| in_flight.follow_up_tick_signature.as_deref()),
+            Some("tick-sig")
+        );
     }
 
     #[test]
@@ -2428,13 +2521,18 @@ mod tests {
         runtime.handle(ParallelModeControlPlaneCommand::OpenEpoch {
             workspace_directory: "/repo".to_string(),
         });
+        let started = runtime.handle(ParallelModeControlPlaneCommand::PollPendingDispatchWake {
+            workspace_directory: "/repo".to_string(),
+            follow_up_tick_signature: Some("tick-sig".to_string()),
+        });
+        let correlation = match only_effect(&started) {
+            ParallelModeControlPlaneEffect::PollPendingDispatchWake { correlation } => correlation,
+            effect => panic!("expected pending dispatch poll effect, got {effect:?}"),
+        };
 
         let polled = runtime.handle(ParallelModeControlPlaneCommand::PendingDispatchWakePolled {
-            workspace_directory: "/repo".to_string(),
-            epoch_id: 1,
-            wake: None,
-            error: None,
-            follow_up_tick_signature: Some("tick-sig".to_string()),
+            correlation,
+            result: Ok(None),
         });
 
         assert!(matches!(
