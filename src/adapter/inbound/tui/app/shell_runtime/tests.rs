@@ -4,10 +4,6 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     ConversationRuntimeEffect, PostTurnContinuationAction, PostTurnEvaluationOutcome,
     PostTurnEvaluationProvenance,
 };
-use crate::adapter::inbound::tui::app::queue_overlay_ui::{
-    QueueMutationAuthorityRefreshError, QueueOverlayAuthorityLoadResult,
-    QueueOverlayAuthorityScreenModel,
-};
 use crate::adapter::inbound::tui::app::{
     ConversationInputState, ConversationState, InlineShellCommand, NativeTuiParallelModeBinding,
     PlanningWorkerPanelState, PlanningWorkerStatus, test_helpers,
@@ -35,7 +31,10 @@ use crate::application::service::planning::{
 use crate::application::service::post_turn_evaluation as application_post_turn;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::core::app::{CoreInput, StartupReadySnapshot, TurnStreamEvent};
+use crate::core::app::{
+    AppEvent, CoreInput, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
+    StartupReadySnapshot, TurnStreamEvent,
+};
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot,
 };
@@ -278,11 +277,15 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     }
     assert!(QUEUE_CONTROLLER_RS.contains("std::thread::spawn"));
     assert!(QUEUE_CONTROLLER_RS.contains("BackgroundMessage::QueueMutationCompleted"));
-    assert!(QUEUE_CONTROLLER_RS.contains("BackgroundMessage::QueueOverlayAuthorityLoaded"));
     assert!(SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueMutationCompleted(result)"));
     assert!(SHELL_RUNTIME_RS.contains("apply_queue_mutation_completion(*result)"));
-    assert!(SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueOverlayAuthorityLoaded(result)"));
-    assert!(SHELL_RUNTIME_RS.contains("apply_queue_overlay_authority_loaded(*result)"));
+    assert!(!APP_RUNTIME_RS.contains("QueueOverlayAuthorityLoaded"));
+    assert!(!QUEUE_CONTROLLER_RS.contains("QueueOverlayAuthorityLoaded"));
+    assert!(!SHELL_RUNTIME_RS.contains("QueueOverlayAuthorityLoaded"));
+    assert!(QUEUE_CONTROLLER_RS.contains("AppCommand::LoadQueueAuthority"));
+    assert!(QUEUE_CONTROLLER_RS.contains("AppEvent::QueueAuthorityLoadStarted"));
+    assert!(APP_RUNTIME_RS.contains("AppEvent::QueueAuthorityLoaded"));
+    assert!(APP_RUNTIME_RS.contains("apply_queue_overlay_authority_loaded(correlation, result)"));
 
     assert!(QUEUE_UI_RS.contains("operation_id: u64"));
     assert!(QUEUE_UI_RS.contains("workspace_directory: String"));
@@ -314,7 +317,7 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     assert!(!APP_RUNTIME_RS.contains("execute_queue_mutation"));
     assert!(!APP_RUNTIME_RS.contains("load_queue_authority"));
     assert!(QUEUE_CONTROLLER_RS.contains(".execute_cancellation_transaction("));
-    assert!(QUEUE_CONTROLLER_RS.contains(".load_coherent_authority("));
+    assert!(!QUEUE_CONTROLLER_RS.contains(".load_coherent_authority("));
 
     assert!(APP_RS.contains("queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState"));
     assert!(APP_RS.contains("queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState"));
@@ -1086,39 +1089,45 @@ fn startup_background_message_updates_app_state() {
 }
 
 #[test]
-fn stale_queue_authority_completion_reloads_for_the_current_thread_context() {
+fn stale_queue_authority_completion_requires_a_load_for_the_current_thread_context() {
     let mut runtime = make_test_runtime();
     runtime
         .app_mut()
         .dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
-    let stale_request = runtime.app_mut().begin_queue_overlay_authority_load();
-    let stale_request_id = stale_request.request_id;
+    let stale_context = runtime.app().current_queue_mutation_context();
+    let stale_correlation = QueueAuthorityLoadCorrelation::new(
+        1,
+        stale_context.workspace_directory,
+        stale_context.active_thread_id,
+    );
+    runtime
+        .app_mut()
+        .begin_queue_overlay_authority_load(stale_correlation.clone());
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
     };
     conversation.thread_id = "thread-after-load-started".to_string();
+    let replacement_context = runtime.app().current_queue_mutation_context();
+    let replacement_correlation = QueueAuthorityLoadCorrelation::new(
+        1,
+        replacement_context.workspace_directory.clone(),
+        replacement_context.active_thread_id.clone(),
+    );
 
     runtime
-        .app
-        .tx
-        .send(BackgroundMessage::QueueOverlayAuthorityLoaded(Box::new(
-            QueueOverlayAuthorityLoadResult {
-                request: stale_request,
-                authority: Err(QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable),
-            },
-        )))
-        .expect("stale queue authority result should enqueue");
+        .app_mut()
+        .apply_core_event(AppEvent::QueueAuthorityLoaded {
+            correlation: stale_correlation,
+            result: Err(QueueAuthorityLoadError::RuntimeProjectionUnavailable),
+        });
 
-    runtime.poll_background_messages();
-
-    assert!(matches!(
+    assert!(
         runtime
             .app()
             .queue_overlay_ui_state
-            .authority_screen_model(),
-        QueueOverlayAuthorityScreenModel::Loading { request_id }
-            if request_id > stale_request_id
-    ));
+            .loading_request(&replacement_correlation)
+            .is_some()
+    );
     assert!(!runtime.app().queue_overlay_authority_load_required());
 }
 

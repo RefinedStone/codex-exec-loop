@@ -1,4 +1,5 @@
 use crate::application::service::planning::PlanningResetTarget;
+use crate::core::app::QueueAuthorityLoadError;
 use crate::domain::conversation::ConversationReasoningEffort;
 use crate::domain::recent_sessions::SessionCatalogTier;
 
@@ -201,6 +202,28 @@ impl TuiLanguage {
             Self::English => "authority unavailable: close and reopen to retry",
             Self::Korean => "권한 확인 실패: 닫았다가 다시 열어 재시도",
         }
+    }
+
+    pub(super) fn queue_overlay_authority_load_error(
+        self,
+        error: &QueueAuthorityLoadError,
+    ) -> String {
+        let error = match error {
+            QueueAuthorityLoadError::AuthorityUnavailable(detail) => {
+                QueueMutationAuthorityRefreshError::AuthorityUnavailable(detail.clone())
+            }
+            QueueAuthorityLoadError::RevisionsKeptChanging {
+                projection_revision,
+                authority_revision,
+            } => QueueMutationAuthorityRefreshError::RevisionsKeptChanging {
+                projection_revision: *projection_revision,
+                authority_revision: *authority_revision,
+            },
+            QueueAuthorityLoadError::RuntimeProjectionUnavailable => {
+                QueueMutationAuthorityRefreshError::RuntimeProjectionUnavailable
+            }
+        };
+        self.queue_mutation_authority_refresh_error(&error)
     }
 
     pub(super) fn queue_mutation_authority_refresh_error(

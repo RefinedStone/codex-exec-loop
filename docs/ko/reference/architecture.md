@@ -99,6 +99,24 @@ Private SQLite store가 권한을 가집니다. Planning workspace file은 운�
 prompt, staged draft, export, 복구 근거입니다. 승인 mutation은 revision-aware validation을 통과하고,
 hidden worker output은 SQL이나 보호된 planning file을 직접 쓰지 않습니다.
 
+TUI Queue overlay를 열면 먼저 shell chrome을 반영한 뒤 core load command를 dispatch합니다. Core는
+workspace와 active thread identity에 단조 증가 generation을 부여하고 최신 요청으로 이전 요청을
+대체하며 stale 또는 중복 completion을 버립니다. Composition은 coherent application read를 실행하고
+runtime projection, planning revision, task, typed failure를 core 소유 snapshot으로 매핑합니다.
+Presentation은 이 immutable screen model만 읽습니다. Loading과 failed 상태에서는 remove/undo를
+비활성화하고, ready 상태는 visible row, selection, revision, destructive-action token을 한 snapshot에
+묶습니다. Workspace, thread, visible revision이 바뀌면 새 correlated load를 시작하며 redraw와
+resize에서는 authority I/O를 수행하지 않습니다.
+
+TUI queue remove와 undo intent는 overlay와 독립적인 pending gate 하나를 엽니다. Adapter correlation은
+operation ID, workspace와 active thread identity, cancellation request의 base planning revision,
+정확한 task status/update token을 보관합니다. Controller는 visible projection을 낙관적으로 변경하지
+않으며 terminal input path에서 cancellation service를 호출하지 않습니다. `PlanningQueueUseCases`가
+cancellation과 성공/실패 뒤 coherent authority readback을 한 transaction으로 소유합니다. TUI는
+mutation worker scheduling, operation/context correlation, settlement만 소유하며 같은 workspace/thread의
+정확한 pending operation만 반환된 authority를 projection에 반영할 수 있습니다. Queue overlay를
+닫아도 pending mutation은 유지되고 completion을 소비할 때까지 중복 destructive intent를 차단합니다.
+
 `AKRA_HOME`은 신뢰할 수 있는 절대 경로여야 합니다. SQLite DB와 sidecar는 private regular
 single-link file이어야 합니다. Repository incarnation marker는 재사용된 checkout 경로가 예전
 저장소의 권한을 자동으로 채택하지 못하게 합니다.

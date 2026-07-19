@@ -34,7 +34,7 @@ use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::operator_alert::OperatorAlert;
 
-use super::queue_overlay_ui::{QueueMutationWorkerResult, QueueOverlayAuthorityLoadResult};
+use super::queue_overlay_ui::QueueMutationWorkerResult;
 use super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowOverlayUiState,
     ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
@@ -74,7 +74,6 @@ pub(super) enum BackgroundMessage {
         event: ConversationStreamEvent,
     },
     ConversationRuntimeNotice(String),
-    QueueOverlayAuthorityLoaded(Box<QueueOverlayAuthorityLoadResult>),
     QueueMutationCompleted(Box<QueueMutationWorkerResult>),
     OperatorAlert(OperatorAlert),
     InvalidateParallelModeSupervisorSnapshot,
@@ -1428,7 +1427,7 @@ impl NativeTuiApp {
         }
     }
 
-    fn apply_core_event(&mut self, event: AppEvent) {
+    pub(super) fn apply_core_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::StartupChanged {
                 correlation,
@@ -1471,6 +1470,17 @@ impl NativeTuiApp {
                     == super::reviews_overlay_ui::ReviewsOverlayLoadCompletion::ReloadRequired
                 {
                     self.start_reviews_overlay_authority_load();
+                }
+            }
+            AppEvent::QueueAuthorityLoadStarted { .. } => {}
+            AppEvent::QueueAuthorityLoaded {
+                correlation,
+                result,
+            } => {
+                if self.apply_queue_overlay_authority_loaded(correlation, result)
+                    == super::queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::ReloadRequired
+                {
+                    self.start_queue_overlay_authority_load();
                 }
             }
             AppEvent::TurnSubmissionAdmissionResolved(_) => {}

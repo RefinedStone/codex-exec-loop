@@ -166,13 +166,6 @@ impl ShellRuntime {
                     self.app
                         .dispatch_core_input(CoreInput::ConversationRuntimeNotice(notice));
                 }
-                BackgroundMessage::QueueOverlayAuthorityLoaded(result) => {
-                    if self.app.apply_queue_overlay_authority_loaded(*result)
-                        == super::queue_overlay_ui::QueueOverlayAuthorityLoadCompletion::ReloadRequired
-                    {
-                        self.app.start_queue_overlay_authority_load();
-                    }
-                }
                 BackgroundMessage::QueueMutationCompleted(result) => {
                     self.app.apply_queue_mutation_completion(*result);
                 }

@@ -29,6 +29,10 @@ pub enum AppCommand {
         workspace_directory: String,
         active_thread_id: Option<String>,
     },
+    LoadQueueAuthority {
+        workspace_directory: String,
+        active_thread_id: Option<String>,
+    },
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,
     SubmitTurn(TurnSubmissionRequest),

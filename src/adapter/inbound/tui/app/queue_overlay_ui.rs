@@ -10,6 +10,7 @@ use crate::application::service::planning::{
     PlanningQueueAuthoritySnapshot, PlanningQueueCancellationRequest, PlanningRuntimeProjection,
     PlanningTaskMutationCommitResult,
 };
+use crate::core::app::QueueAuthorityLoadCorrelation;
 use crate::domain::planning::{PlanningQueueMutationReceipt, TaskStatus};
 
 use super::{ConversationInputState, ConversationState, NativeTuiApp, TuiLanguage};
@@ -62,15 +63,14 @@ pub(super) struct QueueMutationWorkerResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueOverlayAuthorityLoadRequest {
-    pub(super) request_id: u64,
-    pub(super) context: QueueMutationContext,
+    pub(super) correlation: QueueAuthorityLoadCorrelation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct QueueOverlayAuthorityLoadResult {
-    pub(super) request: QueueOverlayAuthorityLoadRequest,
-    pub(super) authority:
-        Result<QueueMutationAuthoritySnapshot, QueueMutationAuthorityRefreshError>,
+impl QueueOverlayAuthorityLoadRequest {
+    pub(super) fn matches_context(&self, context: &QueueMutationContext) -> bool {
+        self.correlation.workspace_directory == context.workspace_directory
+            && self.correlation.active_thread_id == context.active_thread_id
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,7 +229,6 @@ impl From<PlanningApplicationSkippedTask> for QueueOverlayActionTask {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueueOverlayUiState {
-    next_authority_request_id: u64,
     authority_projection: QueueOverlayAuthorityProjectionState,
     selected_task_id: Option<String>,
     feedback: Option<String>,
@@ -239,7 +238,6 @@ pub(super) struct QueueOverlayUiState {
 impl Default for QueueOverlayUiState {
     fn default() -> Self {
         Self {
-            next_authority_request_id: 0,
             authority_projection: QueueOverlayAuthorityProjectionState::Idle,
             selected_task_id: None,
             feedback: None,
@@ -251,13 +249,9 @@ impl Default for QueueOverlayUiState {
 impl QueueOverlayUiState {
     pub(super) fn begin_authority_load(
         &mut self,
-        context: QueueMutationContext,
+        correlation: QueueAuthorityLoadCorrelation,
     ) -> QueueOverlayAuthorityLoadRequest {
-        self.next_authority_request_id = self.next_authority_request_id.wrapping_add(1).max(1);
-        let request = QueueOverlayAuthorityLoadRequest {
-            request_id: self.next_authority_request_id,
-            context,
-        };
+        let request = QueueOverlayAuthorityLoadRequest { correlation };
         self.authority_projection = QueueOverlayAuthorityProjectionState::Loading(request.clone());
         self.feedback = None;
         request
@@ -270,6 +264,23 @@ impl QueueOverlayUiState {
         )
     }
 
+    pub(super) fn loading_request(
+        &self,
+        correlation: &QueueAuthorityLoadCorrelation,
+    ) -> Option<&QueueOverlayAuthorityLoadRequest> {
+        match &self.authority_projection {
+            QueueOverlayAuthorityProjectionState::Loading(request)
+                if request.correlation == *correlation =>
+            {
+                Some(request)
+            }
+            QueueOverlayAuthorityProjectionState::Idle
+            | QueueOverlayAuthorityProjectionState::Loading(_)
+            | QueueOverlayAuthorityProjectionState::Ready { .. }
+            | QueueOverlayAuthorityProjectionState::Failed { .. } => None,
+        }
+    }
+
     pub(super) fn requires_authority_load_for(
         &self,
         context: &QueueMutationContext,
@@ -279,14 +290,15 @@ impl QueueOverlayUiState {
             QueueOverlayAuthorityProjectionState::Idle => true,
             QueueOverlayAuthorityProjectionState::Loading(request)
             | QueueOverlayAuthorityProjectionState::Failed { request, .. } => {
-                request.context != *context
+                !request.matches_context(context)
             }
             QueueOverlayAuthorityProjectionState::Ready {
                 request,
                 planning_revision,
                 ..
             } => {
-                request.context != *context || Some(*planning_revision) != visible_planning_revision
+                !request.matches_context(context)
+                    || Some(*planning_revision) != visible_planning_revision
             }
         }
     }
@@ -333,7 +345,7 @@ impl QueueOverlayUiState {
             QueueOverlayAuthorityProjectionState::Idle => QueueOverlayAuthorityScreenModel::Idle,
             QueueOverlayAuthorityProjectionState::Loading(request) => {
                 QueueOverlayAuthorityScreenModel::Loading {
-                    request_id: request.request_id,
+                    request_id: request.correlation.generation,
                 }
             }
             QueueOverlayAuthorityProjectionState::Ready {
@@ -341,12 +353,12 @@ impl QueueOverlayUiState {
                 planning_revision,
                 ..
             } => QueueOverlayAuthorityScreenModel::Ready {
-                request_id: request.request_id,
+                request_id: request.correlation.generation,
                 planning_revision: *planning_revision,
             },
             QueueOverlayAuthorityProjectionState::Failed { request, error } => {
                 QueueOverlayAuthorityScreenModel::Failed {
-                    request_id: request.request_id,
+                    request_id: request.correlation.generation,
                     error: error.clone(),
                 }
             }
@@ -444,11 +456,7 @@ impl QueueOverlayUiState {
     }
 
     pub(super) fn reset(&mut self) {
-        let next_authority_request_id = self.next_authority_request_id;
-        *self = Self {
-            next_authority_request_id,
-            ..Self::default()
-        };
+        *self = Self::default();
     }
 
     pub(super) fn sync(&mut self, task_ids: &[String]) {
@@ -488,9 +496,10 @@ impl QueueOverlayUiState {
 impl NativeTuiApp {
     pub(super) fn begin_queue_overlay_authority_load(
         &mut self,
+        correlation: QueueAuthorityLoadCorrelation,
     ) -> QueueOverlayAuthorityLoadRequest {
-        let context = self.current_queue_mutation_context();
-        self.queue_overlay_ui_state.begin_authority_load(context)
+        self.queue_overlay_ui_state
+            .begin_authority_load(correlation)
     }
 
     pub(super) fn queue_overlay_authority_load_required(&self) -> bool {
@@ -753,7 +762,12 @@ impl NativeTuiApp {
         planning_revision: i64,
         authority_tokens: BTreeMap<String, QueueOverlayAuthorityToken>,
     ) {
-        let request = self.begin_queue_overlay_authority_load();
+        let context = self.current_queue_mutation_context();
+        let request = self.begin_queue_overlay_authority_load(QueueAuthorityLoadCorrelation::new(
+            u64::MAX,
+            context.workspace_directory,
+            context.active_thread_id,
+        ));
         let runtime_projection = self.planning_runtime_projection_snapshot();
         assert!(
             self.queue_overlay_ui_state.apply_authority_loaded(
@@ -819,7 +833,34 @@ mod tests {
     use crate::application::service::planning::{
         PlanningQueueCancellationRequest, PlanningRuntimeProjection,
     };
+    use crate::core::app::QueueAuthorityLoadCorrelation;
     use crate::domain::planning::TaskStatus;
+
+    fn context(workspace_directory: &str, active_thread_id: Option<&str>) -> QueueMutationContext {
+        QueueMutationContext {
+            workspace_directory: workspace_directory.to_string(),
+            active_thread_id: active_thread_id.map(str::to_string),
+        }
+    }
+
+    fn correlation_for(
+        generation: u64,
+        context: &QueueMutationContext,
+    ) -> QueueAuthorityLoadCorrelation {
+        QueueAuthorityLoadCorrelation::new(
+            generation,
+            context.workspace_directory.clone(),
+            context.active_thread_id.clone(),
+        )
+    }
+
+    fn begin_load(
+        state: &mut QueueOverlayUiState,
+        generation: u64,
+        context: QueueMutationContext,
+    ) -> super::QueueOverlayAuthorityLoadRequest {
+        state.begin_authority_load(correlation_for(generation, &context))
+    }
 
     #[test]
     fn selection_tracks_task_identity_when_rows_change() {
@@ -846,10 +887,7 @@ mod tests {
     #[test]
     fn reset_drops_displayed_authority_tokens() {
         let mut state = QueueOverlayUiState::default();
-        let request = state.begin_authority_load(QueueMutationContext {
-            workspace_directory: "/tmp/workspace".to_string(),
-            active_thread_id: Some("thread-a".to_string()),
-        });
+        let request = begin_load(&mut state, 1, context("/tmp/workspace", Some("thread-a")));
         state.sync(&["task-1".to_string(), "task-2".to_string()]);
         assert!(state.apply_authority_loaded(
             request,
@@ -880,18 +918,12 @@ mod tests {
     }
 
     #[test]
-    fn authority_load_accepts_only_the_exact_request_and_context() {
+    fn authority_load_accepts_only_the_exact_correlation() {
         let mut state = QueueOverlayUiState::default();
-        let pending = state.begin_authority_load(QueueMutationContext {
-            workspace_directory: "/tmp/workspace".to_string(),
-            active_thread_id: Some("thread-a".to_string()),
-        });
+        let pending = begin_load(&mut state, 1, context("/tmp/workspace", Some("thread-a")));
+        let stale_context = context("/tmp/other", Some("thread-a"));
         let stale = super::QueueOverlayAuthorityLoadRequest {
-            request_id: pending.request_id,
-            context: QueueMutationContext {
-                workspace_directory: "/tmp/other".to_string(),
-                active_thread_id: Some("thread-a".to_string()),
-            },
+            correlation: correlation_for(1, &stale_context),
         };
 
         assert!(!state.apply_authority_loaded(
@@ -903,7 +935,7 @@ mod tests {
         assert!(matches!(
             state.authority_screen_model(),
             QueueOverlayAuthorityScreenModel::Loading { request_id }
-                if request_id == pending.request_id
+                if request_id == pending.correlation.generation
         ));
         assert!(state.apply_authority_loaded(
             pending.clone(),
@@ -916,17 +948,15 @@ mod tests {
             QueueOverlayAuthorityScreenModel::Ready {
                 request_id,
                 planning_revision: 7,
-            } if request_id == pending.request_id
+            } if request_id == pending.correlation.generation
         ));
     }
 
     #[test]
-    fn reset_invalidates_in_flight_load_without_reusing_request_ids() {
+    fn reset_and_same_context_reopen_reject_the_stale_generation() {
         let mut state = QueueOverlayUiState::default();
-        let stale = state.begin_authority_load(QueueMutationContext {
-            workspace_directory: "/tmp/workspace".to_string(),
-            active_thread_id: None,
-        });
+        let stale_context = context("/tmp/workspace", None);
+        let stale = begin_load(&mut state, 1, stale_context.clone());
         state.reset();
         assert!(!state.apply_authority_loaded(
             stale.clone(),
@@ -935,17 +965,21 @@ mod tests {
             BTreeMap::new(),
         ));
 
-        let current = state.begin_authority_load(stale.context.clone());
-        assert!(current.request_id > stale.request_id);
+        let current = begin_load(&mut state, 2, stale_context);
+        assert!(!state.apply_authority_loaded(
+            stale,
+            PlanningRuntimeProjection::uninitialized().with_planning_revision(Some(7)),
+            7,
+            BTreeMap::new(),
+        ));
+        assert!(state.is_loading_request(&current));
     }
 
     #[test]
     fn failed_load_is_an_immutable_read_only_screen_state() {
         let mut state = QueueOverlayUiState::default();
-        let request = state.begin_authority_load(QueueMutationContext {
-            workspace_directory: "/tmp/workspace".to_string(),
-            active_thread_id: None,
-        });
+        let request_context = context("/tmp/workspace", None);
+        let request = begin_load(&mut state, 1, request_context.clone());
 
         assert!(
             state.apply_authority_load_failed(request.clone(), "database unavailable".to_string())
@@ -955,18 +989,16 @@ mod tests {
             QueueOverlayAuthorityScreenModel::Failed {
                 request_id,
                 ref error,
-            } if request_id == request.request_id && error == "database unavailable"
+            } if request_id == request.correlation.generation && error == "database unavailable"
         ));
-        assert!(!state.requires_authority_load_for(&request.context, None));
+        assert!(!state.requires_authority_load_for(&request_context, None));
     }
 
     #[test]
     fn ready_authority_reloads_when_the_visible_planning_revision_drifts() {
         let mut state = QueueOverlayUiState::default();
-        let request = state.begin_authority_load(QueueMutationContext {
-            workspace_directory: "/tmp/workspace".to_string(),
-            active_thread_id: Some("thread-a".to_string()),
-        });
+        let request_context = context("/tmp/workspace", Some("thread-a"));
+        let request = begin_load(&mut state, 1, request_context.clone());
         assert!(state.apply_authority_loaded(
             request.clone(),
             PlanningRuntimeProjection::uninitialized().with_planning_revision(Some(7)),
@@ -974,9 +1006,9 @@ mod tests {
             BTreeMap::new(),
         ));
 
-        assert!(!state.requires_authority_load_for(&request.context, Some(7)));
-        assert!(state.requires_authority_load_for(&request.context, Some(8)));
-        let mut next_thread = request.context.clone();
+        assert!(!state.requires_authority_load_for(&request_context, Some(7)));
+        assert!(state.requires_authority_load_for(&request_context, Some(8)));
+        let mut next_thread = request_context;
         next_thread.active_thread_id = Some("thread-b".to_string());
         assert!(state.requires_authority_load_for(&next_thread, Some(7)));
         assert_eq!(
@@ -990,10 +1022,7 @@ mod tests {
     #[test]
     fn ready_authority_rejects_revision_and_action_token_mismatches() {
         let mut state = QueueOverlayUiState::default();
-        let request = state.begin_authority_load(QueueMutationContext {
-            workspace_directory: "/tmp/workspace".to_string(),
-            active_thread_id: Some("thread-a".to_string()),
-        });
+        let request = begin_load(&mut state, 1, context("/tmp/workspace", Some("thread-a")));
 
         assert!(!state.apply_authority_loaded(
             request.clone(),
@@ -1010,7 +1039,7 @@ mod tests {
         assert!(matches!(
             state.authority_screen_model(),
             QueueOverlayAuthorityScreenModel::Loading { request_id }
-                if request_id == request.request_id
+                if request_id == request.correlation.generation
         ));
     }
 

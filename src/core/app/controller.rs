@@ -1,10 +1,11 @@
 use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ConversationLoadCorrelation, CoreEffect,
     CoreEffectCompletion, CoreInput, ManualPromptPreparationAdmission,
-    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
-    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
+    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot,
+    SessionRenameCorrelation, StartupCheckCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
+    TurnStreamEvent, TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission,
+    TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
@@ -41,6 +42,8 @@ pub struct CoreController {
     active_parallel_peek_load: Option<ParallelPeekLoadCorrelation>,
     next_review_center_load_generation: u64,
     active_review_center_load: Option<ReviewCenterLoadCorrelation>,
+    next_queue_authority_load_generation: u64,
+    active_queue_authority_load: Option<QueueAuthorityLoadCorrelation>,
     next_manual_prompt_preparation_generation: u64,
     in_flight_manual_prompt_preparation: Option<ManualPromptCorrelation>,
     next_turn_submission_generation: u64,
@@ -69,6 +72,8 @@ impl CoreController {
             active_parallel_peek_load: None,
             next_review_center_load_generation: 1,
             active_review_center_load: None,
+            next_queue_authority_load_generation: 1,
+            active_queue_authority_load: None,
             next_manual_prompt_preparation_generation: 1,
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
@@ -201,6 +206,27 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::LoadReviewCenter { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::LoadQueueAuthority {
+                workspace_directory,
+                active_thread_id,
+            }) => {
+                let correlation = QueueAuthorityLoadCorrelation::new(
+                    take_generation(
+                        &mut self.next_queue_authority_load_generation,
+                        "queue authority load",
+                    ),
+                    workspace_directory,
+                    active_thread_id,
+                );
+                self.active_queue_authority_load = Some(correlation.clone());
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::QueueAuthorityLoadStarted {
+                        correlation: correlation.clone(),
+                    }],
+                    effects: vec![CoreEffect::LoadQueueAuthority { correlation }],
                     snapshot: self.snapshot(),
                 }
             }
@@ -458,6 +484,23 @@ impl CoreController {
                     events: vec![AppEvent::ReviewCenterLoaded {
                         correlation,
                         snapshot,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::EffectCompleted(CoreEffectCompletion::QueueAuthorityLoaded {
+                correlation,
+                result,
+            }) => {
+                if self.active_queue_authority_load.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.active_queue_authority_load = None;
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::QueueAuthorityLoaded {
+                        correlation,
+                        result,
                     }],
                     effects: Vec::new(),
                     snapshot: self.snapshot(),
@@ -842,8 +885,9 @@ mod tests {
     use super::*;
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
-        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin, ReviewCenterSnapshot,
-        SessionCatalogReadySnapshot, SessionCatalogSnapshot, TurnSubmissionRequest,
+        ConversationReadySnapshot, ConversationSnapshot, CorePromptOrigin, QueueAuthoritySnapshot,
+        ReviewCenterSnapshot, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
+        TurnSubmissionRequest,
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
@@ -860,7 +904,9 @@ mod tests {
         ConversationItemLifecycleSource, ConversationItemOutcome,
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
-    use crate::domain::planning::{ManualPromptOutcome, ManualPromptRequest, TurnSnapshotCapture};
+    use crate::domain::planning::{
+        ManualPromptOutcome, ManualPromptRequest, RuntimeProjection, TurnSnapshotCapture,
+    };
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
     use crate::domain::session_summary::SessionSummary;
 
@@ -922,6 +968,26 @@ mod tests {
             current_thread_reviews: Ok(Vec::new()),
             pending_inbox: Ok(Vec::new()),
             recent_history: Ok(Vec::new()),
+        }
+    }
+
+    fn queue_authority_load_correlation(
+        generation: u64,
+        workspace_directory: &str,
+        active_thread_id: Option<&str>,
+    ) -> QueueAuthorityLoadCorrelation {
+        QueueAuthorityLoadCorrelation::new(
+            generation,
+            workspace_directory,
+            active_thread_id.map(str::to_string),
+        )
+    }
+
+    fn empty_queue_authority_snapshot() -> QueueAuthoritySnapshot {
+        QueueAuthoritySnapshot {
+            runtime_projection: RuntimeProjection::uninitialized(),
+            planning_revision: 0,
+            tasks: Vec::new(),
         }
     }
 
@@ -1634,6 +1700,47 @@ mod tests {
         assert_eq!(
             second.effects,
             vec![CoreEffect::LoadReviewCenter {
+                correlation: second_correlation,
+            }]
+        );
+    }
+
+    #[test]
+    fn newer_queue_authority_load_supersedes_the_active_correlation() {
+        let mut controller = CoreController::new();
+        let first = controller.handle_input(CoreInput::Command(AppCommand::LoadQueueAuthority {
+            workspace_directory: "/tmp/old".to_string(),
+            active_thread_id: Some("thread-old".to_string()),
+        }));
+        let second = controller.handle_input(CoreInput::Command(AppCommand::LoadQueueAuthority {
+            workspace_directory: "/tmp/new".to_string(),
+            active_thread_id: Some("thread-new".to_string()),
+        }));
+        let first_correlation = queue_authority_load_correlation(1, "/tmp/old", Some("thread-old"));
+        let second_correlation =
+            queue_authority_load_correlation(2, "/tmp/new", Some("thread-new"));
+
+        assert_eq!(
+            first.events,
+            vec![AppEvent::QueueAuthorityLoadStarted {
+                correlation: first_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            first.effects,
+            vec![CoreEffect::LoadQueueAuthority {
+                correlation: first_correlation,
+            }]
+        );
+        assert_eq!(
+            second.events,
+            vec![AppEvent::QueueAuthorityLoadStarted {
+                correlation: second_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            second.effects,
+            vec![CoreEffect::LoadQueueAuthority {
                 correlation: second_correlation,
             }]
         );
@@ -2615,6 +2722,93 @@ mod tests {
             vec![AppEvent::ReviewCenterLoaded {
                 correlation,
                 snapshot,
+            }]
+        );
+    }
+
+    #[test]
+    fn queue_authority_completion_accepts_only_the_latest_generation_once() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadQueueAuthority {
+            workspace_directory: "/tmp/old".to_string(),
+            active_thread_id: Some("thread-old".to_string()),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadQueueAuthority {
+            workspace_directory: "/tmp/new".to_string(),
+            active_thread_id: Some("thread-new".to_string()),
+        }));
+        let result = Ok(Box::new(empty_queue_authority_snapshot()));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueAuthorityLoaded {
+                correlation: queue_authority_load_correlation(1, "/tmp/old", Some("thread-old")),
+                result: result.clone(),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let correlation = queue_authority_load_correlation(2, "/tmp/new", Some("thread-new"));
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueAuthorityLoaded {
+                correlation: correlation.clone(),
+                result: result.clone(),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::QueueAuthorityLoaded {
+                correlation: correlation.clone(),
+                result: result.clone(),
+            }]
+        );
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueAuthorityLoaded {
+                correlation,
+                result,
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+    }
+
+    #[test]
+    fn queue_authority_same_identity_aba_rejects_the_older_generation() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::LoadQueueAuthority {
+            workspace_directory: "/tmp/a".to_string(),
+            active_thread_id: Some("thread-a".to_string()),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadQueueAuthority {
+            workspace_directory: "/tmp/b".to_string(),
+            active_thread_id: Some("thread-b".to_string()),
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadQueueAuthority {
+            workspace_directory: "/tmp/a".to_string(),
+            active_thread_id: Some("thread-a".to_string()),
+        }));
+        let result = Ok(Box::new(empty_queue_authority_snapshot()));
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueAuthorityLoaded {
+                correlation: queue_authority_load_correlation(1, "/tmp/a", Some("thread-a")),
+                result: result.clone(),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let correlation = queue_authority_load_correlation(3, "/tmp/a", Some("thread-a"));
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::QueueAuthorityLoaded {
+                correlation: correlation.clone(),
+                result: result.clone(),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::QueueAuthorityLoaded {
+                correlation,
+                result,
             }]
         );
     }
