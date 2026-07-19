@@ -31,7 +31,9 @@ use super::{
 use crate::domain::conversation::ConversationTurnSteerReceipt;
 use crate::domain::github_review::GithubPullRequestPollResult;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
-use crate::domain::planning::{ManualPromptOutcome, PostTurnExecution, RuntimeProjection};
+use crate::domain::planning::{
+    ManualPromptOutcome, PlanningWorkerPanelState, PostTurnExecution, RuntimeProjection,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRenameAcceptedSnapshot {
@@ -282,6 +284,7 @@ pub enum AppEvent {
     },
     TurnStreamSnapshotChanged(Box<TurnStreamSnapshot>),
     ManualPromptPrepared(Box<ManualPromptOutcome>),
+    PostTurnEvaluationStarted(PlanningWorkerPanelState),
     PostTurnEvaluationCompleted(Box<PostTurnExecution>),
     ConversationTurnWorkspaceChanged {
         workspace_directory: String,

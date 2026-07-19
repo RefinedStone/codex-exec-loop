@@ -43,8 +43,8 @@ mod fixtures;
 mod planning;
 
 pub(super) use self::fixtures::{
-    make_test_app, sample_parallel_mode_snapshot, sample_planning_editor_session, sample_session,
-    sample_startup_diagnostics,
+    make_test_app, make_test_app_with_planning, sample_parallel_mode_snapshot,
+    sample_planning_editor_session, sample_session, sample_startup_diagnostics,
 };
 
 // Transcript formatting tests protect text-level contracts that feed both the

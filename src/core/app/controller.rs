@@ -17,7 +17,10 @@ use super::{
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
-use crate::domain::planning::{ManualPromptCorrelation, ManualPromptRequest};
+use crate::domain::planning::{
+    ExecutionSnapshot, ManualPromptCorrelation, ManualPromptRequest, PlanningWorkerPanelState,
+    PlanningWorkerStatus, PostTurnRequest, QueueIdlePolicy, RuntimeWorkspaceStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreDispatchOutcome {
@@ -89,6 +92,7 @@ pub struct CoreController {
     in_flight_manual_prompt_preparation: Option<ActiveManualPromptPreparation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
+    in_flight_post_turn_evaluation: Option<(String, String)>,
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     next_stop_request_generation: u64,
     active_stop_request: Option<ActiveStopRequest>,
@@ -138,6 +142,7 @@ impl CoreController {
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
+            in_flight_post_turn_evaluation: None,
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             next_stop_request_generation: 1,
             active_stop_request: None,
@@ -719,11 +724,39 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
-            CoreInput::Command(AppCommand::EvaluatePostTurn(request)) => CoreDispatchOutcome {
-                events: Vec::new(),
-                effects: vec![CoreEffect::EvaluatePostTurn(request)],
-                snapshot: self.snapshot(),
-            },
+            CoreInput::Command(AppCommand::EvaluatePostTurn(mut request)) => {
+                if self.in_flight_post_turn_evaluation.as_ref().is_some_and(
+                    |(thread_id, turn_id)| {
+                        !self
+                            .turn_stream_state
+                            .can_start_post_turn_evaluation(thread_id, turn_id)
+                    },
+                ) {
+                    self.in_flight_post_turn_evaluation = None;
+                }
+                let identity = (
+                    request.context.thread_id.clone(),
+                    request.completed_turn_id.clone(),
+                );
+                if self.in_flight_post_turn_evaluation.is_some()
+                    || !self
+                        .turn_stream_state
+                        .can_start_post_turn_evaluation(&identity.0, &identity.1)
+                {
+                    return self.unchanged_outcome();
+                }
+                self.in_flight_post_turn_evaluation = Some(identity);
+                let planning_worker_panel_state =
+                    post_turn_worker_panel_start_state(request.as_ref());
+                request.planning_worker_panel_state = planning_worker_panel_state.clone();
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::PostTurnEvaluationStarted(
+                        planning_worker_panel_state,
+                    )],
+                    effects: vec![CoreEffect::EvaluatePostTurn(request)],
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded {
                 correlation,
                 result,
@@ -1397,6 +1430,14 @@ impl CoreController {
             CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
                 execution,
             )) => {
+                if !self.in_flight_post_turn_evaluation.as_ref().is_some_and(
+                    |(thread_id, turn_id)| {
+                        thread_id == &execution.thread_id && turn_id == &execution.completed_turn_id
+                    },
+                ) {
+                    return self.unchanged_outcome();
+                }
+                self.in_flight_post_turn_evaluation = None;
                 if self.in_flight_conversation_load.is_some() {
                     return self.unchanged_outcome();
                 }
@@ -1931,6 +1972,38 @@ impl CoreController {
         self.begin_turn_submission()
     }
 
+    #[cfg(test)]
+    pub(crate) fn begin_test_post_turn_evaluation(
+        &mut self,
+        thread_id: &str,
+        completed_turn_id: &str,
+    ) {
+        assert!(
+            self.in_flight_post_turn_evaluation.is_none(),
+            "test post-turn evaluation must not supersede an active lease"
+        );
+        assert!(
+            self.turn_stream_state
+                .can_start_post_turn_evaluation(thread_id, completed_turn_id),
+            "test post-turn evaluation must target the latest confirmed completed turn"
+        );
+        self.in_flight_post_turn_evaluation =
+            Some((thread_id.to_string(), completed_turn_id.to_string()));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_post_turn_evaluation_is_in_flight(
+        &self,
+        thread_id: &str,
+        completed_turn_id: &str,
+    ) -> bool {
+        self.in_flight_post_turn_evaluation.as_ref().is_some_and(
+            |(active_thread_id, active_turn_id)| {
+                active_thread_id == thread_id && active_turn_id == completed_turn_id
+            },
+        )
+    }
+
     fn unchanged_outcome(&self) -> CoreDispatchOutcome {
         CoreDispatchOutcome {
             events: Vec::new(),
@@ -2006,6 +2079,36 @@ fn take_generation(next_generation: &mut u64, operation: &str) -> u64 {
     generation
 }
 
+fn post_turn_worker_panel_start_state(request: &PostTurnRequest) -> PlanningWorkerPanelState {
+    let mut state = request.planning_worker_panel_state.clone();
+    if request.context.planning_settlement_paused {
+        return state;
+    }
+    if request
+        .changed_planning_file_paths
+        .iter()
+        .any(|path| ExecutionSnapshot::captures_path(path))
+    {
+        state.status = PlanningWorkerStatus::RepairRunning;
+        return state;
+    }
+    if request
+        .context
+        .current_runtime_projection
+        .workspace_status()
+        == RuntimeWorkspaceStatus::ReadyNoTask
+        && request
+            .context
+            .current_runtime_projection
+            .queue_idle_policy()
+            == QueueIdlePolicy::Stop
+    {
+        return state;
+    }
+    state.status = PlanningWorkerStatus::RefreshRunning;
+    state
+}
+
 impl Default for CoreController {
     fn default() -> Self {
         Self::new()
@@ -2053,8 +2156,9 @@ mod tests {
     };
     use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeReadinessState};
     use crate::domain::planning::{
-        ManualPromptOutcome, ManualPromptRequest, QueueIdlePolicy, RuntimeProjection, TaskStatus,
-        TurnSnapshotCapture,
+        ManualPromptOutcome, ManualPromptRequest, PlanningWorkerPanelState, PlanningWorkerStatus,
+        PostTurnContext, PostTurnContinuationGate, PostTurnRequest, QueueIdlePolicy,
+        RESULT_OUTPUT_FILE_PATH, RuntimeProjection, TaskStatus, TurnSnapshotCapture,
     };
     use crate::domain::recent_sessions::{RecentSessions, SessionRenameRequest};
     use crate::domain::session_summary::SessionSummary;
@@ -7209,6 +7313,210 @@ mod tests {
     }
 
     #[test]
+    fn post_turn_start_state_obeys_priority_and_preserves_panel_detail() {
+        let existing = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshSucceeded,
+            last_operation_label: Some("previous operation".to_string()),
+            last_summary: Some("previous summary".to_string()),
+            last_rejected_summary: Some("previous rejection".to_string()),
+            last_queue_summary: Some("previous queue".to_string()),
+            last_notice_detail: Some("previous detail".to_string()),
+            last_prompt: Some("previous prompt".to_string()),
+            last_response: Some("previous response".to_string()),
+            last_host_detail: Some("previous host".to_string()),
+        };
+        let ready_empty =
+            RuntimeProjection::ready("prompt".to_string(), "queue empty".to_string(), None);
+        let refresh_empty = ready_empty.clone().with_queue_idle_policy(
+            QueueIdlePolicy::ReviewAndEnqueue,
+            Some("docs/planning/queue-idle-prompt.md".to_string()),
+        );
+        let protected_change = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
+        let mut repair = existing.clone();
+        repair.status = PlanningWorkerStatus::RepairRunning;
+        let mut refresh = existing.clone();
+        refresh.status = PlanningWorkerStatus::RefreshRunning;
+
+        for (label, request, expected) in [
+            (
+                "explicit settlement pause",
+                post_turn_request(
+                    ready_empty.clone(),
+                    protected_change.clone(),
+                    true,
+                    existing.clone(),
+                ),
+                existing.clone(),
+            ),
+            (
+                "protected planning file change",
+                post_turn_request(
+                    ready_empty.clone(),
+                    protected_change,
+                    false,
+                    existing.clone(),
+                ),
+                repair,
+            ),
+            (
+                "empty stop-policy queue",
+                post_turn_request(ready_empty, Vec::new(), false, existing.clone()),
+                existing,
+            ),
+            (
+                "remaining refresh path",
+                post_turn_request(
+                    refresh_empty,
+                    Vec::new(),
+                    false,
+                    PlanningWorkerPanelState {
+                        status: PlanningWorkerStatus::RefreshSucceeded,
+                        last_summary: Some("previous summary".to_string()),
+                        last_notice_detail: Some("previous detail".to_string()),
+                        ..PlanningWorkerPanelState::default()
+                    },
+                ),
+                PlanningWorkerPanelState {
+                    status: PlanningWorkerStatus::RefreshRunning,
+                    last_summary: Some("previous summary".to_string()),
+                    last_notice_detail: Some("previous detail".to_string()),
+                    ..PlanningWorkerPanelState::default()
+                },
+            ),
+        ] {
+            let mut controller = CoreController::new();
+            apply_completed_turn(&mut controller, "thread-1", "turn-1");
+            let outcome = controller.handle_input(CoreInput::Command(
+                AppCommand::EvaluatePostTurn(Box::new(request)),
+            ));
+            assert_eq!(
+                outcome.events,
+                vec![AppEvent::PostTurnEvaluationStarted(expected.clone())],
+                "{label} must publish the full computed state first"
+            );
+            let [CoreEffect::EvaluatePostTurn(effect_request)] = outcome.effects.as_slice() else {
+                panic!("{label} must dispatch exactly one post-turn effect");
+            };
+            assert_eq!(
+                effect_request.planning_worker_panel_state, expected,
+                "{label} event and effect request must carry the same full state"
+            );
+        }
+    }
+
+    #[test]
+    fn post_turn_start_requires_latest_completed_turn_and_an_idle_lease() {
+        let mut controller = CoreController::new();
+        let no_terminal = start_post_turn_evaluation(&mut controller, "turn-1");
+        assert!(no_terminal.events.is_empty());
+        assert!(no_terminal.effects.is_empty());
+
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let mut wrong_thread = post_turn_request(
+            RuntimeProjection::invalid("refresh required"),
+            Vec::new(),
+            false,
+            PlanningWorkerPanelState::default(),
+        );
+        wrong_thread.context.thread_id = "thread-2".to_string();
+        let wrong_thread = controller.handle_input(CoreInput::Command(
+            AppCommand::EvaluatePostTurn(Box::new(wrong_thread)),
+        ));
+        assert!(wrong_thread.events.is_empty());
+        assert!(wrong_thread.effects.is_empty());
+
+        let wrong_turn = start_post_turn_evaluation(&mut controller, "turn-2");
+        assert!(wrong_turn.events.is_empty());
+        assert!(wrong_turn.effects.is_empty());
+
+        let accepted = start_post_turn_evaluation(&mut controller, "turn-1");
+        assert!(matches!(
+            accepted.events.as_slice(),
+            [AppEvent::PostTurnEvaluationStarted(_)]
+        ));
+        assert!(matches!(
+            accepted.effects.as_slice(),
+            [CoreEffect::EvaluatePostTurn(_)]
+        ));
+
+        let duplicate = start_post_turn_evaluation(&mut controller, "turn-1");
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+
+        let mut wrong_completion = sample_post_turn_execution();
+        wrong_completion.completed_turn_id = "turn-2".to_string();
+        let wrong_completion = controller.handle_input(CoreInput::EffectCompleted(
+            post_turn_completion("/tmp/workspace", Box::new(wrong_completion)),
+        ));
+        assert!(wrong_completion.events.is_empty());
+        assert_eq!(
+            controller.in_flight_post_turn_evaluation,
+            Some(("thread-1".to_string(), "turn-1".to_string())),
+            "a mismatched completion must leave the exact lease active"
+        );
+
+        let accepted_completion = controller.handle_input(CoreInput::EffectCompleted(
+            post_turn_completion("/tmp/workspace", Box::new(sample_post_turn_execution())),
+        ));
+        assert!(matches!(
+            accepted_completion.events.as_slice(),
+            [AppEvent::PostTurnEvaluationCompleted(_)]
+        ));
+        assert!(controller.in_flight_post_turn_evaluation.is_none());
+
+        let already_applied = start_post_turn_evaluation(&mut controller, "turn-1");
+        assert!(already_applied.events.is_empty());
+        assert!(already_applied.effects.is_empty());
+    }
+
+    #[test]
+    fn post_turn_lease_is_pruned_or_settled_after_lifecycle_supersession() {
+        let mut pruned = CoreController::new();
+        apply_completed_turn(&mut pruned, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut pruned, "turn-1")
+                .effects
+                .is_empty()
+        );
+        apply_completed_turn(&mut pruned, "thread-1", "turn-2");
+
+        let next = start_post_turn_evaluation(&mut pruned, "turn-2");
+        assert!(matches!(
+            next.events.as_slice(),
+            [AppEvent::PostTurnEvaluationStarted(_)]
+        ));
+        assert_eq!(
+            pruned.in_flight_post_turn_evaluation,
+            Some(("thread-1".to_string(), "turn-2".to_string()))
+        );
+
+        let mut settled = CoreController::new();
+        apply_completed_turn(&mut settled, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut settled, "turn-1")
+                .effects
+                .is_empty()
+        );
+        apply_completed_turn(&mut settled, "thread-1", "turn-2");
+
+        let stale_exact = settled.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            Box::new(sample_post_turn_execution()),
+        )));
+        assert!(stale_exact.events.is_empty());
+        assert!(stale_exact.effects.is_empty());
+        assert!(
+            settled.in_flight_post_turn_evaluation.is_none(),
+            "an exact but stale completion must settle its obsolete lease"
+        );
+        assert!(
+            !start_post_turn_evaluation(&mut settled, "turn-2")
+                .effects
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn resumed_turn_accepts_post_turn_completion_without_thread_prepared_event() {
         let mut controller = CoreController::new();
         controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
@@ -7240,6 +7548,11 @@ mod tests {
             },
         ));
         let execution = Box::new(sample_post_turn_execution());
+        assert!(
+            !start_post_turn_evaluation(&mut controller, "turn-1")
+                .effects
+                .is_empty()
+        );
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
             "/tmp/workspace",
@@ -7256,6 +7569,11 @@ mod tests {
     fn accepted_post_turn_evaluation_updates_core_planning_projection() {
         let mut controller = CoreController::new();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut controller, "turn-1")
+                .effects
+                .is_empty()
+        );
         let execution = Box::new(sample_post_turn_execution());
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
@@ -7279,6 +7597,11 @@ mod tests {
     fn post_turn_projection_cannot_complete_an_active_refresh_operation() {
         let mut controller = CoreController::new();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut controller, "turn-1")
+                .effects
+                .is_empty()
+        );
         controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
             workspace_directory: "/tmp/workspace".to_string(),
         }));
@@ -7351,6 +7674,11 @@ mod tests {
             root_projection.clone(),
         ));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut controller, "turn-1")
+                .effects
+                .is_empty()
+        );
         controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
             workspace_directory: "/tmp/root".to_string(),
         }));
@@ -7411,6 +7739,11 @@ mod tests {
             projection.clone(),
         ));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut controller, "turn-1")
+                .effects
+                .is_empty()
+        );
         let execution = Box::new(sample_post_turn_execution());
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
@@ -7443,6 +7776,11 @@ mod tests {
             current_projection.clone(),
         ));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut controller, "turn-1")
+                .effects
+                .is_empty()
+        );
         let load = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-2".to_string(),
             fallback_workspace_directory: "/tmp/workspace".to_string(),
@@ -7509,6 +7847,11 @@ mod tests {
     fn duplicate_post_turn_evaluation_completion_is_dropped_in_core() {
         let mut controller = CoreController::new();
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        assert!(
+            !start_post_turn_evaluation(&mut controller, "turn-1")
+                .effects
+                .is_empty()
+        );
         let execution = Box::new(sample_post_turn_execution());
         let mut duplicate_execution = (*execution).clone();
         duplicate_execution.evaluation.runtime_projection = PlanningRuntimeProjection::ready(
@@ -7936,6 +8279,55 @@ mod tests {
             turn_options: Default::default(),
             slot_lease_handoff: None,
         }
+    }
+
+    fn post_turn_request(
+        current_runtime_projection: RuntimeProjection,
+        changed_planning_file_paths: Vec<String>,
+        planning_settlement_paused: bool,
+        planning_worker_panel_state: PlanningWorkerPanelState,
+    ) -> PostTurnRequest {
+        PostTurnRequest {
+            context: PostTurnContext {
+                thread_id: "thread-1".to_string(),
+                planning_workspace_directory: "/tmp/workspace".to_string(),
+                latest_user_message: None,
+                latest_main_reply: None,
+                previous_handoff_task: None,
+                current_runtime_projection,
+                parallel_mode_enabled: false,
+                parallel_automation_epoch_id: None,
+                planning_settlement_paused,
+                continuation_paused: false,
+                can_queue_next: false,
+                stop_keyword: ":stop".to_string(),
+                stop_keyword_matched: false,
+                no_file_changes_stop_matched: false,
+                mode_label: "test".to_string(),
+            },
+            workspace_directory: "/tmp/workspace".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            changed_planning_file_paths,
+            execution_snapshot_capture: None,
+            planning_worker_panel_state,
+            continuation_permit: PostTurnContinuationGate::default().capture(),
+        }
+    }
+
+    fn start_post_turn_evaluation(
+        controller: &mut CoreController,
+        completed_turn_id: &str,
+    ) -> CoreDispatchOutcome {
+        let mut request = post_turn_request(
+            RuntimeProjection::invalid("refresh required"),
+            Vec::new(),
+            false,
+            PlanningWorkerPanelState::default(),
+        );
+        request.completed_turn_id = completed_turn_id.to_string();
+        controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
+            request,
+        ))))
     }
 
     fn submit_test_turn(

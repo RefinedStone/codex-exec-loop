@@ -558,23 +558,18 @@ impl InteractiveTurnRuntimePort for TestAppServerPort {
 }
 
 pub(super) fn test_native_tui_app() -> NativeTuiApp {
-    test_native_tui_app_with_review_center_repository(Arc::new(
-        SqlitePlanningAuthorityAdapter::new(),
-    ))
+    test_native_tui_app_with_services().0
 }
 
-pub(super) fn test_native_tui_app_with_approval_resolution_error(
-    error: impl Into<String>,
-) -> NativeTuiApp {
+pub(super) fn test_native_tui_app_with_services() -> (NativeTuiApp, PlanningServices) {
     let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
-    test_native_tui_app_with_planning_review_center_and_app_server(
+    let services = planning.clone();
+    let app = test_native_tui_app_with_planning_and_review_center_repository(
         planning,
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
         None,
-        Arc::new(TestAppServerPort {
-            approval_resolution_error: Some(error.into()),
-        }),
-    )
+    );
+    (app, services)
 }
 
 pub(super) fn test_native_tui_app_with_review_center_repository(
@@ -588,11 +583,29 @@ pub(super) fn test_native_tui_app_with_review_center_repository(
     )
 }
 
-pub(super) fn test_native_tui_app_with_planning(planning: PlanningServices) -> NativeTuiApp {
-    test_native_tui_app_with_planning_and_review_center_repository(
+pub(super) fn test_native_tui_app_with_planning(
+    planning: PlanningServices,
+) -> (NativeTuiApp, PlanningServices) {
+    let services = planning.clone();
+    let app = test_native_tui_app_with_planning_and_review_center_repository(
         planning,
         Arc::new(SqlitePlanningAuthorityAdapter::new()),
         None,
+    );
+    (app, services)
+}
+
+pub(super) fn test_native_tui_app_with_approval_resolution_error(
+    error: impl Into<String>,
+) -> NativeTuiApp {
+    let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    test_native_tui_app_with_planning_review_center_and_app_server(
+        planning,
+        Arc::new(SqlitePlanningAuthorityAdapter::new()),
+        None,
+        Arc::new(TestAppServerPort {
+            approval_resolution_error: Some(error.into()),
+        }),
     )
 }
 

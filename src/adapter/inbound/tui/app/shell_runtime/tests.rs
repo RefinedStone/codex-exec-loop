@@ -187,6 +187,7 @@ impl ParallelAgentWorkerPort for CountingParallelAgentWorkerPort {
 
 struct ShellRuntimeParallelFixture {
     runtime: ShellRuntime,
+    planning: PlanningServices,
     launch_count: Arc<AtomicUsize>,
 }
 
@@ -254,11 +255,11 @@ fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>
 }
 
 #[test]
-fn native_tui_app_keeps_parallel_control_plane_behind_application_handle() {
+fn native_tui_app_keeps_parallel_control_plane_behind_narrow_control_plane_handle() {
     /*
      * This guards the architecture boundary from regressing back to a TUI-owned
-     * controller. The app stores the application handle; app_runtime performs
-     * the TUI event-sink binding from the shared control-plane composition.
+     * controller. The app stores only the typed control-plane handle; app_runtime
+     * performs the TUI event-sink binding from the shared composition.
      */
     const APP_RS: &str = include_str!("../../app.rs");
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
@@ -617,6 +618,7 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
         .runtime
         .commit_task_intake(&proposal)
         .expect("task intake proposal should commit");
+    let fixture_planning = planning.clone();
 
     let launch_count = Arc::new(AtomicUsize::new(0));
     let worker_port = Arc::new(CountingParallelAgentWorkerPort {
@@ -643,6 +645,7 @@ fn make_dispatch_ready_parallel_runtime(prefix: &str) -> ShellRuntimeParallelFix
 
     ShellRuntimeParallelFixture {
         runtime: ShellRuntime::new(app),
+        planning: fixture_planning,
         launch_count,
     }
 }
@@ -767,6 +770,13 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
                 ),
             },
         });
+}
+
+fn arm_core_post_turn_evaluation(runtime: &mut ShellRuntime, thread_id: &str, turn_id: &str) {
+    runtime
+        .app_mut()
+        .core_runtime
+        .begin_test_post_turn_evaluation(thread_id, turn_id);
 }
 
 fn application_post_turn_evaluation_outcome(
@@ -1070,6 +1080,12 @@ fn resumed_session_status_reads_core_projection() {
 #[test]
 fn post_turn_evaluation_start_state_reads_core_projection() {
     let mut runtime = make_test_runtime();
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-1".to_string();
+    conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
+    mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
     runtime
         .app_mut()
         .sync_core_planning_runtime_projection(PlanningRuntimeProjection::ready(
@@ -1087,10 +1103,61 @@ fn post_turn_evaluation_start_state_reads_core_projection() {
         },
     );
 
+    assert!(
+        runtime
+            .app()
+            .core_runtime
+            .test_post_turn_evaluation_is_in_flight("thread-1", "turn-1")
+    );
     assert_eq!(
         runtime.app().planning_worker_panel_state.status,
         PlanningWorkerStatus::Idle,
         "ready/no-task core projection should preserve the panel"
+    );
+}
+
+#[test]
+fn post_turn_evaluation_started_event_applies_running_state_without_waiting_for_completion() {
+    let mut runtime = make_test_runtime();
+    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    conversation.thread_id = "thread-1".to_string();
+    conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
+    mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
+    runtime
+        .app_mut()
+        .sync_core_planning_runtime_projection(PlanningRuntimeProjection::invalid(
+            "refresh required",
+        ));
+    runtime.app_mut().planning_worker_panel_state = PlanningWorkerPanelState {
+        status: PlanningWorkerStatus::RefreshSucceeded,
+        last_summary: Some("previous summary".to_string()),
+        ..PlanningWorkerPanelState::default()
+    };
+
+    runtime.app_mut().execute_conversation_runtime_effect(
+        ConversationRuntimeEffect::EvaluatePostTurn {
+            workspace_directory: "/tmp/workspace".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: None,
+        },
+    );
+
+    assert!(
+        runtime
+            .app()
+            .core_runtime
+            .test_post_turn_evaluation_is_in_flight("thread-1", "turn-1")
+    );
+    assert_eq!(
+        runtime.app().planning_worker_panel_state,
+        PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshRunning,
+            last_summary: Some("previous summary".to_string()),
+            ..PlanningWorkerPanelState::default()
+        }
     );
 }
 
@@ -1409,6 +1476,7 @@ fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
+    arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
     let expected_worker_state = PlanningWorkerPanelState {
         status: PlanningWorkerStatus::RepairFailed,
         last_operation_label: Some("repair projection".to_string()),
@@ -1487,6 +1555,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
+    arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
     let build_message = |notice: &str| {
         post_turn_evaluation_completed_message(
             "thread-1",

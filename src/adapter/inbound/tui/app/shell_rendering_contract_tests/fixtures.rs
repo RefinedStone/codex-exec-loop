@@ -11,6 +11,7 @@ use crate::application::port::outbound::startup_probe_port::{
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::planning::{
     PlanningDraftEditorFile, PlanningDraftEditorSession, PlanningRuntimeProjection,
+    PlanningServices,
 };
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
@@ -127,6 +128,10 @@ impl InteractiveTurnRuntimePort for FakeAppServerPort {
 }
 
 pub(crate) fn make_test_app() -> NativeTuiApp {
+    make_test_app_with_planning().0
+}
+
+pub(crate) fn make_test_app_with_planning() -> (NativeTuiApp, PlanningServices) {
     /*
      * Build through the production constructor so shell rendering tests observe the same service
      * graph as the TUI: startup/session/conversation services share one app-server port, planning
@@ -137,6 +142,7 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
     let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
         Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
     );
+    let services = planning.clone();
     let parallel_mode_control_plane_composition =
         test_helpers::test_parallel_mode_control_plane_composition(planning);
     let parallel_mode_binding =
@@ -162,7 +168,7 @@ pub(crate) fn make_test_app() -> NativeTuiApp {
     app.sync_ready_conversation_planning_runtime_projection(
         PlanningRuntimeProjection::uninitialized(),
     );
-    app
+    (app, services)
 }
 
 pub(crate) fn sample_startup_diagnostics() -> Box<StartupReadySnapshot> {

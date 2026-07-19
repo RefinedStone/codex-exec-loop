@@ -303,6 +303,18 @@ impl TurnStreamState {
         self.snapshot(TurnStreamUpdate::RuntimeNotice { notice })
     }
 
+    pub fn can_start_post_turn_evaluation(&self, thread_id: &str, completed_turn_id: &str) -> bool {
+        self.thread_id.as_deref() == Some(thread_id)
+            && self.active_turn_id.is_none()
+            && self.last_applied_post_turn_evaluation_id.as_deref() != Some(completed_turn_id)
+            && matches!(
+                &self.terminal,
+                Some(TurnStreamTerminalSnapshot::Turn { receipt })
+                    if receipt.turn_id == completed_turn_id
+                        && receipt.is_completed_and_confirmed()
+            )
+    }
+
     pub fn accept_post_turn_evaluation_completion(
         &mut self,
         execution: &PostTurnExecution,
@@ -318,16 +330,7 @@ impl TurnStreamState {
         &self,
         execution: &PostTurnExecution,
     ) -> bool {
-        self.thread_id.as_deref() == Some(execution.thread_id.as_str())
-            && self.active_turn_id.is_none()
-            && self.last_applied_post_turn_evaluation_id.as_deref()
-                != Some(execution.completed_turn_id.as_str())
-            && matches!(
-                &self.terminal,
-                Some(TurnStreamTerminalSnapshot::Turn { receipt })
-                    if receipt.turn_id == execution.completed_turn_id
-                        && receipt.is_completed_and_confirmed()
-            )
+        self.can_start_post_turn_evaluation(&execution.thread_id, &execution.completed_turn_id)
     }
 
     fn turn_retrying_update(
