@@ -1,4 +1,4 @@
-use crate::application::service::planning::DirectionsMaintenanceDirectionSummary;
+use crate::core::app::{DirectionsMaintenanceDirectionSnapshot, DirectionsSupportingFileStatus};
 
 use super::super::super::{AkraTheme, Line, Modifier, Span, Style};
 
@@ -15,9 +15,9 @@ pub(super) struct DetailDocSelectionProjection {
 // This function joins those inputs into visual rows without re-evaluating detail-doc health.
 pub(super) fn build_detail_doc_selection_projection(
     // Already-filtered subset with missing or broken detail-doc mappings.
-    actionable_directions: &[&DirectionsMaintenanceDirectionSummary],
+    actionable_directions: &[&DirectionsMaintenanceDirectionSnapshot],
     // Focused item from UI state; may be None when the actionable list is empty or still being aligned.
-    selected_direction: Option<&DirectionsMaintenanceDirectionSummary>,
+    selected_direction: Option<&DirectionsMaintenanceDirectionSnapshot>,
 ) -> DetailDocSelectionProjection {
     // Empty state still returns option_lines so downstream copy/rendering can keep the same section layout.
     let option_lines = if actionable_directions.is_empty() {
@@ -54,7 +54,7 @@ pub(super) fn build_detail_doc_selection_projection(
                         format!(
                             "  id={} / status={} / path={}",
                             direction.id,
-                            direction.detail_doc_status.label(),
+                            supporting_file_status_label(direction.detail_doc_status),
                             direction.detail_doc_path.as_deref().unwrap_or("<unset>")
                         ),
                         style,
@@ -71,5 +71,15 @@ pub(super) fn build_detail_doc_selection_projection(
     DetailDocSelectionProjection {
         option_lines,
         selected_direction_title,
+    }
+}
+
+pub(super) const fn supporting_file_status_label(
+    status: DirectionsSupportingFileStatus,
+) -> &'static str {
+    match status {
+        DirectionsSupportingFileStatus::MissingMapping => "unset",
+        DirectionsSupportingFileStatus::Ready => "ready",
+        DirectionsSupportingFileStatus::BrokenMapping => "broken",
     }
 }

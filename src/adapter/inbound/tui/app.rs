@@ -195,6 +195,7 @@ use conversation_runtime::{
 };
 use directions_maintenance_ui::{
     DetailDocConfirmChoice, DirectionsMaintenanceOverlayStep, DirectionsMaintenanceOverlayUiState,
+    DirectionsMaintenanceProjectionKind, DirectionsMaintenanceScreenModel,
 };
 use github_polling::{GithubReviewPollingBootstrap, GithubReviewPollingState};
 use history_insertion::HistoryInsertionMode;
@@ -348,6 +349,7 @@ impl InlineHistoryRenderMode {
  */
 struct NativeTuiApp {
     shell_overlay: ShellOverlay,
+    approval_return_overlay: Option<ShellOverlay>,
     exit_confirmation_state: ExitConfirmationState,
     startup_state: StartupState,
     pending_startup_check: Option<StartupCheckCorrelation>,

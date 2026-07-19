@@ -34,6 +34,9 @@ pub enum AppCommand {
         workspace_directory: String,
         active_thread_id: Option<String>,
     },
+    LoadDirectionsMaintenance {
+        workspace_directory: String,
+    },
     RefreshPlanningRuntime {
         workspace_directory: String,
     },

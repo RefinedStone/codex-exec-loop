@@ -10,6 +10,7 @@ use super::{
     PlanningRuntimeRefreshCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
     SessionRenameCorrelation, StartupCheckCorrelation,
 };
+use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
     QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
     QueueMutationCorrelation, QueueMutationResult,
@@ -87,6 +88,10 @@ pub enum CoreEffectCompletion {
         correlation: QueueAuthorityLoadCorrelation,
         result: Result<Box<QueueAuthoritySnapshot>, QueueAuthorityLoadError>,
     },
+    DirectionsMaintenanceLoaded {
+        correlation: DirectionsMaintenanceLoadCorrelation,
+        result: Result<Box<DirectionsMaintenanceSummarySnapshot>, String>,
+    },
     PlanningRuntimeLoaded {
         correlation: PlanningRuntimeRefreshCorrelation,
         result: Result<Box<RuntimeProjection>, String>,
@@ -154,6 +159,13 @@ pub enum AppEvent {
     QueueAuthorityLoaded {
         correlation: QueueAuthorityLoadCorrelation,
         result: Result<Box<QueueAuthoritySnapshot>, QueueAuthorityLoadError>,
+    },
+    DirectionsMaintenanceLoadStarted {
+        correlation: DirectionsMaintenanceLoadCorrelation,
+    },
+    DirectionsMaintenanceLoaded {
+        correlation: DirectionsMaintenanceLoadCorrelation,
+        result: Result<Box<DirectionsMaintenanceSummarySnapshot>, String>,
     },
     PlanningRuntimeRefreshStarted {
         correlation: PlanningRuntimeRefreshCorrelation,

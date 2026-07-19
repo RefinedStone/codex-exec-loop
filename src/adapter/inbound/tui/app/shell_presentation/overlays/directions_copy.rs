@@ -13,6 +13,74 @@ fn directions_title_line(suffix: &'static str) -> Line<'static> {
     AkraTheme::title_line("Directions Maintenance", suffix)
 }
 
+pub(super) fn build_idle_overlay_view() -> DirectionsMaintenanceOverlayView {
+    DirectionsMaintenanceOverlayView {
+        header_lines: vec![
+            directions_title_line(" / unavailable"),
+            Line::from("No directions authority snapshot is attached to this overlay."),
+        ],
+        summary_lines: vec![Line::from(
+            "Retry to inspect the current workspace before choosing a maintenance action.",
+        )],
+        option_lines: vec![overlay_option_line(
+            "R",
+            "retry",
+            "load directions authority and supporting-file health",
+            false,
+            false,
+        )],
+        status_lines: vec![Line::from("directions summary: not loaded")],
+        key_lines: vec![AkraTheme::key_line("r: retry    Esc/Ctrl+C: close")],
+    }
+}
+
+pub(super) fn build_loading_overlay_view(
+    workspace_directory: &str,
+) -> DirectionsMaintenanceOverlayView {
+    DirectionsMaintenanceOverlayView {
+        header_lines: vec![
+            directions_title_line(" / loading"),
+            Line::from("Inspecting directions authority and supporting files."),
+        ],
+        summary_lines: vec![
+            Line::from(
+                "Reading the direction catalog, detail-doc mappings, and queue-idle prompt.",
+            ),
+            Line::from("Maintenance actions unlock when this workspace snapshot is ready."),
+        ],
+        option_lines: vec![Line::from("Loading maintenance summary…")],
+        status_lines: vec![Line::from(format!("workspace: {workspace_directory}"))],
+        key_lines: vec![AkraTheme::key_line("Esc/Ctrl+C: close")],
+    }
+}
+
+pub(super) fn build_failed_overlay_view(
+    workspace_directory: &str,
+    error: &str,
+) -> DirectionsMaintenanceOverlayView {
+    DirectionsMaintenanceOverlayView {
+        header_lines: vec![
+            directions_title_line(" / unavailable"),
+            Line::from("Directions authority could not be inspected for this workspace."),
+        ],
+        summary_lines: vec![Line::from(
+            "No maintenance action is available until a fresh snapshot loads successfully.",
+        )],
+        option_lines: vec![overlay_option_line(
+            "R",
+            "retry",
+            "read directions authority and supporting-file health again",
+            false,
+            false,
+        )],
+        status_lines: vec![
+            Line::from(format!("workspace: {workspace_directory}")),
+            Line::from(format!("load error: {error}")),
+        ],
+        key_lines: vec![AkraTheme::key_line("r: retry    Esc/Ctrl+C: close")],
+    }
+}
+
 /*
  * Overview는 directions authority scan과 queue-idle prompt health를 한 화면에 압축한다. 이 copy는
  * accepted DB authority가 promote 전까지 바뀌지 않는다는 authoring contract를 반복해서 보여 주어,

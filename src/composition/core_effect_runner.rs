@@ -12,6 +12,8 @@ use crate::application::service::github_review_poller_service::GithubReviewPolle
 use crate::application::service::manual_prompt_preparation::ManualPromptPreparationService;
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
+    DirectionsMaintenanceSummary as ApplicationDirectionsMaintenanceSummary,
+    DirectionsSupportingFileStatus as ApplicationDirectionsSupportingFileStatus,
     PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
     PlanningQueueCancellationTransactionResult, PlanningQueueUseCases, PlanningRuntimeProjection,
@@ -26,13 +28,16 @@ use crate::application::service::startup_service::StartupService;
 use crate::composition::core_turn_submission;
 use crate::core::app::{
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, ConversationReadySnapshot,
-    ConversationThreadReviewSnapshot, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
-    PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
-    QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationCorrelation,
-    QueueMutationIntent, QueueMutationResult, ReviewCenterHistoryEntrySnapshot,
-    ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
-    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation,
+    ConversationThreadReviewSnapshot, DirectionsMaintenanceDirectionSnapshot,
+    DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot,
+    DirectionsSupportingFileStatus as CoreDirectionsSupportingFileStatus,
+    GithubReviewPollCorrelation, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
+    QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
+    QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
+    QueueMutationResult, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
+    ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
+    SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    StopRequestAttempt, StopRequestCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -137,6 +142,10 @@ impl CoreEffectRunner {
             }
             CoreEffect::LoadQueueAuthority { correlation } => {
                 self.spawn_queue_authority_load(correlation);
+                None
+            }
+            CoreEffect::LoadDirectionsMaintenance { correlation } => {
+                self.spawn_directions_maintenance_load(correlation);
                 None
             }
             CoreEffect::LoadPlanningRuntime { correlation } => {
@@ -279,6 +288,25 @@ impl CoreEffectRunner {
                 CoreEffectCompletion::QueueAuthorityLoaded {
                     correlation,
                     result: result.map(Box::new),
+                },
+            ));
+        });
+    }
+
+    pub fn spawn_directions_maintenance_load(
+        &self,
+        correlation: DirectionsMaintenanceLoadCorrelation,
+    ) {
+        let planning_workspace = self.planning_workspace.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result = directions_maintenance_result(
+                planning_workspace.load_summary(&correlation.workspace_directory),
+            );
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::DirectionsMaintenanceLoaded {
+                    correlation,
+                    result,
                 },
             ));
         });
@@ -624,6 +652,58 @@ fn queue_authority_result(
         })
 }
 
+fn directions_maintenance_result(
+    result: Result<ApplicationDirectionsMaintenanceSummary>,
+) -> Result<Box<DirectionsMaintenanceSummarySnapshot>, String> {
+    result
+        .map(directions_maintenance_summary_snapshot)
+        .map(Box::new)
+        .map_err(|error| error.to_string())
+}
+
+fn directions_maintenance_summary_snapshot(
+    summary: ApplicationDirectionsMaintenanceSummary,
+) -> DirectionsMaintenanceSummarySnapshot {
+    DirectionsMaintenanceSummarySnapshot {
+        directions: summary
+            .directions
+            .into_iter()
+            .map(|direction| DirectionsMaintenanceDirectionSnapshot {
+                id: direction.id,
+                title: direction.title,
+                detail_doc_path: direction.detail_doc_path,
+                detail_doc_status: directions_supporting_file_status_snapshot(
+                    direction.detail_doc_status,
+                ),
+            })
+            .collect(),
+        missing_detail_doc_count: summary.missing_detail_doc_count,
+        broken_detail_doc_count: summary.broken_detail_doc_count,
+        queue_idle_policy: summary.queue_idle_policy,
+        queue_idle_prompt_path: summary.queue_idle_prompt_path,
+        queue_idle_prompt_status: directions_supporting_file_status_snapshot(
+            summary.queue_idle_prompt_status,
+        ),
+        parse_error: summary.parse_error,
+    }
+}
+
+fn directions_supporting_file_status_snapshot(
+    status: ApplicationDirectionsSupportingFileStatus,
+) -> CoreDirectionsSupportingFileStatus {
+    match status {
+        ApplicationDirectionsSupportingFileStatus::MissingMapping => {
+            CoreDirectionsSupportingFileStatus::MissingMapping
+        }
+        ApplicationDirectionsSupportingFileStatus::Ready => {
+            CoreDirectionsSupportingFileStatus::Ready
+        }
+        ApplicationDirectionsSupportingFileStatus::BrokenMapping => {
+            CoreDirectionsSupportingFileStatus::BrokenMapping
+        }
+    }
+}
+
 fn planning_queue_cancellation_request(
     intent: &QueueMutationIntent,
 ) -> PlanningQueueCancellationRequest {
@@ -701,11 +781,15 @@ fn conversation_ready_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::service::planning::PlanningQueueAuthoritySnapshot;
+    use crate::application::service::planning::{
+        DirectionsMaintenanceDirectionSummary as ApplicationDirectionsMaintenanceDirectionSummary,
+        PlanningQueueAuthoritySnapshot,
+    };
     use crate::core::app::{QueueMutationKind, QueueMutationTarget, TurnSubmissionCorrelation};
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
     use crate::domain::planning::{
-        RuntimeProjection, TaskActor, TaskDefinition, TaskMutationProvenance, TaskStatus,
+        QueueIdlePolicy, RuntimeProjection, TaskActor, TaskDefinition, TaskMutationProvenance,
+        TaskStatus,
     };
     use crate::domain::recent_sessions::{
         RecentSessions, SessionCatalogTier, SessionRenameRequest,
@@ -1104,6 +1188,78 @@ mod tests {
         assert_eq!(snapshot.pending_inbox, Err("inbox unavailable".to_string()));
         assert_eq!(snapshot.current_thread_reviews.unwrap().len(), 1);
         assert_eq!(snapshot.recent_history.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn directions_maintenance_result_maps_application_projection_to_core_snapshot() {
+        let result = directions_maintenance_result(Ok(ApplicationDirectionsMaintenanceSummary {
+            directions: vec![
+                ApplicationDirectionsMaintenanceDirectionSummary {
+                    id: "missing".to_string(),
+                    title: "Missing mapping".to_string(),
+                    detail_doc_path: None,
+                    detail_doc_status: ApplicationDirectionsSupportingFileStatus::MissingMapping,
+                },
+                ApplicationDirectionsMaintenanceDirectionSummary {
+                    id: "ready".to_string(),
+                    title: "Ready mapping".to_string(),
+                    detail_doc_path: Some("docs/directions/ready.md".to_string()),
+                    detail_doc_status: ApplicationDirectionsSupportingFileStatus::Ready,
+                },
+                ApplicationDirectionsMaintenanceDirectionSummary {
+                    id: "broken".to_string(),
+                    title: "Broken mapping".to_string(),
+                    detail_doc_path: Some("docs/directions/missing.md".to_string()),
+                    detail_doc_status: ApplicationDirectionsSupportingFileStatus::BrokenMapping,
+                },
+            ],
+            missing_detail_doc_count: 1,
+            broken_detail_doc_count: 1,
+            queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+            queue_idle_prompt_path: Some("prompts/queue-idle.md".to_string()),
+            queue_idle_prompt_status: ApplicationDirectionsSupportingFileStatus::BrokenMapping,
+            parse_error: Some("legacy parse warning".to_string()),
+        }));
+
+        assert_eq!(
+            result,
+            Ok(Box::new(DirectionsMaintenanceSummarySnapshot {
+                directions: vec![
+                    DirectionsMaintenanceDirectionSnapshot {
+                        id: "missing".to_string(),
+                        title: "Missing mapping".to_string(),
+                        detail_doc_path: None,
+                        detail_doc_status: CoreDirectionsSupportingFileStatus::MissingMapping,
+                    },
+                    DirectionsMaintenanceDirectionSnapshot {
+                        id: "ready".to_string(),
+                        title: "Ready mapping".to_string(),
+                        detail_doc_path: Some("docs/directions/ready.md".to_string()),
+                        detail_doc_status: CoreDirectionsSupportingFileStatus::Ready,
+                    },
+                    DirectionsMaintenanceDirectionSnapshot {
+                        id: "broken".to_string(),
+                        title: "Broken mapping".to_string(),
+                        detail_doc_path: Some("docs/directions/missing.md".to_string()),
+                        detail_doc_status: CoreDirectionsSupportingFileStatus::BrokenMapping,
+                    },
+                ],
+                missing_detail_doc_count: 1,
+                broken_detail_doc_count: 1,
+                queue_idle_policy: QueueIdlePolicy::ReviewAndEnqueue,
+                queue_idle_prompt_path: Some("prompts/queue-idle.md".to_string()),
+                queue_idle_prompt_status: CoreDirectionsSupportingFileStatus::BrokenMapping,
+                parse_error: Some("legacy parse warning".to_string()),
+            }))
+        );
+    }
+
+    #[test]
+    fn directions_maintenance_result_maps_load_error_to_string() {
+        assert_eq!(
+            directions_maintenance_result(Err(anyhow::anyhow!("directions unavailable"))),
+            Err("directions unavailable".to_string())
+        );
     }
 
     #[test]

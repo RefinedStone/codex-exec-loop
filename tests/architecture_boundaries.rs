@@ -779,6 +779,22 @@ fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_directions_maintenance_loads_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI directions maintenance reads must dispatch a Core command instead of loading planning authority directly",
+        &["src/adapter/inbound/tui"],
+        &[".load_summary("],
+    );
+
+    let controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/planning/controller.rs").unwrap();
+    assert!(
+        controller.contains("AppCommand::LoadDirectionsMaintenance {"),
+        "TUI directions maintenance loads must positively enter through the typed Core command"
+    );
+}
+
+#[test]
 fn tui_review_presentation_reads_screen_model_without_effects() {
     // Review Center authority loading belongs to the controller/effect path. Presentation must
     // remain a pure projection of the request-correlated immutable screen model.

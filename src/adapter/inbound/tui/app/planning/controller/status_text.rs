@@ -55,7 +55,7 @@ pub(super) fn directions_manual_editor_close_warning_status(
 }
 
 /*
- * directions editor가 닫힌 뒤에는 `present_directions_maintenance_overview`가 다시 summary를 로드한다.
+ * directions editor가 닫힌 뒤에는 `start_directions_maintenance_overview_load`가 summary를 다시 요청한다.
  * 이 문구는 방금 떠난 editor에서 어떤 draft 위험이 남았는지 overview status line으로 이어 주어,
  * 사용자가 directions maintenance 흐름에서 맥락을 잃지 않게 한다.
  */
