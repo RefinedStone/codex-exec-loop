@@ -1267,6 +1267,8 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         ),
         ("load_manual_editor_session", "simple editor load"),
         ("promote_staged_draft", "simple draft promotion"),
+        ("save_draft_editor_files", "editor save"),
+        ("promote_draft_editor_files", "editor promotion"),
     ] {
         assert_no_production_callable_reference_named_in_paths(
             &format!(
@@ -1338,7 +1340,7 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     );
     let editor_stage_settlement = planning_controller
         .split_once("fn apply_planning_editor_stage_completion(")
-        .and_then(|(_, body)| body.split_once("fn planning_editor_stage_presentation_is_current("))
+        .and_then(|(_, body)| body.split_once("fn apply_planning_editor_mutation_completion("))
         .map(|(body, _)| body)
         .expect("planning editor stage settlement should have a bounded source body");
     for forbidden in [
@@ -1351,6 +1353,52 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
             "editor staging must not trigger runtime refresh or post-turn pause: {forbidden}"
         );
     }
+    let editor_save_settlement = planning_controller
+        .split_once("fn apply_planning_editor_save_completion(")
+        .and_then(|(_, body)| body.split_once("fn apply_planning_editor_promote_completion("))
+        .map(|(body, _)| body)
+        .expect("planning editor save settlement should have a bounded source body");
+    for forbidden in [
+        "pause_post_turn_continuation_after_authority_mutation",
+        "refresh_ready_conversation_planning_runtime_projection",
+        "close_shell_overlay",
+        "start_directions_maintenance_overview_load",
+    ] {
+        assert!(
+            !editor_save_settlement.contains(forbidden),
+            "editor save must preserve the overlay and skip runtime refresh/pause: {forbidden}"
+        );
+    }
+    let editor_promote_settlement = planning_controller
+        .split_once("fn apply_planning_editor_promote_completion(")
+        .and_then(|(_, body)| body.split_once("fn planning_editor_mutation_target_is_current("))
+        .map(|(body, _)| body)
+        .expect("planning editor promote settlement should have a bounded source body");
+    for required in [
+        "pause_post_turn_continuation_after_authority_mutation",
+        "refresh_ready_conversation_planning_runtime_projection_for_workspace",
+        "PlanningWorkspaceOperationUiSettlement::Applied",
+    ] {
+        assert!(
+            editor_promote_settlement.contains(required),
+            "editor promotion settlement is missing its authority or exact-presentation contract: {required}"
+        );
+    }
+    for required in [
+        "fn planning_workspace_operation_busy_label(",
+        "fn editor_mutation_late_save_reconciles_only_the_matching_session_and_revision()",
+        "fn editor_mutation_exact_promote_always_refreshes_but_only_success_closes()",
+        "fn editor_mutation_late_promote_never_closes_a_newer_or_suspended_editor()",
+        "fn editor_mutation_promote_refreshes_after_workspace_aba_but_not_in_workspace_b()",
+        "fn editor_mutation_coalesced_retry_rebinds_current_presentation_revision()",
+        "fn planning_editor_workspace_drift_blocks_mutation_without_clearing_close_confirmation()",
+        "fn directions_detail_doc_editor_promotes_back_to_maintenance_overview()",
+    ] {
+        assert!(
+            planning_controller.contains(required),
+            "TUI editor mutation temporal coverage is missing: {required}"
+        );
+    }
 
     let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
     assert!(
@@ -1361,6 +1409,8 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
             && core_controller.contains("correlation.reset_target() == Some(snapshot.target)")
             && core_controller.contains("PlanningWorkspaceOperationKind::StageSimpleDraft")
             && core_controller.contains("PlanningWorkspaceOperationKind::StageEditor")
+            && core_controller.contains("PlanningWorkspaceOperationKind::MutateEditor")
+            && core_controller.contains("AppCommand::MutatePlanningEditor")
             && core_controller.contains("PlanningWorkspaceOperationKind::LoadSimpleEditor")
             && core_controller.contains("PlanningWorkspaceOperationKind::PromoteSimpleDraft"),
         "CoreController must delegate reset and simple-authoring admission plus exact settlement to one coordinator"
@@ -1371,7 +1421,10 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         "PlanningWorkspaceOperationAdmission::Busy",
         "PlanningEditorSessionIdentity",
         "PlanningEditorStageTarget",
+        "PlanningEditorMutationIdentity",
+        "PlanningEditorMutationRequest",
         "StageEditor",
+        "MutateEditor",
         "LoadSimpleEditor",
         "PromoteSimpleDraft",
         "checked_add(1)",
@@ -1381,7 +1434,15 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
             "planning workspace coordinator is missing contract: {required}"
         );
     }
-    for forbidden in ["VecDeque", "cancel(", "actor"] {
+    for forbidden in [
+        "VecDeque",
+        "cancel(",
+        "actor",
+        "saving…",
+        "promoting…",
+        "planning editor save",
+        "planning editor promotion",
+    ] {
         assert!(
             !coordinator.contains(forbidden),
             "planning workspace coordinator must not add queue/actor/cancellation machinery: {forbidden}"
@@ -1403,14 +1464,17 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     for required in [
         "pub fn spawn_simple_planning_draft_stage(",
         "pub fn spawn_planning_editor_stage(",
+        "pub fn spawn_planning_editor_mutation(",
         "pub fn spawn_simple_planning_editor_load(",
         "pub fn spawn_simple_planning_draft_promotion(",
         "PlanningSimpleDraftStaged",
         "PlanningEditorStaged",
+        "PlanningEditorMutationCompleted",
         "PlanningSimpleEditorLoaded",
         "PlanningSimpleDraftPromoted",
         "planning simple draft stage worker panicked",
         "planning editor stage worker panicked",
+        "planning editor mutation worker panicked",
         "planning simple editor load worker panicked",
         "planning simple draft promotion worker panicked",
     ] {
@@ -1427,7 +1491,13 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         ) && effect_runner.contains(
             "fn planning_editor_stage_runner_rejects_wrong_operation_target_session_and_draft()"
         ) && effect_runner.contains(
+            "fn planning_editor_mutation_rejects_every_identity_mismatch_before_provider_io()"
+        ) && effect_runner.contains(
+            "fn planning_editor_mutation_dispatch_is_non_blocking_and_coordinates_duplicates()"
+        ) && effect_runner.contains(
             "fn planning_editor_stage_worker_panic_is_redacted_and_reopens_admission()"
+        ) && effect_runner.contains(
+            "fn planning_editor_save_and_promote_panics_are_redacted_once_and_reopen_admission()"
         ) && effect_runner.contains(
             "fn simple_editor_worker_panic_returns_one_redacted_completion_and_reopens_admission()"
         ) && effect_runner
@@ -1436,7 +1506,6 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
     );
 
     let tui_root = repo_root().join("src/adapter/inbound/tui");
-    let mut guarded_mutation_methods = Vec::new();
     let mut direct_workspace_calls = 0;
     for path in rust_files_under(&tui_root) {
         if is_test_only_path(&path) {
@@ -1444,39 +1513,13 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         }
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        for (method_name, calls, has_leading_busy_return_guard) in
-            top_level_impl_method_calls(&source)
-        {
-            let workspace_lines = calls
-                .iter()
-                .filter_map(|(name, line)| (name == "workspace").then_some(*line))
-                .collect::<Vec<_>>();
-            if workspace_lines.is_empty() {
-                continue;
-            }
-            direct_workspace_calls += workspace_lines.len();
-            assert!(
-                has_leading_busy_return_guard,
-                "{}::{method_name} must begin with `if planning_workspace_operation_blocks_direct_mutation() {{ return; }}` before workspace mutation",
-                path.display()
-            );
-            guarded_mutation_methods.push(method_name);
+        for (_, calls, _) in top_level_impl_method_calls(&source) {
+            direct_workspace_calls += calls.iter().filter(|(name, _)| name == "workspace").count();
         }
     }
     assert_eq!(
-        direct_workspace_calls, 4,
-        "this slice must move all editor staging behind Core and leave only four direct save/promote calls for later slices"
-    );
-    guarded_mutation_methods.sort();
-    assert_eq!(
-        guarded_mutation_methods,
-        [
-            "promote_directions_manual_editor",
-            "promote_planning_manual_editor",
-            "save_directions_manual_editor",
-            "save_planning_manual_editor",
-        ],
-        "every remaining direct planning workspace mutation must have a leading reset busy guard"
+        direct_workspace_calls, 0,
+        "production TUI must not expose PlanningWorkspaceUseCases through `.workspace()`"
     );
 }
 
@@ -1490,6 +1533,8 @@ fn planning_workspace_ast_guard_rejects_all_callable_forms_and_ignored_busy_resu
         "stage_queue_idle_prompt_editor_session",
         "load_manual_editor_session",
         "promote_staged_draft",
+        "save_draft_editor_files",
+        "promote_draft_editor_files",
     ] {
         let text_only = format!(
             r#"

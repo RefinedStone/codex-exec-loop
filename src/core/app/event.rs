@@ -10,12 +10,12 @@ use super::{
 use super::{
     ConversationLoadCorrelation, GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
     GithubReviewPollingSetupResult, ParallelPeekLoadCorrelation, PlanningDoctorSnapshot,
-    PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot, PlanningRuntimeRefreshCorrelation,
-    PlanningRuntimeRefreshSnapshot, PlanningSimpleDraftPromotionSnapshot,
-    PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationAdmission,
-    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetSnapshot,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
-    StartupCheckCorrelation,
+    PlanningEditorMutationResult, PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot,
+    PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
+    PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
+    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
+    PlanningWorkspaceResetSnapshot, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
@@ -114,6 +114,10 @@ pub enum CoreEffectCompletion {
     PlanningEditorStaged {
         correlation: PlanningWorkspaceOperationCorrelation,
         result: Result<Box<PlanningEditorStageSnapshot>, String>,
+    },
+    PlanningEditorMutationCompleted {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorMutationResult>, String>,
     },
     PlanningSimpleEditorLoaded {
         correlation: PlanningWorkspaceOperationCorrelation,
@@ -224,6 +228,10 @@ pub enum AppEvent {
     PlanningEditorStaged {
         correlation: PlanningWorkspaceOperationCorrelation,
         result: Result<Box<PlanningEditorStageSnapshot>, String>,
+    },
+    PlanningEditorMutationCompleted {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorMutationResult>, String>,
     },
     PlanningSimpleEditorLoaded {
         correlation: PlanningWorkspaceOperationCorrelation,

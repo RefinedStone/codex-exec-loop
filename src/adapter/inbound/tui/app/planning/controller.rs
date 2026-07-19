@@ -11,11 +11,12 @@ use super::super::{
 use crate::application::service::planning::PlanningResetTarget;
 use crate::core::app::{
     AppCommand, AppEvent, PlanningDoctorSnapshot, PlanningDoctorSnapshotState,
-    PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot, PlanningEditorStageTarget,
-    PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
-    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
-    PlanningWorkspaceOperationKind, PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot,
-    PlanningWorkspaceResetTarget,
+    PlanningEditorMutationAction, PlanningEditorMutationIdentity, PlanningEditorMutationRequest,
+    PlanningEditorMutationResult, PlanningEditorMutationTarget, PlanningEditorSessionSnapshot,
+    PlanningEditorStageSnapshot, PlanningEditorStageTarget, PlanningSimpleDraftPromotionSnapshot,
+    PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationAdmission,
+    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceOperationKind,
+    PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
 };
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
@@ -25,6 +26,33 @@ fn core_planning_reset_target(target: PlanningResetTarget) -> PlanningWorkspaceR
         PlanningResetTarget::Directions => PlanningWorkspaceResetTarget::Directions,
         PlanningResetTarget::All => PlanningWorkspaceResetTarget::All,
     }
+}
+
+fn planning_editor_mutation_progress_status(identity: &PlanningEditorMutationIdentity) -> String {
+    let target = match identity.target {
+        PlanningEditorMutationTarget::Planning => "planning editor",
+        PlanningEditorMutationTarget::Directions => "directions editor",
+    };
+    let action = match identity.action {
+        PlanningEditorMutationAction::Save => "saving…",
+        PlanningEditorMutationAction::Promote => "promoting…",
+    };
+    format!("{target} {action}")
+}
+
+fn planning_workspace_operation_busy_label(operation: &PlanningWorkspaceOperationKind) -> String {
+    let PlanningWorkspaceOperationKind::MutateEditor { identity } = operation else {
+        return operation.label().to_string();
+    };
+    let target = match identity.target {
+        PlanningEditorMutationTarget::Planning => "planning editor",
+        PlanningEditorMutationTarget::Directions => "directions editor",
+    };
+    let action = match identity.action {
+        PlanningEditorMutationAction::Save => "save",
+        PlanningEditorMutationAction::Promote => "promotion",
+    };
+    format!("{target} {action}")
 }
 
 mod directions_overlay;
@@ -401,6 +429,9 @@ impl NativeTuiApp {
                     PlanningWorkspaceOperationKind::StageEditor { target } => {
                         format!("{} staging in progress", target.label())
                     }
+                    PlanningWorkspaceOperationKind::MutateEditor { identity } => {
+                        planning_editor_mutation_progress_status(identity)
+                    }
                     PlanningWorkspaceOperationKind::LoadSimpleEditor { .. } => {
                         "planning simple draft editor loading".to_string()
                     }
@@ -416,6 +447,13 @@ impl NativeTuiApp {
                     .begin(correlation, self.planning_ui_intent_revision);
             }
             PlanningWorkspaceOperationAdmission::Coalesced { correlation } => {
+                if let PlanningWorkspaceOperationKind::MutateEditor { identity } =
+                    &correlation.operation
+                {
+                    self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                        status_text: planning_editor_mutation_progress_status(identity),
+                    });
+                }
                 let is_reset = matches!(
                     &correlation.operation,
                     PlanningWorkspaceOperationKind::Reset { .. }
@@ -452,8 +490,8 @@ impl NativeTuiApp {
                     ),
                     _ => format!(
                         "planning workspace busy / active: {} / requested: {} / wait for the active operation to finish",
-                        active_correlation.label(),
-                        requested.label(),
+                        planning_workspace_operation_busy_label(&active_correlation.operation),
+                        planning_workspace_operation_busy_label(&requested.operation),
                     ),
                 };
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -491,6 +529,7 @@ impl NativeTuiApp {
             PlanningWorkspaceOperationKind::Reset { .. }
             | PlanningWorkspaceOperationKind::StageSimpleDraft
             | PlanningWorkspaceOperationKind::StageEditor { .. }
+            | PlanningWorkspaceOperationKind::MutateEditor { .. }
             | PlanningWorkspaceOperationKind::LoadSimpleEditor { .. }
             | PlanningWorkspaceOperationKind::PromoteSimpleDraft { .. } => {}
         }
@@ -553,34 +592,6 @@ impl NativeTuiApp {
                 self.apply_core_dispatch_outcome(outcome);
             }
         }
-    }
-
-    pub(super) fn planning_workspace_operation_blocks_direct_mutation(&mut self) -> bool {
-        let Some(active) = self
-            .planning_workspace_operation_ui_state
-            .active_correlation()
-            .cloned()
-        else {
-            return false;
-        };
-        let status_text = active.reset_target().map_or_else(
-            || {
-                format!(
-                    "planning workspace busy / {} is still in progress",
-                    active.label()
-                )
-            },
-            |target| {
-                format!(
-                    "planning workspace busy / reset {} is still in progress",
-                    target.label()
-                )
-            },
-        );
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
-        true
     }
 
     // Simple mode stages a low-ceremony draft and keeps validation attached to
@@ -824,6 +835,256 @@ impl NativeTuiApp {
         self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
             status_text,
         });
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn apply_planning_editor_mutation_completion(
+        &mut self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+        result: Result<Box<PlanningEditorMutationResult>, String>,
+    ) {
+        let Some(identity) = correlation.editor_mutation_identity().cloned() else {
+            return;
+        };
+        let workspace_directory = self.planning_workspace_directory();
+        let settlement = self.planning_workspace_operation_ui_state.settle(
+            &correlation,
+            &workspace_directory,
+            self.planning_ui_intent_revision,
+        );
+        if matches!(
+            settlement,
+            PlanningWorkspaceOperationUiSettlement::Rejected
+                | PlanningWorkspaceOperationUiSettlement::WorkspaceSuperseded
+        ) {
+            return;
+        }
+        let result = result.and_then(|result| {
+            if result.identity() == &identity
+                && result.action() == identity.action
+                && result.draft_name() == identity.draft_name
+            {
+                Ok(result)
+            } else {
+                Err("planning editor mutation completion identity mismatch".to_string())
+            }
+        });
+        match identity.action {
+            PlanningEditorMutationAction::Save => {
+                self.apply_planning_editor_save_completion(identity, settlement, result);
+            }
+            PlanningEditorMutationAction::Promote => {
+                self.apply_planning_editor_promote_completion(
+                    identity,
+                    settlement,
+                    workspace_directory,
+                    result,
+                );
+            }
+        }
+    }
+
+    fn apply_planning_editor_save_completion(
+        &mut self,
+        identity: PlanningEditorMutationIdentity,
+        settlement: PlanningWorkspaceOperationUiSettlement,
+        result: Result<Box<PlanningEditorMutationResult>, String>,
+    ) {
+        let presentation_is_current = settlement == PlanningWorkspaceOperationUiSettlement::Applied
+            && self.planning_editor_mutation_target_is_current(identity.target);
+        let source_is_current = self.planning_draft_editor_ui_state.session_identity()
+            == Some(&identity.source_session);
+        let current_buffer_revision = self.planning_draft_editor_ui_state.buffer_revision();
+        let exact_revision =
+            source_is_current && current_buffer_revision == Some(identity.buffer_revision);
+        let newer_edit_is_current = source_is_current
+            && current_buffer_revision.is_some_and(|revision| revision > identity.buffer_revision);
+        let status_text = match result {
+            Ok(result) => {
+                let validation_report = result.validation_report().clone();
+                let validation_ok = validation_report.is_valid();
+                let reconciled = self
+                    .planning_draft_editor_ui_state
+                    .apply_correlated_save_result(
+                        &identity.source_session,
+                        identity.buffer_revision,
+                        validation_report,
+                    );
+                if !presentation_is_current || !reconciled {
+                    return;
+                }
+                let target = match identity.target {
+                    PlanningEditorMutationTarget::Planning => "planning",
+                    PlanningEditorMutationTarget::Directions => "directions",
+                };
+                if exact_revision {
+                    format!(
+                        "{target} draft saved / draft: {} / validation: {} / next: {}",
+                        result.draft_name(),
+                        if validation_ok {
+                            "ok"
+                        } else {
+                            "needs attention"
+                        },
+                        if validation_ok {
+                            "press Ctrl+P to promote into accepted planning state"
+                        } else {
+                            "fix validation issues before promoting"
+                        },
+                    )
+                } else {
+                    format!(
+                        "{target} draft save completed / draft: {} / newer edits remain unsaved",
+                        result.draft_name()
+                    )
+                }
+            }
+            Err(error) if presentation_is_current && newer_edit_is_current => {
+                format!("save failed for an older revision: {error} / newer edits remain unsaved")
+            }
+            Err(error) if presentation_is_current && exact_revision => {
+                let target = match identity.target {
+                    PlanningEditorMutationTarget::Planning => "planning draft",
+                    PlanningEditorMutationTarget::Directions => "directions draft",
+                };
+                format!("{target} save failed: {error}")
+            }
+            Err(_) => return,
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    fn apply_planning_editor_promote_completion(
+        &mut self,
+        identity: PlanningEditorMutationIdentity,
+        settlement: PlanningWorkspaceOperationUiSettlement,
+        workspace_directory: String,
+        result: Result<Box<PlanningEditorMutationResult>, String>,
+    ) {
+        let target_is_current = settlement == PlanningWorkspaceOperationUiSettlement::Applied
+            && self.planning_editor_mutation_target_is_current(identity.target);
+        let source_is_current = self.planning_draft_editor_ui_state.session_identity()
+            == Some(&identity.source_session);
+        let current_buffer_revision = self.planning_draft_editor_ui_state.buffer_revision();
+        let apply_presentation = target_is_current
+            && source_is_current
+            && current_buffer_revision == Some(identity.buffer_revision);
+        let newer_edit_is_current = target_is_current
+            && source_is_current
+            && current_buffer_revision.is_some_and(|revision| revision > identity.buffer_revision);
+        self.pause_post_turn_continuation_after_authority_mutation();
+        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
+            &workspace_directory,
+        );
+        if !apply_presentation {
+            if newer_edit_is_current {
+                let status_text = match result {
+                    Ok(result) => match result.as_ref() {
+                        PlanningEditorMutationResult::Promoted {
+                            promoted_file_count: 0,
+                            ..
+                        } => "promotion blocked for an older revision / newer edits remain unsaved"
+                            .to_string(),
+                        PlanningEditorMutationResult::Promoted { .. } => {
+                            "promotion completed for an older revision / newer edits remain unsaved"
+                                .to_string()
+                        }
+                        PlanningEditorMutationResult::Saved { .. } => return,
+                    },
+                    Err(error) => format!(
+                        "promotion failed for an older revision: {error} / newer edits remain unsaved"
+                    ),
+                };
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text,
+                });
+            }
+            return;
+        }
+        let status_text = match result {
+            Ok(result) => {
+                let PlanningEditorMutationResult::Promoted {
+                    promoted_file_count,
+                    validation_report,
+                    ..
+                } = result.as_ref()
+                else {
+                    return;
+                };
+                let validation_ok = validation_report.is_valid();
+                self.planning_draft_editor_ui_state
+                    .apply_correlated_save_result(
+                        &identity.source_session,
+                        identity.buffer_revision,
+                        validation_report.clone(),
+                    );
+                if *promoted_file_count == 0 {
+                    let target = match identity.target {
+                        PlanningEditorMutationTarget::Planning => "planning",
+                        PlanningEditorMutationTarget::Directions => "directions",
+                    };
+                    format!(
+                        "{target} draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
+                        result.draft_name(),
+                        if validation_ok {
+                            "ok"
+                        } else {
+                            "needs attention"
+                        }
+                    )
+                } else {
+                    let status_text = match identity.target {
+                        PlanningEditorMutationTarget::Planning => format!(
+                            "planning draft promoted / draft: {} / files: {} / planning context refreshed",
+                            result.draft_name(),
+                            promoted_file_count
+                        ),
+                        PlanningEditorMutationTarget::Directions => format!(
+                            "directions draft promoted / draft: {} / files: {} / planning context refresh requested",
+                            result.draft_name(),
+                            promoted_file_count
+                        ),
+                    };
+                    match identity.target {
+                        PlanningEditorMutationTarget::Planning => self.close_shell_overlay(),
+                        PlanningEditorMutationTarget::Directions => {
+                            self.start_directions_maintenance_overview_load(Some(status_text));
+                            return;
+                        }
+                    }
+                    status_text
+                }
+            }
+            Err(error) => {
+                let target = match identity.target {
+                    PlanningEditorMutationTarget::Planning => "planning draft",
+                    PlanningEditorMutationTarget::Directions => "directions draft",
+                };
+                format!("{target} promote failed: {error}")
+            }
+        };
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text,
+        });
+    }
+
+    fn planning_editor_mutation_target_is_current(
+        &self,
+        target: PlanningEditorMutationTarget,
+    ) -> bool {
+        match target {
+            PlanningEditorMutationTarget::Planning => {
+                self.shell_overlay == ShellOverlay::PlanningInit
+                    && self.planning_init_overlay_ui_state.step()
+                        == PlanningInitOverlayStep::ManualEditor
+            }
+            PlanningEditorMutationTarget::Directions => {
+                self.shell_overlay == ShellOverlay::DirectionsMaintenance
+                    && self.directions_maintenance_overlay_ui_state.step()
+                        == DirectionsMaintenanceOverlayStep::ManualEditor
+            }
+        }
     }
 
     fn planning_editor_stage_presentation_is_current(
@@ -1715,12 +1976,112 @@ mod tests {
         panic!("expected {expected} planning workspace load completions");
     }
 
+    fn make_observed_mutation_app(
+        workspace: &TempPlanningWorkspace,
+    ) -> (NativeTuiApp, PlanningWorkspaceLoadObservation) {
+        let (port, observation) = FailingPlanningWorkspacePort::observed();
+        let mut app = make_test_app_with_planning_workspace_port(workspace, Arc::new(port));
+        wait_for_observed_loads_to_settle(&mut app, &observation);
+        observation.reset_and_enable(workspace.path_str(), false);
+        (app, observation)
+    }
+
     fn post_turn_continuation_is_paused(app: &NativeTuiApp) -> bool {
         match &app.conversation_state {
             ConversationState::Ready(conversation) => conversation
                 .auto_follow_state
                 .post_turn_continuation_paused(),
             ConversationState::Loading | ConversationState::Failed(_) => false,
+        }
+    }
+
+    fn open_planning_editor_for_mutation_test(
+        app: &mut NativeTuiApp,
+        workspace_directory: &str,
+        generation: u64,
+        draft_name: &str,
+    ) -> crate::core::app::PlanningEditorSessionIdentity {
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        app.planning_init_overlay_ui_state.open_manual_editor();
+        let session_identity = crate::core::app::PlanningEditorSessionIdentity::new(
+            generation,
+            workspace_directory,
+            draft_name,
+        );
+        app.planning_draft_editor_ui_state
+            .open_correlated_session(PlanningEditorSessionSnapshot {
+                session_identity: session_identity.clone(),
+                draft_directory: format!("{workspace_directory}/drafts/{draft_name}"),
+                editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
+                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    staged_path: format!(
+                        "{workspace_directory}/drafts/{draft_name}/result-output.md"
+                    ),
+                    body: "# Result Output\n\n- Keep the latest editor body.\n".to_string(),
+                }],
+                validation_report: PlanningValidationReport::default(),
+            });
+        session_identity
+    }
+
+    fn bind_planning_editor_mutation(
+        app: &mut NativeTuiApp,
+        generation: u64,
+        action: PlanningEditorMutationAction,
+        target: PlanningEditorMutationTarget,
+        source_session: crate::core::app::PlanningEditorSessionIdentity,
+    ) -> PlanningWorkspaceOperationCorrelation {
+        let buffer_revision = app
+            .planning_draft_editor_ui_state
+            .buffer_revision()
+            .expect("mutation test editor should expose a buffer revision");
+        let identity = PlanningEditorMutationIdentity::new(
+            action,
+            target,
+            source_session.draft_name.clone(),
+            source_session.clone(),
+            buffer_revision,
+        );
+        let correlation = PlanningWorkspaceOperationCorrelation {
+            generation,
+            workspace_directory: source_session.workspace_directory.clone(),
+            operation: PlanningWorkspaceOperationKind::MutateEditor { identity },
+        };
+        app.planning_workspace_operation_ui_state
+            .begin(correlation.clone(), app.planning_ui_intent_revision);
+        correlation
+    }
+
+    fn editor_mutation_identity(
+        correlation: &PlanningWorkspaceOperationCorrelation,
+    ) -> PlanningEditorMutationIdentity {
+        correlation
+            .editor_mutation_identity()
+            .cloned()
+            .expect("mutation correlation should carry editor identity")
+    }
+
+    fn saved_editor_mutation_result(
+        correlation: &PlanningWorkspaceOperationCorrelation,
+    ) -> PlanningEditorMutationResult {
+        let identity = editor_mutation_identity(correlation);
+        PlanningEditorMutationResult::Saved {
+            draft_name: identity.draft_name.clone(),
+            identity,
+            validation_report: PlanningValidationReport::default(),
+        }
+    }
+
+    fn promoted_editor_mutation_result(
+        correlation: &PlanningWorkspaceOperationCorrelation,
+        promoted_file_count: usize,
+    ) -> PlanningEditorMutationResult {
+        let identity = editor_mutation_identity(correlation);
+        PlanningEditorMutationResult::Promoted {
+            draft_name: identity.draft_name.clone(),
+            identity,
+            promoted_file_count,
+            validation_report: PlanningValidationReport::default(),
         }
     }
 
@@ -2625,6 +2986,907 @@ mod tests {
     }
 
     #[test]
+    fn editor_mutation_late_save_reconciles_only_the_matching_session_and_revision() {
+        let exact_workspace = TempPlanningWorkspace::new("tui-editor-save-exact");
+        let mut exact_app = make_test_app(&exact_workspace);
+        let exact_source = open_planning_editor_for_mutation_test(
+            &mut exact_app,
+            exact_workspace.path_str(),
+            101,
+            "draft-save-exact",
+        );
+        exact_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let exact = bind_planning_editor_mutation(
+            &mut exact_app,
+            201,
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            exact_source,
+        );
+        let exact_body = exact_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("exact save buffer should exist")
+            .body();
+        let exact_permit = exact_app.post_turn_continuation_gate.capture();
+        let exact_refresh = exact_app.planning_runtime_refresh_ui_state.clone();
+
+        exact_app.apply_planning_editor_mutation_completion(
+            exact.clone(),
+            Ok(Box::new(saved_editor_mutation_result(&exact))),
+        );
+
+        assert_eq!(
+            exact_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("exact save should keep the editor")
+                .body(),
+            exact_body
+        );
+        assert!(!exact_app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(exact_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert!(
+            exact_permit.is_current(),
+            "save must not pause continuation"
+        );
+        assert_eq!(
+            exact_app.planning_runtime_refresh_ui_state, exact_refresh,
+            "save must not request a planning runtime refresh"
+        );
+
+        let newer_workspace = TempPlanningWorkspace::new("tui-editor-save-newer");
+        let mut newer_app = make_test_app(&newer_workspace);
+        let newer_source = open_planning_editor_for_mutation_test(
+            &mut newer_app,
+            newer_workspace.path_str(),
+            102,
+            "draft-save-newer",
+        );
+        newer_app
+            .planning_draft_editor_ui_state
+            .insert_character('1');
+        let newer = bind_planning_editor_mutation(
+            &mut newer_app,
+            202,
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            newer_source,
+        );
+        newer_app
+            .planning_draft_editor_ui_state
+            .insert_character('2');
+        let newer_body = newer_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("newer save buffer should exist")
+            .body();
+        let newer_permit = newer_app.post_turn_continuation_gate.capture();
+        let newer_refresh = newer_app.planning_runtime_refresh_ui_state.clone();
+
+        newer_app.apply_planning_editor_mutation_completion(
+            newer.clone(),
+            Ok(Box::new(saved_editor_mutation_result(&newer))),
+        );
+
+        assert_eq!(
+            newer_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("newer save should keep the editor")
+                .body(),
+            newer_body
+        );
+        assert!(newer_app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert!(ready_status(&newer_app).contains("newer edits remain unsaved"));
+        assert!(newer_permit.is_current());
+        assert_eq!(newer_app.planning_runtime_refresh_ui_state, newer_refresh);
+
+        let error_workspace = TempPlanningWorkspace::new("tui-editor-save-newer-error");
+        let mut error_app = make_test_app(&error_workspace);
+        let error_source = open_planning_editor_for_mutation_test(
+            &mut error_app,
+            error_workspace.path_str(),
+            103,
+            "draft-save-newer-error",
+        );
+        error_app
+            .planning_draft_editor_ui_state
+            .insert_character('1');
+        let error_correlation = bind_planning_editor_mutation(
+            &mut error_app,
+            203,
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            error_source,
+        );
+        error_app
+            .planning_draft_editor_ui_state
+            .insert_character('2');
+        let error_body = error_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("failed save buffer should exist")
+            .body();
+
+        error_app.apply_planning_editor_mutation_completion(
+            error_correlation,
+            Err("provider unavailable".to_string()),
+        );
+
+        assert_eq!(
+            error_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("failed newer save should keep the editor")
+                .body(),
+            error_body
+        );
+        assert!(error_app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            ready_status(&error_app),
+            "save failed for an older revision: provider unavailable / newer edits remain unsaved"
+        );
+
+        let session_workspace = TempPlanningWorkspace::new("tui-editor-save-session-drift");
+        let mut session_app = make_test_app(&session_workspace);
+        let old_source = open_planning_editor_for_mutation_test(
+            &mut session_app,
+            session_workspace.path_str(),
+            104,
+            "draft-save-old-session",
+        );
+        session_app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "newer session status".to_string(),
+        });
+        let old_correlation = bind_planning_editor_mutation(
+            &mut session_app,
+            204,
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            old_source,
+        );
+        let newer_identity = crate::core::app::PlanningEditorSessionIdentity::new(
+            105,
+            session_workspace.path_str(),
+            "draft-save-new-session",
+        );
+        session_app
+            .planning_draft_editor_ui_state
+            .open_correlated_session(PlanningEditorSessionSnapshot {
+                session_identity: newer_identity.clone(),
+                draft_directory: format!(
+                    "{}/drafts/draft-save-new-session",
+                    session_workspace.path_str()
+                ),
+                editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
+                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    staged_path: "draft-save-new-session/result-output.md".to_string(),
+                    body: "# Result Output\n\n- New session body.\n".to_string(),
+                }],
+                validation_report: PlanningValidationReport::default(),
+            });
+        session_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let session_body = session_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("new session buffer should exist")
+            .body();
+
+        session_app.apply_planning_editor_mutation_completion(
+            old_correlation.clone(),
+            Ok(Box::new(saved_editor_mutation_result(&old_correlation))),
+        );
+
+        assert_eq!(
+            session_app
+                .planning_draft_editor_ui_state
+                .session_identity(),
+            Some(&newer_identity)
+        );
+        assert_eq!(
+            session_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("new session must survive old save")
+                .body(),
+            session_body
+        );
+        assert!(
+            session_app
+                .planning_draft_editor_ui_state
+                .has_dirty_buffers()
+        );
+        assert_eq!(ready_status(&session_app), "newer session status");
+    }
+
+    #[test]
+    fn editor_mutation_exact_promote_always_refreshes_but_only_success_closes() {
+        let success_workspace = TempPlanningWorkspace::new("tui-editor-promote-success");
+        let (mut success_app, success_observation) = make_observed_mutation_app(&success_workspace);
+        let success_source = open_planning_editor_for_mutation_test(
+            &mut success_app,
+            success_workspace.path_str(),
+            111,
+            "draft-promote-success",
+        );
+        success_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let success = bind_planning_editor_mutation(
+            &mut success_app,
+            211,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            success_source,
+        );
+        let success_permit = success_app.post_turn_continuation_gate.capture();
+
+        success_app.apply_planning_editor_mutation_completion(
+            success.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&success, 1))),
+        );
+        wait_for_observed_load_completions(&mut success_app, &success_observation, 1);
+
+        assert!(!success_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&success_app));
+        assert_eq!(success_app.shell_overlay, ShellOverlay::Hidden);
+        assert!(
+            success_app
+                .planning_draft_editor_ui_state
+                .session_identity()
+                .is_none()
+        );
+        assert!(ready_status(&success_app).contains("planning draft promoted"));
+
+        let zero_workspace = TempPlanningWorkspace::new("tui-editor-promote-zero");
+        let (mut zero_app, zero_observation) = make_observed_mutation_app(&zero_workspace);
+        let zero_source = open_planning_editor_for_mutation_test(
+            &mut zero_app,
+            zero_workspace.path_str(),
+            112,
+            "draft-promote-zero",
+        );
+        zero_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let zero = bind_planning_editor_mutation(
+            &mut zero_app,
+            212,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            zero_source.clone(),
+        );
+        let zero_permit = zero_app.post_turn_continuation_gate.capture();
+
+        zero_app.apply_planning_editor_mutation_completion(
+            zero.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&zero, 0))),
+        );
+        wait_for_observed_load_completions(&mut zero_app, &zero_observation, 1);
+
+        assert!(!zero_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&zero_app));
+        assert_eq!(zero_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            zero_app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+        assert_eq!(
+            zero_app.planning_draft_editor_ui_state.session_identity(),
+            Some(&zero_source)
+        );
+        assert!(
+            !zero_app.planning_draft_editor_ui_state.has_dirty_buffers(),
+            "an exact zero-count promote still persisted the current body into the draft"
+        );
+        assert!(ready_status(&zero_app).contains("promote blocked"));
+
+        let error_workspace = TempPlanningWorkspace::new("tui-editor-promote-error");
+        let (mut error_app, error_observation) = make_observed_mutation_app(&error_workspace);
+        let error_source = open_planning_editor_for_mutation_test(
+            &mut error_app,
+            error_workspace.path_str(),
+            113,
+            "draft-promote-error",
+        );
+        error_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let error = bind_planning_editor_mutation(
+            &mut error_app,
+            213,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            error_source.clone(),
+        );
+        let error_permit = error_app.post_turn_continuation_gate.capture();
+
+        error_app.apply_planning_editor_mutation_completion(
+            error,
+            Err("provider unavailable".to_string()),
+        );
+        wait_for_observed_load_completions(&mut error_app, &error_observation, 1);
+
+        assert!(!error_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&error_app));
+        assert_eq!(error_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            error_app.planning_draft_editor_ui_state.session_identity(),
+            Some(&error_source)
+        );
+        assert!(error_app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            ready_status(&error_app),
+            "planning draft promote failed: provider unavailable"
+        );
+    }
+
+    #[test]
+    fn editor_mutation_late_promote_never_closes_a_newer_or_suspended_editor() {
+        let newer_workspace = TempPlanningWorkspace::new("tui-editor-promote-newer");
+        let (mut newer_app, newer_observation) = make_observed_mutation_app(&newer_workspace);
+        let newer_source = open_planning_editor_for_mutation_test(
+            &mut newer_app,
+            newer_workspace.path_str(),
+            121,
+            "draft-promote-newer",
+        );
+        newer_app
+            .planning_draft_editor_ui_state
+            .insert_character('1');
+        let newer = bind_planning_editor_mutation(
+            &mut newer_app,
+            221,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            newer_source.clone(),
+        );
+        newer_app
+            .planning_draft_editor_ui_state
+            .insert_character('2');
+        let newer_body = newer_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("newer promotion buffer should exist")
+            .body();
+        let newer_permit = newer_app.post_turn_continuation_gate.capture();
+
+        newer_app.apply_planning_editor_mutation_completion(
+            newer.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&newer, 1))),
+        );
+        wait_for_observed_load_completions(&mut newer_app, &newer_observation, 1);
+
+        assert!(!newer_permit.is_current());
+        assert_eq!(newer_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            newer_app.planning_draft_editor_ui_state.session_identity(),
+            Some(&newer_source)
+        );
+        assert_eq!(
+            newer_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("newer promotion must keep its buffer")
+                .body(),
+            newer_body
+        );
+        assert!(newer_app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            ready_status(&newer_app),
+            "promotion completed for an older revision / newer edits remain unsaved"
+        );
+        assert_eq!(newer_observation.load_count.load(Ordering::SeqCst), 1);
+
+        let approval_workspace = TempPlanningWorkspace::new("tui-editor-promote-approval");
+        let (mut approval_app, approval_observation) =
+            make_observed_mutation_app(&approval_workspace);
+        let approval_source = open_planning_editor_for_mutation_test(
+            &mut approval_app,
+            approval_workspace.path_str(),
+            122,
+            "draft-promote-approval",
+        );
+        approval_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let approval = bind_planning_editor_mutation(
+            &mut approval_app,
+            222,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            approval_source.clone(),
+        );
+        approval_app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+        let approval_status = ready_status(&approval_app).to_string();
+        let approval_permit = approval_app.post_turn_continuation_gate.capture();
+
+        approval_app.apply_planning_editor_mutation_completion(
+            approval.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&approval, 1))),
+        );
+        wait_for_observed_load_completions(&mut approval_app, &approval_observation, 1);
+
+        assert!(!approval_permit.is_current());
+        assert_eq!(approval_app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(
+            approval_app
+                .planning_draft_editor_ui_state
+                .session_identity(),
+            Some(&approval_source)
+        );
+        assert!(
+            approval_app
+                .planning_draft_editor_ui_state
+                .has_dirty_buffers()
+        );
+        assert_eq!(ready_status(&approval_app), approval_status);
+        assert_eq!(approval_observation.load_count.load(Ordering::SeqCst), 1);
+
+        let close_workspace = TempPlanningWorkspace::new("tui-editor-promote-close");
+        let (mut close_app, close_observation) = make_observed_mutation_app(&close_workspace);
+        let close_source = open_planning_editor_for_mutation_test(
+            &mut close_app,
+            close_workspace.path_str(),
+            123,
+            "draft-promote-close",
+        );
+        let close = bind_planning_editor_mutation(
+            &mut close_app,
+            223,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            close_source,
+        );
+        close_app.close_shell_overlay();
+        let close_status = ready_status(&close_app).to_string();
+        let close_permit = close_app.post_turn_continuation_gate.capture();
+
+        close_app.apply_planning_editor_mutation_completion(
+            close.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&close, 1))),
+        );
+        wait_for_observed_load_completions(&mut close_app, &close_observation, 1);
+
+        assert!(!close_permit.is_current());
+        assert_eq!(close_app.shell_overlay, ShellOverlay::Hidden);
+        assert!(
+            close_app
+                .planning_draft_editor_ui_state
+                .session_identity()
+                .is_none()
+        );
+        assert_eq!(ready_status(&close_app), close_status);
+        assert_eq!(close_observation.load_count.load(Ordering::SeqCst), 1);
+
+        let session_workspace = TempPlanningWorkspace::new("tui-editor-promote-new-session");
+        let (mut session_app, session_observation) = make_observed_mutation_app(&session_workspace);
+        let old_source = open_planning_editor_for_mutation_test(
+            &mut session_app,
+            session_workspace.path_str(),
+            124,
+            "draft-promote-old-session",
+        );
+        let old = bind_planning_editor_mutation(
+            &mut session_app,
+            224,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            old_source,
+        );
+        let new_source = crate::core::app::PlanningEditorSessionIdentity::new(
+            125,
+            session_workspace.path_str(),
+            "draft-promote-new-session",
+        );
+        session_app
+            .planning_draft_editor_ui_state
+            .open_correlated_session(PlanningEditorSessionSnapshot {
+                session_identity: new_source.clone(),
+                draft_directory: format!(
+                    "{}/drafts/draft-promote-new-session",
+                    session_workspace.path_str()
+                ),
+                editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
+                    active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                    staged_path: "draft-promote-new-session/result-output.md".to_string(),
+                    body: "# Result Output\n\n- New session body.\n".to_string(),
+                }],
+                validation_report: PlanningValidationReport::default(),
+            });
+        session_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let new_body = session_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("new promotion session should have a buffer")
+            .body();
+        let new_session_permit = session_app.post_turn_continuation_gate.capture();
+
+        session_app.apply_planning_editor_mutation_completion(
+            old.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&old, 1))),
+        );
+        wait_for_observed_load_completions(&mut session_app, &session_observation, 1);
+
+        assert!(!new_session_permit.is_current());
+        assert_eq!(session_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            session_app
+                .planning_draft_editor_ui_state
+                .session_identity(),
+            Some(&new_source)
+        );
+        assert_eq!(
+            session_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("old promotion must not replace the new buffer")
+                .body(),
+            new_body
+        );
+        assert!(
+            session_app
+                .planning_draft_editor_ui_state
+                .has_dirty_buffers()
+        );
+        assert_eq!(session_observation.load_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn editor_mutation_promote_refreshes_after_workspace_aba_but_not_in_workspace_b() {
+        let workspace_a = TempPlanningWorkspace::new("tui-editor-promote-drift-a");
+        let workspace_b = TempPlanningWorkspace::new("tui-editor-promote-drift-b");
+        let (mut drifted_app, drifted_observation) = make_observed_mutation_app(&workspace_a);
+        let drifted_source = open_planning_editor_for_mutation_test(
+            &mut drifted_app,
+            workspace_a.path_str(),
+            131,
+            "draft-promote-drift",
+        );
+        drifted_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let drifted = bind_planning_editor_mutation(
+            &mut drifted_app,
+            231,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            drifted_source.clone(),
+        );
+        let drifted_body = drifted_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("drifted editor buffer should exist")
+            .body();
+        drifted_observation.reset_and_enable(workspace_b.path_str(), false);
+        drifted_app.sync_draft_shell_workspace(workspace_b.path_str());
+        wait_for_observed_load_completions(&mut drifted_app, &drifted_observation, 1);
+        wait_for_planning_runtime_refresh(&mut drifted_app);
+        drifted_observation.reset_and_enable(workspace_b.path_str(), false);
+        let workspace_b_permit = drifted_app.post_turn_continuation_gate.capture();
+        let workspace_b_refresh = drifted_app.planning_runtime_refresh_ui_state.clone();
+
+        drifted_app.apply_planning_editor_mutation_completion(
+            drifted.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&drifted, 1))),
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        drifted_app.poll_core_runtime_inputs(16);
+
+        assert!(workspace_b_permit.is_current());
+        assert_eq!(
+            drifted_observation.load_count.load(Ordering::SeqCst),
+            0,
+            "an old workspace A completion must not refresh current workspace B"
+        );
+        assert_eq!(
+            drifted_app.planning_runtime_refresh_ui_state,
+            workspace_b_refresh
+        );
+        assert_eq!(drifted_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            drifted_app
+                .planning_draft_editor_ui_state
+                .session_identity(),
+            Some(&drifted_source)
+        );
+        assert_eq!(
+            drifted_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("workspace drift must preserve the editor")
+                .body(),
+            drifted_body
+        );
+        assert!(
+            drifted_app
+                .planning_draft_editor_ui_state
+                .has_dirty_buffers()
+        );
+
+        let aba_workspace_a = TempPlanningWorkspace::new("tui-editor-promote-aba-a");
+        let aba_workspace_b = TempPlanningWorkspace::new("tui-editor-promote-aba-b");
+        let (mut aba_app, aba_observation) = make_observed_mutation_app(&aba_workspace_a);
+        let aba_source = open_planning_editor_for_mutation_test(
+            &mut aba_app,
+            aba_workspace_a.path_str(),
+            132,
+            "draft-promote-aba",
+        );
+        aba_app.planning_draft_editor_ui_state.insert_character('!');
+        let aba = bind_planning_editor_mutation(
+            &mut aba_app,
+            232,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            aba_source.clone(),
+        );
+        let aba_body = aba_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("ABA editor buffer should exist")
+            .body();
+        aba_observation.reset_and_enable(aba_workspace_b.path_str(), false);
+        aba_app.sync_draft_shell_workspace(aba_workspace_b.path_str());
+        wait_for_observed_load_completions(&mut aba_app, &aba_observation, 1);
+        wait_for_planning_runtime_refresh(&mut aba_app);
+        aba_observation.reset_and_enable(aba_workspace_a.path_str(), false);
+        aba_app.sync_draft_shell_workspace(aba_workspace_a.path_str());
+        wait_for_observed_load_completions(&mut aba_app, &aba_observation, 1);
+        wait_for_planning_runtime_refresh(&mut aba_app);
+        aba_observation.reset_and_enable(aba_workspace_a.path_str(), false);
+        let aba_permit = aba_app.post_turn_continuation_gate.capture();
+
+        aba_app.apply_planning_editor_mutation_completion(
+            aba.clone(),
+            Ok(Box::new(promoted_editor_mutation_result(&aba, 1))),
+        );
+        wait_for_observed_load_completions(&mut aba_app, &aba_observation, 1);
+
+        assert!(!aba_permit.is_current());
+        assert!(post_turn_continuation_is_paused(&aba_app));
+        assert_eq!(aba_app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            aba_app.planning_draft_editor_ui_state.session_identity(),
+            Some(&aba_source)
+        );
+        assert_eq!(
+            aba_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("ABA completion must preserve the editor")
+                .body(),
+            aba_body
+        );
+        assert!(aba_app.planning_draft_editor_ui_state.has_dirty_buffers());
+    }
+
+    #[test]
+    fn editor_mutation_coalesced_retry_rebinds_current_presentation_revision() {
+        let workspace = TempPlanningWorkspace::new("tui-editor-mutation-coalesced");
+        let mut app = make_test_app(&workspace);
+        let source = open_planning_editor_for_mutation_test(
+            &mut app,
+            workspace.path_str(),
+            141,
+            "draft-mutation-coalesced",
+        );
+        app.planning_draft_editor_ui_state.insert_character('!');
+        let identity = PlanningEditorMutationIdentity::new(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            source.draft_name.clone(),
+            source.clone(),
+            app.planning_draft_editor_ui_state
+                .buffer_revision()
+                .expect("coalesced test editor should expose a revision"),
+        );
+        let correlation = PlanningWorkspaceOperationCorrelation {
+            generation: 241,
+            workspace_directory: workspace.path_str().to_string(),
+            operation: PlanningWorkspaceOperationKind::MutateEditor {
+                identity: identity.clone(),
+            },
+        };
+
+        app.apply_planning_workspace_operation_admission(
+            PlanningWorkspaceOperationAdmission::Started {
+                correlation: correlation.clone(),
+            },
+        );
+        let started_presentation_revision = app.planning_ui_intent_revision;
+        assert_eq!(ready_status(&app), "planning editor saving…");
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
+        app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
+        app.planning_init_overlay_ui_state.open_manual_editor();
+        assert_ne!(
+            app.planning_ui_intent_revision, started_presentation_revision,
+            "the coalesced retry must rebind after a real presentation intent change"
+        );
+
+        app.apply_planning_workspace_operation_admission(
+            PlanningWorkspaceOperationAdmission::Coalesced {
+                correlation: correlation.clone(),
+            },
+        );
+        assert_eq!(ready_status(&app), "planning editor saving…");
+        assert_eq!(
+            app.planning_workspace_operation_ui_state
+                .active_correlation(),
+            Some(&correlation)
+        );
+
+        app.apply_planning_editor_mutation_completion(
+            correlation.clone(),
+            Ok(Box::new(saved_editor_mutation_result(&correlation))),
+        );
+
+        assert!(
+            app.planning_workspace_operation_ui_state
+                .active_correlation()
+                .is_none()
+        );
+        assert!(!app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert!(ready_status(&app).contains("planning draft saved"));
+        assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
+
+        let busy_workspace = TempPlanningWorkspace::new("tui-editor-mutation-busy-edit");
+        let mut busy_app = make_test_app(&busy_workspace);
+        let busy_source = open_planning_editor_for_mutation_test(
+            &mut busy_app,
+            busy_workspace.path_str(),
+            142,
+            "draft-mutation-busy-edit",
+        );
+        busy_app
+            .planning_draft_editor_ui_state
+            .insert_character('!');
+        let busy_identity = PlanningEditorMutationIdentity::new(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            busy_source.draft_name.clone(),
+            busy_source,
+            busy_app
+                .planning_draft_editor_ui_state
+                .buffer_revision()
+                .expect("busy test editor should expose a revision"),
+        );
+        let busy_correlation = PlanningWorkspaceOperationCorrelation {
+            generation: 242,
+            workspace_directory: busy_workspace.path_str().to_string(),
+            operation: PlanningWorkspaceOperationKind::MutateEditor {
+                identity: busy_identity.clone(),
+            },
+        };
+        busy_app.apply_planning_workspace_operation_admission(
+            PlanningWorkspaceOperationAdmission::Started {
+                correlation: busy_correlation.clone(),
+            },
+        );
+        busy_app
+            .planning_draft_editor_ui_state
+            .insert_character('?');
+        let in_flight_body = busy_app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("in-flight editing should keep the buffer available")
+            .body();
+        let mut requested_identity = busy_identity;
+        requested_identity.action = PlanningEditorMutationAction::Promote;
+        requested_identity.buffer_revision += 1;
+        busy_app.apply_planning_workspace_operation_admission(
+            PlanningWorkspaceOperationAdmission::Busy {
+                active_correlation: busy_correlation.clone(),
+                requested: crate::core::app::PlanningWorkspaceOperationIntent::mutate_editor(
+                    busy_workspace.path_str(),
+                    requested_identity,
+                ),
+            },
+        );
+        let busy_status = ready_status(&busy_app).to_string();
+        assert!(busy_status.contains("planning workspace busy"));
+
+        busy_app.apply_planning_editor_mutation_completion(
+            busy_correlation.clone(),
+            Ok(Box::new(saved_editor_mutation_result(&busy_correlation))),
+        );
+
+        assert!(busy_app.planning_draft_editor_ui_state.has_dirty_buffers());
+        assert_eq!(
+            busy_app
+                .planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("late save completion must preserve the in-flight edit")
+                .body(),
+            in_flight_body
+        );
+        assert_eq!(ready_status(&busy_app), busy_status);
+    }
+
+    #[test]
+    fn planning_editor_workspace_drift_blocks_mutation_without_clearing_close_confirmation() {
+        let workspace = TempPlanningWorkspace::new("tui-editor-mutation-workspace-precheck");
+        let mut app = make_test_app(&workspace);
+        let source = open_planning_editor_for_mutation_test(
+            &mut app,
+            workspace.path_str(),
+            151,
+            "draft-mutation-workspace-precheck",
+        );
+        app.planning_draft_editor_ui_state.insert_character('!');
+        let edited_body = app
+            .planning_draft_editor_ui_state
+            .selected_buffer()
+            .expect("workspace precheck editor should have a buffer")
+            .body();
+        app.request_close_planning_manual_editor();
+        assert!(
+            app.planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should have a ready conversation");
+        };
+        conversation.cwd = "/tmp/replacement-workspace".to_string();
+        conversation.draft_workspace_directory = "/tmp/replacement-workspace".to_string();
+
+        app.save_planning_manual_editor();
+
+        assert!(ready_status(&app).contains("workspace changed; save blocked"));
+        assert!(
+            app.planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state.session_identity(),
+            Some(&source)
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state
+                .selected_buffer()
+                .expect("blocked save must preserve its buffer")
+                .body(),
+            edited_body
+        );
+        assert!(
+            app.planning_workspace_operation_ui_state
+                .active_correlation()
+                .is_none()
+        );
+
+        app.promote_planning_manual_editor();
+
+        assert!(ready_status(&app).contains("workspace changed; promote blocked"));
+        assert!(
+            app.planning_draft_editor_ui_state
+                .is_close_confirmation_pending()
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state.session_identity(),
+            Some(&source)
+        );
+        assert!(
+            app.planning_workspace_operation_ui_state
+                .active_correlation()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn simple_authoring_completions_do_not_reopen_after_close_or_workspace_drift() {
         let workspace_a = TempPlanningWorkspace::new("tui-simple-authoring-close-a");
         let workspace_b = TempPlanningWorkspace::new("tui-simple-authoring-close-b");
@@ -3230,6 +4492,7 @@ mod tests {
         assert!(app.handle_planning_init_overlay_key(key(KeyCode::Char('!'))));
         assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
         assert!(app.handle_planning_init_overlay_key(ctrl_key(KeyCode::Char('s'))));
+        wait_for_planning_workspace_operation(&mut app);
 
         assert!(ready_status(&app).contains("planning draft saved / draft: "));
         assert!(ready_status(&app).contains("validation: needs attention"));
@@ -3274,6 +4537,7 @@ mod tests {
         );
         assert!(ready_status(&app).contains("planning simple draft editor ready / draft: "));
         app.promote_planning_manual_editor();
+        wait_for_planning_workspace_operation(&mut app);
 
         app.close_shell_overlay();
         app.show_planning_init_overlay();
@@ -3379,8 +4643,10 @@ mod tests {
         assert!(app.handle_directions_overlay_key(key(KeyCode::Char('!'))));
         assert!(app.planning_draft_editor_ui_state.has_dirty_buffers());
         assert!(app.handle_directions_overlay_key(ctrl_key(KeyCode::Char('s'))));
+        wait_for_planning_workspace_operation(&mut app);
         assert!(ready_status(&app).contains("directions draft saved / draft: "));
         assert!(app.handle_directions_overlay_key(ctrl_key(KeyCode::Char('p'))));
+        wait_for_planning_workspace_operation(&mut app);
         let promoted_status = ready_status(&app).to_string();
         assert_eq!(
             app.directions_maintenance_overlay_ui_state
@@ -3503,6 +4769,7 @@ mod tests {
             NativeTuiApp::save_planning_manual_editor,
             NativeTuiApp::promote_planning_manual_editor,
         );
+        wait_for_planning_workspace_operation(&mut app);
 
         assert!(ready_status(&app).contains("planning draft saved / draft: "));
         assert!(ready_status(&app).contains("validation: needs attention"));
@@ -3517,6 +4784,7 @@ mod tests {
             NativeTuiApp::save_planning_manual_editor,
             NativeTuiApp::promote_planning_manual_editor,
         );
+        wait_for_planning_workspace_operation(&mut app);
 
         assert!(ready_status(&app).contains("planning draft promote blocked / draft: "));
         assert_eq!(app.shell_overlay, ShellOverlay::PlanningInit);
@@ -3534,6 +4802,7 @@ mod tests {
         wait_for_planning_workspace_operation(&mut app);
 
         app.promote_planning_manual_editor();
+        wait_for_planning_workspace_operation(&mut app);
 
         assert!(
             ready_status(&app).contains("planning draft promoted / draft: "),
@@ -3614,11 +4883,13 @@ mod tests {
         assert!(ready_status(&app).contains("directions detail doc editor ready / draft: "));
 
         app.save_directions_manual_editor();
+        wait_for_planning_workspace_operation(&mut app);
 
         assert!(ready_status(&app).contains("directions draft saved / draft: "));
         assert!(ready_status(&app).contains("validation: ok"));
 
         app.promote_directions_manual_editor();
+        wait_for_planning_workspace_operation(&mut app);
 
         let promoted_status = ready_status(&app).to_string();
         assert!(promoted_status.contains("directions draft promoted / draft: "));
@@ -3949,6 +5220,7 @@ mod tests {
         save_app.open_planning_manual_editor();
         wait_for_planning_workspace_operation(&mut save_app);
         save_app.save_planning_manual_editor();
+        wait_for_planning_workspace_operation(&mut save_app);
         assert!(
             ready_status(&save_app).starts_with("planning draft save failed: forced "),
             "status: {}",
@@ -3967,6 +5239,7 @@ mod tests {
         start_direction_detail_editor(&mut directions_save_app, "general-workstream");
         wait_for_planning_workspace_operation(&mut directions_save_app);
         directions_save_app.save_directions_manual_editor();
+        wait_for_planning_workspace_operation(&mut directions_save_app);
         assert!(
             ready_status(&directions_save_app).starts_with("directions draft save failed: forced "),
             "status: {}",
@@ -3985,6 +5258,7 @@ mod tests {
         promote_app.open_simple_mode_planning_editor();
         wait_for_planning_workspace_operation(&mut promote_app);
         promote_app.promote_planning_manual_editor();
+        wait_for_planning_workspace_operation(&mut promote_app);
         assert!(
             ready_status(&promote_app).starts_with("planning draft promote failed: forced "),
             "status: {}",
@@ -4010,6 +5284,7 @@ mod tests {
         start_direction_detail_editor(&mut directions_promote_app, "general-workstream");
         wait_for_planning_workspace_operation(&mut directions_promote_app);
         directions_promote_app.promote_directions_manual_editor();
+        wait_for_planning_workspace_operation(&mut directions_promote_app);
         assert!(
             ready_status(&directions_promote_app)
                 .starts_with("directions draft promote failed: forced "),
@@ -4101,13 +5376,13 @@ mod tests {
 
         assert_eq!(
             occurrence_count(EDITOR_RS, ".save_draft_editor_files("),
-            2,
-            "planning and directions editor saves should both delegate through the application planning handle"
+            0,
+            "planning and directions editor saves should enter through Core"
         );
         assert_eq!(
             occurrence_count(EDITOR_RS, ".promote_draft_editor_files("),
-            2,
-            "planning and directions editor promotions should both delegate through the application planning handle"
+            0,
+            "planning and directions editor promotions should enter through Core"
         );
 
         for forbidden in [

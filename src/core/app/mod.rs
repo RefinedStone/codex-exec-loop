@@ -55,8 +55,10 @@ pub use planning_runtime::{
 };
 pub(crate) use planning_workspace::PlanningWorkspaceOperationCoordinator;
 pub use planning_workspace::{
-    PlanningEditorFileSnapshot, PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot,
-    PlanningEditorStageSnapshot, PlanningEditorStageTarget, PlanningSimpleDraftPromotionSnapshot,
+    PlanningEditorFileSnapshot, PlanningEditorMutationAction, PlanningEditorMutationIdentity,
+    PlanningEditorMutationRequest, PlanningEditorMutationResult, PlanningEditorMutationTarget,
+    PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot,
+    PlanningEditorStageTarget, PlanningSimpleDraftPromotionSnapshot,
     PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationAdmission,
     PlanningWorkspaceOperationCorrelation, PlanningWorkspaceOperationIntent,
     PlanningWorkspaceOperationKind, PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot,

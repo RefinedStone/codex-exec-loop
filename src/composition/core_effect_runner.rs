@@ -20,6 +20,7 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     DirectionsMaintenanceSummary as ApplicationDirectionsMaintenanceSummary,
     DirectionsSupportingFileStatus as ApplicationDirectionsSupportingFileStatus,
+    PlanningDraftEditorFile as ApplicationPlanningDraftEditorFile,
     PlanningDraftEditorSession as ApplicationPlanningDraftEditorSession,
     PlanningDraftPromoteResult as ApplicationPlanningDraftPromoteResult,
     PlanningInitStageResult as ApplicationPlanningInitStageResult,
@@ -46,7 +47,8 @@ use crate::core::app::{
     DirectionsSupportingFileStatus as CoreDirectionsSupportingFileStatus,
     GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
     GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult, ParallelPeekLoadCorrelation,
-    PlanningEditorFileSnapshot, PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot,
+    PlanningEditorFileSnapshot, PlanningEditorMutationAction, PlanningEditorMutationRequest,
+    PlanningEditorMutationResult, PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot,
     PlanningEditorStageTarget, PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
     PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
     PlanningWorkspaceOperationCorrelation, PlanningWorkspaceOperationKind,
@@ -322,6 +324,13 @@ impl CoreEffectRunner {
             }
             CoreEffect::StagePlanningEditor { correlation } => {
                 self.spawn_planning_editor_stage(correlation);
+                None
+            }
+            CoreEffect::MutatePlanningEditor {
+                correlation,
+                request,
+            } => {
+                self.spawn_planning_editor_mutation(correlation, request);
                 None
             }
             CoreEffect::LoadSimplePlanningEditor { correlation } => {
@@ -634,6 +643,20 @@ impl CoreEffectRunner {
         let input_sender = self.input_sender.clone();
         thread::spawn(move || {
             let completion = planning_editor_stage_completion(&planning_workspace, correlation);
+            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        });
+    }
+
+    pub fn spawn_planning_editor_mutation(
+        &self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+        request: Box<PlanningEditorMutationRequest>,
+    ) {
+        let planning_workspace = self.planning_workspace.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let completion =
+                planning_editor_mutation_completion(&planning_workspace, correlation, *request);
             let _ = input_sender.send(CoreInput::EffectCompleted(completion));
         });
     }
@@ -1020,6 +1043,79 @@ fn validate_planning_editor_stage_snapshot(
         ));
     }
     Ok(snapshot)
+}
+
+fn planning_editor_mutation_completion(
+    planning_workspace: &PlanningWorkspaceUseCases,
+    correlation: PlanningWorkspaceOperationCorrelation,
+    request: PlanningEditorMutationRequest,
+) -> CoreEffectCompletion {
+    let result = validate_planning_editor_mutation_request(&correlation, &request).and_then(|()| {
+        let identity = request.identity;
+        let editable_files = request
+            .editable_files
+            .into_iter()
+            .map(|file| ApplicationPlanningDraftEditorFile {
+                active_path: file.active_path,
+                staged_path: file.staged_path,
+                body: file.body,
+            })
+            .collect::<Vec<_>>();
+        let workspace_directory = correlation.workspace_directory.as_str();
+        let draft_name = identity.draft_name.as_str();
+        match identity.action {
+            PlanningEditorMutationAction::Save => catch_redacted_worker_unwind(|| {
+                planning_workspace.save_draft_editor_files(
+                    workspace_directory,
+                    draft_name,
+                    &editable_files,
+                )
+            })
+            .map_err(|_| anyhow::anyhow!("planning editor mutation worker panicked"))
+            .and_then(|result| result)
+            .map(|result| PlanningEditorMutationResult::Saved {
+                identity,
+                draft_name: result.draft_name,
+                validation_report: result.validation_report,
+            }),
+            PlanningEditorMutationAction::Promote => catch_redacted_worker_unwind(|| {
+                planning_workspace.promote_draft_editor_files(
+                    workspace_directory,
+                    draft_name,
+                    &editable_files,
+                )
+            })
+            .map_err(|_| anyhow::anyhow!("planning editor mutation worker panicked"))
+            .and_then(|result| result)
+            .map(|result| PlanningEditorMutationResult::Promoted {
+                identity,
+                draft_name: result.draft_name,
+                promoted_file_count: result.promoted_file_count,
+                validation_report: result.validation_report,
+            }),
+        }
+    });
+    CoreEffectCompletion::PlanningEditorMutationCompleted {
+        correlation,
+        result: result.map(Box::new).map_err(|error| error.to_string()),
+    }
+}
+
+fn validate_planning_editor_mutation_request(
+    correlation: &PlanningWorkspaceOperationCorrelation,
+    request: &PlanningEditorMutationRequest,
+) -> Result<()> {
+    let Some(expected) = correlation.editor_mutation_identity() else {
+        anyhow::bail!("planning editor mutation operation mismatch");
+    };
+    if expected != &request.identity
+        || expected.draft_name.trim().is_empty()
+        || expected.source_session.workspace_directory != correlation.workspace_directory
+        || expected.source_session.draft_name != expected.draft_name
+    {
+        anyhow::bail!("planning editor mutation request identity mismatch");
+    }
+    Ok(())
 }
 
 fn simple_draft_promotion_snapshot(
@@ -1475,8 +1571,8 @@ mod tests {
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
     use crate::application::port::outbound::planning_workspace_port::{
-        PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
-        PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+        PlanningDraftFileRecord, PlanningDraftLoadFileRecord, PlanningDraftLoadRecord,
+        PlanningDraftStageRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
     };
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::application::port::outbound::startup_probe_port::{
@@ -1492,6 +1588,7 @@ mod tests {
     use crate::core::app::{
         AppCommand, AppEvent, CoreDispatchOutcome, CorePromptOrigin,
         ManualPromptPreparationAdmission, ManualPromptPreparationIntent,
+        PlanningEditorMutationIdentity, PlanningEditorMutationTarget,
         PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
         PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, QueueMutationKind,
         QueueMutationTarget, StartupSnapshot, StopRequestAdmission, TurnStreamEvent,
@@ -1518,6 +1615,8 @@ mod tests {
         "raw simple authoring provider draft payload";
     const SENSITIVE_EDITOR_STAGE_PANIC_PAYLOAD: &str =
         "raw planning editor stage provider draft payload";
+    const SENSITIVE_EDITOR_MUTATION_PANIC_PAYLOAD: &str =
+        "raw planning editor mutation provider body payload";
     const SENSITIVE_STARTUP_PANIC_PAYLOAD: &str = "raw startup provider prompt payload";
     const STARTUP_PANIC_CHILD_ENV: &str = "AKRA_STARTUP_PANIC_OBSERVATION_CHILD";
     const STARTUP_PANIC_TEST_NAME: &str = "composition::core_effect_runner::tests::startup_provider_panic_stderr_is_redacted_in_isolated_process";
@@ -1586,8 +1685,8 @@ mod tests {
 
         fn load_planning_draft_files(
             &self,
-            _workspace_dir: &str,
-            _draft_name: &str,
+            workspace_dir: &str,
+            draft_name: &str,
         ) -> Result<PlanningDraftLoadRecord> {
             self.promote_call_count.fetch_add(1, Ordering::SeqCst);
             if self.panic_draft_load_once.swap(false, Ordering::SeqCst) {
@@ -1596,6 +1695,20 @@ mod tests {
             if let Some(gate) = &self.simple_authoring_gate {
                 gate.wait_once();
             }
+            if draft_name.starts_with("mutation-valid-") {
+                return Ok(PlanningDraftLoadRecord {
+                    draft_name: draft_name.to_string(),
+                    draft_directory: format!("{workspace_dir}/drafts/{draft_name}"),
+                    staged_files: vec![PlanningDraftLoadFileRecord {
+                        active_path: ".codex-exec-loop/planning/result-output.md".to_string(),
+                        staged_path: format!(
+                            "{workspace_dir}/drafts/{draft_name}/result-output.md"
+                        ),
+                        body: "# Result Output\n\n- Preserve the accepted task summary.\n"
+                            .to_string(),
+                    }],
+                });
+            }
             anyhow::bail!("synthetic promote should not complete")
         }
 
@@ -1603,10 +1716,17 @@ mod tests {
             &self,
             _workspace_dir: &str,
             _draft_name: &str,
-            _active_path: &str,
+            active_path: &str,
             _body: &str,
         ) -> Result<String> {
-            unreachable!("manual preparation should stop after the gated authority load error")
+            self.stage_call_count.fetch_add(1, Ordering::SeqCst);
+            if self.panic_draft_load_once.swap(false, Ordering::SeqCst) {
+                panic!("{SENSITIVE_EDITOR_MUTATION_PANIC_PAYLOAD}");
+            }
+            if let Some(gate) = &self.simple_authoring_gate {
+                gate.wait_once();
+            }
+            Ok(format!("draft/{active_path}"))
         }
 
         fn load_planning_workspace_files(
@@ -1640,7 +1760,7 @@ mod tests {
             _workspace_dir: &str,
             _relative_path: &str,
         ) -> Result<Option<String>> {
-            unreachable!("manual preparation should stop after the gated authority load error")
+            Ok(None)
         }
 
         fn load_optional_planning_candidate_file(
@@ -1657,7 +1777,8 @@ mod tests {
             _relative_path: &str,
             _body: Option<&str>,
         ) -> Result<()> {
-            unreachable!("manual preparation should stop after the gated authority load error")
+            self.promote_call_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
 
         fn remove_planning_workspace_entry(
@@ -2175,6 +2296,494 @@ mod tests {
                 editable_files: Vec::new(),
                 validation_report: Default::default(),
             },
+        }
+    }
+
+    fn planning_editor_mutation_identity(
+        action: PlanningEditorMutationAction,
+        target: PlanningEditorMutationTarget,
+        draft_name: &str,
+        source_generation: u64,
+        workspace_directory: &str,
+        buffer_revision: u64,
+    ) -> PlanningEditorMutationIdentity {
+        PlanningEditorMutationIdentity::new(
+            action,
+            target,
+            draft_name,
+            planning_editor_session(source_generation, workspace_directory, draft_name),
+            buffer_revision,
+        )
+    }
+
+    fn planning_editor_mutation_correlation(
+        generation: u64,
+        workspace_directory: &str,
+        identity: PlanningEditorMutationIdentity,
+    ) -> PlanningWorkspaceOperationCorrelation {
+        PlanningWorkspaceOperationCorrelation {
+            generation,
+            workspace_directory: workspace_directory.to_string(),
+            operation: PlanningWorkspaceOperationKind::MutateEditor { identity },
+        }
+    }
+
+    fn planning_editor_mutation_request(
+        identity: PlanningEditorMutationIdentity,
+        body: &str,
+    ) -> PlanningEditorMutationRequest {
+        PlanningEditorMutationRequest {
+            identity,
+            editable_files: vec![PlanningEditorFileSnapshot {
+                active_path: "planning/result-output.md".to_string(),
+                staged_path: "draft/planning/result-output.md".to_string(),
+                body: body.to_string(),
+            }],
+        }
+    }
+
+    fn gated_editor_mutation_workspace(
+        gate: Option<Arc<OneShotGate>>,
+        panic_once: bool,
+    ) -> (
+        Arc<GatedPlanningWorkspacePort>,
+        Arc<AtomicUsize>,
+        Arc<AtomicUsize>,
+    ) {
+        let (unused_load_gate, _unused_entered, _unused_release) = one_shot_gate();
+        let replace_call_count = Arc::new(AtomicUsize::new(0));
+        let load_call_count = Arc::new(AtomicUsize::new(0));
+        (
+            Arc::new(GatedPlanningWorkspacePort {
+                load_gate: unused_load_gate,
+                simple_authoring_gate: gate,
+                stage_call_count: replace_call_count.clone(),
+                promote_call_count: load_call_count.clone(),
+                panic_load_once: AtomicBool::new(false),
+                panic_draft_load_once: AtomicBool::new(panic_once),
+            }),
+            replace_call_count,
+            load_call_count,
+        )
+    }
+
+    #[test]
+    fn planning_editor_mutation_rejects_every_identity_mismatch_before_provider_io() {
+        let workspace_directory = "/workspace";
+        let draft_name = "mutation-valid-identity";
+        let identity = planning_editor_mutation_identity(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            draft_name,
+            17,
+            workspace_directory,
+            4,
+        );
+        let correlation =
+            planning_editor_mutation_correlation(31, workspace_directory, identity.clone());
+        let request = planning_editor_mutation_request(identity.clone(), "body");
+        let (planning_workspace, replace_call_count, load_call_count) =
+            gated_editor_mutation_workspace(None, false);
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, _input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+
+        let mut wrong_action = request.clone();
+        wrong_action.identity.action = PlanningEditorMutationAction::Promote;
+        let mut wrong_target = request.clone();
+        wrong_target.identity.target = PlanningEditorMutationTarget::Directions;
+        let mut wrong_draft = request.clone();
+        wrong_draft.identity.draft_name = "mutation-valid-other".to_string();
+        let mut wrong_source_generation = request.clone();
+        wrong_source_generation.identity.source_session.generation += 1;
+        let mut wrong_source_workspace = request.clone();
+        wrong_source_workspace
+            .identity
+            .source_session
+            .workspace_directory = "/other".to_string();
+        let mut wrong_source_draft = request.clone();
+        wrong_source_draft.identity.source_session.draft_name = "mutation-valid-other".to_string();
+        let mut wrong_buffer_revision = request.clone();
+        wrong_buffer_revision.identity.buffer_revision += 1;
+        let mut wrong_workspace_correlation = correlation.clone();
+        wrong_workspace_correlation.workspace_directory = "/other".to_string();
+        let malformed_source_workspace = planning_editor_mutation_identity(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            draft_name,
+            17,
+            "/other",
+            4,
+        );
+        let malformed_source_draft = PlanningEditorMutationIdentity::new(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            draft_name,
+            planning_editor_session(17, workspace_directory, "mutation-valid-other"),
+            4,
+        );
+
+        let invalid = vec![
+            (
+                planning_reset_correlation(31, workspace_directory),
+                request.clone(),
+                "planning editor mutation operation mismatch",
+            ),
+            (
+                correlation.clone(),
+                wrong_action,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                correlation.clone(),
+                wrong_target,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                correlation.clone(),
+                wrong_draft,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                correlation.clone(),
+                wrong_source_generation,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                correlation.clone(),
+                wrong_source_workspace,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                correlation.clone(),
+                wrong_source_draft,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                correlation.clone(),
+                wrong_buffer_revision,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                wrong_workspace_correlation,
+                request,
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                planning_editor_mutation_correlation(
+                    31,
+                    workspace_directory,
+                    malformed_source_workspace.clone(),
+                ),
+                planning_editor_mutation_request(malformed_source_workspace, "body"),
+                "planning editor mutation request identity mismatch",
+            ),
+            (
+                planning_editor_mutation_correlation(
+                    31,
+                    workspace_directory,
+                    malformed_source_draft.clone(),
+                ),
+                planning_editor_mutation_request(malformed_source_draft, "body"),
+                "planning editor mutation request identity mismatch",
+            ),
+        ];
+
+        for (correlation, request, expected_error) in invalid {
+            let CoreEffectCompletion::PlanningEditorMutationCompleted { result, .. } =
+                planning_editor_mutation_completion(
+                    &runner.planning_workspace,
+                    correlation,
+                    request,
+                )
+            else {
+                panic!("mutation validation should return its typed completion");
+            };
+            assert_eq!(
+                result.expect_err("malformed mutation must fail"),
+                expected_error
+            );
+            assert_eq!(replace_call_count.load(Ordering::SeqCst), 0);
+            assert_eq!(load_call_count.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn planning_editor_mutation_runs_exactly_one_save_or_promote_use_case() {
+        for (action, target) in [
+            (
+                PlanningEditorMutationAction::Save,
+                PlanningEditorMutationTarget::Planning,
+            ),
+            (
+                PlanningEditorMutationAction::Promote,
+                PlanningEditorMutationTarget::Directions,
+            ),
+        ] {
+            let workspace_directory = "/workspace";
+            let draft_name = match action {
+                PlanningEditorMutationAction::Save => "mutation-valid-save",
+                PlanningEditorMutationAction::Promote => "mutation-valid-promote",
+            };
+            let identity = planning_editor_mutation_identity(
+                action,
+                target,
+                draft_name,
+                5,
+                workspace_directory,
+                9,
+            );
+            let correlation =
+                planning_editor_mutation_correlation(13, workspace_directory, identity.clone());
+            let (planning_workspace, replace_call_count, load_call_count) =
+                gated_editor_mutation_workspace(None, false);
+            let runtime_port = Arc::new(GatedRuntimePort::default());
+            let (input_sender, _input_receiver) = core_input_channel();
+            let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+
+            let CoreEffectCompletion::PlanningEditorMutationCompleted {
+                correlation: completed_correlation,
+                result,
+            } = planning_editor_mutation_completion(
+                &runner.planning_workspace,
+                correlation.clone(),
+                planning_editor_mutation_request(identity.clone(), "edited body"),
+            )
+            else {
+                panic!("mutation should return its typed completion");
+            };
+            assert_eq!(completed_correlation, correlation);
+            match (
+                action,
+                result.expect("valid mutation should complete").as_ref(),
+            ) {
+                (
+                    PlanningEditorMutationAction::Save,
+                    PlanningEditorMutationResult::Saved {
+                        identity: completed_identity,
+                        draft_name: completed_draft,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(completed_identity, &identity);
+                    assert_eq!(completed_draft, draft_name);
+                }
+                (
+                    PlanningEditorMutationAction::Promote,
+                    PlanningEditorMutationResult::Promoted {
+                        identity: completed_identity,
+                        draft_name: completed_draft,
+                        promoted_file_count,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(completed_identity, &identity);
+                    assert_eq!(completed_draft, draft_name);
+                    assert_eq!(*promoted_file_count, 1);
+                }
+                (_, result) => panic!("wrong mutation result variant: {result:?}"),
+            }
+            assert_eq!(replace_call_count.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                load_call_count.load(Ordering::SeqCst),
+                match action {
+                    PlanningEditorMutationAction::Save => 1,
+                    PlanningEditorMutationAction::Promote => 2,
+                },
+                "only promotion may perform the active workspace write"
+            );
+        }
+    }
+
+    #[test]
+    fn planning_editor_mutation_dispatch_is_non_blocking_and_coordinates_duplicates() {
+        let workspace_directory = "/tmp/gated-editor-mutation";
+        let draft_name = "mutation-valid-gated";
+        let (mutation_gate, gate_entered, gate_release) = one_shot_gate();
+        let (planning_workspace, replace_call_count, load_call_count) =
+            gated_editor_mutation_workspace(Some(mutation_gate), false);
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let runtime = CoreRuntime::new(runner, input_receiver);
+        let identity = planning_editor_mutation_identity(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+            draft_name,
+            3,
+            workspace_directory,
+            7,
+        );
+        let command = AppCommand::MutatePlanningEditor {
+            workspace_directory: workspace_directory.to_string(),
+            request: Box::new(planning_editor_mutation_request(
+                identity.clone(),
+                "SENSITIVE-GATED-EDITOR-BODY",
+            )),
+        };
+        assert!(!format!("{command:?}").contains("SENSITIVE-GATED-EDITOR-BODY"));
+        let (dispatch_tx, dispatch_rx) = mpsc::sync_channel(1);
+        let dispatcher = thread::spawn({
+            let command = command.clone();
+            move || {
+                let mut runtime = runtime;
+                let outcome = runtime.dispatch_command(command);
+                dispatch_tx
+                    .send((runtime, outcome))
+                    .expect("mutation dispatch should return to the test");
+            }
+        });
+
+        gate_entered
+            .recv_timeout(WORKER_COMPLETION_TIMEOUT)
+            .expect("mutation provider should reach the gate");
+        thread::sleep(Duration::from_millis(650));
+        let (mut runtime, started) = dispatch_rx
+            .recv_timeout(Duration::from_millis(300))
+            .expect("mutation dispatch must return while provider I/O remains blocked");
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = started.events.as_slice()
+        else {
+            panic!("mutation should be admitted");
+        };
+        let correlation = correlation.clone();
+        assert_eq!(replace_call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(load_call_count.load(Ordering::SeqCst), 0);
+
+        let duplicate = runtime.dispatch_command(command.clone());
+        assert_eq!(
+            duplicate.events,
+            vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Coalesced {
+                    correlation: correlation.clone(),
+                },
+            )]
+        );
+        let mut busy_identity = identity;
+        busy_identity.buffer_revision += 1;
+        let busy = runtime.dispatch_command(AppCommand::MutatePlanningEditor {
+            workspace_directory: workspace_directory.to_string(),
+            request: Box::new(planning_editor_mutation_request(
+                busy_identity,
+                "newer body",
+            )),
+        });
+        assert!(matches!(
+            busy.events.as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Busy {
+                    active_correlation,
+                    ..
+                }
+            )] if active_correlation == &correlation
+        ));
+        assert_eq!(replace_call_count.load(Ordering::SeqCst), 1);
+
+        gate_release
+            .send(())
+            .expect("mutation provider should be released");
+        let completion = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningEditorMutationCompleted {
+                    correlation: completed,
+                    result: Ok(result),
+                }] if completed == &correlation
+                    && matches!(result.as_ref(), PlanningEditorMutationResult::Saved { .. })
+            )
+        });
+        assert_eq!(completion.events.len(), 1);
+        assert_eq!(replace_call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(load_call_count.load(Ordering::SeqCst), 1);
+        dispatcher
+            .join()
+            .expect("mutation dispatch thread should not panic");
+    }
+
+    #[test]
+    fn planning_editor_save_and_promote_panics_are_redacted_once_and_reopen_admission() {
+        for action in [
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationAction::Promote,
+        ] {
+            let workspace_directory = "/tmp/panicking-editor-mutation";
+            let draft_name = match action {
+                PlanningEditorMutationAction::Save => "mutation-valid-panic-save",
+                PlanningEditorMutationAction::Promote => "mutation-valid-panic-promote",
+            };
+            let identity = planning_editor_mutation_identity(
+                action,
+                PlanningEditorMutationTarget::Planning,
+                draft_name,
+                8,
+                workspace_directory,
+                2,
+            );
+            let command = AppCommand::MutatePlanningEditor {
+                workspace_directory: workspace_directory.to_string(),
+                request: Box::new(planning_editor_mutation_request(
+                    identity,
+                    SENSITIVE_EDITOR_MUTATION_PANIC_PAYLOAD,
+                )),
+            };
+            let (planning_workspace, replace_call_count, load_call_count) =
+                gated_editor_mutation_workspace(None, true);
+            let runtime_port = Arc::new(GatedRuntimePort::default());
+            let (input_sender, input_receiver) = core_input_channel();
+            let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+            let mut runtime = CoreRuntime::new(runner, input_receiver);
+
+            let started = runtime.dispatch_command(command.clone());
+            let [
+                AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                    PlanningWorkspaceOperationAdmission::Started { correlation },
+                ),
+            ] = started.events.as_slice()
+            else {
+                panic!("panicking mutation should start");
+            };
+            let first = correlation.clone();
+            let panicked = poll_until(&mut runtime, |outcome| {
+                matches!(
+                    outcome.events.as_slice(),
+                    [AppEvent::PlanningEditorMutationCompleted {
+                        correlation,
+                        result: Err(error),
+                    }] if correlation == &first
+                        && error == "planning editor mutation worker panicked"
+                )
+            });
+            assert_eq!(panicked.events.len(), 1);
+            assert!(runtime.poll_pending_input().is_none());
+            assert_eq!(replace_call_count.load(Ordering::SeqCst), 1);
+            assert_eq!(load_call_count.load(Ordering::SeqCst), 0);
+
+            let retried = runtime.dispatch_command(command);
+            assert!(matches!(
+                retried.events.as_slice(),
+                [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                    PlanningWorkspaceOperationAdmission::Started { correlation }
+                )] if correlation.generation == first.generation + 1
+            ));
+            let completed = poll_until(&mut runtime, |outcome| {
+                matches!(
+                    outcome.events.as_slice(),
+                    [AppEvent::PlanningEditorMutationCompleted { result: Ok(_), .. }]
+                )
+            });
+            assert_eq!(completed.events.len(), 1);
+            assert!(runtime.poll_pending_input().is_none());
+            assert_eq!(replace_call_count.load(Ordering::SeqCst), 2);
+            assert_eq!(
+                load_call_count.load(Ordering::SeqCst),
+                match action {
+                    PlanningEditorMutationAction::Save => 1,
+                    PlanningEditorMutationAction::Promote => 2,
+                }
+            );
         }
     }
 
@@ -3353,6 +3962,10 @@ mod tests {
                 run_panicking_editor_stage_worker_child();
                 return;
             }
+            Ok(mode @ ("editor-mutation-save" | "editor-mutation-promote")) => {
+                run_panicking_editor_mutation_worker_child(mode);
+                return;
+            }
             Ok("normal") => {
                 assert!(catch_redacted_worker_unwind(|| ()).is_ok());
                 panic!("{NORMAL_PANIC_PAYLOAD}");
@@ -3361,7 +3974,14 @@ mod tests {
         }
 
         let executable = std::env::current_exe().expect("test executable should resolve");
-        for mode in ["maintenance", "startup", "simple", "editor-stage"] {
+        for mode in [
+            "maintenance",
+            "startup",
+            "simple",
+            "editor-stage",
+            "editor-mutation-save",
+            "editor-mutation-promote",
+        ] {
             let redacted_output = Command::new(&executable)
                 .args(["--exact", STARTUP_PANIC_TEST_NAME, "--nocapture"])
                 .env(STARTUP_PANIC_CHILD_ENV, mode)
@@ -3383,6 +4003,7 @@ mod tests {
                 SENSITIVE_MAINTENANCE_PANIC_PAYLOAD,
                 SENSITIVE_SIMPLE_AUTHORING_PANIC_PAYLOAD,
                 SENSITIVE_EDITOR_STAGE_PANIC_PAYLOAD,
+                SENSITIVE_EDITOR_MUTATION_PANIC_PAYLOAD,
                 SENSITIVE_STARTUP_PANIC_PAYLOAD,
             ] {
                 assert!(!redacted_stdout.contains(sensitive_payload));
@@ -3591,6 +4212,62 @@ mod tests {
         assert!(
             runtime.poll_pending_input().is_none(),
             "one editor-stage worker must emit exactly one completion"
+        );
+        println!("{STARTUP_COMPLETION_MARKER}");
+    }
+
+    fn run_panicking_editor_mutation_worker_child(mode: &str) {
+        let workspace_directory = "/tmp/editor-mutation-redacted";
+        let action = match mode {
+            "editor-mutation-save" => PlanningEditorMutationAction::Save,
+            "editor-mutation-promote" => PlanningEditorMutationAction::Promote,
+            _ => unreachable!("isolated child mode should be validated by the parent test"),
+        };
+        let draft_name = match action {
+            PlanningEditorMutationAction::Save => "mutation-valid-redacted-save",
+            PlanningEditorMutationAction::Promote => "mutation-valid-redacted-promote",
+        };
+        let identity = planning_editor_mutation_identity(
+            action,
+            PlanningEditorMutationTarget::Planning,
+            draft_name,
+            1,
+            workspace_directory,
+            0,
+        );
+        let command = AppCommand::MutatePlanningEditor {
+            workspace_directory: workspace_directory.to_string(),
+            request: Box::new(planning_editor_mutation_request(
+                identity,
+                SENSITIVE_EDITOR_MUTATION_PANIC_PAYLOAD,
+            )),
+        };
+        let (planning_workspace, _replace_call_count, _load_call_count) =
+            gated_editor_mutation_workspace(None, true);
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        let mut runtime = CoreRuntime::new(runner, input_receiver);
+
+        assert!(matches!(
+            runtime.dispatch_command(command).events.as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { .. }
+            )]
+        ));
+        let completion = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::PlanningEditorMutationCompleted {
+                    result: Err(error),
+                    ..
+                }] if error == "planning editor mutation worker panicked"
+            )
+        });
+        assert_eq!(completion.events.len(), 1);
+        assert!(
+            runtime.poll_pending_input().is_none(),
+            "one editor-mutation worker must emit exactly one completion"
         );
         println!("{STARTUP_COMPLETION_MARKER}");
     }

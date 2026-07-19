@@ -1,6 +1,5 @@
-use crate::application::service::planning::PlanningDraftEditorFile;
 #[cfg(test)]
-use crate::application::service::planning::PlanningDraftEditorSession;
+use crate::application::service::planning::{PlanningDraftEditorFile, PlanningDraftEditorSession};
 use crate::core::app::{
     PlanningEditorFileSnapshot, PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot,
 };
@@ -25,6 +24,7 @@ pub(super) struct PlanningDraftEditorSessionState {
     draft_directory: String,
     buffers: Vec<PlanningDraftEditorBufferState>,
     selected_file_index: usize,
+    buffer_revision: u64,
     validation_report: PlanningValidationReport,
 }
 
@@ -97,6 +97,9 @@ impl PlanningDraftEditorUiState {
             .as_ref()
             .map(|session| session.selected_file_index)
     }
+    pub fn buffer_revision(&self) -> Option<u64> {
+        self.session.as_ref().map(|session| session.buffer_revision)
+    }
     pub fn buffers(&self) -> Option<&[PlanningDraftEditorBufferState]> {
         self.session
             .as_ref()
@@ -125,27 +128,19 @@ impl PlanningDraftEditorUiState {
     // snapshot from a previous keypress.
     pub fn insert_character(&mut self, character: char) {
         self.clear_close_confirmation();
-        if let Some(buffer) = self.selected_buffer_mut() {
-            buffer.insert_character(character);
-        }
+        self.mutate_selected_buffer(|buffer| buffer.insert_character(character));
     }
     pub fn insert_newline(&mut self) {
         self.clear_close_confirmation();
-        if let Some(buffer) = self.selected_buffer_mut() {
-            buffer.insert_newline();
-        }
+        self.mutate_selected_buffer(PlanningDraftEditorBufferState::insert_newline);
     }
     pub fn backspace(&mut self) {
         self.clear_close_confirmation();
-        if let Some(buffer) = self.selected_buffer_mut() {
-            buffer.backspace();
-        }
+        self.mutate_selected_buffer(PlanningDraftEditorBufferState::backspace);
     }
     pub fn delete_previous_word(&mut self) {
         self.clear_close_confirmation();
-        if let Some(buffer) = self.selected_buffer_mut() {
-            buffer.delete_previous_word();
-        }
+        self.mutate_selected_buffer(PlanningDraftEditorBufferState::delete_previous_word);
     }
     pub fn move_cursor_left(&mut self) {
         self.clear_close_confirmation();
@@ -176,6 +171,7 @@ impl PlanningDraftEditorUiState {
             buffer.sync_editor_scroll(visible_height);
         }
     }
+    #[cfg(test)]
     pub fn collect_editable_files(&self) -> Vec<PlanningDraftEditorFile> {
         // The application service owns persistence and validation; this adapter
         // rehydrates files from buffers without exposing cursor or scroll state.
@@ -189,6 +185,18 @@ impl PlanningDraftEditorUiState {
             })
             .collect()
     }
+    pub fn collect_editable_file_snapshots(&self) -> Vec<PlanningEditorFileSnapshot> {
+        self.buffers()
+            .unwrap_or(&[])
+            .iter()
+            .map(|buffer| PlanningEditorFileSnapshot {
+                active_path: buffer.active_path.clone(),
+                staged_path: buffer.staged_path.clone(),
+                body: buffer.body(),
+            })
+            .collect()
+    }
+    #[cfg(test)]
     pub fn apply_save_result(&mut self, validation_report: PlanningValidationReport) {
         let Some(session) = self.session.as_mut() else {
             return;
@@ -200,6 +208,29 @@ impl PlanningDraftEditorUiState {
         for buffer in &mut session.buffers {
             buffer.dirty = false;
         }
+    }
+    pub fn apply_correlated_save_result(
+        &mut self,
+        source_session: &PlanningEditorSessionIdentity,
+        saved_buffer_revision: u64,
+        validation_report: PlanningValidationReport,
+    ) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        if session.session_identity.as_ref() != Some(source_session)
+            || session.buffer_revision < saved_buffer_revision
+        {
+            return false;
+        }
+        session.validation_report = validation_report;
+        if session.buffer_revision == saved_buffer_revision {
+            self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
+            for buffer in &mut session.buffers {
+                buffer.dirty = false;
+            }
+        }
+        true
     }
     pub fn validation_report(&self) -> Option<&PlanningValidationReport> {
         self.session
@@ -271,6 +302,23 @@ impl PlanningDraftEditorUiState {
         let session = self.session.as_mut()?;
         session.buffers.get_mut(session.selected_file_index)
     }
+    fn mutate_selected_buffer(
+        &mut self,
+        mutation: impl FnOnce(&mut PlanningDraftEditorBufferState) -> bool,
+    ) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(buffer) = session.buffers.get_mut(session.selected_file_index) else {
+            return;
+        };
+        if mutation(buffer) {
+            session.buffer_revision = session
+                .buffer_revision
+                .checked_add(1)
+                .expect("planning editor buffer revision exhausted");
+        }
+    }
 }
 impl PlanningDraftEditorCloseRisk {
     pub fn has_dirty_buffers(&self) -> bool {
@@ -297,6 +345,7 @@ impl PlanningDraftEditorSessionState {
             draft_directory: session.draft_directory,
             buffers,
             selected_file_index: 0,
+            buffer_revision: 0,
             validation_report: session.validation_report,
         }
     }
@@ -315,6 +364,7 @@ impl From<PlanningEditorSessionSnapshot> for PlanningDraftEditorSessionState {
             draft_directory: session.draft_directory,
             buffers,
             selected_file_index: 0,
+            buffer_revision: 0,
             validation_report: session.validation_report,
         }
     }
@@ -382,15 +432,16 @@ impl PlanningDraftEditorBufferState {
 
     // Editing code treats cursor_column as a character index and delegates byte
     // conversion to char_to_byte_index before touching String storage.
-    fn insert_character(&mut self, character: char) {
+    fn insert_character(&mut self, character: char) -> bool {
         let byte_index =
             char_to_byte_index(&self.lines[self.cursor_line_index], self.cursor_column);
         self.lines[self.cursor_line_index].insert(byte_index, character);
         self.cursor_column += 1;
         self.preferred_column = self.cursor_column;
         self.dirty = true;
+        true
     }
-    fn insert_newline(&mut self) {
+    fn insert_newline(&mut self) -> bool {
         let byte_index =
             char_to_byte_index(&self.lines[self.cursor_line_index], self.cursor_column);
         let remainder = self.lines[self.cursor_line_index].split_off(byte_index);
@@ -399,8 +450,9 @@ impl PlanningDraftEditorBufferState {
         self.cursor_column = 0;
         self.preferred_column = 0;
         self.dirty = true;
+        true
     }
-    fn backspace(&mut self) {
+    fn backspace(&mut self) -> bool {
         if self.cursor_column > 0 {
             let line = &mut self.lines[self.cursor_line_index];
             let current_byte = char_to_byte_index(line, self.cursor_column);
@@ -414,13 +466,14 @@ impl PlanningDraftEditorBufferState {
             self.cursor_column = previous_line.chars().count();
             previous_line.push_str(&current_line);
         } else {
-            return;
+            return false;
         }
 
         self.preferred_column = self.cursor_column;
         self.dirty = true;
+        true
     }
-    fn delete_previous_word(&mut self) {
+    fn delete_previous_word(&mut self) -> bool {
         let original_position = (self.cursor_line_index, self.cursor_column);
         // Match terminal editing behavior: consume whitespace first, then the
         // preceding non-whitespace run, crossing line boundaries as a newline.
@@ -438,6 +491,9 @@ impl PlanningDraftEditorBufferState {
         }
         if original_position != (self.cursor_line_index, self.cursor_column) {
             self.dirty = true;
+            true
+        } else {
+            false
         }
     }
     fn move_cursor_left(&mut self) {
@@ -511,6 +567,7 @@ impl PlanningDraftEditorBufferState {
         self.editor_scroll = next_scroll.min(max_scroll).min(u16::MAX as usize) as u16;
     }
 }
+#[cfg(test)]
 impl From<PlanningDraftEditorFile> for PlanningDraftEditorBufferState {
     fn from(file: PlanningDraftEditorFile) -> Self {
         // Store even an empty file as one editable line so cursor movement and

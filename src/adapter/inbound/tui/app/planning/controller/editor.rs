@@ -45,279 +45,113 @@ impl NativeTuiApp {
     }
 
     pub(super) fn save_planning_manual_editor(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
-            return;
-        }
-        /*
-         * Saving planning-init editor content writes the current UI buffers
-         * back to the staged draft and refreshes validation. Promotion remains
-         * a separate Ctrl+P action so invalid drafts can stay open for repair.
-         */
-        let Some(draft_name) = self
-            .planning_draft_editor_ui_state
-            .draft_name()
-            .map(str::to_string)
-        else {
-            return;
-        };
-        /*
-         * The draft name is copied out before collecting buffers because save mutates
-         * editor state below. The service call must target the session that was open
-         * when Ctrl+S was pressed, not any later overlay state.
-         */
-        self.planning_draft_editor_ui_state
-            .clear_close_confirmation();
-        let workspace_directory = self.planning_workspace_directory();
-        /*
-         * collect_editable_files converts UI buffers back into service records. This
-         * controller does not inspect file bodies; validation and path ownership stay
-         * inside planning workspace services.
-         */
-        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let status_text = match self
-            .application
-            .planning()
-            .workspace()
-            .save_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
-        {
-            Ok(result) => {
-                /*
-                 * The service returns the canonical validation report for the
-                 * saved staged files. Applying it also clears dirty flags so
-                 * close-risk and next-action copy stop treating the buffer as
-                 * unsaved.
-                 */
-                let validation_ok = result.validation_report.is_valid();
-                self.planning_draft_editor_ui_state
-                    .apply_save_result(result.validation_report.clone());
-                format!(
-                    "planning draft saved / draft: {} / validation: {} / next: {}",
-                    result.draft_name,
-                    if validation_ok {
-                        "ok"
-                    } else {
-                        "needs attention"
-                    },
-                    if validation_ok {
-                        "press Ctrl+P to promote into accepted planning state"
-                    } else {
-                        "fix validation issues before promoting"
-                    },
-                )
-            }
-            Err(error) => format!("planning draft save failed: {error}"),
-        };
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
+        self.dispatch_planning_editor_mutation(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Planning,
+        );
     }
 
     pub(super) fn save_directions_manual_editor(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
+        if self
+            .planning_draft_editor_ui_state
+            .session_identity()
+            .is_none()
+        {
             return;
         }
-        /*
-         * Directions editor save follows the same staged-draft persistence
-         * contract as planning-init save. Only the operator-facing copy differs
-         * because a successful promotion returns to directions maintenance.
-         */
-        let Some(draft_name) = self
-            .planning_draft_editor_ui_state
-            .draft_name()
-            .map(str::to_string)
-        else {
-            return;
-        };
         if !self.directions_editor_workspace_is_current() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: "directions editor workspace changed; save blocked / close and reopen maintenance in the current workspace".to_string(),
             });
             return;
         }
-        /*
-         * Directions save uses the same staged draft namespace as planning-init save,
-         * so the active draft name is captured before status copy or validation state
-         * can be replaced by the save result.
-         */
-        self.planning_draft_editor_ui_state
-            .clear_close_confirmation();
-        let workspace_directory = self.planning_workspace_directory();
-        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let status_text = match self
-            .application
-            .planning()
-            .workspace()
-            .save_draft_editor_files(&workspace_directory, &draft_name, &editable_files)
-        {
-            Ok(result) => {
-                let validation_ok = result.validation_report.is_valid();
-                self.planning_draft_editor_ui_state
-                    .apply_save_result(result.validation_report.clone());
-                format!(
-                    "directions draft saved / draft: {} / validation: {} / next: {}",
-                    result.draft_name,
-                    if validation_ok {
-                        "ok"
-                    } else {
-                        "needs attention"
-                    },
-                    if validation_ok {
-                        "press Ctrl+P to promote into accepted planning state"
-                    } else {
-                        "fix validation issues before promoting"
-                    },
-                )
-            }
-            Err(error) => format!("directions draft save failed: {error}"),
-        };
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
+        self.dispatch_planning_editor_mutation(
+            PlanningEditorMutationAction::Save,
+            PlanningEditorMutationTarget::Directions,
+        );
     }
 
     pub(super) fn promote_planning_manual_editor(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
-            return;
-        }
-        /*
-         * Promotion writes current editor buffers through the workspace service
-         * and, on success, replaces accepted planning authority files. The
-         * runtime projection is refreshed regardless of success so footer/queue
-         * status reflects the latest validation attempt.
-         */
-        let Some(draft_name) = self
-            .planning_draft_editor_ui_state
-            .draft_name()
-            .map(str::to_string)
-        else {
-            return;
-        };
-        self.planning_draft_editor_ui_state
-            .clear_close_confirmation();
-        let workspace_directory = self.planning_workspace_directory();
-        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let promote_result = self
-            .application
-            .planning()
-            .workspace()
-            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
-        /*
-         * Runtime projection refresh happens even on blocked promotion. A validation
-         * failure may still update editor validation state or planning status copy, and
-         * the inline footer should reflect that latest attempt immediately.
-         */
-        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
-            &workspace_directory,
+        self.dispatch_planning_editor_mutation(
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
         );
-        let status_text = match promote_result {
-            Ok(result) => {
-                let validation_ok = result.validation_report.is_valid();
-                self.planning_draft_editor_ui_state
-                    .apply_save_result(result.validation_report.clone());
-                if result.promoted_file_count == 0 {
-                    /*
-                     * Zero promoted files is a service-level "not accepted" outcome, not
-                     * a controller exception. Keep the editor open with fresh validation
-                     * so the operator can repair the same buffers.
-                     */
-                    format!(
-                        "planning draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
-                        result.draft_name,
-                        if validation_ok {
-                            "ok"
-                        } else {
-                            "needs attention"
-                        }
-                    )
-                } else {
-                    self.close_shell_overlay();
-                    format!(
-                        "planning draft promoted / draft: {} / files: {} / planning context refreshed",
-                        result.draft_name, result.promoted_file_count
-                    )
-                }
-            }
-            Err(error) => format!("planning draft promote failed: {error}"),
-        };
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
     }
 
     pub(super) fn promote_directions_manual_editor(&mut self) {
-        if self.planning_workspace_operation_blocks_direct_mutation() {
+        if self
+            .planning_draft_editor_ui_state
+            .session_identity()
+            .is_none()
+        {
             return;
         }
-        /*
-         * Directions promotion shares the same staged-draft promotion service,
-         * but a successful result should reopen the directions maintenance
-         * overview so the operator sees the refreshed authority catalog.
-         */
-        let Some(draft_name) = self
-            .planning_draft_editor_ui_state
-            .draft_name()
-            .map(str::to_string)
-        else {
-            return;
-        };
         if !self.directions_editor_workspace_is_current() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: "directions editor workspace changed; promote blocked / close and reopen maintenance in the current workspace".to_string(),
             });
             return;
         }
+        self.dispatch_planning_editor_mutation(
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Directions,
+        );
+    }
+
+    fn dispatch_planning_editor_mutation(
+        &mut self,
+        action: PlanningEditorMutationAction,
+        target: PlanningEditorMutationTarget,
+    ) {
+        let Some(source_session) = self
+            .planning_draft_editor_ui_state
+            .session_identity()
+            .cloned()
+        else {
+            return;
+        };
+        let workspace_directory = self.planning_workspace_directory();
+        if source_session.workspace_directory != workspace_directory {
+            let target = match target {
+                PlanningEditorMutationTarget::Planning => "planning",
+                PlanningEditorMutationTarget::Directions => "directions",
+            };
+            let action = match action {
+                PlanningEditorMutationAction::Save => "save",
+                PlanningEditorMutationAction::Promote => "promote",
+            };
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: format!(
+                    "{target} editor workspace changed; {action} blocked / close and reopen the editor in the current workspace"
+                ),
+            });
+            return;
+        }
+        let Some(buffer_revision) = self.planning_draft_editor_ui_state.buffer_revision() else {
+            return;
+        };
+        let draft_name = source_session.draft_name.clone();
         self.planning_draft_editor_ui_state
             .clear_close_confirmation();
-        let workspace_directory = self.planning_workspace_directory();
-        let editable_files = self.planning_draft_editor_ui_state.collect_editable_files();
-        let promote_result = self
-            .application
-            .planning()
-            .workspace()
-            .promote_draft_editor_files(&workspace_directory, &draft_name, &editable_files);
-        /*
-         * Directions promotion also refreshes the ready conversation snapshot because
-         * changing direction detail docs or queue-idle prompt can alter queue/runtime
-         * guidance shown outside the directions overlay.
-         */
-        self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
-            &workspace_directory,
-        );
-        let status_text = match promote_result {
-            Ok(result) => {
-                let validation_ok = result.validation_report.is_valid();
-                self.planning_draft_editor_ui_state
-                    .apply_save_result(result.validation_report.clone());
-                if result.promoted_file_count == 0 {
-                    format!(
-                        "directions draft promote blocked / draft: {} / validation: {} / next: fix validation issues or keep editing",
-                        result.draft_name,
-                        if validation_ok {
-                            "ok"
-                        } else {
-                            "needs attention"
-                        }
-                    )
-                } else {
-                    /*
-                     * A successful directions promotion returns to the maintenance overview
-                     * instead of closing to the shell. That overview is the user's context
-                     * for the direction catalog they just edited.
-                     */
-                    self.start_directions_maintenance_overview_load(
-                        Some(format!(
-                            "directions draft promoted / draft: {} / files: {} / planning context refresh requested",
-                            result.draft_name, result.promoted_file_count
-                        )),
-                    );
-                    return;
-                }
-            }
-            Err(error) => format!("directions draft promote failed: {error}"),
+        let request = PlanningEditorMutationRequest {
+            identity: PlanningEditorMutationIdentity::new(
+                action,
+                target,
+                draft_name,
+                source_session,
+                buffer_revision,
+            ),
+            editable_files: self
+                .planning_draft_editor_ui_state
+                .collect_editable_file_snapshots(),
         };
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text,
-        });
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::MutatePlanningEditor {
+                workspace_directory,
+                request: Box::new(request),
+            });
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(in crate::adapter::inbound::tui::app) fn request_close_planning_manual_editor(&mut self) {

@@ -8,11 +8,9 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
 };
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+use crate::application::service::planning::{PlanningRuntimeUseCases, PlanningServices};
 #[cfg(test)]
-use crate::application::service::planning::PlanningTaskToolUseCases;
-use crate::application::service::planning::{
-    PlanningRuntimeUseCases, PlanningServices, PlanningWorkspaceUseCases,
-};
+use crate::application::service::planning::{PlanningTaskToolUseCases, PlanningWorkspaceUseCases};
 #[cfg(test)]
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
@@ -1324,6 +1322,7 @@ impl NativeTuiPlanningHandle {
         Self { services }
     }
 
+    #[cfg(test)]
     pub(super) fn workspace(&self) -> &PlanningWorkspaceUseCases {
         &self.services.workspace
     }
@@ -1815,6 +1814,12 @@ impl NativeTuiApp {
                 result,
             } => {
                 self.apply_planning_editor_stage_completion(correlation, result);
+            }
+            AppEvent::PlanningEditorMutationCompleted {
+                correlation,
+                result,
+            } => {
+                self.apply_planning_editor_mutation_completion(correlation, result);
             }
             AppEvent::PlanningSimpleEditorLoaded {
                 correlation,
