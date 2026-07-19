@@ -11,6 +11,7 @@ pub(super) enum DirectionsMaintenanceOverlayStep {
     Overview,
     DetailDocSelection,
     DetailDocConfirm,
+    EditorLoading,
     ManualEditor,
 }
 
@@ -291,6 +292,18 @@ impl DirectionsMaintenanceOverlayUiState {
         self.step = DirectionsMaintenanceOverlayStep::ManualEditor;
     }
 
+    pub fn begin_editor_loading(&mut self) {
+        self.step = DirectionsMaintenanceOverlayStep::EditorLoading;
+    }
+
+    pub fn restore_detail_doc_confirm(&mut self) {
+        if self.pending_detail_doc_creation.is_some() {
+            self.step = DirectionsMaintenanceOverlayStep::DetailDocConfirm;
+        } else {
+            self.return_to_overview();
+        }
+    }
+
     fn reset_interaction(&mut self) {
         self.step = DirectionsMaintenanceOverlayStep::Overview;
         self.selected_missing_detail_doc_index = 0;
@@ -505,6 +518,44 @@ mod tests {
                 .loading_request(&correlation)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn editor_loading_preserves_summary_selection_and_pending_direction() {
+        let mut state = DirectionsMaintenanceOverlayUiState::default();
+        let mut ready = summary();
+        ready
+            .directions
+            .push(DirectionsMaintenanceDirectionSnapshot {
+                id: "direction-a".to_string(),
+                title: "Direction A".to_string(),
+                detail_doc_path: None,
+                detail_doc_status: DirectionsSupportingFileStatus::MissingMapping,
+            });
+        ready.missing_detail_doc_count = 1;
+        state.open_summary(ready);
+        state.open_detail_doc_selection();
+        state.open_detail_doc_confirm();
+        let summary_before = state.summary().cloned();
+        let pending_before = state.pending_detail_doc_creation().cloned();
+
+        state.begin_editor_loading();
+
+        assert_eq!(
+            state.step(),
+            DirectionsMaintenanceOverlayStep::EditorLoading
+        );
+        assert_eq!(state.summary(), summary_before.as_ref());
+        assert_eq!(state.pending_detail_doc_creation(), pending_before.as_ref());
+        assert!(!state.requires_load_for_workspace("/test"));
+        assert!(state.requires_load_for_workspace("/different-workspace"));
+
+        state.restore_detail_doc_confirm();
+        assert_eq!(
+            state.step(),
+            DirectionsMaintenanceOverlayStep::DetailDocConfirm
+        );
+        assert_eq!(state.pending_detail_doc_creation(), pending_before.as_ref());
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use crate::application::service::planning::{PlanningDraftEditorFile, PlanningDraftEditorSession};
+use crate::application::service::planning::PlanningDraftEditorFile;
+#[cfg(test)]
+use crate::application::service::planning::PlanningDraftEditorSession;
 use crate::core::app::{
     PlanningEditorFileSnapshot, PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot,
 };
@@ -64,6 +66,7 @@ impl PlanningDraftEditorUiState {
     pub fn reset(&mut self) {
         *self = Self::default();
     }
+    #[cfg(test)]
     pub fn open_session(&mut self, session: PlanningDraftEditorSession) {
         self.session = Some(PlanningDraftEditorSessionState::from(session));
         self.close_guard = PlanningDraftEditorCloseGuardState::Inactive;
@@ -278,6 +281,7 @@ impl PlanningDraftEditorCloseRisk {
     }
 }
 impl PlanningDraftEditorSessionState {
+    #[cfg(test)]
     fn from(session: PlanningDraftEditorSession) -> Self {
         // Editable file order is service-provided and becomes the file list
         // order for keyboard selection. New sessions always focus the first

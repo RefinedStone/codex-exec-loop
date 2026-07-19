@@ -384,6 +384,12 @@ impl CoreController {
             }) => self.begin_planning_workspace_operation(
                 PlanningWorkspaceOperationIntent::stage_simple_draft(workspace_directory),
             ),
+            CoreInput::Command(AppCommand::StagePlanningEditor {
+                workspace_directory,
+                target,
+            }) => self.begin_planning_workspace_operation(
+                PlanningWorkspaceOperationIntent::stage_editor(workspace_directory, target),
+            ),
             CoreInput::Command(AppCommand::LoadSimplePlanningEditor {
                 workspace_directory,
                 draft_name,
@@ -989,6 +995,36 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
+            CoreInput::EffectCompleted(CoreEffectCompletion::PlanningEditorStaged {
+                correlation,
+                result,
+            }) => {
+                let Some(expected_target) = correlation.editor_stage_target() else {
+                    return self.unchanged_outcome();
+                };
+                if let Ok(snapshot) = &result {
+                    let draft_name = snapshot.session.session_identity.draft_name.as_str();
+                    let expected_session =
+                        correlation.editor_session_identity(draft_name.to_string());
+                    if draft_name.trim().is_empty()
+                        || &snapshot.target != expected_target
+                        || snapshot.session.session_identity != expected_session
+                    {
+                        return self.unchanged_outcome();
+                    }
+                }
+                if !self.planning_workspace_operations.accept(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::PlanningEditorStaged {
+                        correlation,
+                        result,
+                    }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningSimpleEditorLoaded {
                 correlation,
                 result,
@@ -1508,6 +1544,11 @@ impl CoreController {
                             correlation: correlation.clone(),
                         }
                     }
+                    PlanningWorkspaceOperationKind::StageEditor { .. } => {
+                        CoreEffect::StagePlanningEditor {
+                            correlation: correlation.clone(),
+                        }
+                    }
                     PlanningWorkspaceOperationKind::LoadSimpleEditor { .. } => {
                         CoreEffect::LoadSimplePlanningEditor {
                             correlation: correlation.clone(),
@@ -1907,14 +1948,14 @@ mod tests {
         CorePromptOrigin, DirectionsMaintenanceDirectionSnapshot,
         DirectionsMaintenanceSummarySnapshot, DirectionsSupportingFileStatus,
         PlanningDoctorSnapshot, PlanningEditorFileSnapshot, PlanningEditorSessionIdentity,
-        PlanningEditorSessionSnapshot, PlanningRuntimeRefreshCorrelation,
-        PlanningRuntimeRefreshSnapshot, PlanningSimpleDraftPromotionSnapshot,
-        PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationCorrelation,
-        PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
-        QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
-        QueueMutationIntent, QueueMutationKind, QueueMutationResult, QueueMutationTarget,
-        ReviewCenterSnapshot, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
-        TurnSubmissionRequest,
+        PlanningEditorSessionSnapshot, PlanningEditorStageSnapshot, PlanningEditorStageTarget,
+        PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
+        PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
+        PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetIntent,
+        PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, QueueAuthorityLoadError,
+        QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationIntent,
+        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterSnapshot,
+        SessionCatalogReadySnapshot, SessionCatalogSnapshot, TurnSubmissionRequest,
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
@@ -2525,6 +2566,179 @@ mod tests {
     }
 
     #[test]
+    fn editor_stage_requires_exact_target_workspace_generation_draft_and_completion_kind() {
+        let mut controller = CoreController::new();
+        let target = PlanningEditorStageTarget::PlanningManual;
+        let command = AppCommand::StagePlanningEditor {
+            workspace_directory: "/workspace".to_string(),
+            target: target.clone(),
+        };
+        let started = controller.handle_input(CoreInput::Command(command.clone()));
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = started.events.as_slice()
+        else {
+            panic!("planning editor stage should start");
+        };
+        let first = correlation.clone();
+        assert_eq!(
+            started.effects,
+            vec![CoreEffect::StagePlanningEditor {
+                correlation: first.clone(),
+            }]
+        );
+        assert_eq!(
+            controller
+                .handle_input(CoreInput::Command(command.clone()))
+                .events,
+            vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Coalesced {
+                    correlation: first.clone(),
+                },
+            )]
+        );
+        assert!(matches!(
+            controller
+                .handle_input(CoreInput::Command(AppCommand::StagePlanningEditor {
+                    workspace_directory: "/workspace".to_string(),
+                    target: PlanningEditorStageTarget::QueueIdlePrompt,
+                }))
+                .events
+                .as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Busy {
+                    active_correlation,
+                    ..
+                }
+            )] if active_correlation == &first
+        ));
+
+        let snapshot = |target: PlanningEditorStageTarget,
+                        identity: PlanningEditorSessionIdentity| {
+            Box::new(PlanningEditorStageSnapshot {
+                target,
+                session: PlanningEditorSessionSnapshot {
+                    session_identity: identity,
+                    draft_directory: "/workspace/drafts/draft-a".to_string(),
+                    editable_files: Vec::new(),
+                    validation_report: Default::default(),
+                },
+            })
+        };
+        for malformed in [
+            snapshot(
+                PlanningEditorStageTarget::QueueIdlePrompt,
+                first.editor_session_identity("draft-a"),
+            ),
+            snapshot(
+                target.clone(),
+                PlanningEditorSessionIdentity::new(first.generation + 1, "/workspace", "draft-a"),
+            ),
+            snapshot(
+                target.clone(),
+                PlanningEditorSessionIdentity::new(first.generation, "/other", "draft-a"),
+            ),
+            snapshot(target.clone(), first.editor_session_identity("")),
+        ] {
+            let rejected = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PlanningEditorStaged {
+                    correlation: first.clone(),
+                    result: Ok(malformed),
+                },
+            ));
+            assert!(rejected.events.is_empty());
+            assert_eq!(
+                controller
+                    .handle_input(CoreInput::Command(command.clone()))
+                    .events,
+                vec![AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                    PlanningWorkspaceOperationAdmission::Coalesced {
+                        correlation: first.clone(),
+                    },
+                )],
+                "malformed success must not release the active editor-stage lease"
+            );
+        }
+
+        let exact = snapshot(target.clone(), first.editor_session_identity("draft-a"));
+        assert_eq!(
+            controller
+                .handle_input(CoreInput::EffectCompleted(
+                    CoreEffectCompletion::PlanningEditorStaged {
+                        correlation: first.clone(),
+                        result: Ok(exact.clone()),
+                    },
+                ))
+                .events,
+            vec![AppEvent::PlanningEditorStaged {
+                correlation: first.clone(),
+                result: Ok(exact),
+            }]
+        );
+        assert!(
+            controller
+                .handle_input(CoreInput::EffectCompleted(
+                    CoreEffectCompletion::PlanningEditorStaged {
+                        correlation: first.clone(),
+                        result: Err("duplicate".to_string()),
+                    },
+                ))
+                .events
+                .is_empty()
+        );
+
+        let restarted = controller.handle_input(CoreInput::Command(command.clone()));
+        let [
+            AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation },
+            ),
+        ] = restarted.events.as_slice()
+        else {
+            panic!("editor stage should restart after exact settlement");
+        };
+        let second = correlation.clone();
+        assert_eq!(second.generation, first.generation + 1);
+        assert!(
+            controller
+                .handle_input(CoreInput::EffectCompleted(
+                    CoreEffectCompletion::PlanningEditorStaged {
+                        correlation: first,
+                        result: Err("aba".to_string()),
+                    },
+                ))
+                .events
+                .is_empty()
+        );
+        assert!(matches!(
+            controller
+                .handle_input(CoreInput::EffectCompleted(
+                    CoreEffectCompletion::PlanningEditorStaged {
+                        correlation: second.clone(),
+                        result: Err("planning editor stage worker panicked".to_string()),
+                    },
+                ))
+                .events
+                .as_slice(),
+            [AppEvent::PlanningEditorStaged {
+                correlation,
+                result: Err(error),
+            }] if correlation == &second
+                && error == "planning editor stage worker panicked"
+        ));
+        assert!(matches!(
+            controller
+                .handle_input(CoreInput::Command(command))
+                .events
+                .as_slice(),
+            [AppEvent::PlanningWorkspaceOperationAdmissionResolved(
+                PlanningWorkspaceOperationAdmission::Started { correlation }
+            )] if correlation.generation == second.generation + 1
+        ));
+    }
+
+    #[test]
     fn simple_editor_load_and_promotion_require_exact_draft_and_session_identity() {
         let mut controller = CoreController::new();
         let source = PlanningEditorSessionIdentity::new(41, "/workspace", "draft-a");
@@ -2722,6 +2936,20 @@ mod tests {
                 result: Err("wrong completion variant".to_string()),
             },
             |correlation| CoreEffectCompletion::PlanningSimpleDraftStaged {
+                correlation,
+                result: Err("exact completion".to_string()),
+            },
+        );
+        assert_wrong_planning_completion_kind_keeps_active_lease(
+            AppCommand::StagePlanningEditor {
+                workspace_directory: "/workspace".to_string(),
+                target: PlanningEditorStageTarget::PlanningManual,
+            },
+            |correlation| CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation,
+                result: Err("wrong completion variant".to_string()),
+            },
+            |correlation| CoreEffectCompletion::PlanningEditorStaged {
                 correlation,
                 result: Err("exact completion".to_string()),
             },

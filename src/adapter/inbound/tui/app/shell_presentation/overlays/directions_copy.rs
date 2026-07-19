@@ -54,6 +54,21 @@ pub(super) fn build_loading_overlay_view(
     }
 }
 
+pub(super) fn build_editor_loading_overlay_view() -> DirectionsMaintenanceOverlayView {
+    DirectionsMaintenanceOverlayView {
+        header_lines: vec![
+            directions_title_line(" / editor loading"),
+            Line::from("Staging the selected directions editor session."),
+        ],
+        summary_lines: vec![Line::from(
+            "The current maintenance summary and selection remain available after staging.",
+        )],
+        option_lines: vec![Line::from("Loading staged editor…")],
+        status_lines: Vec::new(),
+        key_lines: vec![AkraTheme::key_line("Please wait for editor staging")],
+    }
+}
+
 pub(super) fn build_failed_overlay_view(
     workspace_directory: &str,
     error: &str,

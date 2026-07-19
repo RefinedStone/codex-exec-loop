@@ -167,27 +167,36 @@ correlation만 바꾸고 최초 revision을 보존합니다. Stale, duplicate, A
 drift, 더 최신 UI intent completion은 setup 분기나 status를 바꿀 수 없습니다. Inspection 실패는
 workspace 부재와 구분되고, reset 복구는 reset error와 inspection error를 모두 보존합니다.
 
-TUI reset과 simple draft stage/load/promotion은 Core 소유 planning-workspace operation
-coordinator 하나를 공유합니다. Core는 정확한 workspace와 operation kind, 해당되는 reset target
-또는 simple draft/session identity를 포함한 단조 증가 correlation을 발급합니다. 완전히 같은
-operation을 반복하면 worker를 추가로 시작하지 않고 coalesce하며 다른 operation은 busy로
-응답합니다. Composition은 TUI input thread 밖에서 provider 작업을 실행하고 panic도 정확히 같은
+TUI reset, simple draft stage/load/promotion, planning/directions editor staging은 Core 소유
+planning-workspace operation coordinator 하나를 공유합니다. Core는 정확한 workspace와 operation
+kind, 해당되는 reset target, simple draft/session identity 또는 editor-stage target을 포함한 단조
+증가 correlation을 발급합니다. Editor-stage target은 planning manual, 정확한 direction id를 가진
+direction detail, queue-idle prompt를 구분합니다. 완전히 같은 operation을 반복하면 worker를 추가로
+시작하지 않고 coalesce하며 다른 operation은 busy로 응답합니다. Composition은 TUI input thread
+밖에서 provider 작업을 실행하고 panic도 정확히 같은
 correlated error completion으로 변환합니다. 이 worker들은 공용 panic-redaction 경계를 사용하므로
 provider panic payload를 stderr에 노출하지 않습니다. Coordinator는 정확한 completion만 완료합니다. Core는
-correlation과 다른 reset target, editor draft/session, promotion draft를 error로 바꿉니다. Stale,
-duplicate, workspace drift, target drift, ABA completion은 결과를 표시할 수 없습니다.
+correlation과 다른 reset target, editor-stage target/session 또는 빈 draft, editor load session,
+promotion draft를 거절합니다. Runner도 success를 반환하기 전에 같은 editor-stage 검사를 적용합니다.
+Stale, duplicate, workspace drift, target drift, wrong-kind, ABA completion은 결과를 표시할 수
+없습니다.
 
 수락된 simple stage는 stage generation에서 session identity를 만들고, 수락된 editor load는
 load-generation identity로 교체합니다. TUI는 review/editor state와 이 identity를 함께 보관하므로
 늦은 load가 더 최신 editor를 바꾸거나 늦은 promotion이 더 최신 overlay를 닫을 수 없습니다. Editor
 file body는 typed completion payload로만 전달되고 debug output에서는 가려지며 correlation에는
-들어가지 않습니다. Exact reset 또는 promotion completion의 workspace가 현재 workspace라면 A→B→A
+들어가지 않습니다. Planning manual staging은 기존 planning `Loading` step을 사용하고, directions
+staging은 summary, selection, pending direction을 보존하는 별도 `EditorLoading` step을 사용합니다.
+현재 presentation과 정확히 일치하는 completion만 editor를 엽니다. 실패하면 planning manual은
+detail selection, direction detail은 confirmation, queue-idle은 directions overview로 돌아갑니다.
+Coalesced retry는 현재 presentation revision에 다시 연결됩니다. Overlay close, workspace drift,
+approval 전환은 background operation을 완료하되 더 최신 UI 뒤에서 editor를 열지 않습니다. Exact reset 또는 promotion completion의 workspace가 현재 workspace라면 A→B→A
 회귀 뒤에도 TUI는 항상 post-turn continuation을 멈추고 Core runtime projection을 다시 읽습니다.
 별도 presentation revision은 status와 overlay 변경만 제한하므로 더 최신 UI intent의 문구는
 유지하면서 authority/runtime reconciliation은 계속 수행합니다. Overlay를 닫거나 바꿔도 파괴 작업을
-취소하지 않습니다. 아직 Core로 이동하지 않은 detail/directions stage/open/save/promote의 직접
-application 호출 7개는 coordinated workspace operation 진행 중 visible busy status로 거절합니다.
-이는 active-operation gate이며 deferred queue, actor, cancellation abstraction이 아닙니다.
+취소하지 않습니다. 아직 Core로 이동하지 않은 planning/directions save/promote의 직접 application
+호출 4개는 coordinated workspace operation 진행 중 visible busy status로 거절합니다. 이는
+active-operation gate이며 deferred queue, actor, cancellation abstraction이 아닙니다.
 
 TUI Queue overlay를 열면 먼저 shell chrome을 반영한 뒤 core load command를 dispatch합니다. Core는
 workspace와 active thread identity에 단조 증가 generation을 부여하고 최신 요청으로 이전 요청을

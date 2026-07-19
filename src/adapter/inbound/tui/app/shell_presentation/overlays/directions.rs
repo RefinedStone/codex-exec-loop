@@ -11,8 +11,8 @@ use super::super::{
 };
 use copy::{
     build_detail_doc_confirm_overlay_view, build_detail_doc_selection_overlay_view,
-    build_failed_overlay_view, build_idle_overlay_view, build_loading_overlay_view,
-    build_manual_editor_overlay_view, build_overview_overlay_view,
+    build_editor_loading_overlay_view, build_failed_overlay_view, build_idle_overlay_view,
+    build_loading_overlay_view, build_manual_editor_overlay_view, build_overview_overlay_view,
 };
 use projection::build_detail_doc_selection_projection;
 
@@ -130,6 +130,7 @@ pub(crate) fn build_directions_maintenance_overlay_view(
                     .detail_doc_confirm_choice(),
             )
         }
+        DirectionsMaintenanceOverlayStep::EditorLoading => build_editor_loading_overlay_view(),
         // ManualEditor is rendered by the draft editor path; this static view is only a fallback contract.
         DirectionsMaintenanceOverlayStep::ManualEditor => build_manual_editor_overlay_view(),
     }

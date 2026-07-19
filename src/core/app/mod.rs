@@ -56,10 +56,11 @@ pub use planning_runtime::{
 pub(crate) use planning_workspace::PlanningWorkspaceOperationCoordinator;
 pub use planning_workspace::{
     PlanningEditorFileSnapshot, PlanningEditorSessionIdentity, PlanningEditorSessionSnapshot,
-    PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
-    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
-    PlanningWorkspaceOperationIntent, PlanningWorkspaceOperationKind, PlanningWorkspaceResetIntent,
-    PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget,
+    PlanningEditorStageSnapshot, PlanningEditorStageTarget, PlanningSimpleDraftPromotionSnapshot,
+    PlanningSimpleDraftStageSnapshot, PlanningWorkspaceOperationAdmission,
+    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceOperationIntent,
+    PlanningWorkspaceOperationKind, PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot,
+    PlanningWorkspaceResetTarget,
 };
 pub use projection::{ParallelModeProjection, PlanningParallelProjection};
 pub use queue::{

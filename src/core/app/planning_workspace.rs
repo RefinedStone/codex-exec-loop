@@ -58,11 +58,31 @@ impl PlanningEditorSessionIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningEditorStageTarget {
+    PlanningManual,
+    DirectionDetail { direction_id: String },
+    QueueIdlePrompt,
+}
+
+impl PlanningEditorStageTarget {
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::PlanningManual => "planning manual editor",
+            Self::DirectionDetail { .. } => "direction detail editor",
+            Self::QueueIdlePrompt => "queue-idle prompt editor",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanningWorkspaceOperationKind {
     Reset {
         target: PlanningWorkspaceResetTarget,
     },
     StageSimpleDraft,
+    StageEditor {
+        target: PlanningEditorStageTarget,
+    },
     LoadSimpleEditor {
         draft_name: String,
         source_session: PlanningEditorSessionIdentity,
@@ -78,6 +98,7 @@ impl PlanningWorkspaceOperationKind {
         match self {
             Self::Reset { .. } => "reset",
             Self::StageSimpleDraft => "simple draft staging",
+            Self::StageEditor { target } => target.label(),
             Self::LoadSimpleEditor { .. } => "simple draft editor loading",
             Self::PromoteSimpleDraft { .. } => "simple draft promotion",
         }
@@ -87,7 +108,7 @@ impl PlanningWorkspaceOperationKind {
         match self {
             Self::LoadSimpleEditor { draft_name, .. }
             | Self::PromoteSimpleDraft { draft_name, .. } => Some(draft_name),
-            Self::Reset { .. } | Self::StageSimpleDraft => None,
+            Self::Reset { .. } | Self::StageSimpleDraft | Self::StageEditor { .. } => None,
         }
     }
 
@@ -95,7 +116,7 @@ impl PlanningWorkspaceOperationKind {
         match self {
             Self::LoadSimpleEditor { source_session, .. }
             | Self::PromoteSimpleDraft { source_session, .. } => Some(source_session),
-            Self::Reset { .. } | Self::StageSimpleDraft => None,
+            Self::Reset { .. } | Self::StageSimpleDraft | Self::StageEditor { .. } => None,
         }
     }
 }
@@ -120,6 +141,16 @@ impl PlanningWorkspaceOperationIntent {
         Self {
             workspace_directory: workspace_directory.into(),
             operation: PlanningWorkspaceOperationKind::StageSimpleDraft,
+        }
+    }
+
+    pub fn stage_editor(
+        workspace_directory: impl Into<String>,
+        target: PlanningEditorStageTarget,
+    ) -> Self {
+        Self {
+            workspace_directory: workspace_directory.into(),
+            operation: PlanningWorkspaceOperationKind::StageEditor { target },
         }
     }
 
@@ -189,6 +220,13 @@ impl PlanningWorkspaceOperationCorrelation {
 
     pub fn source_session(&self) -> Option<&PlanningEditorSessionIdentity> {
         self.operation.source_session()
+    }
+
+    pub fn editor_stage_target(&self) -> Option<&PlanningEditorStageTarget> {
+        match &self.operation {
+            PlanningWorkspaceOperationKind::StageEditor { target } => Some(target),
+            _ => None,
+        }
     }
 
     pub fn label(&self) -> &'static str {
@@ -271,6 +309,12 @@ impl fmt::Debug for PlanningEditorSessionSnapshot {
             .field("validation_report", &self.validation_report)
             .finish()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanningEditorStageSnapshot {
+    pub target: PlanningEditorStageTarget,
+    pub session: PlanningEditorSessionSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +436,51 @@ mod tests {
         let second = started(coordinator.begin(intent));
         assert_eq!(first.generation, 1);
         assert_eq!(second.generation, 2);
+    }
+
+    #[test]
+    fn editor_stage_only_coalesces_the_exact_workspace_and_target() {
+        let mut coordinator = PlanningWorkspaceOperationCoordinator::new();
+        let intent = PlanningWorkspaceOperationIntent::stage_editor(
+            "/workspace",
+            PlanningEditorStageTarget::DirectionDetail {
+                direction_id: "direction-a".to_string(),
+            },
+        );
+        let active = started(coordinator.begin(intent.clone()));
+        assert_eq!(
+            coordinator.begin(intent),
+            PlanningWorkspaceOperationAdmission::Coalesced {
+                correlation: active.clone(),
+            }
+        );
+
+        for requested in [
+            PlanningWorkspaceOperationIntent::stage_editor(
+                "/workspace",
+                PlanningEditorStageTarget::DirectionDetail {
+                    direction_id: "direction-b".to_string(),
+                },
+            ),
+            PlanningWorkspaceOperationIntent::stage_editor(
+                "/workspace",
+                PlanningEditorStageTarget::QueueIdlePrompt,
+            ),
+            PlanningWorkspaceOperationIntent::stage_editor(
+                "/other",
+                PlanningEditorStageTarget::DirectionDetail {
+                    direction_id: "direction-a".to_string(),
+                },
+            ),
+        ] {
+            assert_eq!(
+                coordinator.begin(requested.clone()),
+                PlanningWorkspaceOperationAdmission::Busy {
+                    active_correlation: active.clone(),
+                    requested,
+                }
+            );
+        }
     }
 
     #[test]

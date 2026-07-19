@@ -1810,6 +1810,12 @@ impl NativeTuiApp {
             } => {
                 self.apply_simple_planning_draft_stage_completion(correlation, result);
             }
+            AppEvent::PlanningEditorStaged {
+                correlation,
+                result,
+            } => {
+                self.apply_planning_editor_stage_completion(correlation, result);
+            }
             AppEvent::PlanningSimpleEditorLoaded {
                 correlation,
                 result,
