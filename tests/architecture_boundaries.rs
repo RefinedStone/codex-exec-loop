@@ -760,6 +760,25 @@ fn tui_session_renames_enter_through_core_runtime() {
 }
 
 #[test]
+fn tui_planning_runtime_projection_refreshes_enter_through_core_runtime() {
+    assert_no_forbidden_references_in_paths(
+        "TUI planning runtime refreshes must dispatch a Core command instead of reading the application service",
+        &["src/adapter/inbound/tui"],
+        &[
+            ".load_runtime_projection_or_invalid(",
+            "fn load_planning_runtime_projection(",
+        ],
+    );
+
+    let controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/conversation/controller.rs").unwrap();
+    assert!(
+        controller.contains("AppCommand::RefreshPlanningRuntime {"),
+        "TUI planning runtime refreshes must positively enter through the typed Core command"
+    );
+}
+
+#[test]
 fn tui_review_presentation_reads_screen_model_without_effects() {
     // Review Center authority loading belongs to the controller/effect path. Presentation must
     // remain a pure projection of the request-correlated immutable screen model.

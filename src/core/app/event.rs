@@ -7,8 +7,8 @@ use super::{
 use super::{ApprovalDecisionAdmission, ApprovalDecisionCorrelation};
 use super::{
     ConversationLoadCorrelation, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
-    ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation, SessionRenameCorrelation,
-    StartupCheckCorrelation,
+    PlanningRuntimeRefreshCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
+    SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use super::{
     QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
@@ -49,7 +49,10 @@ pub enum CoreInput {
         workspace_directory: String,
     },
     ParallelModeSupervisorSnapshotInvalidated,
-    RuntimeProjectionChanged(Box<RuntimeProjection>),
+    RuntimeProjectionChanged {
+        workspace_directory: String,
+        projection: Box<RuntimeProjection>,
+    },
     ParallelModeReadinessProjectionChanged(Option<Box<ParallelModeReadinessSnapshot>>),
     ParallelModeSupervisorProjectionChanged(Option<Box<ParallelModeSupervisorSnapshot>>),
 }
@@ -83,6 +86,10 @@ pub enum CoreEffectCompletion {
     QueueAuthorityLoaded {
         correlation: QueueAuthorityLoadCorrelation,
         result: Result<Box<QueueAuthoritySnapshot>, QueueAuthorityLoadError>,
+    },
+    PlanningRuntimeLoaded {
+        correlation: PlanningRuntimeRefreshCorrelation,
+        result: Result<Box<RuntimeProjection>, String>,
     },
     QueueMutationCompleted {
         correlation: QueueMutationCorrelation,
@@ -147,6 +154,16 @@ pub enum AppEvent {
     QueueAuthorityLoaded {
         correlation: QueueAuthorityLoadCorrelation,
         result: Result<Box<QueueAuthoritySnapshot>, QueueAuthorityLoadError>,
+    },
+    PlanningRuntimeRefreshStarted {
+        correlation: PlanningRuntimeRefreshCorrelation,
+    },
+    PlanningRuntimeRefreshed {
+        correlation: PlanningRuntimeRefreshCorrelation,
+        error: Option<String>,
+    },
+    PlanningRuntimeRefreshCancelled {
+        correlation: PlanningRuntimeRefreshCorrelation,
     },
     QueueMutationStarted {
         correlation: QueueMutationCorrelation,

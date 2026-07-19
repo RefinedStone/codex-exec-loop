@@ -638,6 +638,7 @@ fn test_native_tui_app_with_planning_review_center_and_app_server(
     };
     conversation.cwd = "/tmp/root".to_string();
     conversation.draft_workspace_directory = "/tmp/root".to_string();
+    app.refresh_ready_conversation_planning_runtime_projection();
     app.sync_ready_conversation_planning_runtime_projection(
         PlanningRuntimeProjection::uninitialized(),
     );

@@ -102,9 +102,17 @@ impl<'a> ConversationScreenModel<'a> {
     ) -> Self {
         let core_snapshot = &sample.core_snapshot;
         let core_revision = core_snapshot.revision;
-        let planning_runtime_projection =
-            (*core_snapshot.planning_parallel.planning_runtime).clone();
         let workspace_directory = presentation_workspace_directory(app);
+        let planning_runtime_projection = if core_snapshot
+            .planning_parallel
+            .planning_runtime_workspace_directory
+            .as_deref()
+            == workspace_directory.as_deref()
+        {
+            (*core_snapshot.planning_parallel.planning_runtime).clone()
+        } else {
+            PlanningRuntimeProjection::uninitialized()
+        };
         let parallel_mode_enabled = app.parallel_mode_control_plane.mode_enabled();
         let parallel_mode_control_effect_in_flight =
             app.parallel_mode_control_plane.control_effect_in_flight();

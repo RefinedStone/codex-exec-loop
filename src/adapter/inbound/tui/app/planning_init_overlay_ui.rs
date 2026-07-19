@@ -1,4 +1,5 @@
 use crate::application::service::planning::PlanningInitStageResult;
+use crate::core::app::PlanningRuntimeRefreshCorrelation;
 use crate::domain::planning::PlanningValidationReport;
 
 /*
@@ -9,6 +10,8 @@ state다. controller는 이 값을 보고 key routing을 결정하고, presentat
 */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlanningInitOverlayStep {
+    // runtime projection을 Core effect에서 읽는 동안 wizard 입력을 막는 transient 화면이다.
+    Loading,
     // 첫 진입점. simple bootstrap과 detail authoring 중 무엇을 시작할지 고른다.
     ModeSelection,
     // 이미 planning workspace가 감지된 경우의 guard 화면이다. 초기화 대신 queue/directions로 보낸다.
@@ -31,6 +34,18 @@ pub(super) enum PlanningInitModeSelection {
 pub(super) enum PlanningInitDetailSelection {
     Manual,
     WorkerAssisted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlanningInitRuntimeRefreshIntent {
+    Inspect,
+    OpenSimpleReviewWhenAbsent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingPlanningInitRuntimeRefresh {
+    correlation: PlanningRuntimeRefreshCorrelation,
+    intent: PlanningInitRuntimeRefreshIntent,
 }
 
 // Simple review는 planning service가 staged draft를 만든 뒤에만 존재한다. 화면은
@@ -63,6 +78,8 @@ pub(super) struct PlanningInitOverlayUiState {
     detail_selection: PlanningInitDetailSelection,
     // Some이면 staged simple draft에서 detail selection으로 갔다가 돌아올 breadcrumb가 된다.
     simple_review: Option<PlanningInitSimpleReviewState>,
+    // overlay를 연 refresh만 wizard branch를 바꿀 수 있게 exact generation을 보관한다.
+    pending_runtime_refresh: Option<PendingPlanningInitRuntimeRefresh>,
 }
 
 impl Default for PlanningInitOverlayUiState {
@@ -74,6 +91,7 @@ impl Default for PlanningInitOverlayUiState {
             // detail mode의 아직 지원되는 concrete backend는 manual editor뿐이다.
             detail_selection: PlanningInitDetailSelection::Manual,
             simple_review: None,
+            pending_runtime_refresh: None,
         }
     }
 }
@@ -100,10 +118,91 @@ impl PlanningInitOverlayUiState {
         self.simple_review.as_ref()
     }
 
+    pub fn begin_runtime_refresh(
+        &mut self,
+        correlation: PlanningRuntimeRefreshCorrelation,
+        intent: PlanningInitRuntimeRefreshIntent,
+    ) {
+        self.step = PlanningInitOverlayStep::Loading;
+        self.simple_review = None;
+        self.pending_runtime_refresh = Some(PendingPlanningInitRuntimeRefresh {
+            correlation,
+            intent,
+        });
+    }
+
+    pub fn rebind_runtime_refresh(
+        &mut self,
+        correlation: PlanningRuntimeRefreshCorrelation,
+    ) -> bool {
+        let Some(pending) = self.pending_runtime_refresh.as_mut() else {
+            return false;
+        };
+        if self.step != PlanningInitOverlayStep::Loading
+            || pending.correlation.workspace_directory != correlation.workspace_directory
+        {
+            return false;
+        }
+        pending.correlation = correlation;
+        true
+    }
+
+    pub fn cancel_runtime_refresh(
+        &mut self,
+        correlation: &PlanningRuntimeRefreshCorrelation,
+    ) -> bool {
+        if self
+            .pending_runtime_refresh
+            .as_ref()
+            .map(|pending| &pending.correlation)
+            != Some(correlation)
+        {
+            return false;
+        }
+        self.reset();
+        true
+    }
+
+    pub fn apply_runtime_refresh(
+        &mut self,
+        correlation: &PlanningRuntimeRefreshCorrelation,
+        workspace_present: bool,
+    ) -> Option<bool> {
+        let pending = self.pending_runtime_refresh.as_ref()?;
+        if &pending.correlation != correlation {
+            return None;
+        }
+        let should_open_simple_review = !workspace_present
+            && pending.intent == PlanningInitRuntimeRefreshIntent::OpenSimpleReviewWhenAbsent;
+        if workspace_present {
+            self.open_existing_workspace();
+        } else {
+            self.open_command_center_mode_selection();
+        }
+        Some(should_open_simple_review)
+    }
+
+    pub fn apply_runtime_refresh_error(
+        &mut self,
+        correlation: &PlanningRuntimeRefreshCorrelation,
+    ) -> bool {
+        if self
+            .pending_runtime_refresh
+            .as_ref()
+            .map(|pending| &pending.correlation)
+            != Some(correlation)
+        {
+            return false;
+        }
+        self.pending_runtime_refresh = None;
+        true
+    }
+
     pub fn open_command_center_mode_selection(&mut self) {
         // command center 진입은 새 planning init session처럼 취급해 이전 simple draft 결정을 숨긴다.
         self.step = PlanningInitOverlayStep::ModeSelection;
         self.simple_review = None;
+        self.pending_runtime_refresh = None;
     }
 
     pub fn apply_simple_review_validation(&mut self, validation_report: PlanningValidationReport) {
@@ -139,12 +238,14 @@ impl PlanningInitOverlayUiState {
         // detail step으로 들어가면 mode highlight도 detail로 고정해 breadcrumb와 header copy가 어긋나지 않게 한다.
         self.mode_selection = PlanningInitModeSelection::Detail;
         self.step = PlanningInitOverlayStep::DetailSelection;
+        self.pending_runtime_refresh = None;
     }
 
     pub fn open_existing_workspace(&mut self) {
         // existing workspace guard는 bootstrap decision이 아니므로 staged review copy를 항상 비운다.
         self.step = PlanningInitOverlayStep::ExistingWorkspace;
         self.simple_review = None;
+        self.pending_runtime_refresh = None;
     }
 
     pub fn open_manual_editor(&mut self) {
@@ -153,6 +254,7 @@ impl PlanningInitOverlayUiState {
         self.detail_selection = PlanningInitDetailSelection::Manual;
         self.step = PlanningInitOverlayStep::ManualEditor;
         self.simple_review = None;
+        self.pending_runtime_refresh = None;
     }
 
     pub fn open_simple_editor(&mut self) {
@@ -160,6 +262,7 @@ impl PlanningInitOverlayUiState {
         self.mode_selection = PlanningInitModeSelection::Simple;
         self.detail_selection = PlanningInitDetailSelection::Manual;
         self.step = PlanningInitOverlayStep::ManualEditor;
+        self.pending_runtime_refresh = None;
     }
 
     pub fn open_simple_review(&mut self, staged: PlanningInitStageResult) {
@@ -182,6 +285,7 @@ impl PlanningInitOverlayUiState {
     ) {
         self.mode_selection = PlanningInitModeSelection::Simple;
         self.step = PlanningInitOverlayStep::SimpleReview;
+        self.pending_runtime_refresh = None;
         self.simple_review = Some(PlanningInitSimpleReviewState {
             draft_name,
             staged_file_count,
@@ -200,6 +304,7 @@ impl PlanningInitOverlayUiState {
         } else {
             self.step = PlanningInitOverlayStep::ModeSelection;
         }
+        self.pending_runtime_refresh = None;
     }
 
     pub fn select_detail(&mut self, selection: PlanningInitDetailSelection) {
@@ -225,10 +330,11 @@ impl PlanningInitOverlayUiState {
 mod tests {
     use super::{
         PlanningInitDetailSelection, PlanningInitModeSelection, PlanningInitOverlayStep,
-        PlanningInitOverlayUiState,
+        PlanningInitOverlayUiState, PlanningInitRuntimeRefreshIntent,
     };
     use crate::application::service::planning::PlanningBootstrapMode;
     use crate::application::service::planning::PlanningInitStageResult;
+    use crate::core::app::PlanningRuntimeRefreshCorrelation;
     use crate::domain::planning::PlanningValidationReport;
 
     // 이 테스트들은 key handler가 아니라 pure UI state contract를 고정한다. controller/presentation
@@ -240,6 +346,85 @@ mod tests {
         assert_eq!(state.step(), PlanningInitOverlayStep::ModeSelection);
         assert_eq!(state.selected_mode(), PlanningInitModeSelection::Simple);
         assert_eq!(state.selected_detail(), PlanningInitDetailSelection::Manual);
+    }
+
+    #[test]
+    fn runtime_refresh_rebinds_latest_same_workspace_generation_and_rejects_aba() {
+        let mut state = PlanningInitOverlayUiState::default();
+        let first = PlanningRuntimeRefreshCorrelation::new(1, "/tmp/workspace");
+        let second = PlanningRuntimeRefreshCorrelation::new(2, "/tmp/workspace");
+        state.begin_runtime_refresh(first.clone(), PlanningInitRuntimeRefreshIntent::Inspect);
+
+        assert_eq!(state.step(), PlanningInitOverlayStep::Loading);
+        assert!(state.rebind_runtime_refresh(second.clone()));
+        assert_eq!(state.apply_runtime_refresh(&first, false), None);
+        assert_eq!(state.step(), PlanningInitOverlayStep::Loading);
+        assert_eq!(state.apply_runtime_refresh(&second, true), Some(false));
+        assert_eq!(state.step(), PlanningInitOverlayStep::ExistingWorkspace);
+        assert_eq!(state.apply_runtime_refresh(&second, false), None);
+    }
+
+    #[test]
+    fn runtime_refresh_error_requires_the_exact_generation() {
+        let mut state = PlanningInitOverlayUiState::default();
+        let first = PlanningRuntimeRefreshCorrelation::new(1, "/tmp/root");
+        let second = PlanningRuntimeRefreshCorrelation::new(2, "/tmp/root");
+        state.begin_runtime_refresh(
+            second.clone(),
+            PlanningInitRuntimeRefreshIntent::OpenSimpleReviewWhenAbsent,
+        );
+
+        assert!(!state.apply_runtime_refresh_error(&first));
+        assert_eq!(state.step(), PlanningInitOverlayStep::Loading);
+        assert!(state.apply_runtime_refresh_error(&second));
+        assert_eq!(state.step(), PlanningInitOverlayStep::Loading);
+        assert_eq!(state.apply_runtime_refresh(&second, false), None);
+    }
+
+    #[test]
+    fn runtime_refresh_rejects_workspace_drift_and_close_discards_completion() {
+        let mut state = PlanningInitOverlayUiState::default();
+        let original = PlanningRuntimeRefreshCorrelation::new(1, "/tmp/a");
+        state.begin_runtime_refresh(original.clone(), PlanningInitRuntimeRefreshIntent::Inspect);
+
+        assert!(!state.rebind_runtime_refresh(PlanningRuntimeRefreshCorrelation::new(2, "/tmp/b")));
+        state.reset();
+        assert_eq!(state.apply_runtime_refresh(&original, true), None);
+        assert_eq!(state.step(), PlanningInitOverlayStep::ModeSelection);
+    }
+
+    #[test]
+    fn exact_runtime_refresh_cancellation_leaves_loading_terminally() {
+        let mut state = PlanningInitOverlayUiState::default();
+        let correlation = PlanningRuntimeRefreshCorrelation::new(1, "/tmp/workspace");
+        state.begin_runtime_refresh(
+            correlation.clone(),
+            PlanningInitRuntimeRefreshIntent::Inspect,
+        );
+
+        assert!(
+            !state.cancel_runtime_refresh(&PlanningRuntimeRefreshCorrelation::new(
+                2,
+                "/tmp/workspace"
+            ))
+        );
+        assert_eq!(state.step(), PlanningInitOverlayStep::Loading);
+        assert!(state.cancel_runtime_refresh(&correlation));
+        assert_eq!(state.step(), PlanningInitOverlayStep::ModeSelection);
+    }
+
+    #[test]
+    fn absent_first_run_refresh_requests_simple_review_only_after_exact_completion() {
+        let mut state = PlanningInitOverlayUiState::default();
+        let correlation = PlanningRuntimeRefreshCorrelation::new(1, "/tmp/workspace");
+        state.begin_runtime_refresh(
+            correlation.clone(),
+            PlanningInitRuntimeRefreshIntent::OpenSimpleReviewWhenAbsent,
+        );
+
+        assert_eq!(state.step(), PlanningInitOverlayStep::Loading);
+        assert_eq!(state.apply_runtime_refresh(&correlation, false), Some(true));
+        assert_eq!(state.step(), PlanningInitOverlayStep::ModeSelection);
     }
 
     #[test]

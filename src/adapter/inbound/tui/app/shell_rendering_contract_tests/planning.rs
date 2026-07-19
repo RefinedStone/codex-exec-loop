@@ -19,7 +19,7 @@ occupy the terminal flow layout, or expose editor controls, so these tests pin
 the final frame text that a TUI operator actually sees.
 */
 #[test]
-fn inline_planning_init_inspection_renders_existing_auto_seeded_workspace_inside_shell_frame() {
+fn inline_planning_init_inspection_renders_initialized_workspace_inside_shell_frame() {
     let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
     let mut app = make_test_app();
     let workspace_dir = std::env::temp_dir().join(format!(
@@ -49,7 +49,25 @@ fn inline_planning_init_inspection_renders_existing_auto_seeded_workspace_inside
         },
     )));
     app.sync_draft_shell_workspace(&workspace_dir);
+    app.application
+        .planning()
+        .workspace()
+        .initialize_simple_workspace(&workspace_dir)
+        .expect("planning workspace should initialize");
     app.show_planning_init_overlay();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        app.poll_core_runtime_inputs(16);
+        if app.planning_init_overlay_ui_state.step() != PlanningInitOverlayStep::Loading {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_ne!(
+        app.planning_init_overlay_ui_state.step(),
+        PlanningInitOverlayStep::Loading,
+        "planning runtime refresh should finish before rendering"
+    );
 
     // An initialized workspace should render as inline inspection content, not
     // as the normal transcript pane or bordered popup chrome.

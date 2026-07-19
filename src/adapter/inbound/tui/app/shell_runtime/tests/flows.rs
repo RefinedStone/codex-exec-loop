@@ -438,6 +438,7 @@ impl NativeFlowHarness {
             .send(post_turn_evaluation_completed_message(
                 "thread-1",
                 turn_id,
+                self.workspace_dir.clone(),
                 planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
@@ -486,6 +487,7 @@ impl NativeFlowHarness {
             .send(post_turn_evaluation_completed_message(
                 "thread-1",
                 turn_id,
+                self.workspace_dir.clone(),
                 planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
@@ -525,6 +527,7 @@ impl NativeFlowHarness {
             .send(post_turn_evaluation_completed_message(
                 "thread-1",
                 turn_id,
+                self.workspace_dir.clone(),
                 planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),

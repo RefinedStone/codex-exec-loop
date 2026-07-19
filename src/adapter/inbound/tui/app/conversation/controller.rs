@@ -1,7 +1,12 @@
 use super::super::planning::status_projection::build_resumed_session_status_text;
-use super::super::{AutoFollowControlEvent, ConversationState, NativeTuiApp, StartupState};
+use super::super::{
+    AutoFollowControlEvent, ConversationState, NativeTuiApp, PendingResumedSessionPlanningRefresh,
+    StartupState,
+};
 use crate::application::service::planning::PlanningRuntimeProjection;
-use crate::core::app::CoreInput;
+use crate::core::app::{
+    AppCommand, AppEvent, CoreDispatchOutcome, CoreInput, PlanningRuntimeRefreshCorrelation,
+};
 
 /*
 conversation controller는 shell startup, editable draft, resumed thread 사이의 workspace boundary를 소유한다.
@@ -49,19 +54,37 @@ impl NativeTuiApp {
         }
     }
 
-    // planning runtime은 application service로 읽고, IO/parse failure는 invalid projection으로 접어 presentation에 전달한다.
-    pub(crate) fn load_planning_runtime_projection(
-        &self,
+    pub(in crate::adapter::inbound::tui::app) fn begin_planning_runtime_projection_refresh(
+        &mut self,
         workspace_directory: &str,
-    ) -> PlanningRuntimeProjection {
-        self.application
-            .planning()
-            .runtime()
-            .load_runtime_projection_or_invalid(workspace_directory)
+    ) -> Option<(PlanningRuntimeRefreshCorrelation, CoreDispatchOutcome)> {
+        if !matches!(self.conversation_state, ConversationState::Ready(_))
+            || self.planning_workspace_directory() != workspace_directory
+        {
+            return None;
+        }
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::RefreshPlanningRuntime {
+                workspace_directory: workspace_directory.to_string(),
+            });
+        let correlation = outcome.events.iter().find_map(|event| match event {
+            AppEvent::PlanningRuntimeRefreshStarted { correlation } => Some(correlation.clone()),
+            _ => None,
+        })?;
+        Some((correlation, outcome))
     }
 
     pub(crate) fn planning_runtime_projection_snapshot(&self) -> PlanningRuntimeProjection {
         let snapshot = self.core_runtime.snapshot();
+        if snapshot
+            .planning_parallel
+            .planning_runtime_workspace_directory
+            .as_deref()
+            != Some(self.planning_workspace_directory().as_str())
+        {
+            return PlanningRuntimeProjection::uninitialized();
+        }
         *snapshot.planning_parallel.planning_runtime
     }
 
@@ -79,9 +102,12 @@ impl NativeTuiApp {
         &mut self,
         workspace_directory: &str,
     ) {
-        let planning_runtime_projection =
-            self.load_planning_runtime_projection(workspace_directory);
-        self.sync_ready_conversation_planning_runtime_projection(planning_runtime_projection);
+        let Some((_, outcome)) =
+            self.begin_planning_runtime_projection_refresh(workspace_directory)
+        else {
+            return;
+        };
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     // Loading/failed conversation state must not replace the active core planning view.
@@ -114,6 +140,41 @@ impl NativeTuiApp {
         ));
         self.conversation_state = ConversationState::ready(conversation);
     }
+
+    pub(in crate::adapter::inbound::tui::app) fn surface_resumed_session_planning_context_if_unchanged(
+        &mut self,
+        pending: &PendingResumedSessionPlanningRefresh,
+    ) {
+        let still_waiting_for_context = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.thread_id == pending.thread_id
+                    && conversation.status_text == pending.status_text
+        );
+        if still_waiting_for_context {
+            self.surface_resumed_session_planning_context();
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn surface_resumed_session_planning_error_if_unchanged(
+        &mut self,
+        pending: &PendingResumedSessionPlanningRefresh,
+        error: &str,
+    ) {
+        let still_waiting_for_context = matches!(
+            &self.conversation_state,
+            ConversationState::Ready(conversation)
+                if conversation.thread_id == pending.thread_id
+                    && conversation.status_text == pending.status_text
+        );
+        if still_waiting_for_context {
+            self.dispatch_conversation_input(
+                super::super::ConversationInputEvent::StatusMessageShown {
+                    status_text: format!("planning setup unavailable: {error}"),
+                },
+            );
+        }
+    }
 }
 
 impl NativeTuiApp {
@@ -121,6 +182,9 @@ impl NativeTuiApp {
         &mut self,
         projection: PlanningRuntimeProjection,
     ) {
-        self.dispatch_core_input(CoreInput::RuntimeProjectionChanged(Box::new(projection)));
+        self.dispatch_core_input(CoreInput::RuntimeProjectionChanged {
+            workspace_directory: self.planning_workspace_directory(),
+            projection: Box::new(projection),
+        });
     }
 }

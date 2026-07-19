@@ -14,8 +14,9 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::{
     PlanningQueueAuthorityProjection, PlanningQueueAuthorityRefreshError,
     PlanningQueueCancellationRequest, PlanningQueueCancellationTarget,
-    PlanningQueueCancellationTransactionResult, PlanningQueueUseCases, PlanningRuntimeUseCases,
-    PlanningServices, PlanningTaskMutationCommitResult,
+    PlanningQueueCancellationTransactionResult, PlanningQueueUseCases, PlanningRuntimeProjection,
+    PlanningRuntimeUseCases, PlanningServices, PlanningTaskMutationCommitResult,
+    PlanningWorkspaceUseCases,
 };
 use crate::application::service::post_turn_evaluation::{
     POST_TURN_EVALUATION_TIMEOUT, PostTurnEvaluationService,
@@ -26,12 +27,12 @@ use crate::composition::core_turn_submission;
 use crate::core::app::{
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, ConversationReadySnapshot,
     ConversationThreadReviewSnapshot, GithubReviewPollCorrelation, ParallelPeekLoadCorrelation,
-    QueueAuthorityLoadCorrelation, QueueAuthorityLoadError, QueueAuthoritySnapshot,
-    QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
-    QueueMutationResult, ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot,
-    ReviewCenterLoadCorrelation, ReviewCenterSnapshot, SessionCatalogLoadCorrelation,
-    SessionCatalogReadySnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
-    StopRequestAttempt, StopRequestCorrelation,
+    PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
+    QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationCorrelation,
+    QueueMutationIntent, QueueMutationResult, ReviewCenterHistoryEntrySnapshot,
+    ReviewCenterInboxItemSnapshot, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
+    SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation, StopRequestAttempt, StopRequestCorrelation,
 };
 use crate::core::app::{CoreEffect, CoreEffectCompletion, CoreInput, StartupReadySnapshot};
 use crate::core::runtime::CoreEffectExecutor;
@@ -44,6 +45,7 @@ pub struct CoreEffectRunner {
     startup_service: StartupService,
     session_service: SessionService,
     conversation_service: ConversationService,
+    planning_workspace: PlanningWorkspaceUseCases,
     planning_runtime: PlanningRuntimeUseCases,
     planning_queue: PlanningQueueUseCases,
     parallel_mode_turn_service: ParallelModeTurnService,
@@ -63,6 +65,7 @@ impl CoreEffectRunner {
         post_turn_evaluation_service: PostTurnEvaluationService,
         input_sender: CoreInputSender,
     ) -> Self {
+        let planning_workspace = planning_feature.workspace.clone();
         let planning_runtime = planning_feature.runtime.clone();
         let planning_queue = planning_feature.queue.clone();
         let manual_prompt_preparation_service =
@@ -71,6 +74,7 @@ impl CoreEffectRunner {
             startup_service,
             session_service,
             conversation_service,
+            planning_workspace,
             planning_runtime,
             planning_queue,
             parallel_mode_turn_service,
@@ -133,6 +137,10 @@ impl CoreEffectRunner {
             }
             CoreEffect::LoadQueueAuthority { correlation } => {
                 self.spawn_queue_authority_load(correlation);
+                None
+            }
+            CoreEffect::LoadPlanningRuntime { correlation } => {
+                self.spawn_planning_runtime_projection_load(correlation);
                 None
             }
             CoreEffect::ExecuteQueueMutation { correlation } => {
@@ -271,6 +279,32 @@ impl CoreEffectRunner {
                 CoreEffectCompletion::QueueAuthorityLoaded {
                     correlation,
                     result: result.map(Box::new),
+                },
+            ));
+        });
+    }
+
+    pub fn spawn_planning_runtime_projection_load(
+        &self,
+        correlation: PlanningRuntimeRefreshCorrelation,
+    ) {
+        let planning_workspace = self.planning_workspace.clone();
+        let planning_runtime = self.planning_runtime.clone();
+        let input_sender = self.input_sender.clone();
+        thread::spawn(move || {
+            let result =
+                match planning_workspace.has_planning_workspace(&correlation.workspace_directory) {
+                    Ok(true) => Ok(Box::new(
+                        planning_runtime
+                            .load_runtime_projection_or_invalid(&correlation.workspace_directory),
+                    )),
+                    Ok(false) => Ok(Box::new(PlanningRuntimeProjection::uninitialized())),
+                    Err(error) => Err(error.to_string()),
+                };
+            let _ = input_sender.send(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PlanningRuntimeLoaded {
+                    correlation,
+                    result,
                 },
             ));
         });

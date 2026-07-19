@@ -796,6 +796,7 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
         .send(post_turn_evaluation_completed_message(
             "thread-1",
             "turn-1",
+            workspace_directory.clone(),
             planning_projection,
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string())
@@ -885,6 +886,7 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
         .send(post_turn_evaluation_completed_message(
             "thread-disable-race",
             "turn-disable-race",
+            workspace_directory.clone(),
             planning_projection,
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-disable-race".to_string())
@@ -957,6 +959,7 @@ fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result(
         .send(post_turn_evaluation_completed_message(
             "thread-single-follow",
             "turn-single-follow",
+            workspace_directory.clone(),
             planning_projection,
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-single-follow".to_string())

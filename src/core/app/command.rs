@@ -34,6 +34,9 @@ pub enum AppCommand {
         workspace_directory: String,
         active_thread_id: Option<String>,
     },
+    RefreshPlanningRuntime {
+        workspace_directory: String,
+    },
     SubmitQueueMutation(Box<QueueMutationIntent>),
     PrepareManualPrompt(Box<ManualPromptPreparationIntent>),
     CancelManualPromptPreparation,

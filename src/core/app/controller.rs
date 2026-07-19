@@ -2,11 +2,11 @@ use super::{
     AppCommand, AppEvent, AppSnapshot, AppState, ApprovalDecisionAdmission,
     ApprovalDecisionCorrelation, ConversationLoadCorrelation, CoreEffect, CoreEffectCompletion,
     CoreInput, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
-    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, QueueAuthorityLoadCorrelation,
-    QueueMutationCorrelation, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
-    StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission,
-    TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    ManualPromptPreparationIntent, ParallelPeekLoadCorrelation, PlanningRuntimeRefreshCorrelation,
+    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
+    StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
+    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
     TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
@@ -66,6 +66,8 @@ pub struct CoreController {
     active_review_center_load: Option<ReviewCenterLoadCorrelation>,
     next_queue_authority_load_generation: u64,
     active_queue_authority_load: Option<QueueAuthorityLoadCorrelation>,
+    next_planning_runtime_refresh_generation: u64,
+    active_planning_runtime_refresh: Option<PlanningRuntimeRefreshCorrelation>,
     next_queue_mutation_generation: u64,
     active_queue_mutation: Option<QueueMutationCorrelation>,
     next_manual_prompt_preparation_generation: u64,
@@ -106,6 +108,8 @@ impl CoreController {
             active_review_center_load: None,
             next_queue_authority_load_generation: 1,
             active_queue_authority_load: None,
+            next_planning_runtime_refresh_generation: 1,
+            active_planning_runtime_refresh: None,
             next_queue_mutation_generation: 1,
             active_queue_mutation: None,
             next_manual_prompt_preparation_generation: 1,
@@ -200,12 +204,19 @@ impl CoreController {
                 {
                     self.deferred_conversation_load =
                         Some((thread_id, fallback_workspace_directory));
-                    return self.unchanged_outcome();
+                    let mut outcome = self.unchanged_outcome();
+                    if let Some(correlation) = self.active_planning_runtime_refresh.take() {
+                        outcome
+                            .events
+                            .push(AppEvent::PlanningRuntimeRefreshCancelled { correlation });
+                    }
+                    return outcome;
                 }
                 self.deferred_conversation_load = None;
                 self.start_conversation_load(thread_id, fallback_workspace_directory)
             }
             CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
+                let cancelled_refresh = self.active_planning_runtime_refresh.take();
                 self.deferred_conversation_load = None;
                 self.in_flight_conversation_load = None;
                 self.active_turn_submission = None;
@@ -215,7 +226,13 @@ impl CoreController {
                 self.guarded_session_rename_stream = None;
                 self.state.reset_conversation();
                 self.turn_stream_state = TurnStreamState::new();
-                self.conversation_changed_outcome(None, Vec::new())
+                let mut outcome = self.conversation_changed_outcome(None, Vec::new());
+                if let Some(correlation) = cancelled_refresh {
+                    outcome
+                        .events
+                        .insert(0, AppEvent::PlanningRuntimeRefreshCancelled { correlation });
+                }
+                outcome
             }
             CoreInput::Command(AppCommand::LoadParallelPeekConversation { thread_id }) => {
                 let correlation = ParallelPeekLoadCorrelation::new(
@@ -271,6 +288,31 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::LoadQueueAuthority { correlation }],
+                    snapshot: self.snapshot(),
+                }
+            }
+            CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                workspace_directory,
+            }) => {
+                let correlation = PlanningRuntimeRefreshCorrelation::new(
+                    take_generation(
+                        &mut self.next_planning_runtime_refresh_generation,
+                        "planning runtime refresh",
+                    ),
+                    workspace_directory,
+                );
+                let superseded = self
+                    .active_planning_runtime_refresh
+                    .replace(correlation.clone());
+                let mut events = vec![AppEvent::PlanningRuntimeRefreshStarted {
+                    correlation: correlation.clone(),
+                }];
+                if let Some(correlation) = superseded {
+                    events.push(AppEvent::PlanningRuntimeRefreshCancelled { correlation });
+                }
+                CoreDispatchOutcome {
+                    events,
+                    effects: vec![CoreEffect::LoadPlanningRuntime { correlation }],
                     snapshot: self.snapshot(),
                 }
             }
@@ -689,6 +731,30 @@ impl CoreController {
                     snapshot: self.snapshot(),
                 }
             }
+            CoreInput::EffectCompleted(CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation,
+                result,
+            }) => {
+                if self.active_planning_runtime_refresh.as_ref() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                self.active_planning_runtime_refresh = None;
+                let error = match result {
+                    Ok(projection) => {
+                        self.state.apply_planning_runtime_projection(
+                            correlation.workspace_directory.clone(),
+                            projection,
+                        );
+                        None
+                    }
+                    Err(error) => Some(error),
+                };
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::PlanningRuntimeRefreshed { correlation, error }],
+                    effects: Vec::new(),
+                    snapshot: self.snapshot(),
+                }
+            }
             CoreInput::EffectCompleted(CoreEffectCompletion::QueueMutationCompleted {
                 correlation,
                 result,
@@ -852,11 +918,40 @@ impl CoreController {
                 if !accepted {
                     return self.unchanged_outcome();
                 }
-                self.state.apply_planning_runtime_projection(Box::new(
-                    execution.evaluation.runtime_projection.clone(),
-                ));
+                let workspace_directory = execution.runtime_projection_workspace_directory.clone();
+                let refresh_matches_workspace = self
+                    .active_planning_runtime_refresh
+                    .as_ref()
+                    .is_some_and(|correlation| {
+                        correlation.workspace_directory == workspace_directory
+                    });
+                let should_apply_projection = if self.active_planning_runtime_refresh.is_some() {
+                    refresh_matches_workspace
+                } else {
+                    self.state
+                        .planning_runtime_workspace_directory()
+                        .is_none_or(|current| current == workspace_directory)
+                };
+                let settled_refresh = refresh_matches_workspace.then(|| {
+                    self.active_planning_runtime_refresh
+                        .take()
+                        .expect("matching planning runtime refresh must remain active")
+                });
+                if should_apply_projection {
+                    self.state.apply_planning_runtime_projection(
+                        workspace_directory,
+                        Box::new(execution.evaluation.runtime_projection.clone()),
+                    );
+                }
+                let mut events = vec![AppEvent::PostTurnEvaluationCompleted(execution)];
+                if let Some(correlation) = settled_refresh {
+                    events.push(AppEvent::PlanningRuntimeRefreshed {
+                        correlation,
+                        error: None,
+                    });
+                }
                 CoreDispatchOutcome {
-                    events: vec![AppEvent::PostTurnEvaluationCompleted(execution)],
+                    events,
                     effects: Vec::new(),
                     snapshot: self.snapshot(),
                 }
@@ -906,9 +1001,35 @@ impl CoreController {
                 effects: Vec::new(),
                 snapshot: self.snapshot(),
             },
-            CoreInput::RuntimeProjectionChanged(projection) => {
-                let changed = self.state.apply_planning_runtime_projection(projection);
-                self.snapshot_changed_outcome(changed)
+            CoreInput::RuntimeProjectionChanged {
+                workspace_directory,
+                projection,
+            } => {
+                let refresh_matches_workspace = self
+                    .active_planning_runtime_refresh
+                    .as_ref()
+                    .is_some_and(|correlation| {
+                        correlation.workspace_directory == workspace_directory
+                    });
+                if self.active_planning_runtime_refresh.is_some() && !refresh_matches_workspace {
+                    return self.unchanged_outcome();
+                }
+                let settled_refresh = refresh_matches_workspace.then(|| {
+                    self.active_planning_runtime_refresh
+                        .take()
+                        .expect("matching planning runtime refresh must remain active")
+                });
+                let changed = self
+                    .state
+                    .apply_planning_runtime_projection(workspace_directory, projection);
+                let mut outcome = self.snapshot_changed_outcome(changed);
+                if let Some(correlation) = settled_refresh {
+                    outcome.events.push(AppEvent::PlanningRuntimeRefreshed {
+                        correlation,
+                        error: None,
+                    });
+                }
+                outcome
             }
             CoreInput::ParallelModeReadinessProjectionChanged(snapshot) => {
                 let changed = self.state.apply_parallel_readiness_projection(snapshot);
@@ -944,6 +1065,7 @@ impl CoreController {
         thread_id: String,
         fallback_workspace_directory: String,
     ) -> CoreDispatchOutcome {
+        let cancelled_refresh = self.active_planning_runtime_refresh.take();
         self.active_turn_submission = None;
         self.active_stop_request = None;
         self.active_turn_steer = None;
@@ -959,13 +1081,19 @@ impl CoreController {
         self.in_flight_conversation_load = Some(correlation.clone());
         self.state.mark_conversation_loading();
         self.turn_stream_state = TurnStreamState::new();
-        self.conversation_changed_outcome(
+        let mut outcome = self.conversation_changed_outcome(
             Some(correlation.clone()),
             vec![CoreEffect::LoadConversation {
                 correlation,
                 fallback_workspace_directory,
             }],
-        )
+        );
+        if let Some(correlation) = cancelled_refresh {
+            outcome
+                .events
+                .insert(0, AppEvent::PlanningRuntimeRefreshCancelled { correlation });
+        }
+        outcome
     }
 
     fn start_deferred_session_reads(
@@ -1347,6 +1475,33 @@ mod tests {
             workspace_directory,
             active_thread_id.map(str::to_string),
         )
+    }
+
+    fn planning_runtime_refresh_correlation(
+        generation: u64,
+        workspace_directory: &str,
+    ) -> PlanningRuntimeRefreshCorrelation {
+        PlanningRuntimeRefreshCorrelation::new(generation, workspace_directory)
+    }
+
+    fn runtime_projection_changed(
+        workspace_directory: &str,
+        projection: PlanningRuntimeProjection,
+    ) -> CoreInput {
+        CoreInput::RuntimeProjectionChanged {
+            workspace_directory: workspace_directory.to_string(),
+            projection: Box::new(projection),
+        }
+    }
+
+    fn post_turn_completion(
+        workspace_directory: &str,
+        mut execution: Box<
+            crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution,
+        >,
+    ) -> CoreEffectCompletion {
+        execution.runtime_projection_workspace_directory = workspace_directory.to_string();
+        CoreEffectCompletion::PostTurnEvaluationCompleted(execution)
     }
 
     fn empty_queue_authority_snapshot() -> QueueAuthoritySnapshot {
@@ -2139,6 +2294,342 @@ mod tests {
                 correlation: second_correlation,
             }]
         );
+    }
+
+    #[test]
+    fn newer_planning_runtime_refresh_supersedes_the_active_correlation() {
+        let mut controller = CoreController::new();
+        let first =
+            controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                workspace_directory: "/tmp/a".to_string(),
+            }));
+        let second =
+            controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                workspace_directory: "/tmp/b".to_string(),
+            }));
+        let first_correlation = planning_runtime_refresh_correlation(1, "/tmp/a");
+        let second_correlation = planning_runtime_refresh_correlation(2, "/tmp/b");
+
+        assert_eq!(
+            first.events,
+            vec![AppEvent::PlanningRuntimeRefreshStarted {
+                correlation: first_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            first.effects,
+            vec![CoreEffect::LoadPlanningRuntime {
+                correlation: first_correlation.clone(),
+            }]
+        );
+        assert_eq!(
+            second.events,
+            vec![
+                AppEvent::PlanningRuntimeRefreshStarted {
+                    correlation: second_correlation.clone(),
+                },
+                AppEvent::PlanningRuntimeRefreshCancelled {
+                    correlation: first_correlation,
+                },
+            ]
+        );
+        assert_eq!(
+            second.effects,
+            vec![CoreEffect::LoadPlanningRuntime {
+                correlation: second_correlation,
+            }]
+        );
+    }
+
+    #[test]
+    fn planning_runtime_refresh_completion_accepts_only_the_latest_generation_once() {
+        let mut controller = CoreController::new();
+        for workspace_directory in ["/tmp/old", "/tmp/new"] {
+            controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                workspace_directory: workspace_directory.to_string(),
+            }));
+        }
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: planning_runtime_refresh_correlation(1, "/tmp/old"),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid("stale"))),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let correlation = planning_runtime_refresh_correlation(2, "/tmp/new");
+        let projection = PlanningRuntimeProjection::invalid("latest");
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: correlation.clone(),
+                result: Ok(Box::new(projection.clone())),
+            },
+        ));
+        assert_eq!(
+            accepted.events,
+            vec![AppEvent::PlanningRuntimeRefreshed {
+                correlation: correlation.clone(),
+                error: None,
+            }]
+        );
+        assert_eq!(
+            *accepted.snapshot.planning_parallel.planning_runtime,
+            projection
+        );
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation,
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid("duplicate"))),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+        assert_eq!(
+            *duplicate.snapshot.planning_parallel.planning_runtime,
+            PlanningRuntimeProjection::invalid("latest")
+        );
+    }
+
+    #[test]
+    fn planning_runtime_refresh_failure_preserves_projection_and_reports_error() {
+        let mut controller = CoreController::new();
+        let previous_projection = PlanningRuntimeProjection::ready(
+            "current prompt".to_string(),
+            "current queue".to_string(),
+            None,
+        );
+        controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
+            previous_projection.clone(),
+        ));
+        controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        let correlation = planning_runtime_refresh_correlation(1, "/tmp/workspace");
+
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: correlation.clone(),
+                result: Err("workspace inspection failed".to_string()),
+            },
+        ));
+
+        assert_eq!(
+            failed.events,
+            vec![AppEvent::PlanningRuntimeRefreshed {
+                correlation,
+                error: Some("workspace inspection failed".to_string()),
+            }]
+        );
+        assert_eq!(failed.snapshot.revision, 1);
+        assert_eq!(
+            failed
+                .snapshot
+                .planning_parallel
+                .planning_runtime_workspace_directory
+                .as_deref(),
+            Some("/tmp/workspace")
+        );
+        assert_eq!(
+            *failed.snapshot.planning_parallel.planning_runtime,
+            previous_projection
+        );
+    }
+
+    #[test]
+    fn planning_runtime_refresh_same_workspace_aba_rejects_the_older_generation() {
+        let mut controller = CoreController::new();
+        for workspace_directory in ["/tmp/a", "/tmp/b", "/tmp/a"] {
+            controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+                workspace_directory: workspace_directory.to_string(),
+            }));
+        }
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: planning_runtime_refresh_correlation(1, "/tmp/a"),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid("old a"))),
+            },
+        ));
+        assert!(stale.events.is_empty());
+
+        let latest = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: planning_runtime_refresh_correlation(3, "/tmp/a"),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid("new a"))),
+            },
+        ));
+        assert_eq!(
+            latest.events,
+            vec![AppEvent::PlanningRuntimeRefreshed {
+                correlation: planning_runtime_refresh_correlation(3, "/tmp/a"),
+                error: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn accepted_projection_writer_settles_and_supersedes_an_active_refresh() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        let accepted_projection = PlanningRuntimeProjection::invalid("new authority");
+
+        let writer = controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
+            accepted_projection.clone(),
+        ));
+
+        assert!(writer.events.iter().any(|event| {
+            event
+                == &AppEvent::PlanningRuntimeRefreshed {
+                    correlation: planning_runtime_refresh_correlation(1, "/tmp/workspace"),
+                    error: None,
+                }
+        }));
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: planning_runtime_refresh_correlation(1, "/tmp/workspace"),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid(
+                    "old authority",
+                ))),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(
+            *stale.snapshot.planning_parallel.planning_runtime,
+            accepted_projection
+        );
+    }
+
+    #[test]
+    fn projection_writer_for_another_workspace_does_not_settle_an_active_refresh() {
+        let mut controller = CoreController::new();
+        controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/root".to_string(),
+        }));
+
+        let ignored = controller.handle_input(runtime_projection_changed(
+            "/tmp/slot",
+            PlanningRuntimeProjection::invalid("slot projection"),
+        ));
+
+        assert!(ignored.events.is_empty());
+        assert_eq!(ignored.snapshot, AppSnapshot::initial());
+
+        let correlation = planning_runtime_refresh_correlation(1, "/tmp/root");
+        let loaded = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: correlation.clone(),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid(
+                    "root projection",
+                ))),
+            },
+        ));
+        assert_eq!(
+            loaded.events,
+            vec![AppEvent::PlanningRuntimeRefreshed {
+                correlation,
+                error: None,
+            }]
+        );
+        assert_eq!(
+            loaded
+                .snapshot
+                .planning_parallel
+                .planning_runtime_workspace_directory
+                .as_deref(),
+            Some("/tmp/root")
+        );
+    }
+
+    #[test]
+    fn conversation_transitions_cancel_an_active_planning_runtime_refresh() {
+        let mut load_controller = CoreController::new();
+        load_controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/a".to_string(),
+        }));
+        let load = load_controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-b".to_string(),
+            fallback_workspace_directory: "/tmp/b".to_string(),
+        }));
+        assert!(matches!(
+            load.events.first(),
+            Some(AppEvent::PlanningRuntimeRefreshCancelled { correlation })
+                if correlation == &planning_runtime_refresh_correlation(1, "/tmp/a")
+        ));
+
+        let mut invalidate_controller = CoreController::new();
+        invalidate_controller.handle_input(CoreInput::Command(
+            AppCommand::RefreshPlanningRuntime {
+                workspace_directory: "/tmp/a".to_string(),
+            },
+        ));
+        let invalidated = invalidate_controller
+            .handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        assert!(matches!(
+            invalidated.events.first(),
+            Some(AppEvent::PlanningRuntimeRefreshCancelled { correlation })
+                if correlation == &planning_runtime_refresh_correlation(1, "/tmp/a")
+        ));
+
+        for controller in [&mut load_controller, &mut invalidate_controller] {
+            let stale = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PlanningRuntimeLoaded {
+                    correlation: planning_runtime_refresh_correlation(1, "/tmp/a"),
+                    result: Ok(Box::new(PlanningRuntimeProjection::invalid("stale"))),
+                },
+            ));
+            assert!(stale.events.is_empty());
+        }
+    }
+
+    #[test]
+    fn turn_workspace_change_does_not_cancel_the_conversation_planning_refresh() {
+        let mut controller = CoreController::new();
+        let turn = controller.begin_test_turn_submission();
+        controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/conversation-root".to_string(),
+        }));
+
+        let changed = controller.handle_input(CoreInput::ConversationTurnWorkspaceChanged {
+            correlation: turn,
+            workspace_directory: "/tmp/parallel-slot".to_string(),
+        });
+        assert_eq!(
+            changed.events,
+            vec![AppEvent::ConversationTurnWorkspaceChanged {
+                workspace_directory: "/tmp/parallel-slot".to_string(),
+            }]
+        );
+
+        let completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: planning_runtime_refresh_correlation(1, "/tmp/conversation-root"),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid("loaded root"))),
+            },
+        ));
+        assert_eq!(
+            completion.events,
+            vec![AppEvent::PlanningRuntimeRefreshed {
+                correlation: planning_runtime_refresh_correlation(1, "/tmp/conversation-root"),
+                error: None,
+            }]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "planning runtime refresh generation exhausted")]
+    fn planning_runtime_refresh_generation_overflow_fails_closed() {
+        let mut controller = CoreController::new();
+        controller.next_planning_runtime_refresh_generation = u64::MAX;
+
+        controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
     }
 
     #[test]
@@ -3687,6 +4178,35 @@ mod tests {
     }
 
     #[test]
+    fn successful_conversation_completion_clears_the_previous_workspace_projection() {
+        let mut controller = CoreController::new();
+        controller.handle_input(runtime_projection_changed(
+            "/tmp/a",
+            PlanningRuntimeProjection::ready(
+                "workspace a prompt".to_string(),
+                "workspace a queue".to_string(),
+                None,
+            ),
+        ));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-b".to_string(),
+            fallback_workspace_directory: "/tmp/b".to_string(),
+        }));
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::ConversationLoaded {
+                correlation: conversation_load_correlation(1, "thread-b"),
+                result: Ok(Box::new(sample_conversation_ready_snapshot_for("thread-b"))),
+            },
+        ));
+
+        assert_eq!(
+            *outcome.snapshot.planning_parallel.planning_runtime,
+            PlanningRuntimeProjection::uninitialized()
+        );
+    }
+
+    #[test]
     fn conversation_completion_marks_failed() {
         let mut controller = CoreController::new();
         controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
@@ -4480,9 +5000,10 @@ mod tests {
         ));
         let execution = Box::new(sample_post_turn_execution());
 
-        let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
-        ));
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            execution.clone(),
+        )));
 
         assert_eq!(
             outcome.events,
@@ -4496,9 +5017,10 @@ mod tests {
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let execution = Box::new(sample_post_turn_execution());
 
-        let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
-        ));
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            execution.clone(),
+        )));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(
@@ -4513,18 +5035,117 @@ mod tests {
     }
 
     #[test]
+    fn accepted_post_turn_projection_settles_and_supersedes_an_active_refresh() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        let execution = Box::new(sample_post_turn_execution());
+
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            execution.clone(),
+        )));
+
+        assert_eq!(
+            outcome.events,
+            vec![
+                AppEvent::PostTurnEvaluationCompleted(execution),
+                AppEvent::PlanningRuntimeRefreshed {
+                    correlation: planning_runtime_refresh_correlation(1, "/tmp/workspace"),
+                    error: None,
+                },
+            ]
+        );
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: planning_runtime_refresh_correlation(1, "/tmp/workspace"),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid("stale"))),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(
+            *stale.snapshot.planning_parallel.planning_runtime,
+            PlanningRuntimeProjection::invalid("planning blocked")
+        );
+    }
+
+    #[test]
+    fn parallel_slot_post_turn_does_not_settle_the_root_planning_refresh() {
+        let mut controller = CoreController::new();
+        let root_projection = PlanningRuntimeProjection::ready(
+            "root prompt".to_string(),
+            "root queue".to_string(),
+            None,
+        );
+        controller.handle_input(runtime_projection_changed(
+            "/tmp/root",
+            root_projection.clone(),
+        ));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/root".to_string(),
+        }));
+        let mut execution = Box::new(sample_post_turn_execution());
+        execution.runtime_projection_workspace_directory = "/tmp/slot".to_string();
+
+        let slot_completion = controller.handle_input(CoreInput::EffectCompleted(
+            post_turn_completion("/tmp/slot", execution.clone()),
+        ));
+
+        assert_eq!(
+            slot_completion.events,
+            vec![AppEvent::PostTurnEvaluationCompleted(execution)]
+        );
+        assert_eq!(
+            *slot_completion.snapshot.planning_parallel.planning_runtime,
+            root_projection
+        );
+        assert_eq!(
+            slot_completion
+                .snapshot
+                .planning_parallel
+                .planning_runtime_workspace_directory
+                .as_deref(),
+            Some("/tmp/root")
+        );
+
+        let correlation = planning_runtime_refresh_correlation(1, "/tmp/root");
+        let root_completion = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: correlation.clone(),
+                result: Ok(Box::new(PlanningRuntimeProjection::invalid("loaded root"))),
+            },
+        ));
+        assert_eq!(
+            root_completion.events,
+            vec![AppEvent::PlanningRuntimeRefreshed {
+                correlation,
+                error: None,
+            }]
+        );
+        assert_eq!(
+            *root_completion.snapshot.planning_parallel.planning_runtime,
+            PlanningRuntimeProjection::invalid("loaded root")
+        );
+    }
+
+    #[test]
     fn matching_post_turn_projection_keeps_revision_and_delivers_completion() {
         let mut controller = CoreController::new();
         let projection = PlanningRuntimeProjection::invalid("planning blocked");
-        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+        controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
             projection.clone(),
-        )));
+        ));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let execution = Box::new(sample_post_turn_execution());
 
-        let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(execution.clone()),
-        ));
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            execution.clone(),
+        )));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(
@@ -4546,9 +5167,10 @@ mod tests {
             "current summary".to_string(),
             None,
         );
-        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+        controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
             current_projection.clone(),
-        )));
+        ));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let load = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-2".to_string(),
@@ -4560,11 +5182,10 @@ mod tests {
         let correlation = correlation.clone();
         let snapshot_before_completion = controller.snapshot();
 
-        let dropped = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(
-                sample_post_turn_execution(),
-            )),
-        ));
+        let dropped = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            Box::new(sample_post_turn_execution()),
+        )));
 
         assert_eq!(dropped.snapshot, snapshot_before_completion);
         assert!(dropped.events.is_empty());
@@ -4590,9 +5211,10 @@ mod tests {
             "existing summary".to_string(),
             None,
         );
-        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+        controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
             existing_projection,
-        )));
+        ));
         apply_completed_turn(&mut controller, "thread-1", "turn-2");
         let snapshot_before_stale_completion = controller.snapshot();
         let mut execution = sample_post_turn_execution();
@@ -4602,9 +5224,10 @@ mod tests {
                 "turn-1".to_string(),
             );
 
-        let outcome = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(execution)),
-        ));
+        let outcome = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            Box::new(execution),
+        )));
 
         assert_eq!(outcome.snapshot, snapshot_before_stale_completion);
         assert!(outcome.events.is_empty());
@@ -4623,12 +5246,14 @@ mod tests {
             None,
         );
 
-        let first = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(execution),
-        ));
-        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
-            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(duplicate_execution)),
-        ));
+        let first = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            execution,
+        )));
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(post_turn_completion(
+            "/tmp/workspace",
+            Box::new(duplicate_execution),
+        )));
 
         assert_eq!(first.events.len(), 1);
         assert_eq!(duplicate.snapshot, first.snapshot);
@@ -4667,9 +5292,10 @@ mod tests {
         let planning_projection =
             PlanningRuntimeProjection::invalid("planning validation failed in projection");
 
-        let outcome = controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+        let outcome = controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
             planning_projection.clone(),
-        )));
+        ));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(
@@ -4714,13 +5340,15 @@ mod tests {
         let mut controller = CoreController::new();
         let planning_projection =
             PlanningRuntimeProjection::invalid("planning validation failed in projection");
-        controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+        controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
             planning_projection.clone(),
-        )));
+        ));
 
-        let outcome = controller.handle_input(CoreInput::RuntimeProjectionChanged(Box::new(
+        let outcome = controller.handle_input(runtime_projection_changed(
+            "/tmp/workspace",
             planning_projection,
-        )));
+        ));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert!(outcome.events.is_empty());
@@ -5021,6 +5649,7 @@ mod tests {
         crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution {
             thread_id: "thread-1".to_string(),
             completed_turn_id: "turn-1".to_string(),
+            runtime_projection_workspace_directory: "/tmp/workspace".to_string(),
             evaluation: PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
                 runtime_projection: PlanningRuntimeProjection::invalid("planning blocked"),

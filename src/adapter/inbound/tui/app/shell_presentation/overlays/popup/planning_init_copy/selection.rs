@@ -5,6 +5,23 @@ use super::super::super::super::option_lines::overlay_option_line;
 use super::super::super::PlanningInitOverlayView;
 use super::super::copy::planning_setup_title_line;
 
+pub(super) fn build_loading_overlay_view() -> PlanningInitOverlayView {
+    PlanningInitOverlayView {
+        header_lines: vec![
+            planning_setup_title_line(" / loading workspace"),
+            Line::from("Reading the current planning runtime before setup actions are enabled."),
+        ],
+        summary_lines: vec![Line::from(
+            "The accepted workspace projection will choose setup or existing-workspace controls.",
+        )],
+        option_lines: Vec::new(),
+        status_lines: vec![Line::from("planning runtime refresh in progress...")],
+        key_lines: vec![AkraTheme::key_line(
+            "Esc/Ctrl+C cancels this surface. Setup keys are disabled while loading.",
+        )],
+    }
+}
+
 // First planning-init inspection screen: choose the authoring route before any planning files are staged.
 pub(super) fn build_mode_selection_overlay_view(
     selected_mode: PlanningInitModeSelection,

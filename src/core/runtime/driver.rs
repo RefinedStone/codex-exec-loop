@@ -102,13 +102,14 @@ mod tests {
     use crate::core::app::{
         AppEvent, ApprovalDecisionAdmission, ApprovalDecisionCorrelation, CoreEffectCompletion,
         CorePromptOrigin, GithubReviewPollCorrelation, ManualPromptPreparationAdmission,
-        ManualPromptPreparationIntent, QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot,
-        QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
-        QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterLoadCorrelation,
-        ReviewCenterSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
-        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, StopRequestAdmission,
-        StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
-        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+        ManualPromptPreparationIntent, PlanningRuntimeRefreshCorrelation,
+        QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
+        QueueMutationCorrelation, QueueMutationIntent, QueueMutationKind, QueueMutationResult,
+        QueueMutationTarget, ReviewCenterLoadCorrelation, ReviewCenterSnapshot,
+        StartupAttachmentSnapshot, StartupCheckCorrelation, StartupDiagnosticSnapshot,
+        StartupReadySnapshot, StartupSnapshot, StopRequestAdmission, StopRequestAttempt,
+        StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+        TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::{
@@ -216,6 +217,25 @@ mod tests {
                         planning_revision: 0,
                         tasks: Vec::new(),
                     })),
+                },
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ImmediatePlanningRuntimeExecutor;
+
+    impl CoreEffectExecutor for ImmediatePlanningRuntimeExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::LoadPlanningRuntime { correlation } = effect else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PlanningRuntimeLoaded {
+                    correlation,
+                    result: Ok(Box::new(
+                        crate::domain::planning::RuntimeProjection::invalid("loaded"),
+                    )),
                 },
             ))
         }
@@ -851,6 +871,38 @@ mod tests {
                     result: Ok(Box::new(snapshot)),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn immediate_planning_runtime_effect_is_started_before_refreshed() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediatePlanningRuntimeExecutor, rx);
+        let correlation = PlanningRuntimeRefreshCorrelation::new(1, "/tmp/workspace");
+
+        let outcome = runtime.dispatch_command(AppCommand::RefreshPlanningRuntime {
+            workspace_directory: "/tmp/workspace".to_string(),
+        });
+
+        assert_eq!(
+            outcome.events,
+            vec![
+                AppEvent::PlanningRuntimeRefreshStarted {
+                    correlation: correlation.clone(),
+                },
+                AppEvent::PlanningRuntimeRefreshed {
+                    correlation: correlation.clone(),
+                    error: None,
+                },
+            ]
+        );
+        assert_eq!(
+            outcome.effects,
+            vec![CoreEffect::LoadPlanningRuntime { correlation }]
+        );
+        assert_eq!(
+            *outcome.snapshot.planning_parallel.planning_runtime,
+            crate::domain::planning::RuntimeProjection::invalid("loaded")
         );
     }
 

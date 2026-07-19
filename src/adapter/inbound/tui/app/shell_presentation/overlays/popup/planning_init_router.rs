@@ -2,8 +2,9 @@ use super::super::super::super::{NativeTuiApp, PlanningInitOverlayStep};
 use super::super::PlanningInitOverlayView;
 use super::existing_workspace::build_existing_workspace_overlay_view_for_app;
 use super::init_copy::{
-    build_detail_selection_overlay_view, build_manual_editor_overlay_view,
-    build_mode_selection_overlay_view, build_simple_review_overlay_view,
+    build_detail_selection_overlay_view, build_loading_overlay_view,
+    build_manual_editor_overlay_view, build_mode_selection_overlay_view,
+    build_simple_review_overlay_view,
 };
 use super::simple_review_inputs::build_simple_review_copy;
 
@@ -21,6 +22,7 @@ pub(super) fn build_planning_init_overlay_view_for_app(
     // presentation routing을 갱신하게 한다. fallback view를 만들면 wizard state와
     // 화면 copy가 어긋나는 오류가 늦게 드러난다.
     match state.step() {
+        PlanningInitOverlayStep::Loading => build_loading_overlay_view(),
         // 기존 planning artifact 감지는 runtime projection과 workspace path를 함께 읽는다.
         // 이 단계만 app-level copy builder를 거쳐야 guard 화면의 상태 문구가 최신이다.
         PlanningInitOverlayStep::ExistingWorkspace => {

@@ -16,6 +16,8 @@ impl NativeTuiApp {
          * is visible.
          */
         match self.planning_init_overlay_ui_state.step() {
+            // Loading은 Core effect completion만 해제한다. 이 동안 wizard mutation key는 소비한다.
+            PlanningInitOverlayStep::Loading => {}
             PlanningInitOverlayStep::ExistingWorkspace => match key.code {
                 /*
                  * Existing workspace mode is an inspection/redirect screen:

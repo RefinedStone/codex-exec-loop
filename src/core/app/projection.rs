@@ -3,6 +3,7 @@ use crate::domain::planning::RuntimeProjection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningParallelProjection {
+    pub planning_runtime_workspace_directory: Option<String>,
     pub planning_runtime: Box<RuntimeProjection>,
     pub parallel_mode: ParallelModeProjection,
 }
@@ -10,6 +11,7 @@ pub struct PlanningParallelProjection {
 impl PlanningParallelProjection {
     pub fn initial() -> Self {
         Self {
+            planning_runtime_workspace_directory: None,
             planning_runtime: Box::new(RuntimeProjection::uninitialized()),
             parallel_mode: ParallelModeProjection::default(),
         }
@@ -17,12 +19,27 @@ impl PlanningParallelProjection {
 
     pub fn apply_planning_runtime_projection(
         &mut self,
+        workspace_directory: String,
         projection: Box<RuntimeProjection>,
     ) -> bool {
-        if self.planning_runtime == projection {
+        if self.planning_runtime_workspace_directory.as_ref() == Some(&workspace_directory)
+            && self.planning_runtime == projection
+        {
             return false;
         }
+        self.planning_runtime_workspace_directory = Some(workspace_directory);
         self.planning_runtime = projection;
+        true
+    }
+
+    pub fn clear_planning_runtime_projection(&mut self) -> bool {
+        if self.planning_runtime_workspace_directory.is_none()
+            && *self.planning_runtime == RuntimeProjection::uninitialized()
+        {
+            return false;
+        }
+        self.planning_runtime_workspace_directory = None;
+        *self.planning_runtime = RuntimeProjection::uninitialized();
         true
     }
 
@@ -76,6 +93,33 @@ mod tests {
             *PlanningParallelProjection::default().planning_runtime,
             RuntimeProjection::uninitialized()
         );
+        assert!(
+            PlanningParallelProjection::default()
+                .planning_runtime_workspace_directory
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn projection_identity_includes_its_workspace() {
+        let mut projection = PlanningParallelProjection::default();
+        let runtime = Box::new(RuntimeProjection::invalid("blocked"));
+
+        assert!(
+            projection.apply_planning_runtime_projection("/tmp/root".to_string(), runtime.clone())
+        );
+        assert!(
+            !projection.apply_planning_runtime_projection("/tmp/root".to_string(), runtime.clone())
+        );
+        assert!(projection.apply_planning_runtime_projection("/tmp/slot".to_string(), runtime));
+        assert_eq!(
+            projection.planning_runtime_workspace_directory.as_deref(),
+            Some("/tmp/slot")
+        );
+
+        assert!(projection.clear_planning_runtime_projection());
+        assert!(!projection.clear_planning_runtime_projection());
+        assert_eq!(projection, PlanningParallelProjection::initial());
     }
 
     #[test]
