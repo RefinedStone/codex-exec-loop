@@ -7,11 +7,13 @@ use crate::adapter::inbound::tui::app::shell_presentation::{
 use crate::adapter::inbound::tui::app::shell_runtime::ShellRuntime;
 use crate::adapter::inbound::tui::app::test_helpers::{
     sample_planning_runtime_projection, test_native_tui_app_with_review_center_repository,
+    test_native_tui_app_with_session_catalog_port,
 };
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterRepositoryPort,
     ReviewCenterThreadProjection,
 };
+use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::parallel_mode::{
@@ -23,7 +25,9 @@ use crate::domain::parallel_mode::{
     ParallelModeSupervisorDetailSnapshot, ParallelModeSupervisorSnapshot,
     ParallelModeSupervisorState,
 };
-use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
+use crate::domain::recent_sessions::{
+    RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
+};
 use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::layout::Position;
@@ -46,6 +50,26 @@ pub(super) use self::fixtures::{
     make_test_app, make_test_app_with_planning, sample_parallel_mode_snapshot,
     sample_planning_editor_session, sample_session, sample_startup_diagnostics,
 };
+
+#[derive(Default)]
+struct CountingSessionCatalogPort {
+    load_count: AtomicUsize,
+}
+
+impl SessionCatalogPort for CountingSessionCatalogPort {
+    fn load_session_catalog(
+        &self,
+        _request: SessionCatalogRequest,
+    ) -> anyhow::Result<SessionCatalog> {
+        self.load_count.fetch_add(1, Ordering::SeqCst);
+        Ok(RecentSessions {
+            items: Vec::new(),
+            warnings: Vec::new(),
+            next_cursor: None,
+        }
+        .into())
+    }
+}
 
 // Transcript formatting tests protect text-level contracts that feed both the
 // bordered TUI and the inline main-buffer renderer.
@@ -592,6 +616,34 @@ fn inline_sessions_inspection_renders_browser_panels() {
     assert!(!rendered.contains("shell inspection"));
     assert!(!rendered.contains("Transcript /"));
     assert!(!rendered.contains("┌"));
+}
+#[test]
+fn repeated_session_overlay_draws_do_not_load_the_catalog() {
+    let session_port = Arc::new(CountingSessionCatalogPort::default());
+    let mut terminal = Terminal::new(TestBackend::new(96, 28)).expect("test terminal");
+    let mut app = test_native_tui_app_with_session_catalog_port(session_port.clone());
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.session_state = SessionState::Ready(
+        RecentSessions {
+            items: vec![sample_session("thread-1")],
+            warnings: Vec::new(),
+            next_cursor: None,
+        }
+        .into(),
+    );
+    app.shell_overlay = ShellOverlay::Sessions;
+
+    for _ in 0..2 {
+        terminal
+            .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
+            .expect("inline session redraw succeeds");
+    }
+
+    assert_eq!(
+        session_port.load_count.load(Ordering::SeqCst),
+        0,
+        "capturing and redrawing the session screen model must not load the catalog"
+    );
 }
 #[test]
 fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navigation() {
@@ -2218,7 +2270,8 @@ fn overlay_family_uses_shared_akra_chrome_tokens() {
         &app,
         startup_sample.parallel_mode_enabled(),
     );
-    let sessions = shell_presentation::build_session_overlay_view(&app);
+    let sessions_model = SessionOverlayScreenModel::capture(&app);
+    let sessions = shell_presentation::build_session_overlay_view(&sessions_model);
     let help = shell_presentation::build_help_overlay_view(TuiLanguage::English);
     app.show_model_selection_overlay();
     let model_selection = shell_presentation::build_model_selection_overlay_view(&app);

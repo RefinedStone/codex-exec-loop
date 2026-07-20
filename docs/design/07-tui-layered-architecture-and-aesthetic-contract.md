@@ -147,6 +147,17 @@ the fixed Akra theme.
 - Review Center projection and rendering must read only that screen model; displaying its loading
   state, resizing, or repeatedly redrawing it must not perform service, repository, filesystem, or
   database I/O.
+- One session-overlay draw must capture an owned `SessionOverlayScreenModel` containing catalog
+  status, workspace context, committed and edited query state, filter/page projection, stable
+  selected thread identity, page-local selected index, rename state, and warning/key availability.
+  Filtering, paging, and selection repair run exactly once while capturing that model; presentation
+  helpers must not reread `NativeTuiApp` or call services.
+- Session list rows, selected detail, warnings, and key copy must be built from that same model.
+  Rendering must finish the owned `SessionOverlayView` before synchronizing Ratatui `ListState`, and
+  resize or repeated redraw must not trigger session-catalog I/O.
+- This presentation boundary does not move load admission: Core remains the semantic catalog and
+  correlation authority, while the adapter-local `SessionState` mirror continues to gate initial
+  load and reload until Core owns equivalent coalescing.
 - Async Review Center results may replace the current screen model only when the core correlation
   generation, workspace, and active-thread identity (thread ID) still match; workspace or thread
   identity drift must trigger a correlated reload.

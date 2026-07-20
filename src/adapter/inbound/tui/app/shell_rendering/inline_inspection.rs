@@ -15,7 +15,8 @@ use super::super::shell_presentation::{
 };
 use super::super::{
     AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, ParallelPeekOverlayStep,
-    PlanningInitOverlayStep, ProgressiveActivityPageCursor, ShellOverlay,
+    PlanningInitOverlayStep, ProgressiveActivityPageCursor, SessionOverlayScreenModel,
+    ShellOverlay,
 };
 use super::inline_layout::{
     InlineAppendOnlyStream, InlineAppendOnlyStreamTitle, InlineScrolledPanel, InlineTitledPanel,
@@ -572,7 +573,8 @@ fn draw_inline_startup_inspection(
     render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
 fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
-    let overlay_view = build_session_overlay_view(app);
+    let screen_model = SessionOverlayScreenModel::capture(app);
+    let overlay_view = build_session_overlay_view(&screen_model);
     let SessionOverlayView {
         header_lines,
         list_view,

@@ -97,6 +97,16 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
 
 - `AkraTheme::panel_block`을 사용합니다.
 - 필요한 section은 header, summary, primary content, status, keys 순서로 둡니다.
+- Session overlay draw는 catalog 상태, workspace, 저장/편집 query, filter/page projection, stable
+  thread ID, page-local index, rename 상태, warning/key 가능 여부를 하나의 owned
+  `SessionOverlayScreenModel`로 한 번 캡처합니다. Filter, paging, selection 복구는 이때 정확히 한
+  번만 수행하며 presentation helper는 `NativeTuiApp`이나 service를 다시 읽지 않습니다.
+- List row, selected detail, warning, key copy는 같은 session screen model에서 만듭니다. Renderer는
+  owned `SessionOverlayView`를 완성한 뒤에만 Ratatui `ListState`를 동기화하며 resize나 반복
+  redraw는 session catalog I/O를 발생시키지 않습니다.
+- 이 presentation 경계는 load admission을 옮기지 않습니다. Core가 catalog 의미와 correlation
+  authority이고, adapter-local `SessionState` mirror는 Core에 동등한 coalescing이 생길 때까지
+  initial load/reload gate로 유지됩니다.
 - 선택 row는 semantic selected style과 marker를 함께 사용해 색상만으로 표현하지 않습니다.
 - Key footer는 `AkraTheme::key_line`을 사용하고 현재 state가 실제 처리하는 shortcut만 표시합니다.
 

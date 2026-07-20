@@ -1,3 +1,7 @@
+use super::super::{
+    SessionBrowserScreenModel, SessionOverlayCatalogScreenModel, SessionOverlayScreenModel,
+};
+use super::AkraTheme;
 use super::capability_copy::{
     session_catalog_empty_action_hint_line, session_catalog_empty_message_line,
     session_catalog_empty_provider_line, session_catalog_loading_message,
@@ -8,13 +12,9 @@ use super::capability_copy::{
     session_catalog_warning_blocked_line, session_catalog_warning_waiting_line,
 };
 use super::overlays::{OverlayListEntryView, OverlayListView};
-use super::{AkraTheme, NativeTuiApp};
-use crate::adapter::inbound::tui::shell_chrome::SessionState;
-use crate::domain::recent_sessions::{SessionCatalog, SessionCatalogTier};
+use crate::domain::recent_sessions::SessionCatalogStatus;
 use crate::domain::session_browser::SessionProjectFilterOption;
-use crate::domain::session_browser::{
-    SessionBrowserPage, SessionBrowserProjection, SessionProjectFilter, build_session_browser_page,
-};
+use crate::domain::session_browser::{SessionBrowserProjection, SessionProjectFilter};
 use crate::domain::session_summary::SessionSummary;
 use ratatui::text::Line;
 #[path = "session_browser/empty_state.rs"]
@@ -29,23 +29,22 @@ use self::empty_state::{
 // pane is always an OverlayListView, while the right pane explains either the
 // selected thread or why no thread can be selected.
 pub(super) fn build_session_overlay_content(
-    app: &NativeTuiApp,
+    model: &SessionOverlayScreenModel,
 ) -> (OverlayListView, Vec<Line<'static>>) {
-    let current_workspace_directory = app.current_workspace_directory();
-    match &app.session_state {
-        SessionState::Idle => (
+    match &model.catalog {
+        SessionOverlayCatalogScreenModel::Idle => (
             OverlayListView {
                 message_lines: Some(vec![Line::from(session_catalog_not_loaded_message(
-                    app.can_open_session_list(),
+                    model.can_open_session_list,
                 ))]),
                 items: Vec::new(),
                 selected_index: None,
             },
             vec![Line::from(session_catalog_not_loaded_detail_line(
-                app.can_open_session_list(),
+                model.can_open_session_list,
             ))],
         ),
-        SessionState::Loading => (
+        SessionOverlayCatalogScreenModel::Loading => (
             OverlayListView {
                 message_lines: Some(vec![Line::from(session_catalog_loading_message())]),
                 items: Vec::new(),
@@ -53,7 +52,7 @@ pub(super) fn build_session_overlay_content(
             },
             vec![Line::from(session_catalog_waiting_detail_line())],
         ),
-        SessionState::Failed(message) => (
+        SessionOverlayCatalogScreenModel::Failed(message) => (
             OverlayListView {
                 message_lines: Some(vec![Line::from(message.clone())]),
                 items: Vec::new(),
@@ -61,28 +60,20 @@ pub(super) fn build_session_overlay_content(
             },
             vec![Line::from(message.clone())],
         ),
-        SessionState::Ready(catalog) => {
-            let Some(recent_sessions) = catalog.recent_sessions() else {
-                return build_non_queryable_session_catalog_content(catalog);
-            };
-
-            // Domain projection owns filtering, paging, and selection repair.
-            // Presentation code only maps that projection into list rows and
-            // detail copy so key handling and rendering stay in sync.
-            let browser_page = build_session_browser_page(
-                recent_sessions,
-                app.session_overlay_ui_state.browser_state(),
-                Some(current_workspace_directory.as_str()),
-                app.session_overlay_ui_state.selected_session_id(),
-                app.selected_session_index,
-            );
+        SessionOverlayCatalogScreenModel::Unsupported(status) => {
+            build_non_queryable_session_catalog_content(status, false)
+        }
+        SessionOverlayCatalogScreenModel::Partial(status) => {
+            build_non_queryable_session_catalog_content(status, true)
+        }
+        SessionOverlayCatalogScreenModel::Queryable(browser) => {
+            let projection = &browser.projection;
 
             // A queryable provider can still return an empty catalog. That is
             // different from "no matches": it should point operators at the
             // provider/capture action instead of query or filter controls.
-            if recent_sessions.items.is_empty() {
-                let mut lines =
-                    build_session_browser_summary_lines(app, &browser_page, catalog.tier());
+            if projection.total_session_count == 0 {
+                let mut lines = build_session_browser_summary_lines(model, browser);
                 lines.push(Line::from(""));
                 lines.push(Line::from(session_catalog_empty_provider_line()));
                 lines.push(Line::from(session_catalog_empty_action_hint_line()));
@@ -99,24 +90,19 @@ pub(super) fn build_session_overlay_content(
             // Filters and search can hide every loaded session. Keep summary
             // context visible here so users can understand whether the empty
             // result came from text search, project filtering, or both.
-            if browser_page.visible_sessions.is_empty() {
-                let search_query = app
-                    .session_overlay_ui_state
-                    .browser_state()
-                    .search_query
-                    .as_str();
-                let mut lines =
-                    build_session_browser_summary_lines(app, &browser_page, catalog.tier());
+            if browser.visible_sessions.is_empty() {
+                let search_query = model.committed_search_query.as_str();
+                let mut lines = build_session_browser_summary_lines(model, browser);
                 lines.push(Line::from(""));
                 lines.push(Line::from(build_session_empty_detail_line(
-                    &browser_page,
+                    projection,
                     search_query,
                 )));
-                lines.push(Line::from(build_session_empty_hint_line(&browser_page)));
+                lines.push(Line::from(build_session_empty_hint_line(projection)));
                 return (
                     OverlayListView {
                         message_lines: Some(vec![Line::from(build_session_empty_message(
-                            &browser_page,
+                            projection,
                             search_query,
                         ))]),
                         items: Vec::new(),
@@ -130,26 +116,20 @@ pub(super) fn build_session_overlay_content(
             // transition even while rows remain visible. Rendering rows without
             // detail keeps the overlay usable until the controller repairs the
             // selected id/index on the next input.
-            let Some(selected_session) = browser_page.selected_session() else {
-                let search_query = app
-                    .session_overlay_ui_state
-                    .browser_state()
-                    .search_query
-                    .as_str();
-                let mut lines =
-                    build_session_browser_summary_lines(app, &browser_page, catalog.tier());
+            let Some(selected_session) = browser.selected_session() else {
+                let search_query = model.committed_search_query.as_str();
+                let mut lines = build_session_browser_summary_lines(model, browser);
                 lines.push(Line::from(""));
                 lines.push(Line::from(build_session_empty_detail_line(
-                    &browser_page,
+                    projection,
                     search_query,
                 )));
                 return (
                     OverlayListView {
                         message_lines: None,
-                        items: browser_page
+                        items: browser
                             .visible_sessions
                             .iter()
-                            .copied()
                             .map(build_session_list_entry)
                             .collect(),
                         selected_index: None,
@@ -174,32 +154,27 @@ pub(super) fn build_session_overlay_content(
                 )),
                 Line::from(format!("status: {}", selected_session.status_type)),
             ];
-            if app.session_overlay_ui_state.is_rename_editing()
-                && app.session_overlay_ui_state.rename_editor_thread_id()
-                    == Some(selected_session.id.as_str())
+            if let Some(rename_editor) = model.rename_editor.as_ref()
+                && rename_editor.thread_id == selected_session.id
             {
                 lines.insert(
                     1,
                     Line::from(format!(
                         "{}: {}",
-                        app.tui_language.session_rename_label(),
-                        app.session_overlay_ui_state.rename_editor_buffer()
+                        model.language.session_rename_label(),
+                        rename_editor.buffer
                     )),
                 );
-                if let Some(feedback) = app.session_overlay_ui_state.rename_editor_feedback() {
-                    lines.insert(2, Line::from(feedback.to_string()));
+                if let Some(feedback) = rename_editor.feedback.as_ref() {
+                    lines.insert(2, Line::from(feedback.clone()));
                 }
             }
             if let Some(branch) = &selected_session.git_branch {
                 lines.push(Line::from(format!("git branch: {branch}")));
             }
 
-            lines.extend(build_session_browser_summary_lines(
-                app,
-                &browser_page,
-                catalog.tier(),
-            ));
-            if recent_sessions.next_cursor.is_some() {
+            lines.extend(build_session_browser_summary_lines(model, browser));
+            if browser.next_cursor_available {
                 lines.push(Line::from("more threads are available in the next cursor"));
             }
 
@@ -211,13 +186,12 @@ pub(super) fn build_session_overlay_content(
             (
                 OverlayListView {
                     message_lines: None,
-                    items: browser_page
+                    items: browser
                         .visible_sessions
                         .iter()
-                        .copied()
                         .map(build_session_list_entry)
                         .collect(),
-                    selected_index: browser_page.selected_index,
+                    selected_index: browser.selected_index,
                 },
                 lines,
             )
@@ -229,27 +203,25 @@ pub(super) fn build_session_overlay_content(
 // intentionally derive labels from the active projection so the right pane,
 // footer keys, and list rows describe the same search/filter/page state.
 fn build_session_browser_summary_lines(
-    app: &NativeTuiApp,
-    browser_page: &SessionBrowserPage<'_>,
-    catalog_tier: SessionCatalogTier,
+    model: &SessionOverlayScreenModel,
+    browser: &SessionBrowserScreenModel,
 ) -> Vec<Line<'static>> {
-    let active_filter_option = browser_page.projection.active_project_filter_option();
+    let active_filter_option = browser.projection.active_project_filter_option();
     let filter_label = active_filter_option
         .map(session_project_filter_option_label)
         .unwrap_or_else(|| session_project_filter_label(&SessionProjectFilter::AllProjects));
     let filter_session_count = active_filter_option
         .map(|option| option.session_count)
-        .unwrap_or(browser_page.projection.filtered_session_count);
-    let browser_query = if app.session_overlay_ui_state.is_search_query_editing() {
-        app.session_overlay_ui_state.search_query_editor_buffer()
-    } else {
-        &app.session_overlay_ui_state.browser_state().search_query
-    };
+        .unwrap_or(browser.projection.filtered_session_count);
+    let browser_query = model
+        .search_query_editor
+        .as_deref()
+        .unwrap_or(model.committed_search_query.as_str());
     let mut lines = vec![
-        Line::from(session_catalog_tier_line(catalog_tier)),
+        Line::from(session_catalog_tier_line(browser.tier)),
         Line::from(format!(
             "{}: {}",
-            if app.session_overlay_ui_state.is_search_query_editing() {
+            if model.search_query_editor.is_some() {
                 "query edit"
             } else {
                 "query"
@@ -257,20 +229,20 @@ fn build_session_browser_summary_lines(
             format_session_query_label(browser_query)
         )),
         Line::from(format_session_filter_line(
-            &browser_page.projection,
+            &browser.projection,
             filter_label.as_str(),
             filter_session_count,
         )),
         Line::from(build_session_project_context_line(
-            &browser_page.projection,
-            &app.current_workspace_directory(),
+            &browser.projection,
+            &model.current_workspace_directory,
         )),
         Line::from(format_session_browser_line(
-            &browser_page.projection,
+            &browser.projection,
             filter_label.as_str(),
         )),
     ];
-    if app.session_overlay_ui_state.is_search_query_editing() {
+    if model.search_query_editor.is_some() {
         lines.push(Line::from(
             "Enter applies the query. Esc keeps the saved browser state.",
         ));
@@ -282,22 +254,23 @@ fn build_session_browser_summary_lines(
 // Key copy is stateful because the same overlay can be a search editor,
 // diagnostic surface for unsupported catalogs, or full browser. The shortcuts
 // listed here must match what the shell controller accepts in each mode.
-pub(super) fn build_session_key_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    if app.session_overlay_ui_state.is_rename_editing() {
-        let pending = app.session_overlay_ui_state.is_rename_pending();
-        let key_lines = app.tui_language.session_rename_key_lines(pending);
+pub(super) fn build_session_key_lines(model: &SessionOverlayScreenModel) -> Vec<Line<'static>> {
+    if let Some(rename_editor) = model.rename_editor.as_ref() {
+        let key_lines = model
+            .language
+            .session_rename_key_lines(rename_editor.pending);
         return vec![
             AkraTheme::key_line(key_lines[0]),
             AkraTheme::key_line(key_lines[1]),
         ];
     }
-    if app.session_overlay_ui_state.is_search_query_editing() {
+    if model.search_query_editor.is_some() {
         return vec![
             AkraTheme::key_line("Type the session query directly. Spaces match multiple tokens."),
             AkraTheme::key_line("Enter: apply query    Esc/Ctrl+C: cancel    Backspace: delete"),
         ];
     }
-    if !app.session_browser_available() {
+    if !model.browser_available() {
         return vec![
             AkraTheme::key_line(
                 "n: draft    r: reload    Ctrl+d: diagnostics    Esc/Ctrl+C: close",
@@ -326,17 +299,32 @@ fn format_session_query_label(search_query: &str) -> &str {
 // Warning lines are separated from the main overlay content so shell chrome can
 // keep surfacing provider capability failures even when the browser body is
 // showing loading, diagnostics, or an otherwise empty list.
-pub(super) fn build_session_warning_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
-    match &app.session_state {
-        SessionState::Ready(catalog) if !catalog.warnings().is_empty() => catalog
-            .warnings()
-            .iter()
-            .cloned()
-            .map(Line::from)
-            .collect::<Vec<_>>(),
-        SessionState::Failed(message) => vec![Line::from(message.clone())],
-        SessionState::Loading => vec![Line::from(session_catalog_warning_waiting_line())],
-        SessionState::Idle if !app.can_open_session_list() => {
+pub(super) fn build_session_warning_lines(model: &SessionOverlayScreenModel) -> Vec<Line<'static>> {
+    match &model.catalog {
+        SessionOverlayCatalogScreenModel::Unsupported(status)
+        | SessionOverlayCatalogScreenModel::Partial(status)
+            if !status.warnings.is_empty() =>
+        {
+            status
+                .warnings
+                .iter()
+                .cloned()
+                .map(Line::from)
+                .collect::<Vec<_>>()
+        }
+        SessionOverlayCatalogScreenModel::Queryable(browser) if !browser.warnings.is_empty() => {
+            browser
+                .warnings
+                .iter()
+                .cloned()
+                .map(Line::from)
+                .collect::<Vec<_>>()
+        }
+        SessionOverlayCatalogScreenModel::Failed(message) => vec![Line::from(message.clone())],
+        SessionOverlayCatalogScreenModel::Loading => {
+            vec![Line::from(session_catalog_warning_waiting_line())]
+        }
+        SessionOverlayCatalogScreenModel::Idle if !model.can_open_session_list => {
             vec![Line::from(session_catalog_warning_blocked_line())]
         }
         _ => vec![Line::from("no warnings")],
@@ -361,44 +349,41 @@ fn build_session_list_entry(session: &SessionSummary) -> OverlayListEntryView {
 // they cannot be searched or paged. Render them as diagnostics instead of
 // forcing them through the normal browser projection.
 fn build_non_queryable_session_catalog_content(
-    catalog: &SessionCatalog,
+    status: &SessionCatalogStatus,
+    partial: bool,
 ) -> (OverlayListView, Vec<Line<'static>>) {
-    let mut lines = vec![Line::from(session_catalog_tier_line(catalog.tier()))];
-    match catalog {
-        SessionCatalog::Unsupported(status) => {
-            lines.push(Line::from(session_catalog_unsupported_detail_line(
-                status.tier,
-            )));
-            if !status.detail.is_empty() {
-                lines.push(Line::from(format!("detail: {}", status.detail)));
-            }
-            (
-                OverlayListView {
-                    message_lines: Some(vec![Line::from(session_catalog_unsupported_message(
-                        status.tier,
-                    ))]),
-                    items: Vec::new(),
-                    selected_index: None,
-                },
-                lines,
-            )
+    let mut lines = vec![Line::from(session_catalog_tier_line(status.tier))];
+    if partial {
+        lines.push(Line::from(session_catalog_partial_detail_line(
+            status.detail.as_str(),
+        )));
+        (
+            OverlayListView {
+                message_lines: Some(vec![Line::from(session_catalog_partial_message(
+                    status.tier,
+                ))]),
+                items: Vec::new(),
+                selected_index: None,
+            },
+            lines,
+        )
+    } else {
+        lines.push(Line::from(session_catalog_unsupported_detail_line(
+            status.tier,
+        )));
+        if !status.detail.is_empty() {
+            lines.push(Line::from(format!("detail: {}", status.detail)));
         }
-        SessionCatalog::Partial(status) => {
-            lines.push(Line::from(session_catalog_partial_detail_line(
-                status.detail.as_str(),
-            )));
-            (
-                OverlayListView {
-                    message_lines: Some(vec![Line::from(session_catalog_partial_message(
-                        status.tier,
-                    ))]),
-                    items: Vec::new(),
-                    selected_index: None,
-                },
-                lines,
-            )
-        }
-        SessionCatalog::Ready { .. } => unreachable!("ready catalogs should render a browser"),
+        (
+            OverlayListView {
+                message_lines: Some(vec![Line::from(session_catalog_unsupported_message(
+                    status.tier,
+                ))]),
+                items: Vec::new(),
+                selected_index: None,
+            },
+            lines,
+        )
     }
 }
 
@@ -500,10 +485,11 @@ fn plural_suffix(count: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::inbound::tui::app::NativeTuiApp;
     use crate::adapter::inbound::tui::app::language::TuiLanguage;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
-    use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
-    use crate::domain::recent_sessions::RecentSessions;
+    use crate::adapter::inbound::tui::shell_chrome::{SessionState, ShellOverlay};
+    use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
 
     fn session(id: &str, title: &str, cwd: &str) -> SessionSummary {
         SessionSummary {
@@ -584,6 +570,10 @@ mod tests {
         lines
     }
 
+    fn screen_model(app: &NativeTuiApp) -> SessionOverlayScreenModel {
+        SessionOverlayScreenModel::capture(app)
+    }
+
     #[test]
     fn query_label_uses_all_text_placeholder_for_empty_query() {
         assert_eq!(format_session_query_label(""), "(all text)");
@@ -594,49 +584,56 @@ mod tests {
     fn overlay_content_covers_non_ready_and_non_queryable_catalogs() {
         let mut app = test_native_tui_app();
 
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert!(list_text(&list_view).contains("recent sessions unlock"));
         assert!(lines_text(&detail_lines).contains("startup diagnostics"));
-        assert!(lines_text(&build_session_warning_lines(&app)).contains("remain unavailable"));
+        assert!(lines_text(&build_session_warning_lines(&model)).contains("remain unavailable"));
         assert!(
-            lines_text(&build_session_key_lines(&app)).contains("requires a queryable catalog")
+            lines_text(&build_session_key_lines(&model)).contains("requires a queryable catalog")
         );
 
         app.session_state = SessionState::Loading;
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert!(list_text(&list_view).contains("loading recent sessions"));
         assert!(lines_text(&detail_lines).contains("waiting for session list response"));
-        assert!(lines_text(&build_session_warning_lines(&app)).contains("waiting for app-server"));
+        assert!(
+            lines_text(&build_session_warning_lines(&model)).contains("waiting for app-server")
+        );
 
         app.session_state = SessionState::Failed("catalog unavailable".to_string());
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert!(list_text(&list_view).contains("catalog unavailable"));
         assert!(lines_text(&detail_lines).contains("catalog unavailable"));
-        assert!(lines_text(&build_session_warning_lines(&app)).contains("catalog unavailable"));
+        assert!(lines_text(&build_session_warning_lines(&model)).contains("catalog unavailable"));
 
         app.session_state = SessionState::Ready(SessionCatalog::unsupported(
             SessionCatalogTier::AttachOnly,
             "provider disabled",
             vec!["unsupported warning".to_string()],
         ));
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert!(list_text(&list_view).contains("does not expose a recent-session catalog"));
         let detail_text = lines_text(&detail_lines);
         assert!(detail_text.contains("catalog tier: attach-only"));
         assert!(detail_text.contains("detail: provider disabled"));
-        assert!(lines_text(&build_session_warning_lines(&app)).contains("unsupported warning"));
+        assert!(lines_text(&build_session_warning_lines(&model)).contains("unsupported warning"));
 
         app.session_state = SessionState::Ready(SessionCatalog::partial(
             SessionCatalogTier::HandleBasedReattach,
             "handle only",
             vec!["partial warning".to_string()],
         ));
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert!(
             list_text(&list_view).contains("handle-based reattach is only partially available")
         );
         assert!(lines_text(&detail_lines).contains("handle only"));
-        assert!(lines_text(&build_session_warning_lines(&app)).contains("partial warning"));
+        assert!(lines_text(&build_session_warning_lines(&model)).contains("partial warning"));
     }
 
     #[test]
@@ -645,14 +642,15 @@ mod tests {
         app.shell_overlay = ShellOverlay::Sessions;
         app.session_state = SessionState::Ready(ready_catalog(Vec::new(), Vec::new(), None));
 
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert_eq!(list_view.selected_index, None);
         assert!(list_text(&list_view).contains("no recent sessions have been recorded yet"));
         let detail_text = lines_text(&detail_lines);
         assert!(detail_text.contains("catalog tier: provider-backed catalog"));
         assert!(detail_text.contains("codex app-server has not returned any recent sessions"));
         assert!(detail_text.contains("Start a new draft with n"));
-        assert!(lines_text(&build_session_warning_lines(&app)).contains("no warnings"));
+        assert!(lines_text(&build_session_warning_lines(&model)).contains("no warnings"));
 
         app.session_state = SessionState::Ready(ready_catalog(
             vec![
@@ -662,7 +660,8 @@ mod tests {
             vec!["catalog warning".to_string()],
             Some("next-cursor".to_string()),
         ));
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert_eq!(list_view.items.len(), 2);
         assert_eq!(list_view.selected_index, Some(0));
         assert!(list_text(&list_view).contains("thread-a"));
@@ -683,22 +682,24 @@ mod tests {
         assert!(detail_text.contains("more threads are available in the next cursor"));
         assert!(detail_text.contains("Alpha task preview"));
         assert!(detail_text.contains("path: /tmp/root/thread-alpha.json"));
-        assert!(lines_text(&build_session_warning_lines(&app)).contains("catalog warning"));
-        assert!(lines_text(&build_session_key_lines(&app)).contains("/: query"));
-        assert!(lines_text(&build_session_key_lines(&app)).contains("e: rename"));
+        assert!(lines_text(&build_session_warning_lines(&model)).contains("catalog warning"));
+        assert!(lines_text(&build_session_key_lines(&model)).contains("/: query"));
+        assert!(lines_text(&build_session_key_lines(&model)).contains("e: rename"));
 
         app.session_overlay_ui_state
             .set_project_filter(SessionProjectFilter::RecentProject {
                 workspace_directory: "/tmp/root".to_string(),
             });
-        let (_, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (_, detail_lines) = build_session_overlay_content(&model);
         let detail_text = lines_text(&detail_lines);
         assert!(detail_text.contains("filter: /tmp/root (1 recent session)"));
         assert!(detail_text.contains("context: current workspace ("));
 
         app.session_overlay_ui_state
             .set_search_query("does-not-exist");
-        let (list_view, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (list_view, detail_lines) = build_session_overlay_content(&model);
         assert_eq!(list_view.items.len(), 0);
         assert!(list_text(&list_view).contains("no sessions in /tmp/root match query"));
         let detail_text = lines_text(&detail_lines);
@@ -709,11 +710,12 @@ mod tests {
         app.session_overlay_ui_state.start_search_query_edit();
         app.session_overlay_ui_state
             .push_search_query_character('!');
-        let (_, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (_, detail_lines) = build_session_overlay_content(&model);
         let detail_text = lines_text(&detail_lines);
         assert!(detail_text.contains("query edit: does-not-exist!"));
         assert!(detail_text.contains("Enter applies the query"));
-        assert!(lines_text(&build_session_key_lines(&app)).contains("Type the session query"));
+        assert!(lines_text(&build_session_key_lines(&model)).contains("Type the session query"));
     }
 
     #[test]
@@ -854,24 +856,61 @@ mod tests {
         app.session_overlay_ui_state
             .start_rename_edit("thread-alpha", "Alpha renamed");
 
-        let (_, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (_, detail_lines) = build_session_overlay_content(&model);
         assert_eq!(detail_lines[0].to_string(), "title: Alpha task");
         assert_eq!(detail_lines[1].to_string(), "rename: Alpha renamed");
         assert!(lines_text(&detail_lines).contains("id: thread-alpha"));
-        assert!(lines_text(&build_session_key_lines(&app)).contains("Enter: rename"));
+        assert!(lines_text(&build_session_key_lines(&model)).contains("Enter: rename"));
 
         app.session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename should enter pending state");
-        let keys = lines_text(&build_session_key_lines(&app));
+        let model = screen_model(&app);
+        let keys = lines_text(&build_session_key_lines(&model));
         assert!(keys.contains("Rename pending"));
         assert!(keys.contains("duplicate submit"));
 
         app.tui_language = TuiLanguage::Korean;
-        let (_, detail_lines) = build_session_overlay_content(&app);
+        let model = screen_model(&app);
+        let (_, detail_lines) = build_session_overlay_content(&model);
         assert_eq!(detail_lines[1].to_string(), "새 이름: Alpha renamed");
-        let keys = lines_text(&build_session_key_lines(&app));
+        let keys = lines_text(&build_session_key_lines(&model));
         assert!(keys.contains("이름 변경 확인 중"));
         assert!(keys.contains("중복 제출"));
+    }
+
+    #[test]
+    fn captured_overlay_sections_stay_coherent_after_app_state_changes() {
+        let mut app = test_native_tui_app();
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.session_state = SessionState::Ready(ready_catalog(
+            vec![session("thread-alpha", "Alpha task", "/tmp/root")],
+            vec!["captured warning".to_string()],
+            None,
+        ));
+        app.session_overlay_ui_state
+            .start_rename_edit("thread-alpha", "Alpha renamed");
+
+        let captured = screen_model(&app);
+
+        app.session_state = SessionState::Failed("new catalog failure".to_string());
+        app.session_overlay_ui_state.clear_browser_state();
+        app.session_overlay_ui_state
+            .cancel_rename_edit(TuiLanguage::Korean);
+        app.tui_language = TuiLanguage::Korean;
+
+        let (captured_list, captured_detail) = build_session_overlay_content(&captured);
+        assert!(list_text(&captured_list).contains("Alpha task"));
+        assert!(lines_text(&captured_detail).contains("rename: Alpha renamed"));
+        assert!(lines_text(&build_session_warning_lines(&captured)).contains("captured warning"));
+        assert!(lines_text(&build_session_key_lines(&captured)).contains("Enter: rename"));
+
+        let fresh = screen_model(&app);
+        let (fresh_list, fresh_detail) = build_session_overlay_content(&fresh);
+        assert!(list_text(&fresh_list).contains("new catalog failure"));
+        assert!(lines_text(&fresh_detail).contains("new catalog failure"));
+        assert!(lines_text(&build_session_warning_lines(&fresh)).contains("new catalog failure"));
+        assert!(!lines_text(&build_session_key_lines(&fresh)).contains("Enter: rename"));
     }
 }

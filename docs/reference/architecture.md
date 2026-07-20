@@ -366,6 +366,16 @@ prompt lock, animation, and drawing consume that immutable projection instead of
 control-plane mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks
 share a panel-only projection and do not clone transcript or event-stream rows.
 
+Each session-overlay draw captures one owned `SessionOverlayScreenModel` before presentation. The
+model combines the adapter-local catalog state with workspace, committed and edited query, project
+filter, one page projection, stable selected thread identity, page-local selected index, rename
+editor state, warnings, and key availability. Page projection and selection repair run once;
+list/detail/warning/key builders cannot reread `NativeTuiApp` or services. Rendering builds the
+owned overlay view before it mutates Ratatui `ListState`, so repeated redraw and resize do not
+dispatch catalog work or call services. Core remains the semantic session-catalog and correlation
+authority; the adapter-local `SessionState` mirror still provides initial-load and reload admission
+until that coalescing policy moves into Core.
+
 The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft. When the editor
 is closed, status and review presentation read the canonical policy from the conversation model;
 the adapter does not retain or reverse-sync a second budget value.
