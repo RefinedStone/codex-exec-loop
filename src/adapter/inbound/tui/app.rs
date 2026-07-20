@@ -141,6 +141,8 @@ mod queue_overlay_ui;
 mod ratatui_frontend;
 #[path = "app/reviews_overlay_ui.rs"]
 mod reviews_overlay_ui;
+#[path = "app/session_overlay_screen_model.rs"]
+mod session_overlay_screen_model;
 #[path = "app/session_overlay_ui.rs"]
 mod session_overlay_ui;
 #[path = "app/session_shell_controller.rs"]
@@ -238,6 +240,9 @@ use progressive_activity_overlay_ui::{
     ProgressiveActivityDiffLineKind, ProgressiveActivityOverlayUiState,
     ProgressiveActivityPageCursor, parse_progressive_activity_card_filter,
     parse_progressive_activity_detail_kind,
+};
+pub(in crate::adapter::inbound::tui::app) use session_overlay_screen_model::{
+    SessionBrowserScreenModel, SessionOverlayCatalogScreenModel, SessionOverlayScreenModel,
 };
 use session_overlay_ui::SessionOverlayUiState;
 pub(super) use shell_controller::ShellActionAvailability;

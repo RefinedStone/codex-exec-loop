@@ -403,11 +403,6 @@ impl NativeTuiApp {
         }
         true
     }
-
-    pub(super) fn session_browser_available(&self) -> bool {
-        // Render code uses this to decide whether browser-specific affordances should be shown.
-        self.current_session_browser_page().is_some()
-    }
 }
 
 #[cfg(test)]
@@ -623,7 +618,7 @@ mod tests {
                 .collect(),
         );
 
-        assert!(app.session_browser_available());
+        assert!(app.current_session_browser_page().is_some());
         assert_eq!(selected_session_id(&app), Some("thread-00"));
 
         app.jump_to_last_session();

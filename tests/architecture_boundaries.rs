@@ -236,6 +236,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/queue_overlay_controller.rs",
             "src/adapter/inbound/tui/app/queue_overlay_ui.rs",
             "src/adapter/inbound/tui/app/reviews_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/session_overlay_screen_model.rs",
             "src/adapter/inbound/tui/app/session_overlay_ui.rs",
             "src/adapter/inbound/tui/app/shell_presentation/overlays",
             "src/adapter/inbound/tui/app/view_selection_overlay_ui.rs",
@@ -254,6 +255,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
             "src/adapter/inbound/tui/app/queue_overlay_ui.rs",
             "src/adapter/inbound/tui/app/shell_controller.rs",
             "src/adapter/inbound/tui/app/reviews_overlay_ui.rs",
+            "src/adapter/inbound/tui/app/session_overlay_screen_model.rs",
             "src/adapter/inbound/tui/app/session_overlay_ui.rs",
             "src/adapter/inbound/tui/app/model_selection_overlay_ui.rs",
             "src/adapter/inbound/tui/app/view_selection_overlay_ui.rs",
@@ -2007,6 +2009,143 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
             .count(),
         1,
         "one terminal sync transaction must capture conversation projection facts exactly once"
+    );
+}
+
+#[test]
+fn tui_session_overlay_reads_one_immutable_screen_model_per_draw() {
+    let model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/session_overlay_screen_model.rs"),
+    )
+    .expect("session overlay screen-model source should load");
+    let model_production = production_lines(&model_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        model_production
+            .matches("build_session_browser_page(")
+            .count(),
+        1,
+        "one session screen-model capture must project filtering, paging, and selection exactly once"
+    );
+    assert_eq!(
+        model_production
+            .matches("current_workspace_directory()")
+            .count(),
+        1,
+        "one session screen-model capture must sample workspace context exactly once"
+    );
+    for required in [
+        "selected_session_id: Option<String>",
+        "selected_index: Option<usize>",
+    ] {
+        assert!(
+            model_production.contains(required),
+            "session screen model must keep stable identity separate from page-local selection: {required}"
+        );
+    }
+    for forbidden in [
+        ".application",
+        "CoreRuntime",
+        "core_runtime",
+        "dispatch_core_command",
+        "SessionService",
+        "SessionCatalogPort",
+        "load_session_catalog",
+        "rename_session",
+        "std::fs",
+        "std::thread",
+        "std::sync",
+        "SystemTime::now",
+        "Instant::now",
+    ] {
+        assert!(
+            !model_production.contains(forbidden),
+            "session screen-model capture must not execute services, catalog I/O, or clocks: {forbidden}"
+        );
+    }
+
+    let presentation_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/session_browser.rs"),
+    )
+    .expect("session presentation source should load");
+    let presentation_production = production_lines(&presentation_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for forbidden in [
+        "NativeTuiApp",
+        "SessionState",
+        "CoreRuntime",
+        "core_runtime",
+        "build_session_browser_page(",
+        ".session_overlay_ui_state",
+        ".current_workspace_directory()",
+        ".application",
+        "std::fs",
+        "std::thread",
+        "std::sync",
+        "SystemTime::now",
+        "Instant::now",
+    ] {
+        assert!(
+            !presentation_production.contains(forbidden),
+            "session presentation must consume only the immutable screen model: {forbidden}"
+        );
+    }
+
+    let popup_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/overlays/popup/base.rs"),
+    )
+    .expect("popup assembly source should load");
+    let popup_builder = top_level_function_source(&popup_source, "build_session_overlay_view");
+    assert!(
+        popup_builder.contains("screen_model: &SessionOverlayScreenModel"),
+        "session popup assembly must receive the immutable screen model"
+    );
+    assert!(
+        !popup_builder.contains("NativeTuiApp"),
+        "session popup assembly must not reread NativeTuiApp"
+    );
+
+    let rendering_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
+    )
+    .expect("inline inspection source should load");
+    let draw = top_level_function_source(&rendering_source, "draw_inline_session_inspection");
+    let compact_draw = draw
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert_eq!(
+        compact_draw
+            .matches("SessionOverlayScreenModel::capture(app)")
+            .count(),
+        1,
+        "one session draw must capture one immutable screen model"
+    );
+    assert_eq!(
+        compact_draw
+            .matches("build_session_overlay_view(&screen_model)")
+            .count(),
+        1,
+        "one session draw must build every overlay section from the same screen model"
+    );
+    let capture_index = compact_draw
+        .find("SessionOverlayScreenModel::capture(app)")
+        .expect("session draw should capture a screen model");
+    let view_index = compact_draw
+        .find("build_session_overlay_view(&screen_model)")
+        .expect("session draw should build an owned overlay view");
+    let list_state_index = compact_draw
+        .find("draw_inline_session_list_panel(")
+        .expect("session draw should synchronize and render the list panel");
+    assert!(
+        capture_index < view_index && view_index < list_state_index,
+        "session draw must finish its immutable projection before mutating Ratatui ListState"
     );
 }
 
@@ -5013,6 +5152,41 @@ fn top_level_impl_method_source(source: &str, method_name: &str) -> String {
         "expected one non-test impl method named {method_name}"
     );
     let span = methods[0].span();
+    source
+        .lines()
+        .skip(span.start().line.saturating_sub(1))
+        .take(
+            span.end()
+                .line
+                .saturating_sub(span.start().line)
+                .saturating_add(1),
+        )
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn top_level_function_source(source: &str, function_name: &str) -> String {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let functions = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function)
+                if !attributes_are_test_only(&function.attrs)
+                    && function.sig.ident == function_name =>
+            {
+                Some(function)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        functions.len(),
+        1,
+        "expected one non-test function named {function_name}"
+    );
+    let span = functions[0].span();
     source
         .lines()
         .skip(span.start().line.saturating_sub(1))

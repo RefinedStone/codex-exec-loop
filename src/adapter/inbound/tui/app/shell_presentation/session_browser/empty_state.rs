@@ -1,6 +1,4 @@
-use crate::domain::session_browser::{
-    SessionBrowserPage, SessionBrowserProjection, SessionProjectFilter,
-};
+use crate::domain::session_browser::{SessionBrowserProjection, SessionProjectFilter};
 
 use super::session_project_filter_option_label;
 
@@ -39,53 +37,49 @@ pub(super) fn build_session_project_context_line(
 }
 
 pub(super) fn build_session_empty_message(
-    browser_page: &SessionBrowserPage<'_>,
+    projection: &SessionBrowserProjection,
     search_query: &str,
 ) -> String {
     // The list-panel message should stay compact. Resolve the human label from
     // the page projection here so the formatter only needs primitive context.
-    let active_filter_label = browser_page
-        .projection
+    let active_filter_label = projection
         .active_project_filter_option()
         .map(session_project_filter_option_label);
     format_session_empty_message(
-        &browser_page.projection.active_project_filter,
+        &projection.active_project_filter,
         search_query,
         active_filter_label.as_deref(),
-        browser_page
-            .projection
+        projection
             .active_project_filter_option()
             .is_some_and(|option| option.is_current_workspace),
-        browser_page.projection.filtered_session_count,
+        projection.filtered_session_count,
     )
 }
 
 pub(super) fn build_session_empty_detail_line(
-    browser_page: &SessionBrowserPage<'_>,
+    projection: &SessionBrowserProjection,
     search_query: &str,
 ) -> String {
     // Detail copy mirrors list empty-state logic but names the missing detail.
     // This covers both true empty results and transient no-selection pages.
-    let active_filter_label = browser_page
-        .projection
+    let active_filter_label = projection
         .active_project_filter_option()
         .map(session_project_filter_option_label);
     format_session_empty_detail_line(
-        &browser_page.projection.active_project_filter,
+        &projection.active_project_filter,
         search_query,
         active_filter_label.as_deref(),
-        browser_page
-            .projection
+        projection
             .active_project_filter_option()
             .is_some_and(|option| option.is_current_workspace),
-        browser_page.projection.filtered_session_count,
+        projection.filtered_session_count,
     )
 }
 
-pub(super) fn build_session_empty_hint_line(browser_page: &SessionBrowserPage<'_>) -> String {
+pub(super) fn build_session_empty_hint_line(projection: &SessionBrowserProjection) -> String {
     // A zero filtered count points to filter/search recovery; rows without a
     // selected item point to navigation or reload.
-    if browser_page.projection.filtered_session_count == 0 {
+    if projection.filtered_session_count == 0 {
         "Press c to clear the browser, Tab/Shift+Tab to cycle filters, or r to reload.".to_string()
     } else {
         "Use Up/Down or Home/End to pick another session, or reload with r.".to_string()

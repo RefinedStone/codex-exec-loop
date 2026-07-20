@@ -2,8 +2,8 @@ use super::super::super::session_browser::{
     build_session_key_lines, build_session_overlay_content, build_session_warning_lines,
 };
 use super::super::super::{
-    AkraTheme, Line, NativeTuiApp, build_startup_check_lines, build_startup_overlay_summary_lines,
-    build_startup_warning_lines,
+    AkraTheme, Line, NativeTuiApp, SessionOverlayScreenModel, build_startup_check_lines,
+    build_startup_overlay_summary_lines, build_startup_warning_lines,
 };
 use super::{SessionOverlayView, StartupOverlayView};
 
@@ -40,9 +40,11 @@ pub(crate) fn build_startup_overlay_view(
 
 // Session popup은 session_browser의 list/detail projection을 modal chrome에 싣는 얇은 assembly boundary다.
 // list selection policy와 warning/key copy는 session_browser가 소유하고, 이 builder는 renderer field mapping만 맡는다.
-pub(crate) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayView {
+pub(crate) fn build_session_overlay_view(
+    screen_model: &SessionOverlayScreenModel,
+) -> SessionOverlayView {
     // list와 detail을 한 helper에서 같이 뽑아 cursor/selection mismatch가 한 frame 안에 섞이지 않게 한다.
-    let (list_view, detail_lines) = build_session_overlay_content(app);
+    let (list_view, detail_lines) = build_session_overlay_content(screen_model);
 
     SessionOverlayView {
         // header copy는 session resume이 별도 route가 아니라 현재 shell 위 inspection임을 유지한다.
@@ -52,7 +54,7 @@ pub(crate) fn build_session_overlay_view(app: &NativeTuiApp) -> SessionOverlayVi
         ],
         list_view,
         detail_lines,
-        warning_lines: build_session_warning_lines(app),
-        key_lines: build_session_key_lines(app),
+        warning_lines: build_session_warning_lines(screen_model),
+        key_lines: build_session_key_lines(screen_model),
     }
 }
