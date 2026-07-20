@@ -22,12 +22,13 @@ use crate::domain::planning::{
     ExecutionSnapshot, ManualPromptCorrelation, ManualPromptRequest, PlanningWorkerPanelState,
     PlanningWorkerStatus, PostTurnRequest, QueueIdlePolicy, RuntimeWorkspaceStatus,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreDispatchOutcome {
     pub events: Vec<AppEvent>,
     pub effects: Vec<CoreEffect>,
-    pub snapshot: AppSnapshot,
+    pub snapshot: Arc<AppSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +167,10 @@ impl CoreController {
         self.state.snapshot()
     }
 
+    fn shared_snapshot(&self) -> Arc<AppSnapshot> {
+        self.state.shared_snapshot()
+    }
+
     pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
         self.state.revisioned_planning_parallel_projection()
     }
@@ -179,7 +184,7 @@ impl CoreController {
             CoreInput::Command(AppCommand::Noop) => CoreDispatchOutcome {
                 events: Vec::new(),
                 effects: Vec::new(),
-                snapshot: self.snapshot(),
+                snapshot: self.shared_snapshot(),
             },
             CoreInput::Command(AppCommand::RunStartupChecks {
                 workspace_directory,
@@ -233,7 +238,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events: Vec::new(),
                     effects: vec![CoreEffect::RenameSession { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::LoadConversation {
@@ -305,7 +310,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events: Vec::new(),
                     effects: vec![CoreEffect::LoadParallelPeekConversation { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::LoadReviewCenter {
@@ -326,7 +331,7 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::LoadReviewCenter { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::LoadQueueAuthority {
@@ -347,7 +352,7 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::LoadQueueAuthority { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::LoadDirectionsMaintenance {
@@ -366,7 +371,7 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::LoadDirectionsMaintenance { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::RefreshPlanningRuntime {
@@ -383,7 +388,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events,
                     effects: vec![CoreEffect::LoadPlanningRuntime { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::ResetPlanningWorkspace(intent)) => self
@@ -441,7 +446,7 @@ impl CoreController {
                         correlation: correlation.clone(),
                     }],
                     effects: vec![CoreEffect::ExecuteQueueMutation { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::PrepareManualPrompt(intent)) => {
@@ -453,7 +458,7 @@ impl CoreController {
                             },
                         )],
                         effects: Vec::new(),
-                        snapshot: self.snapshot(),
+                        snapshot: self.shared_snapshot(),
                     };
                 }
                 let generation = take_generation(
@@ -486,7 +491,7 @@ impl CoreController {
                         ManualPromptPreparationAdmission::Accepted { correlation },
                     )],
                     effects: vec![CoreEffect::PrepareManualPrompt(Box::new(request))],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::CancelManualPromptPreparation) => {
@@ -502,7 +507,7 @@ impl CoreController {
                     effects: vec![CoreEffect::CancelManualPromptPreparation {
                         correlation: active.correlation.clone(),
                     }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::SubmitTurn(request)) => {
@@ -512,7 +517,7 @@ impl CoreController {
                             TurnSubmissionAdmission::RejectedActive { active_correlation },
                         )],
                         effects: Vec::new(),
-                        snapshot: self.snapshot(),
+                        snapshot: self.shared_snapshot(),
                     };
                 }
                 if let Some(active_stop) = self
@@ -526,7 +531,7 @@ impl CoreController {
                             },
                         )],
                         effects: Vec::new(),
-                        snapshot: self.snapshot(),
+                        snapshot: self.shared_snapshot(),
                     };
                 }
                 let correlation = self.begin_turn_submission();
@@ -538,7 +543,7 @@ impl CoreController {
                         correlation,
                         request,
                     }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::RequestStopAllSessions) => {
@@ -550,7 +555,7 @@ impl CoreController {
                             },
                         )],
                         effects: Vec::new(),
-                        snapshot: self.snapshot(),
+                        snapshot: self.shared_snapshot(),
                     };
                 }
                 let correlation = StopRequestCorrelation::new(
@@ -575,7 +580,7 @@ impl CoreController {
                         correlation,
                         attempt: StopRequestAttempt::Initial,
                     }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::SteerTurn(request)) => {
@@ -587,7 +592,7 @@ impl CoreController {
                             },
                         )],
                         effects: Vec::new(),
-                        snapshot: self.snapshot(),
+                        snapshot: self.shared_snapshot(),
                     };
                 }
                 let Some(turn_submission) = self.active_turn_submission else {
@@ -615,7 +620,7 @@ impl CoreController {
                         correlation,
                         request,
                     }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::SubmitApprovalDecision {
@@ -630,7 +635,7 @@ impl CoreController {
                             },
                         )],
                         effects: Vec::new(),
-                        snapshot: self.snapshot(),
+                        snapshot: self.shared_snapshot(),
                     };
                 }
                 let Some(turn_submission) = self.active_turn_submission else {
@@ -662,7 +667,7 @@ impl CoreController {
                         },
                     )],
                     effects: vec![CoreEffect::SubmitApprovalDecision { correlation }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::SetupGithubReviewPolling(request)) => {
@@ -690,7 +695,7 @@ impl CoreController {
                         correlation,
                         request,
                     }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::PollGithubReview) => {
@@ -726,7 +731,7 @@ impl CoreController {
                         correlation,
                         previous_state,
                     }],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::Command(AppCommand::EvaluatePostTurn(mut request)) => {
@@ -759,7 +764,7 @@ impl CoreController {
                         planning_worker_panel_state,
                     )],
                     effects: vec![CoreEffect::EvaluatePostTurn(request)],
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::StartupChecksLoaded {
@@ -803,7 +808,7 @@ impl CoreController {
                             Some((turn_correlation, correlation.clone()));
                     }
                     SessionRenameAcceptedSnapshot {
-                        session_catalog: self.snapshot().session_catalog,
+                        session_catalog: self.shared_snapshot().session_catalog.clone(),
                         turn_stream: self
                             .turn_stream_state
                             .apply_session_rename(
@@ -822,7 +827,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events,
                     effects,
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ConversationLoaded {
@@ -892,7 +897,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ReviewCenterLoaded {
@@ -909,7 +914,7 @@ impl CoreController {
                         snapshot,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::QueueAuthorityLoaded {
@@ -926,7 +931,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::DirectionsMaintenanceLoaded {
@@ -943,7 +948,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningRuntimeLoaded {
@@ -967,7 +972,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningWorkspaceResetCompleted {
@@ -1001,7 +1006,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningSimpleDraftStaged {
@@ -1035,7 +1040,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningEditorStaged {
@@ -1065,7 +1070,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningEditorMutationCompleted {
@@ -1096,7 +1101,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningSimpleEditorLoaded {
@@ -1134,7 +1139,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::PlanningSimpleDraftPromoted {
@@ -1174,7 +1179,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::QueueMutationCompleted {
@@ -1191,7 +1196,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::StopRequestAttemptCompleted {
@@ -1233,7 +1238,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events,
                     effects,
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::TurnSteered {
@@ -1264,7 +1269,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ApprovalDecisionSubmitted {
@@ -1291,7 +1296,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ApprovalReviewPersisted {
@@ -1324,7 +1329,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events,
                     effects,
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(
@@ -1378,7 +1383,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::GithubReviewPollCompleted {
@@ -1406,7 +1411,7 @@ impl CoreController {
                         result,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ManualPromptPrepared(result)) => {
@@ -1414,7 +1419,7 @@ impl CoreController {
                     return CoreDispatchOutcome {
                         events: Vec::new(),
                         effects: Vec::new(),
-                        snapshot: self.snapshot(),
+                        snapshot: self.shared_snapshot(),
                     };
                 };
                 if active.correlation != *result.correlation() {
@@ -1422,7 +1427,7 @@ impl CoreController {
                 }
                 let cancelled = active.cancelled;
                 self.in_flight_manual_prompt_preparation = None;
-                let snapshot = self.snapshot();
+                let snapshot = self.shared_snapshot();
                 CoreDispatchOutcome {
                     events: (!cancelled)
                         .then_some(AppEvent::ManualPromptPrepared(result))
@@ -1476,7 +1481,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events,
                     effects,
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::ConversationStreamUpdated { correlation, event } => {
@@ -1487,7 +1492,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events: vec![AppEvent::turn_stream_snapshot_changed(stream_snapshot)],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::ConversationTurnRuntimeNotice {
@@ -1501,7 +1506,7 @@ impl CoreController {
                 CoreDispatchOutcome {
                     events: vec![AppEvent::turn_stream_snapshot_changed(stream_snapshot)],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::ConversationTurnWorkspaceChanged {
@@ -1516,13 +1521,13 @@ impl CoreController {
                         workspace_directory,
                     }],
                     effects: Vec::new(),
-                    snapshot: self.snapshot(),
+                    snapshot: self.shared_snapshot(),
                 }
             }
             CoreInput::ParallelModeSupervisorSnapshotInvalidated => CoreDispatchOutcome {
                 events: vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated],
                 effects: Vec::new(),
-                snapshot: self.snapshot(),
+                snapshot: self.shared_snapshot(),
             },
             CoreInput::RuntimeProjectionChanged {
                 workspace_directory,
@@ -1655,7 +1660,7 @@ impl CoreController {
                 admission,
             )],
             effects,
-            snapshot: self.snapshot(),
+            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -1689,7 +1694,7 @@ impl CoreController {
                 admission,
             )],
             effects,
-            snapshot: self.snapshot(),
+            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -1760,7 +1765,7 @@ impl CoreController {
     }
 
     fn snapshot_changed_outcome(&self, changed: bool) -> CoreDispatchOutcome {
-        let snapshot = self.snapshot();
+        let snapshot = self.shared_snapshot();
         CoreDispatchOutcome {
             events: if changed {
                 vec![AppEvent::SnapshotChanged(snapshot.clone())]
@@ -1792,7 +1797,7 @@ impl CoreController {
                 TurnSteerAdmission::RejectedUnavailable,
             )],
             effects: Vec::new(),
-            snapshot: self.snapshot(),
+            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -1802,7 +1807,7 @@ impl CoreController {
                 ApprovalDecisionAdmission::RejectedUnavailable,
             )],
             effects: Vec::new(),
-            snapshot: self.snapshot(),
+            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -1907,7 +1912,7 @@ impl CoreController {
         CoreDispatchOutcome {
             events,
             effects,
-            snapshot: self.snapshot(),
+            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -2013,7 +2018,7 @@ impl CoreController {
         CoreDispatchOutcome {
             events: Vec::new(),
             effects: Vec::new(),
-            snapshot: self.snapshot(),
+            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -2022,7 +2027,7 @@ impl CoreController {
         correlation: StartupCheckCorrelation,
         effects: Vec<CoreEffect>,
     ) -> CoreDispatchOutcome {
-        let snapshot = self.snapshot();
+        let snapshot = self.shared_snapshot();
         CoreDispatchOutcome {
             events: vec![AppEvent::StartupChanged {
                 correlation,
@@ -2034,7 +2039,7 @@ impl CoreController {
     }
 
     fn session_catalog_changed_outcome(&self, effects: Vec<CoreEffect>) -> CoreDispatchOutcome {
-        let snapshot = self.snapshot();
+        let snapshot = self.shared_snapshot();
         CoreDispatchOutcome {
             events: vec![AppEvent::SessionCatalogChanged(
                 snapshot.session_catalog.clone(),
@@ -2055,7 +2060,7 @@ impl CoreController {
                 result: Err(message.to_string()),
             }],
             effects: Vec::new(),
-            snapshot: self.snapshot(),
+            snapshot: self.shared_snapshot(),
         }
     }
 
@@ -2064,7 +2069,7 @@ impl CoreController {
         correlation: Option<ConversationLoadCorrelation>,
         effects: Vec<CoreEffect>,
     ) -> CoreDispatchOutcome {
-        let snapshot = self.snapshot();
+        let snapshot = self.shared_snapshot();
         CoreDispatchOutcome {
             events: vec![AppEvent::ConversationChanged {
                 correlation,
@@ -2430,11 +2435,15 @@ mod tests {
     fn noop_command_keeps_initial_state_without_events() {
         let mut controller = CoreController::new();
 
-        let outcome = controller.handle_input(CoreInput::Command(AppCommand::Noop));
+        let first = controller.handle_input(CoreInput::Command(AppCommand::Noop));
+        let second = controller.handle_input(CoreInput::Command(AppCommand::Noop));
 
-        assert!(outcome.events.is_empty());
-        assert!(outcome.effects.is_empty());
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert!(first.events.is_empty());
+        assert!(first.effects.is_empty());
+        assert!(second.events.is_empty());
+        assert!(second.effects.is_empty());
+        assert!(Arc::ptr_eq(&first.snapshot, &second.snapshot));
+        assert_eq!(*second.snapshot, AppSnapshot::initial());
         assert_eq!(controller.snapshot(), AppSnapshot::initial());
     }
 
@@ -3574,7 +3583,7 @@ mod tests {
                 correlation: session_rename_correlation(1, "thread-1", "Renamed"),
             }]
         );
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
     }
 
     #[test]
@@ -3593,6 +3602,7 @@ mod tests {
                 correlation: effect_correlation
             }] if effect_correlation == &correlation
         ));
+        let snapshot_before_rename = command.snapshot.clone();
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionRenamed {
@@ -3601,6 +3611,14 @@ mod tests {
             },
         ));
 
+        assert!(!Arc::ptr_eq(&snapshot_before_rename, &outcome.snapshot));
+        let ConversationSnapshot::Ready(previous_conversation) =
+            &snapshot_before_rename.conversation
+        else {
+            panic!("retained conversation should remain ready");
+        };
+        assert_eq!(previous_conversation.title, "Core runtime");
+        assert_eq!(previous_conversation.conversation.title, "Core runtime");
         assert_eq!(outcome.snapshot.revision, revision_before_rename + 1);
         let SessionCatalogSnapshot::Ready(catalog) = &outcome.snapshot.session_catalog else {
             panic!("session catalog should remain ready");
@@ -3676,7 +3694,7 @@ mod tests {
             },
         ));
 
-        let ConversationSnapshot::Ready(conversation) = outcome.snapshot.conversation else {
+        let ConversationSnapshot::Ready(conversation) = &outcome.snapshot.conversation else {
             panic!("conversation should remain ready");
         };
         assert_eq!(conversation.thread_id, "thread-alpha");
@@ -3785,7 +3803,7 @@ mod tests {
             },
         ));
         assert!(stale.events.is_empty());
-        assert_eq!(stale.snapshot, snapshot_before_rename);
+        assert_eq!(*stale.snapshot, snapshot_before_rename);
 
         let failed = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionRenamed {
@@ -3793,7 +3811,7 @@ mod tests {
                 result: Err("provider unavailable".to_string()),
             },
         ));
-        assert_eq!(failed.snapshot, snapshot_before_rename);
+        assert_eq!(*failed.snapshot, snapshot_before_rename);
         assert!(matches!(
             failed.events.as_slice(),
             [AppEvent::SessionRenameCompleted {
@@ -3809,7 +3827,7 @@ mod tests {
             },
         ));
         assert!(duplicate_completion.events.is_empty());
-        assert_eq!(duplicate_completion.snapshot, snapshot_before_rename);
+        assert_eq!(*duplicate_completion.snapshot, snapshot_before_rename);
     }
 
     #[test]
@@ -3827,7 +3845,7 @@ mod tests {
             },
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
             vec![AppEvent::SessionRenameCompleted {
@@ -3935,7 +3953,7 @@ mod tests {
                 fallback_workspace_directory: "/tmp/workspace".to_string(),
             }));
         assert!(deferred.effects.is_empty());
-        assert_eq!(deferred.snapshot, snapshot_before_rename);
+        assert_eq!(*deferred.snapshot, snapshot_before_rename);
         let resumed = conversations.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionRenamed {
                 correlation: conversation_rename,
@@ -4013,7 +4031,7 @@ mod tests {
             },
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert!(outcome.events.is_empty());
         assert_eq!(
             outcome.effects,
@@ -4137,7 +4155,7 @@ mod tests {
                 workspace_directory: "/tmp/workspace".to_string(),
             }));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
             vec![AppEvent::DirectionsMaintenanceLoadStarted {
@@ -4416,7 +4434,7 @@ mod tests {
         ));
 
         assert!(ignored.events.is_empty());
-        assert_eq!(ignored.snapshot, AppSnapshot::initial());
+        assert_eq!(*ignored.snapshot, AppSnapshot::initial());
 
         let correlation = planning_runtime_refresh_correlation(1, "/tmp/root");
         let loaded = controller.handle_input(CoreInput::EffectCompleted(
@@ -4658,7 +4676,7 @@ mod tests {
                 request,
             }]
         );
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
     }
 
     #[test]
@@ -6159,7 +6177,7 @@ mod tests {
             outcome.effects,
             vec![CoreEffect::PrepareManualPrompt(Box::new(request))]
         );
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
     }
 
     #[test]
@@ -6662,7 +6680,7 @@ mod tests {
             },
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert!(outcome.events.is_empty());
         assert!(outcome.effects.is_empty());
     }
@@ -6703,7 +6721,7 @@ mod tests {
                 result: Ok(Box::new(ready.clone())),
             }]
         );
-        assert_eq!(accepted.snapshot, AppSnapshot::initial());
+        assert_eq!(*accepted.snapshot, AppSnapshot::initial());
 
         let duplicate = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::ParallelPeekConversationLoaded {
@@ -6946,7 +6964,7 @@ mod tests {
             ));
             assert!(stale.events.is_empty());
             assert!(stale.effects.is_empty());
-            assert_eq!(stale.snapshot, AppSnapshot::initial());
+            assert_eq!(*stale.snapshot, AppSnapshot::initial());
         }
 
         let correlation = directions_maintenance_load_correlation(3, "/tmp/a");
@@ -6964,7 +6982,7 @@ mod tests {
             }]
         );
         assert!(accepted.effects.is_empty());
-        assert_eq!(accepted.snapshot, AppSnapshot::initial());
+        assert_eq!(*accepted.snapshot, AppSnapshot::initial());
 
         let duplicate = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::DirectionsMaintenanceLoaded {
@@ -6974,7 +6992,7 @@ mod tests {
         ));
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
-        assert_eq!(duplicate.snapshot, AppSnapshot::initial());
+        assert_eq!(*duplicate.snapshot, AppSnapshot::initial());
     }
 
     #[test]
@@ -7071,11 +7089,15 @@ mod tests {
         let stream_event = TurnStreamEvent::StatusUpdated {
             text: "thinking".to_string(),
         };
+        let before = controller
+            .handle_input(CoreInput::Command(AppCommand::Noop))
+            .snapshot;
 
         let outcome =
             controller.handle_input(test_turn_stream_input(turn_correlation, stream_event));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert!(Arc::ptr_eq(&before, &outcome.snapshot));
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
             vec![AppEvent::turn_stream_snapshot_changed(TurnStreamSnapshot {
@@ -7132,7 +7154,7 @@ mod tests {
             },
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         let [AppEvent::TurnStreamSnapshotChanged(snapshot)] = outcome.events.as_slice() else {
             panic!("typed completion should produce one stream snapshot");
         };
@@ -7156,12 +7178,16 @@ mod tests {
     #[test]
     fn conversation_runtime_notice_reduces_to_core_snapshot_without_state_revision() {
         let mut controller = CoreController::new();
+        let before = controller
+            .handle_input(CoreInput::Command(AppCommand::Noop))
+            .snapshot;
 
         let outcome = controller.handle_input(CoreInput::ConversationRuntimeNotice(
             "reattached runtime".to_string(),
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert!(Arc::ptr_eq(&before, &outcome.snapshot));
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
             vec![AppEvent::turn_stream_snapshot_changed(TurnStreamSnapshot {
@@ -7801,7 +7827,7 @@ mod tests {
             Box::new(sample_post_turn_execution()),
         )));
 
-        assert_eq!(dropped.snapshot, snapshot_before_completion);
+        assert_eq!(*dropped.snapshot, snapshot_before_completion);
         assert!(dropped.events.is_empty());
         assert!(dropped.effects.is_empty());
 
@@ -7843,7 +7869,7 @@ mod tests {
             Box::new(execution),
         )));
 
-        assert_eq!(outcome.snapshot, snapshot_before_stale_completion);
+        assert_eq!(*outcome.snapshot, snapshot_before_stale_completion);
         assert!(outcome.events.is_empty());
         assert!(outcome.effects.is_empty());
     }
@@ -7875,7 +7901,7 @@ mod tests {
         )));
 
         assert_eq!(first.events.len(), 1);
-        assert_eq!(duplicate.snapshot, first.snapshot);
+        assert_eq!(*duplicate.snapshot, *first.snapshot);
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
     }
@@ -7900,7 +7926,7 @@ mod tests {
             CoreEffectCompletion::ManualPromptPrepared(result.clone()),
         ));
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(outcome.events, vec![AppEvent::ManualPromptPrepared(result)]);
         assert!(outcome.effects.is_empty());
     }
@@ -7925,6 +7951,10 @@ mod tests {
             outcome.events,
             vec![AppEvent::SnapshotChanged(outcome.snapshot.clone())]
         );
+        let [AppEvent::SnapshotChanged(event_snapshot)] = outcome.events.as_slice() else {
+            panic!("planning projection change should publish its shared snapshot");
+        };
+        assert!(Arc::ptr_eq(event_snapshot, &outcome.snapshot));
         assert!(outcome.effects.is_empty());
 
         let readiness_snapshot = ParallelModeReadinessSnapshot::new(
@@ -7951,6 +7981,10 @@ mod tests {
             outcome.events,
             vec![AppEvent::SnapshotChanged(outcome.snapshot.clone())]
         );
+        let [AppEvent::SnapshotChanged(event_snapshot)] = outcome.events.as_slice() else {
+            panic!("parallel readiness change should publish its shared snapshot");
+        };
+        assert!(Arc::ptr_eq(event_snapshot, &outcome.snapshot));
         assert!(outcome.effects.is_empty());
     }
 
@@ -7959,7 +7993,7 @@ mod tests {
         let mut controller = CoreController::new();
         let planning_projection =
             PlanningRuntimeProjection::invalid("planning validation failed in projection");
-        controller.handle_input(runtime_projection_changed(
+        let first = controller.handle_input(runtime_projection_changed(
             "/tmp/workspace",
             planning_projection.clone(),
         ));
@@ -7970,6 +8004,7 @@ mod tests {
         ));
 
         assert_eq!(outcome.snapshot.revision, 1);
+        assert!(Arc::ptr_eq(&first.snapshot, &outcome.snapshot));
         assert!(outcome.events.is_empty());
         assert!(outcome.effects.is_empty());
     }
@@ -7984,7 +8019,7 @@ mod tests {
             workspace_directory: "/tmp/slot-worktree".to_string(),
         });
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
             vec![AppEvent::ConversationTurnWorkspaceChanged {
@@ -8000,7 +8035,7 @@ mod tests {
 
         let outcome = controller.handle_input(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
 
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             outcome.events,
             vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated]

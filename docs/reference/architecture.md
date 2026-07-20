@@ -50,6 +50,16 @@ and planning/parallel state without materializing an `AppSnapshot`; startup, ses
 conversation payloads are therefore not cloned for each frame. Full snapshots remain available to
 flows that require their broader adapter-facing read model.
 
+`AppState` keeps that full read model as one `Arc<AppSnapshot>` copy-on-write authority.
+`CoreDispatchOutcome` and the generic `SnapshotChanged` event share the exact snapshot allocation
+for their transition; unchanged, stale, admission-only, and turn-stream inputs therefore clone only
+the `Arc`, not the loaded conversation or session catalog. An accepted state mutation uses
+`Arc::make_mut`, so a caller retaining an older outcome continues to observe its exact prior
+revision. The explicit `snapshot()` pull remains an owned read for consumers that require one.
+Snapshot pointer identity and `AppState` revision are not dispatch identities: controller-only and
+turn-stream transitions can emit ordered events while sharing the same `AppSnapshot`, so adapters
+must still apply every outcome event in order.
+
 Post-turn evaluation also enters Core before changing the planning-worker panel. The command
 is admitted only for the latest confirmed completed terminal with no active turn, no already
 applied evaluation, and no exact evaluation already in flight. Stale, wrong, and duplicate starts

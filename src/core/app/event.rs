@@ -34,6 +34,7 @@ use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSu
 use crate::domain::planning::{
     ManualPromptOutcome, PlanningWorkerPanelState, PostTurnExecution, RuntimeProjection,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRenameAcceptedSnapshot {
@@ -169,7 +170,7 @@ pub enum AppEvent {
      * slices can add narrower events such as StartupChanged while preserving the
      * same core-to-inbound adapter direction.
      */
-    SnapshotChanged(AppSnapshot),
+    SnapshotChanged(Arc<AppSnapshot>),
     StartupChanged {
         correlation: StartupCheckCorrelation,
         snapshot: StartupSnapshot,

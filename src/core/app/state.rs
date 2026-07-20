@@ -1,85 +1,109 @@
 use super::{
-    AppSnapshot, ConversationReadySnapshot, ConversationState, ParallelModeProjection,
-    PlanningParallelProjection, RevisionedPlanningParallelProjection, SessionCatalogReadySnapshot,
-    SessionCatalogState, StartupReadySnapshot, StartupState,
+    AppSnapshot, ConversationReadySnapshot, ConversationSnapshot, ParallelModeProjection,
+    RevisionedPlanningParallelProjection, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
+    StartupReadySnapshot, StartupSnapshot,
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::RuntimeProjection;
 use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
-    revision: u64,
-    startup: StartupState,
-    session_catalog: SessionCatalogState,
-    conversation: ConversationState,
-    planning_parallel: PlanningParallelProjection,
+    // One immutable read-model authority backs explicit reads and dispatch outcomes. Mutations
+    // compare before Arc::make_mut so no-op inputs preserve allocation identity and avoid cloning
+    // loaded conversation, catalog, or parallel payloads.
+    current: Arc<AppSnapshot>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
-            revision: 0,
-            startup: StartupState::Idle,
-            session_catalog: SessionCatalogState::Idle,
-            conversation: ConversationState::Idle,
-            planning_parallel: PlanningParallelProjection::initial(),
+            current: Arc::new(AppSnapshot::initial()),
         }
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
-        AppSnapshot {
-            revision: self.revision,
-            startup: self.startup.snapshot(),
-            session_catalog: self.session_catalog.snapshot(),
-            conversation: self.conversation.snapshot(),
-            planning_parallel: self.planning_parallel.clone(),
-        }
+        self.current.as_ref().clone()
+    }
+
+    pub(crate) fn shared_snapshot(&self) -> Arc<AppSnapshot> {
+        Arc::clone(&self.current)
     }
 
     pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
         RevisionedPlanningParallelProjection {
-            revision: self.revision,
-            planning_parallel: self.planning_parallel.clone(),
+            revision: self.current.revision,
+            planning_parallel: self.current.planning_parallel.clone(),
         }
     }
 
     pub fn parallel_mode_projection(&self) -> ParallelModeProjection {
-        self.planning_parallel.parallel_mode.clone()
+        self.current.planning_parallel.parallel_mode.clone()
     }
 
     pub fn mark_startup_loading(&mut self) {
-        self.startup = StartupState::Loading;
-        self.advance_revision();
+        let current = Arc::make_mut(&mut self.current);
+        current.startup = StartupSnapshot::Loading;
+        current.revision += 1;
     }
 
     pub fn apply_startup_result(&mut self, result: Result<Box<StartupReadySnapshot>, String>) {
-        self.startup = match result {
-            Ok(ready) => StartupState::Ready(ready),
-            Err(message) => StartupState::Failed(message),
+        let current = Arc::make_mut(&mut self.current);
+        current.startup = match result {
+            Ok(ready) => StartupSnapshot::Ready(ready),
+            Err(message) => StartupSnapshot::Failed { message },
         };
-        self.advance_revision();
+        current.revision += 1;
     }
 
     pub fn mark_session_catalog_loading(&mut self) {
-        self.session_catalog = SessionCatalogState::Loading;
-        self.advance_revision();
+        let current = Arc::make_mut(&mut self.current);
+        current.session_catalog = SessionCatalogSnapshot::Loading;
+        current.revision += 1;
     }
 
     pub fn apply_session_catalog_result(
         &mut self,
         result: Result<SessionCatalogReadySnapshot, String>,
     ) {
-        self.session_catalog = match result {
-            Ok(ready) => SessionCatalogState::Ready(ready),
-            Err(message) => SessionCatalogState::Failed(message),
+        let current = Arc::make_mut(&mut self.current);
+        current.session_catalog = match result {
+            Ok(ready) => SessionCatalogSnapshot::Ready(ready),
+            Err(message) => SessionCatalogSnapshot::Failed { message },
         };
-        self.advance_revision();
+        current.revision += 1;
     }
 
     pub fn apply_session_rename(&mut self, request: &SessionRenameRequest) -> bool {
-        let mut changed = false;
-        if let SessionCatalogState::Ready(ready) = &mut self.session_catalog
+        let catalog_changed = if let SessionCatalogSnapshot::Ready(ready) =
+            &self.current.session_catalog
+            && let SessionCatalog::Ready {
+                recent_sessions, ..
+            } = ready.catalog.as_ref()
+        {
+            recent_sessions
+                .items
+                .iter()
+                .find(|session| session.id == request.thread_id)
+                .is_some_and(|session| session.name.as_deref() != Some(request.name.as_str()))
+        } else {
+            false
+        };
+        let conversation_changed =
+            if let ConversationSnapshot::Ready(ready) = &self.current.conversation {
+                ready.thread_id == request.thread_id
+                    && (ready.title != request.name || ready.conversation.title != request.name)
+            } else {
+                false
+            };
+        if !catalog_changed && !conversation_changed {
+            return false;
+        }
+
+        let current = Arc::make_mut(&mut self.current);
+        if catalog_changed
+            && let SessionCatalogSnapshot::Ready(ready) = &mut current.session_catalog
             && let SessionCatalog::Ready {
                 recent_sessions, ..
             } = ready.catalog.as_mut()
@@ -87,32 +111,23 @@ impl AppState {
                 .items
                 .iter_mut()
                 .find(|session| session.id == request.thread_id)
-            && session.name.as_deref() != Some(request.name.as_str())
         {
             session.name = Some(request.name.clone());
-            changed = true;
         }
-        if let super::ConversationState::Ready(ready) = &mut self.conversation
-            && ready.thread_id == request.thread_id
+        if conversation_changed
+            && let ConversationSnapshot::Ready(ready) = &mut current.conversation
         {
-            if ready.title != request.name {
-                ready.title = request.name.clone();
-                changed = true;
-            }
-            if ready.conversation.title != request.name {
-                ready.conversation.title = request.name.clone();
-                changed = true;
-            }
+            ready.title = request.name.clone();
+            ready.conversation.title = request.name.clone();
         }
-        if changed {
-            self.advance_revision();
-        }
-        changed
+        current.revision += 1;
+        true
     }
 
     pub fn mark_conversation_loading(&mut self) {
-        self.conversation = ConversationState::Loading;
-        self.advance_revision();
+        let current = Arc::make_mut(&mut self.current);
+        current.conversation = ConversationSnapshot::Loading;
+        current.revision += 1;
     }
 
     pub fn apply_conversation_result(
@@ -120,20 +135,26 @@ impl AppState {
         result: Result<Box<ConversationReadySnapshot>, String>,
     ) {
         let loaded_successfully = result.is_ok();
-        self.conversation = match result {
-            Ok(ready) => ConversationState::Ready(ready),
-            Err(message) => ConversationState::Failed(message),
+        let current = Arc::make_mut(&mut self.current);
+        current.conversation = match result {
+            Ok(ready) => ConversationSnapshot::Ready(ready),
+            Err(message) => ConversationSnapshot::Failed { message },
         };
         if loaded_successfully {
-            self.planning_parallel.clear_planning_runtime_projection();
+            current
+                .planning_parallel
+                .clear_planning_runtime_projection();
         }
-        self.advance_revision();
+        current.revision += 1;
     }
 
     pub fn reset_conversation(&mut self) {
-        self.conversation = ConversationState::Idle;
-        self.planning_parallel.clear_planning_runtime_projection();
-        self.advance_revision();
+        let current = Arc::make_mut(&mut self.current);
+        current.conversation = ConversationSnapshot::Idle;
+        current
+            .planning_parallel
+            .clear_planning_runtime_projection();
+        current.revision += 1;
     }
 
     pub fn apply_planning_runtime_projection(
@@ -141,17 +162,28 @@ impl AppState {
         workspace_directory: String,
         projection: Box<RuntimeProjection>,
     ) -> bool {
-        let changed = self
+        if self
+            .current
             .planning_parallel
-            .apply_planning_runtime_projection(workspace_directory, projection);
-        if changed {
-            self.advance_revision();
+            .planning_runtime_workspace_directory
+            .as_ref()
+            == Some(&workspace_directory)
+            && self.current.planning_parallel.planning_runtime == projection
+        {
+            return false;
         }
-        changed
+        let current = Arc::make_mut(&mut self.current);
+        current
+            .planning_parallel
+            .planning_runtime_workspace_directory = Some(workspace_directory);
+        current.planning_parallel.planning_runtime = projection;
+        current.revision += 1;
+        true
     }
 
     pub fn planning_runtime_workspace_directory(&self) -> Option<&str> {
-        self.planning_parallel
+        self.current
+            .planning_parallel
             .planning_runtime_workspace_directory
             .as_deref()
     }
@@ -160,30 +192,26 @@ impl AppState {
         &mut self,
         snapshot: Option<Box<ParallelModeReadinessSnapshot>>,
     ) -> bool {
-        let changed = self
-            .planning_parallel
-            .apply_parallel_readiness_snapshot(snapshot);
-        if changed {
-            self.advance_revision();
+        if self.current.planning_parallel.parallel_mode.readiness == snapshot {
+            return false;
         }
-        changed
+        let current = Arc::make_mut(&mut self.current);
+        current.planning_parallel.parallel_mode.readiness = snapshot;
+        current.revision += 1;
+        true
     }
 
     pub fn apply_parallel_supervisor_projection(
         &mut self,
         snapshot: Option<Box<ParallelModeSupervisorSnapshot>>,
     ) -> bool {
-        let changed = self
-            .planning_parallel
-            .apply_parallel_supervisor_snapshot(snapshot);
-        if changed {
-            self.advance_revision();
+        if self.current.planning_parallel.parallel_mode.supervisor == snapshot {
+            return false;
         }
-        changed
-    }
-
-    fn advance_revision(&mut self) {
-        self.revision += 1;
+        let current = Arc::make_mut(&mut self.current);
+        current.planning_parallel.parallel_mode.supervisor = snapshot;
+        current.revision += 1;
+        true
     }
 }
 
@@ -196,12 +224,61 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::app::{ConversationSnapshot, SessionCatalogSnapshot, StartupSnapshot};
+    use crate::core::app::{
+        AppEvent, ConversationSnapshot, CoreDispatchOutcome, PlanningParallelProjection,
+        SessionCatalogSnapshot, StartupSnapshot,
+    };
 
     #[test]
     fn new_state_projects_initial_snapshot() {
         assert_eq!(AppState::new().snapshot(), AppSnapshot::initial());
         assert_eq!(AppState::default().snapshot(), AppSnapshot::initial());
+    }
+
+    #[test]
+    fn shared_snapshot_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<AppSnapshot>();
+        assert_send_sync::<Arc<AppSnapshot>>();
+        assert_send_sync::<CoreDispatchOutcome>();
+        assert_send_sync::<AppEvent>();
+    }
+
+    #[test]
+    fn shared_snapshot_forks_only_when_state_changes() {
+        let mut state = AppState::new();
+        let initial = state.shared_snapshot();
+
+        assert!(Arc::ptr_eq(&initial, &state.shared_snapshot()));
+
+        state.mark_startup_loading();
+        let loading = state.shared_snapshot();
+
+        assert!(!Arc::ptr_eq(&initial, &loading));
+        assert_eq!(initial.as_ref(), &AppSnapshot::initial());
+        assert_eq!(loading.revision, 1);
+        assert_eq!(loading.startup, StartupSnapshot::Loading);
+    }
+
+    #[test]
+    fn identical_planning_projection_keeps_shared_snapshot_identity() {
+        let mut state = AppState::new();
+        let projection = Box::new(RuntimeProjection::invalid("blocked"));
+        assert!(
+            state.apply_planning_runtime_projection(
+                "/tmp/workspace".to_string(),
+                projection.clone(),
+            )
+        );
+        let projected = state.shared_snapshot();
+
+        assert!(
+            !state.apply_planning_runtime_projection("/tmp/workspace".to_string(), projection,)
+        );
+
+        assert!(Arc::ptr_eq(&projected, &state.shared_snapshot()));
+        assert_eq!(projected.revision, 1);
     }
 
     #[test]

@@ -40,6 +40,16 @@ Mapping은 adapter에, policy는 domain 또는 application service에 둡니다.
 사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.
 Core는 projection을 복사할 수 있지만 두 번째 parallel runtime을 소유하면 안 됩니다.
 
+`AppState`는 전체 read model을 하나의 `Arc<AppSnapshot>` copy-on-write 권위로 보관합니다.
+`CoreDispatchOutcome`과 generic `SnapshotChanged` event는 해당 전이의 정확히 같은 snapshot
+allocation을 공유합니다. 따라서 unchanged, stale, admission-only, turn-stream input은 load된 전체
+conversation/session catalog가 아니라 `Arc`만 복제합니다. 상태 변경이 허용되면
+`Arc::make_mut`로 새 revision을 만들기 때문에 이전 outcome을 보관한 caller는 그 시점의 상태를
+그대로 관찰합니다. 전체 owned read가 필요한 흐름에는 명시적 `snapshot()` pull을 유지합니다.
+Snapshot pointer identity와 `AppState` revision은 dispatch identity가 아닙니다. Controller 내부
+상태나 turn stream만 바뀐 전이는 같은 `AppSnapshot`을 공유하면서도 순서가 있는 event를 낼 수
+있으므로 adapter는 모든 outcome event를 계속 순서대로 적용해야 합니다.
+
 Post-turn 평가는 planning-worker panel을 바꾸기 전에 Core로 진입합니다. Command는 explicit
 완료·확정된 최신 terminal이고 active turn, 이미 적용된 평가, 같은 in-flight 평가가 없을 때만
 허용됩니다. 오래되거나 잘못되거나 중복된 start는 event/effect를 내지 않으며 completion은 정확한

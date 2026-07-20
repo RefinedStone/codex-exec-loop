@@ -435,6 +435,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shared_core_snapshot_identity_does_not_suppress_tui_events() {
+        let mut app = test_helpers::test_native_tui_app();
+        let first = app
+            .core_runtime
+            .dispatch_input(CoreInput::ConversationRuntimeNotice(
+                "first notice".to_string(),
+            ));
+        let second = app
+            .core_runtime
+            .dispatch_input(CoreInput::ConversationRuntimeNotice(
+                "second notice".to_string(),
+            ));
+
+        assert!(Arc::ptr_eq(&first.snapshot, &second.snapshot));
+        app.apply_core_dispatch_outcome(first);
+        app.apply_core_dispatch_outcome(second);
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("test conversation should remain ready");
+        };
+        assert!(
+            conversation
+                .runtime_notices
+                .ends_with(&["first notice".to_string(), "second notice".to_string()])
+        );
+    }
+
     #[derive(Default)]
     struct FakeReviewCenterRepository {
         thread_reviews: Mutex<Vec<ReviewCenterThreadProjection>>,

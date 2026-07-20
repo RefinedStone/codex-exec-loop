@@ -2161,8 +2161,8 @@ fn core_revisioned_planning_parallel_projection_stays_narrow() {
         .collect::<String>();
     for required in [
         "RevisionedPlanningParallelProjection{",
-        "revision:self.revision",
-        "planning_parallel:self.planning_parallel.clone()",
+        "revision:self.current.revision",
+        "planning_parallel:self.current.planning_parallel.clone()",
     ] {
         assert!(
             compact_state_method.contains(required),
@@ -2207,6 +2207,78 @@ fn core_revisioned_planning_parallel_projection_stays_narrow() {
         assert!(
             !compact_method.contains("snapshot(") && !compact_method.contains("AppSnapshot"),
             "{path} narrow projection wrapper must not fall back to AppSnapshot"
+        );
+    }
+}
+
+#[test]
+fn core_dispatch_snapshots_share_one_copy_on_write_authority() {
+    let state_source = fs::read_to_string(repo_root().join("src/core/app/state.rs"))
+        .expect("core app state source should load");
+    assert!(
+        state_source.contains("current: Arc<AppSnapshot>"),
+        "AppState must keep one shared AppSnapshot authority"
+    );
+    assert!(
+        state_source.contains("Arc::make_mut(&mut self.current)"),
+        "AppState mutations must copy on write so retained dispatch snapshots stay immutable"
+    );
+    for duplicate_authority in [
+        "startup: StartupState",
+        "session_catalog: SessionCatalogState",
+        "conversation: ConversationState",
+        "cached_snapshot",
+        "snapshot_cache",
+    ] {
+        assert!(
+            !state_source.contains(duplicate_authority),
+            "AppState must not retain a second full snapshot authority: {duplicate_authority}"
+        );
+    }
+
+    let controller_source = fs::read_to_string(repo_root().join("src/core/app/controller.rs"))
+        .expect("core controller source should load");
+    let production_controller = production_lines(&controller_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        production_controller.contains("pub snapshot: Arc<AppSnapshot>"),
+        "dispatch outcomes must expose the exact shared snapshot for their transition"
+    );
+    assert_eq!(
+        production_controller
+            .matches("self.state.snapshot()")
+            .count(),
+        1,
+        "only the explicit owned snapshot() pull may deep-clone AppState"
+    );
+    assert!(
+        !production_controller.contains("self.snapshot()"),
+        "dispatch construction and helpers must use shared_snapshot() instead of an owned snapshot"
+    );
+
+    let event_source = fs::read_to_string(repo_root().join("src/core/app/event.rs"))
+        .expect("core event source should load");
+    assert!(
+        event_source.contains("SnapshotChanged(Arc<AppSnapshot>)"),
+        "SnapshotChanged and CoreDispatchOutcome must share the same snapshot allocation"
+    );
+
+    let tui_runtime_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/app_runtime.rs"))
+            .expect("TUI app runtime source should load");
+    let apply_outcome =
+        top_level_impl_method_source(&tui_runtime_source, "apply_core_dispatch_outcome");
+    assert!(
+        apply_outcome.contains("for event in outcome.events"),
+        "TUI must continue applying every dispatch event in order"
+    );
+    for forbidden_short_circuit in ["ptr_eq", "outcome.snapshot", "snapshot.revision"] {
+        assert!(
+            !apply_outcome.contains(forbidden_short_circuit),
+            "shared snapshot identity is not a dispatch revision and must not suppress events: {forbidden_short_circuit}"
         );
     }
 }

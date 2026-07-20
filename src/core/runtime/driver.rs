@@ -487,7 +487,7 @@ mod tests {
             )]
         );
         assert!(rejected.effects.is_empty());
-        assert_eq!(first.snapshot, AppSnapshot::initial());
+        assert_eq!(*first.snapshot, AppSnapshot::initial());
         assert_eq!(
             effects.recorded_effects(),
             vec![CoreEffect::SubmitTurn {
@@ -795,7 +795,7 @@ mod tests {
                 ManualPromptPreparationAdmission::Accepted { correlation },
             )]
         );
-        assert_eq!(outcome.snapshot, AppSnapshot::initial());
+        assert_eq!(*outcome.snapshot, AppSnapshot::initial());
         assert_eq!(
             effects.recorded_effects(),
             vec![CoreEffect::PrepareManualPrompt(Box::new(request))]
@@ -1080,6 +1080,11 @@ mod tests {
         assert_eq!(
             *outcome.snapshot.planning_parallel.planning_runtime,
             crate::domain::planning::RuntimeProjection::invalid("loaded")
+        );
+        let current = runtime.dispatch_command(AppCommand::Noop);
+        assert!(
+            std::sync::Arc::ptr_eq(&outcome.snapshot, &current.snapshot),
+            "immediate completion must return the runtime's final shared snapshot"
         );
     }
 
