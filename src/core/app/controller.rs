@@ -10,9 +10,10 @@ use super::{
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCoordinator,
     PlanningWorkspaceOperationIntent, PlanningWorkspaceOperationKind,
     QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
-    StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
-    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
+    RevisionedPlanningParallelProjection, SessionCatalogLoadCorrelation,
+    SessionRenameAcceptedSnapshot, SessionRenameCorrelation, StartupCheckCorrelation,
+    StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission,
+    TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
     TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
@@ -163,6 +164,10 @@ impl CoreController {
 
     pub fn snapshot(&self) -> AppSnapshot {
         self.state.snapshot()
+    }
+
+    pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
+        self.state.revisioned_planning_parallel_projection()
     }
 
     pub fn parallel_mode_projection(&self) -> ParallelModeProjection {

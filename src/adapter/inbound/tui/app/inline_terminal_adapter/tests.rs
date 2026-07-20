@@ -3499,14 +3499,27 @@ fn reused_projection_sample_keeps_parallel_frame_facts_stable_after_handle_mutat
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
         vec![inline_runtime_feed_entry(1, "sampled event")],
     )));
+    let sampled_planning =
+        crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection(
+            "sampled planning",
+            "sampled queue",
+        );
+    app.sync_ready_conversation_planning_runtime_projection(sampled_planning.clone());
     let sample = ConversationProjectionSample::capture(&app);
-    let (sampled_revision, sampled_rendered_at, sampled_animation_millis, sampled_supervisor) = {
+    let (
+        sampled_revision,
+        sampled_rendered_at,
+        sampled_animation_millis,
+        sampled_supervisor,
+        sampled_runtime,
+    ) = {
         let first = ConversationScreenModel::from_app_with_sample(&app, &sample);
         (
             first.core_revision,
             first.rendered_at,
             first.animation_elapsed_millis,
             first.parallel_mode_supervisor.clone(),
+            first.planning_runtime_projection.clone(),
         )
     };
 
@@ -3514,12 +3527,20 @@ fn reused_projection_sample_keeps_parallel_frame_facts_stable_after_handle_mutat
     app.set_parallel_mode_supervisor_snapshot_for_test(Some(runtime_feed_supervisor_snapshot(
         vec![inline_runtime_feed_entry(2, "new event")],
     )));
+    let fresh_planning =
+        crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection(
+            "fresh planning",
+            "fresh queue",
+        );
+    app.sync_ready_conversation_planning_runtime_projection(fresh_planning.clone());
     {
         let reused = ConversationScreenModel::from_app_with_sample(&app, &sample);
         assert_eq!(reused.core_revision, sampled_revision);
         assert_eq!(reused.rendered_at, sampled_rendered_at);
         assert_eq!(reused.animation_elapsed_millis, sampled_animation_millis);
         assert_eq!(reused.parallel_mode_supervisor, sampled_supervisor);
+        assert_eq!(reused.planning_runtime_projection, sampled_runtime);
+        assert_eq!(reused.planning_runtime_projection, sampled_planning);
         assert!(reused.parallel_mode_enabled);
     }
     let sampled_frame = InlineConversationFrameProjection::from_app_with_sample(&app, 80, &sample);
@@ -3545,6 +3566,7 @@ fn reused_projection_sample_keeps_parallel_frame_facts_stable_after_handle_mutat
     let fresh = ConversationScreenModel::from_app(&app);
     assert!(fresh.core_revision > sampled_revision);
     assert_ne!(fresh.parallel_mode_supervisor, sampled_supervisor);
+    assert_eq!(fresh.planning_runtime_projection, fresh_planning);
     assert!(!fresh.parallel_mode_enabled);
 }
 

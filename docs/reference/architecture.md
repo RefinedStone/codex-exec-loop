@@ -36,11 +36,19 @@ explicit contracts are:
 - `Completion`: an effect result returning through the same input queue
 - `AppEvent`: externally useful transition
 - `AppSnapshot` and projections: adapter-facing read models
+- `RevisionedPlanningParallelProjection`: revision plus planning/parallel state for the TUI frame
+  hot path
 
 Startup, session loading, conversation selection, turn submission, stream reduction, completion,
 and post-turn evaluation use this flow. Parallel mutation remains application-owned and enters
 through `ParallelModeControlPlaneHandle`; core may copy the projection but must not own a second
 parallel runtime.
+
+The TUI frame hot path calls `revisioned_planning_parallel_projection()` once per terminal
+transaction. Its owned `RevisionedPlanningParallelProjection` carries the matching Core revision
+and planning/parallel state without materializing an `AppSnapshot`; startup, session-catalog, and
+conversation payloads are therefore not cloned for each frame. Full snapshots remain available to
+flows that require their broader adapter-facing read model.
 
 Post-turn evaluation also enters Core before changing the planning-worker panel. The command
 is admitted only for the latest confirmed completed terminal with no active turn, no already
@@ -342,9 +350,12 @@ rendering/layout, and terminal-adapter responsibilities separate. Visual tokens 
 `AkraTheme`; append-only rows split across host scrollback and live viewport cannot insert panel
 chrome into the stream.
 
-The inline conversation tail path projects one core `AppSnapshot` plus adapter-local UI state into
-an immutable `ConversationScreenModel`. A single owned tail projection derived from it is compared
-by the redraw cache and then painted by the terminal transaction. Tail status, planning, parallel,
+The inline conversation tail path combines adapter-local UI state with one owned
+`RevisionedPlanningParallelProjection` from `revisioned_planning_parallel_projection()` into an
+immutable `ConversationScreenModel`. The terminal transaction captures that narrow Core projection
+once; it does not clone the broader `AppSnapshot` or its startup, session-catalog, and conversation
+payloads for a frame. A single owned tail projection derived from the screen model is compared by
+the redraw cache and then painted by the terminal transaction. Tail status, planning, parallel,
 queue, GitHub, transcript, layout, animation, and prompt-focus helpers do not receive
 `NativeTuiApp` or application service handles. Conversation semantic state stores messages, not
 cached Ratatui `Line` values.

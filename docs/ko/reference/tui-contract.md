@@ -38,15 +38,18 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
 - Border 없이 compact하게 유지합니다.
 - Status ribbon, planning/queue summary, runtime notice, prompt, command hint 순서의 안정된
   hierarchy를 유지합니다.
-- Terminal sync transaction 하나는 conversation shell의 core `AppSnapshot`과 render clock을
-  `ConversationProjectionSample`로 한 번만 캡처합니다. Pre-history outer flow layout과 최종
-  tail/live/cache projection은 같은 sample을 사용합니다. Handoff acknowledgement 뒤의
-  UI-local state는 다시 읽을 수 있습니다.
-- Supersession은 이 일관성 보장에 포함됩니다. Sample이 control-plane presentation projection과
-  event-stream projection을 각각 한 번 소유하고, row plan과 draw는 같은 owned overlay view를
-  사용합니다. 다른 overlay document는 owned screen model을 받을 때까지 별도 projection
-  경계로 유지합니다. 자주 실행되는 prompt, pulse, scheduler 검사는 panel 전용 경량 sample을
-  공유하며 transcript나 event-stream row를 복제하지 않습니다.
+- Terminal sync transaction 하나는 `revisioned_planning_parallel_projection()`을 정확히 한 번
+  호출하고, 반환된 `RevisionedPlanningParallelProjection`과 render clock을
+  `ConversationProjectionSample`이 소유합니다. 이 좁은 Core projection은 한 revision과 frame에
+  필요한 planning/parallel state만 운반하며, `AppSnapshot`의 startup, session catalog,
+  conversation payload를 복제하지 않습니다. Pre-history outer flow layout과 최종
+  tail/live/cache projection은 같은 sample을 사용합니다. Handoff acknowledgement 뒤의 UI-local
+  state는 다시 읽을 수 있습니다.
+- Supersession은 이 일관성 보장에 포함됩니다. Sample이 control-plane presentation projection,
+  event-stream projection, 좁은 owned Core projection을 각각 한 번 소유하고, row plan과 draw는
+  같은 owned overlay view를 사용합니다. 다른 overlay document는 owned screen model을 받을
+  때까지 별도 projection 경계로 유지합니다. 자주 실행되는 prompt, pulse, scheduler 검사는
+  panel 전용 경량 sample을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
 - Sample에서 만든 `ConversationScreenModel` 하나가 frame의 UI-local fact를 소유합니다. Tail,
   live transcript, cursor layout, frame cache는 같은 immutable projection을 사용하며 presentation
   helper가 `NativeTuiApp`, service, clock을 다시 읽지 않습니다.

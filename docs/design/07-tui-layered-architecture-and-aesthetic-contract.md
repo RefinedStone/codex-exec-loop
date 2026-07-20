@@ -54,15 +54,19 @@ the fixed Akra theme.
 - The inline tail must remain borderless and compact.
 - It must keep a stable hierarchy: status ribbon, planning or queue summary, runtime notice,
   prompt, command hint.
-- One terminal sync transaction must capture the conversation shell's core `AppSnapshot` and
-  render-clock values in `ConversationProjectionSample`. The pre-history outer flow layout and the
-  final tail/live/cache projection consume that same sample. UI-local facts may be reread after a
-  handoff acknowledgement.
+- One terminal sync transaction must call `revisioned_planning_parallel_projection()` exactly once
+  and own the returned `RevisionedPlanningParallelProjection` together with the render-clock values
+  in `ConversationProjectionSample`. This narrow Core projection carries one revision plus the
+  planning/parallel state required by the frame; it must not clone the `AppSnapshot` startup,
+  session-catalog, or conversation payloads. The pre-history outer flow layout and the final
+  tail/live/cache projection consume that same sample. UI-local facts may be reread after a handoff
+  acknowledgement.
 - Supersession is covered by that consistency guarantee: the sample owns one control-plane
-  presentation projection and one event-stream projection, while row planning and drawing consume
-  the same owned overlay view. Other overlay-specific documents remain separate projection
-  boundaries until they receive an owned screen model. High-frequency prompt, pulse, and scheduler
-  checks share a panel-only sample so they do not clone transcript or event-stream rows.
+  presentation projection, one event-stream projection, and the narrow owned Core projection,
+  while row planning and drawing consume the same owned overlay view. Other overlay-specific
+  documents remain separate projection boundaries until they receive an owned screen model.
+  High-frequency prompt, pulse, and scheduler checks share a panel-only sample so they do not clone
+  transcript or event-stream rows.
 - One `ConversationScreenModel` derived from that sample must own the local UI facts for a frame.
   Tail copy, live transcript copy, cursor layout, and frame-cache comparison consume that same
   immutable projection; presentation helpers must not reread `NativeTuiApp`, call services, or

@@ -1,8 +1,8 @@
 /*
- * ConversationProjectionSample captures the conversation shell's core snapshot
- * and render clocks once per terminal transaction. ConversationScreenModel
- * combines that owned sample with the UI-only facts needed by copy, layout,
- * cursor, and frame-cache code at one projection point.
+ * ConversationProjectionSample captures the conversation shell's narrow Core
+ * projection and render clocks once per terminal transaction.
+ * ConversationScreenModel combines that owned sample with the UI-only facts
+ * needed by copy, layout, cursor, and frame-cache code at one projection point.
  */
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -10,7 +10,9 @@ use ratatui::text::Line;
 
 use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlanePresentationProjection;
 use crate::application::service::planning::PlanningRuntimeProjection;
-use crate::core::app::{AppSnapshot, ParallelModeProjection};
+use crate::core::app::{
+    ParallelModeProjection, PlanningParallelProjection, RevisionedPlanningParallelProjection,
+};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::PlanningWorkerPanelState;
 
@@ -35,19 +37,19 @@ pub(in crate::adapter::inbound::tui::app) struct ParallelPanelProjectionSample {
 
 impl ParallelPanelProjectionSample {
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
-        Self {
-            parallel_mode: app.core_runtime.parallel_mode_projection(),
-            parallel_control_plane: app.parallel_mode_control_plane.presentation_projection(),
-        }
+        Self::from_parts(
+            app.core_runtime.parallel_mode_projection(),
+            app.parallel_mode_control_plane.presentation_projection(),
+        )
     }
 
-    fn from_conversation_snapshot(
-        core_snapshot: &AppSnapshot,
+    fn from_parts(
+        parallel_mode: ParallelModeProjection,
         parallel_control_plane: ParallelModeControlPlanePresentationProjection,
     ) -> Self {
         Self {
             parallel_control_plane,
-            parallel_mode: core_snapshot.planning_parallel.parallel_mode.clone(),
+            parallel_mode,
         }
     }
 
@@ -97,7 +99,9 @@ impl ParallelPanelProjectionSample {
 }
 
 pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
-    core_snapshot: AppSnapshot,
+    core_revision: u64,
+    planning_runtime_workspace_directory: Option<String>,
+    planning_runtime: Box<PlanningRuntimeProjection>,
     parallel_panel: ParallelPanelProjectionSample,
     parallel_supervisor_events: ParallelSupervisorEventProjection,
     inline_history_render_mode: InlineHistoryRenderMode,
@@ -108,14 +112,24 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
 
 impl ConversationProjectionSample {
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
-        let core_snapshot = app.core_runtime.snapshot();
+        let RevisionedPlanningParallelProjection {
+            revision: core_revision,
+            planning_parallel:
+                PlanningParallelProjection {
+                    planning_runtime_workspace_directory,
+                    planning_runtime,
+                    parallel_mode,
+                },
+        } = app.core_runtime.revisioned_planning_parallel_projection();
         let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();
         Self {
-            parallel_panel: ParallelPanelProjectionSample::from_conversation_snapshot(
-                &core_snapshot,
+            core_revision,
+            planning_runtime_workspace_directory,
+            planning_runtime,
+            parallel_panel: ParallelPanelProjectionSample::from_parts(
+                parallel_mode,
                 parallel_control_plane,
             ),
-            core_snapshot,
             parallel_supervisor_events: app.parallel_supervisor_event_log.projection(),
             inline_history_render_mode: app.inline_history_render_mode,
             history_insert_mode: app.history_insert_mode,
@@ -254,16 +268,12 @@ impl<'a> ConversationScreenModel<'a> {
         app: &'a NativeTuiApp,
         sample: &ConversationProjectionSample,
     ) -> Self {
-        let core_snapshot = &sample.core_snapshot;
-        let core_revision = core_snapshot.revision;
+        let core_revision = sample.core_revision;
         let workspace_directory = presentation_workspace_directory(app);
-        let planning_runtime_projection = if core_snapshot
-            .planning_parallel
-            .planning_runtime_workspace_directory
-            .as_deref()
+        let planning_runtime_projection = if sample.planning_runtime_workspace_directory.as_deref()
             == workspace_directory.as_deref()
         {
-            (*core_snapshot.planning_parallel.planning_runtime).clone()
+            (*sample.planning_runtime).clone()
         } else {
             PlanningRuntimeProjection::uninitialized()
         };
