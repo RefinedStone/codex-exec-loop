@@ -1352,8 +1352,9 @@ impl NativeTuiApp {
 mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::{
-        ConversationState, DirectionsMaintenanceScreenModel, NativeTuiParallelModeBinding,
-        PendingResumedSessionPlanningRefresh, PlanningRuntimeRefreshUiState,
+        ConversationRuntimeEvent, ConversationState, DirectionsMaintenanceScreenModel,
+        NativeTuiParallelModeBinding, PendingResumedSessionPlanningRefresh,
+        PlanningRuntimeRefreshUiState,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -1372,7 +1373,7 @@ mod tests {
     use crate::application::service::startup_service::StartupService;
     use crate::core::app::{
         DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
-        DirectionsSupportingFileStatus,
+        DirectionsSupportingFileStatus, TurnStreamEvent, TurnStreamState,
     };
     use crate::domain::conversation::{
         ConversationControlSupport, ConversationSnapshot, ConversationTurnOptions,
@@ -1380,6 +1381,9 @@ mod tests {
     use crate::domain::planning::{PlanningFileKind, PlanningValidationReport, QueueIdlePolicy};
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogRequest};
     use crate::domain::terminal_bridge_attachment::TerminalBridgeAttachmentProfile;
+    use crate::domain::turn_terminal::{
+        ConversationTurnApplicationDelivery, ConversationTurnTerminalReceipt,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -4025,6 +4029,82 @@ mod tests {
             app.planning_runtime_refresh_ui_state,
             PlanningRuntimeRefreshUiState::Idle
         ));
+    }
+
+    #[test]
+    fn stream_fact_during_planning_editor_staging_does_not_supersede_completion() {
+        let (_workspace, mut app, correlation, stage_gate) =
+            begin_gated_planning_manual_stage("tui-editor-stage-stream-fact");
+        let operation_revision = app.planning_ui_intent_revision;
+        let mut stream_state = TurnStreamState::new();
+
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
+            Box::new(stream_state.apply_runtime_notice("background runtime fact".to_string())),
+        ));
+
+        assert_eq!(
+            app.planning_ui_intent_revision, operation_revision,
+            "runtime facts must not supersede an in-flight planning presentation"
+        );
+        stage_gate.release();
+        wait_for_planning_workspace_operation(&mut app);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::ManualEditor
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state
+                .session_identity()
+                .map(|identity| identity.generation),
+            Some(correlation.generation)
+        );
+    }
+
+    #[test]
+    fn planning_change_stream_fact_supersedes_editor_stage_completion() {
+        let (workspace, mut app, _correlation, stage_gate) =
+            begin_gated_planning_manual_stage("tui-editor-stage-planning-change");
+        let operation_revision = app.planning_ui_intent_revision;
+        let mut stream_state = TurnStreamState::new();
+        stream_state.seed_loaded_thread_identity(
+            "thread-planning-change",
+            "Planning change",
+            workspace.path_str(),
+        );
+        stream_state.apply_stream_event(TurnStreamEvent::TurnStarted {
+            turn_id: "turn-planning-change".to_string(),
+            runtime_request: Box::default(),
+        });
+        let receipt = ConversationTurnTerminalReceipt::completed(
+            "thread-planning-change",
+            "turn-planning-change",
+            vec![crate::application::service::planning::RESULT_OUTPUT_FILE_PATH.to_string()],
+        )
+        .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+        let snapshot = stream_state.apply_stream_event(TurnStreamEvent::TurnTerminal {
+            receipt,
+            execution_snapshot_capture: None,
+        });
+
+        app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
+            Box::new(snapshot),
+        ));
+
+        assert_ne!(
+            app.planning_ui_intent_revision, operation_revision,
+            "a confirmed planning file change must supersede stale staging presentation"
+        );
+        stage_gate.release();
+        wait_for_planning_workspace_operation(&mut app);
+        assert_eq!(
+            app.planning_init_overlay_ui_state.step(),
+            PlanningInitOverlayStep::DetailSelection
+        );
+        assert!(
+            app.planning_draft_editor_ui_state
+                .session_identity()
+                .is_none()
+        );
     }
 
     #[test]

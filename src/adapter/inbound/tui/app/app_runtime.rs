@@ -2162,6 +2162,7 @@ impl NativeTuiApp {
         &mut self,
         event: ConversationRuntimeEvent,
     ) -> bool {
+        let supersedes_planning_ui_intent = event.supersedes_planning_ui_intent();
         let post_turn_context = self.post_turn_continuation_context(&event);
         let Some(conversation) = self.take_ready_conversation_state() else {
             return false;
@@ -2176,7 +2177,9 @@ impl NativeTuiApp {
             )
         });
         self.conversation_state = ConversationState::ready(reduction.state);
-        self.advance_planning_ui_intent_revision();
+        if supersedes_planning_ui_intent {
+            self.advance_planning_ui_intent_revision();
+        }
         if !requests_turn_submission && !self.conversation_has_running_turn() {
             self.turn_steer_confirmation = None;
         }

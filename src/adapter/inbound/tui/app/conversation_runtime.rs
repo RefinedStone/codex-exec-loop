@@ -66,6 +66,29 @@ pub(super) enum ConversationRuntimeEvent {
         evaluation: Box<PostTurnEvaluationOutcome>,
     },
 }
+
+impl ConversationRuntimeEvent {
+    pub(super) const fn supersedes_planning_ui_intent(&self) -> bool {
+        match self {
+            Self::PromptSubmissionAdmitted { .. } | Self::ApprovalDecisionSubmitted { .. } => true,
+            Self::StreamSnapshotApplied(snapshot) => match &snapshot.update {
+                TurnStreamUpdate::TurnCompleted {
+                    changed_planning_file_paths,
+                    ..
+                } => !changed_planning_file_paths.is_empty(),
+                TurnStreamUpdate::TurnTerminal { receipt, .. } => {
+                    !receipt.observations.changed_planning_file_paths.is_empty()
+                }
+                _ => false,
+            },
+            Self::SubmitPrompt { .. }
+            | Self::ApprovalDecisionSubmissionFailed { .. }
+            | Self::RuntimeNoticeObserved { .. }
+            | Self::PostTurnEvaluationCompleted { .. } => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ConversationRuntimeEffect {
     /*
@@ -2278,6 +2301,42 @@ mod tests {
                     || reduction.state.status_text.contains("disarmed")
             );
         }
+    }
+
+    #[test]
+    fn planning_ui_supersession_requires_a_correlated_planning_file_change() {
+        use crate::domain::turn_terminal::{
+            ConversationTurnApplicationDelivery, ConversationTurnObservations,
+            ConversationTurnTerminalOutcome, ConversationTurnTerminalReceipt,
+        };
+
+        let stream_event = |outcome, changed_planning_file_paths| {
+            let receipt = ConversationTurnTerminalReceipt::new("thread-1", "turn-1", outcome)
+                .with_observations(ConversationTurnObservations::new(
+                    changed_planning_file_paths,
+                ))
+                .with_application_delivery(ConversationTurnApplicationDelivery::Confirmed);
+            stream_snapshot_event(ConversationStreamEvent::TurnTerminal { receipt })
+        };
+
+        assert!(
+            !stream_event(ConversationTurnTerminalOutcome::Completed, Vec::new())
+                .supersedes_planning_ui_intent()
+        );
+        assert!(
+            stream_event(
+                ConversationTurnTerminalOutcome::Completed,
+                vec![".codex-exec-loop/planning/result-output.md".to_string()],
+            )
+            .supersedes_planning_ui_intent()
+        );
+        assert!(
+            stream_event(
+                ConversationTurnTerminalOutcome::Interrupted,
+                vec![".codex-exec-loop/planning/result-output.md".to_string()],
+            )
+            .supersedes_planning_ui_intent()
+        );
     }
 
     #[test]
