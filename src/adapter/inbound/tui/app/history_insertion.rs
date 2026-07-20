@@ -18,6 +18,7 @@ use super::inline_terminal_adapter::backend::{InlineResizeBackend, InlineResizeS
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum HistoryInsertionMode {
     #[default]
+    Automatic,
     StandardScrollRegion,
     NewlineFallback,
 }
@@ -29,41 +30,37 @@ impl HistoryInsertionMode {
      * environment.
      */
     pub(super) fn from_environment() -> Self {
-        Self::from_env_and_terminal_values(
+        Self::from_env_values(
             std::env::var(super::HISTORY_INSERT_MODE_ENV_VAR)
                 .ok()
                 .as_deref(),
-            std::env::var("WT_SESSION").ok().as_deref(),
         )
     }
-    #[cfg(test)]
     pub(super) fn from_env_values(mode_value: Option<&str>) -> Self {
-        Self::from_env_and_terminal_values(mode_value, None)
-    }
-    fn from_env_and_terminal_values(mode_value: Option<&str>, wt_session: Option<&str>) -> Self {
         let Some(mode_value) = mode_value
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|value| value.to_ascii_lowercase())
         else {
             /*
-             * WT_SESSION is a conservative default to avoid scroll-region corruption
-             * on Windows. An explicit env override still wins so manual debugging
-             * can compare both strategies on the same terminal.
+             * Scroll-region insertion is not guaranteed to create host scrollback.
+             * Automatic mode uses portable newline insertion for normal conversations
+             * while preserving the parallel renderer's scroll-region behavior.
              */
-            return if wt_session
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty())
-            {
-                Self::NewlineFallback
-            } else {
-                Self::StandardScrollRegion
-            };
+            return Self::Automatic;
         };
         match mode_value.as_str() {
             "newline" | "newline-fallback" | "fallback" => Self::NewlineFallback,
             "standard" | "scroll-region" | "scrollregion" => Self::StandardScrollRegion,
-            _ => Self::StandardScrollRegion,
+            _ => Self::Automatic,
+        }
+    }
+
+    pub(super) fn resolve(self, parallel_mode_enabled: bool) -> Self {
+        match (self, parallel_mode_enabled) {
+            (Self::Automatic, true) => Self::StandardScrollRegion,
+            (Self::Automatic, false) => Self::NewlineFallback,
+            (mode, _) => mode,
         }
     }
 }
@@ -132,7 +129,7 @@ impl HistoryInsertionAdapter {
          * the public contract restores the shell-owned cursor afterward.
          */
         let result = match self.mode {
-            HistoryInsertionMode::StandardScrollRegion => {
+            HistoryInsertionMode::Automatic | HistoryInsertionMode::StandardScrollRegion => {
                 insert_with_standard_scroll_region(terminal, lines, rendered_rows)
             }
             HistoryInsertionMode::NewlineFallback => {
@@ -168,7 +165,7 @@ impl HistoryInsertionAdapter {
             return Ok(GuardedHistoryInsertionResult::default());
         }
         let result = match self.mode {
-            HistoryInsertionMode::StandardScrollRegion => {
+            HistoryInsertionMode::Automatic | HistoryInsertionMode::StandardScrollRegion => {
                 insert_with_standard_scroll_region(terminal, lines, rendered_rows)
             }
             HistoryInsertionMode::NewlineFallback => {
@@ -447,17 +444,25 @@ mod tests {
     use ratatui::text::{Line, Span};
     use std::io::Write;
     #[test]
-    fn history_insertion_mode_defaults_to_standard_scroll_region() {
+    fn history_insertion_mode_defaults_to_automatic() {
         assert_eq!(
             HistoryInsertionMode::from_env_values(None),
-            HistoryInsertionMode::StandardScrollRegion
+            HistoryInsertionMode::Automatic
         );
         assert_eq!(
             HistoryInsertionMode::from_env_values(Some("")),
-            HistoryInsertionMode::StandardScrollRegion
+            HistoryInsertionMode::Automatic
         );
         assert_eq!(
             HistoryInsertionMode::from_env_values(Some("unknown")),
+            HistoryInsertionMode::Automatic
+        );
+        assert_eq!(
+            HistoryInsertionMode::Automatic.resolve(false),
+            HistoryInsertionMode::NewlineFallback
+        );
+        assert_eq!(
+            HistoryInsertionMode::Automatic.resolve(true),
             HistoryInsertionMode::StandardScrollRegion
         );
     }
@@ -473,17 +478,6 @@ mod tests {
         );
         assert_eq!(
             HistoryInsertionMode::from_env_values(Some("standard")),
-            HistoryInsertionMode::StandardScrollRegion
-        );
-    }
-    #[test]
-    fn history_insertion_mode_uses_newline_fallback_for_windows_terminal() {
-        assert_eq!(
-            HistoryInsertionMode::from_env_and_terminal_values(None, Some("wt-session-id")),
-            HistoryInsertionMode::NewlineFallback
-        );
-        assert_eq!(
-            HistoryInsertionMode::from_env_and_terminal_values(Some("standard"), Some("wt")),
             HistoryInsertionMode::StandardScrollRegion
         );
     }
