@@ -3055,6 +3055,7 @@ fn resize_after_stability_snapshot_defers_history_mutation() {
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
     app.show_startup_ascii_art = false;
+    app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
 
@@ -3114,6 +3115,7 @@ fn resize_after_history_insertion_commits_once_and_marks_row_accounting_dirty() 
     .expect("bottom-anchored inline terminal should initialize");
     let mut app = make_test_app();
     app.show_startup_ascii_art = false;
+    app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
     append_history_message(&mut app, "stable baseline history");
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
@@ -3776,6 +3778,44 @@ fn host_scrollback_preserves_long_single_completion_beyond_screen_cap() {
             terminal_history.matches(marker).count(),
             1,
             "host scrollback duplicated {marker} from uncapped completion:\n{terminal_history}"
+        );
+    }
+}
+
+#[test]
+fn vt100_host_scrollback_preserves_long_single_completion_beyond_screen_cap() {
+    let mut terminal = tui_testkit::inline_history_vt100_terminal(
+        InlineHistoryRenderMode::HostScrollback,
+        100,
+        30,
+    );
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    let body = (0..180)
+        .map(|index| match index {
+            0 => "VT100_LONG_SINGLE_MARKER_FIRST".to_string(),
+            90 => "VT100_LONG_SINGLE_MARKER_MIDDLE".to_string(),
+            179 => "VT100_LONG_SINGLE_MARKER_LAST".to_string(),
+            _ => format!("long completion filler {index}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    append_history_message(&mut app, &body);
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("draw transaction");
+    let terminal_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
+    for marker in [
+        "VT100_LONG_SINGLE_MARKER_FIRST",
+        "VT100_LONG_SINGLE_MARKER_MIDDLE",
+        "VT100_LONG_SINGLE_MARKER_LAST",
+    ] {
+        assert!(
+            terminal_history.contains(marker),
+            "VT100 host scrollback lost {marker} from uncapped completion:\n{terminal_history}"
         );
     }
 }
