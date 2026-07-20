@@ -777,6 +777,7 @@ impl ConversationViewModel {
             completed_turn_id: completed_turn_id.to_string(),
             started_at: Instant::now(),
         });
+        self.begin_viewport_transcript_handoff_release();
         self.status_text = "turn completed / evaluating post-turn continuation".to_string();
     }
     pub(crate) fn complete_post_turn_settlement(&mut self, completed_turn_id: &str) -> bool {
@@ -788,7 +789,6 @@ impl ConversationViewModel {
             })
         {
             self.post_turn_settlement = None;
-            self.begin_viewport_transcript_handoff_release();
             true
         } else {
             false
