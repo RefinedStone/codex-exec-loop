@@ -288,5 +288,6 @@ pub(crate) fn sample_planning_editor_session() -> PlanningDraftEditorSession {
             },
         ],
         validation_report: Default::default(),
+        source_planning_revision: None,
     }
 }

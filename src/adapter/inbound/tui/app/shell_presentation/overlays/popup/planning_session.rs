@@ -168,6 +168,7 @@ mod tests {
                 },
             ],
             validation_report: PlanningValidationReport::default(),
+            source_planning_revision: None,
         }
     }
 }

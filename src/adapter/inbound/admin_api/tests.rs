@@ -147,6 +147,16 @@ impl TempAdminWorkspace {
             path: path.display().to_string(),
         }
     }
+
+    fn new_git(prefix: &str) -> Self {
+        let workspace = Self::new(prefix);
+        let output = std::process::Command::new("git")
+            .args(["init", "-q", workspace.path.as_str()])
+            .output()
+            .expect("git fixture initialization should run");
+        assert!(output.status.success());
+        workspace
+    }
 }
 
 impl Drop for TempAdminWorkspace {
@@ -902,7 +912,7 @@ async fn admin_json_mutations_require_header_csrf_and_share_reset_guard() {
 
 #[tokio::test]
 async fn admin_json_draft_routes_round_trip_through_router() {
-    let workspace = TempAdminWorkspace::new("draft-routes");
+    let workspace = TempAdminWorkspace::new_git("draft-routes");
     let router = admin_test_router(&workspace);
     let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
 
@@ -1998,7 +2008,7 @@ async fn admin_html_form_routes_redirect_through_shared_facade() {
 
 #[tokio::test]
 async fn admin_html_draft_routes_render_editor_and_validation_responses() {
-    let workspace = TempAdminWorkspace::new("html-drafts");
+    let workspace = TempAdminWorkspace::new_git("html-drafts");
     let router = admin_test_router(&workspace);
     let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
 
@@ -2154,7 +2164,7 @@ fn editor_template_uses_shared_encoded_mutation_paths() {
 
 #[tokio::test]
 async fn akra_html_draft_routes_preserve_surface_continuity() {
-    let workspace = TempAdminWorkspace::new("akra-html-drafts");
+    let workspace = TempAdminWorkspace::new_git("akra-html-drafts");
     let router = admin_test_router(&workspace);
     let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
 

@@ -93,6 +93,7 @@ pub struct PlanningEditorMutationIdentity {
     pub draft_name: String,
     pub source_session: PlanningEditorSessionIdentity,
     pub buffer_revision: u64,
+    pub source_planning_revision: Option<i64>,
 }
 
 impl PlanningEditorMutationIdentity {
@@ -109,7 +110,13 @@ impl PlanningEditorMutationIdentity {
             draft_name: draft_name.into(),
             source_session,
             buffer_revision,
+            source_planning_revision: None,
         }
+    }
+
+    pub fn with_source_planning_revision(mut self, source_planning_revision: i64) -> Self {
+        self.source_planning_revision = Some(source_planning_revision);
+        self
     }
 }
 
@@ -359,6 +366,7 @@ pub struct PlanningEditorSessionSnapshot {
     pub draft_directory: String,
     pub editable_files: Vec<PlanningEditorFileSnapshot>,
     pub validation_report: PlanningValidationReport,
+    pub source_planning_revision: Option<i64>,
 }
 
 impl fmt::Debug for PlanningEditorSessionSnapshot {
@@ -369,6 +377,7 @@ impl fmt::Debug for PlanningEditorSessionSnapshot {
             .field("draft_directory", &self.draft_directory)
             .field("editable_file_count", &self.editable_files.len())
             .field("validation_report", &self.validation_report)
+            .field("source_planning_revision", &self.source_planning_revision)
             .finish()
     }
 }
@@ -401,6 +410,7 @@ pub enum PlanningEditorMutationResult {
         draft_name: String,
         promoted_file_count: usize,
         validation_report: PlanningValidationReport,
+        committed_planning_revision: Option<i64>,
     },
 }
 
@@ -850,10 +860,30 @@ mod tests {
                 body: "secret operator payload".to_string(),
             }],
             validation_report: PlanningValidationReport::default(),
+            source_planning_revision: Some(7),
         };
 
         let debug = format!("{snapshot:?}");
         assert!(!debug.contains("secret operator payload"));
         assert!(debug.contains("editable_file_count"));
+        assert!(debug.contains("source_planning_revision"));
+    }
+
+    #[test]
+    fn editor_mutation_revision_guard_is_opt_in() {
+        let identity = mutation_identity(
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Directions,
+            "draft-a",
+            session(1, "/workspace", "draft-a"),
+            3,
+        );
+        assert_eq!(identity.source_planning_revision, None);
+        assert_eq!(
+            identity
+                .with_source_planning_revision(11)
+                .source_planning_revision,
+            Some(11)
+        );
     }
 }

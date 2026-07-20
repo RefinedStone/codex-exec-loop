@@ -64,6 +64,7 @@ impl PlanningAdminFacadeService {
             priority_queue_service,
             // task_mutation_service는 admin task CRUD 메서드들이 직접 호출하는 application service다.
             task_mutation_service,
+            draft_stage_metadata: Arc::default(),
         }
     }
 }

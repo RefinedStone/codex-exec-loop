@@ -847,6 +847,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&workspace);
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn injected_store_does_not_hide_existing_plain_workspace_files() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!(
+            "codex-exec-loop-fs-plain-routing-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let result_output_path = workspace.join(RESULT_OUTPUT_FILE_PATH);
+        std::fs::create_dir_all(result_output_path.parent().unwrap())
+            .expect("plain planning directory should be created");
+        std::fs::write(&result_output_path, "legacy plain result")
+            .expect("legacy plain result should be seeded");
+        let workspace_dir = workspace.to_str().expect("workspace should be utf8");
+        let adapter = FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(Arc::new(
+            SqlitePlanningAuthorityAdapter::new(),
+        ));
+
+        assert!(!adapter.uses_repo_scoped_authority(workspace_dir));
+        assert_eq!(
+            adapter
+                .load_planning_workspace_files(workspace_dir)
+                .expect("plain workspace should remain readable")
+                .result_output_markdown
+                .as_deref(),
+            Some("legacy plain result")
+        );
+        adapter
+            .replace_planning_workspace_file(
+                workspace_dir,
+                RESULT_OUTPUT_FILE_PATH,
+                Some("updated plain result"),
+            )
+            .expect("plain workspace should remain file-backed");
+        assert_eq!(
+            std::fs::read_to_string(&result_output_path)
+                .expect("updated plain result should remain on disk"),
+            "updated plain result"
+        );
+
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
     #[test]
     fn draft_storage_rejects_names_that_are_not_single_segments() {
         let unique_suffix = SystemTime::now()

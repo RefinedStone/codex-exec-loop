@@ -136,7 +136,7 @@ impl PlanningDirectionsService {
         directions: &DirectionCatalogDocument,
         observed_planning_revision: i64,
         authority_mutation_owner_token: &str,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         // direction edit는 catalog만 commit한다. supporting markdown body는 workspace draft에 남고 shared draft
         // promotion flow가 active file로 옮긴다. path authority와 body authority를 한 commit에 섞지 않는 경계다.
         match self
@@ -149,7 +149,9 @@ impl PlanningDirectionsService {
                     authority_mutation_owner_token: Some(authority_mutation_owner_token),
                 },
             )? {
-            PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(()),
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision, ..
+            } => Ok(planning_revision),
             PlanningTaskAuthorityCommitResult::Conflict { .. } => Err(anyhow!(
                 "planning direction authority changed while editing; retry"
             )),
@@ -237,6 +239,7 @@ impl PlanningDirectionsService {
         workspace_dir: &str,
         direction_id: &str,
     ) -> Result<PlanningDraftEditorSession> {
+        self.require_atomic_maintenance_editor(workspace_dir)?;
         // detail-doc editor를 열 때 catalog path를 먼저 repair할 수 있다. 선택된 path는 direction authority에 commit하고,
         // markdown body는 validation과 later promotion을 위해 workspace draft file로 stage한다.
         let mut workspace = self.load_complete_workspace(workspace_dir)?;
@@ -252,7 +255,7 @@ impl PlanningDirectionsService {
             trimmed_non_empty(selected_direction.detail_doc_path.as_str()),
         )?;
         set_direction_detail_doc_path(&mut workspace.directions, direction_id, &detail_doc_path)?;
-        with_authority_mutation_guard(
+        let source_planning_revision = with_authority_mutation_guard(
             self.planning_authority_port.as_ref(),
             workspace_dir,
             "stage direction detail editor",
@@ -265,6 +268,7 @@ impl PlanningDirectionsService {
                 )
             },
         )?;
+        workspace.observed_planning_revision = source_planning_revision;
         workspace
             .extra_files
             .retain(|file| file.active_path != detail_doc_path);
@@ -281,6 +285,7 @@ impl PlanningDirectionsService {
         &self,
         workspace_dir: &str,
     ) -> Result<PlanningDraftEditorSession> {
+        self.require_atomic_maintenance_editor(workspace_dir)?;
         // queue-idle prompt editing도 같은 split을 따른다. authority는 prompt path를 저장하고, workspace draft file은
         // operator가 편집할 markdown body를 저장한다.
         let mut workspace = self.load_complete_workspace(workspace_dir)?;
@@ -289,7 +294,7 @@ impl PlanningDirectionsService {
             trimmed_non_empty(workspace.directions.queue_idle.prompt_path.as_str()),
         )?;
         set_queue_idle_prompt_path(&mut workspace.directions, &prompt_path);
-        with_authority_mutation_guard(
+        let source_planning_revision = with_authority_mutation_guard(
             self.planning_authority_port.as_ref(),
             workspace_dir,
             "stage queue-idle prompt editor",
@@ -302,6 +307,7 @@ impl PlanningDirectionsService {
                 )
             },
         )?;
+        workspace.observed_planning_revision = source_planning_revision;
         workspace
             .extra_files
             .retain(|file| file.active_path != prompt_path);
@@ -313,6 +319,21 @@ impl PlanningDirectionsService {
         });
 
         self.stage_session_from_source(workspace_dir, workspace, &[prompt_path])
+    }
+
+    fn require_atomic_maintenance_editor(&self, workspace_dir: &str) -> Result<()> {
+        if self
+            .planning_workspace_port
+            .uses_repo_scoped_authority(workspace_dir)
+            && self
+                .planning_authority_port
+                .supports_atomic_planning_authority_documents()
+        {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "planning maintenance editors require the atomic workspace authority"
+        ))
     }
 
     fn stage_session_from_source(
@@ -354,6 +375,7 @@ impl PlanningDirectionsService {
                 })
                 .collect(),
             validation_report,
+            source_planning_revision: Some(source.observed_planning_revision),
         })
     }
 

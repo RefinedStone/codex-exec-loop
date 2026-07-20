@@ -130,17 +130,24 @@ impl NativeTuiApp {
         let Some(buffer_revision) = self.planning_draft_editor_ui_state.buffer_revision() else {
             return;
         };
+        let source_planning_revision = self
+            .planning_draft_editor_ui_state
+            .source_planning_revision();
         let draft_name = source_session.draft_name.clone();
         self.planning_draft_editor_ui_state
             .clear_close_confirmation();
+        let mut identity = PlanningEditorMutationIdentity::new(
+            action,
+            target,
+            draft_name,
+            source_session,
+            buffer_revision,
+        );
+        if let Some(source_planning_revision) = source_planning_revision {
+            identity = identity.with_source_planning_revision(source_planning_revision);
+        }
         let request = PlanningEditorMutationRequest {
-            identity: PlanningEditorMutationIdentity::new(
-                action,
-                target,
-                draft_name,
-                source_session,
-                buffer_revision,
-            ),
+            identity,
             editable_files: self
                 .planning_draft_editor_ui_state
                 .collect_editable_file_snapshots(),

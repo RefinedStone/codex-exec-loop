@@ -301,5 +301,6 @@ fn sample_long_planning_editor_session() -> PlanningDraftEditorSession {
                 .join("\n"),
         }],
         validation_report: Default::default(),
+        source_planning_revision: None,
     }
 }

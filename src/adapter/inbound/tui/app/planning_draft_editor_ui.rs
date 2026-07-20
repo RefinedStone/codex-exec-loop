@@ -26,6 +26,7 @@ pub(super) struct PlanningDraftEditorSessionState {
     selected_file_index: usize,
     buffer_revision: u64,
     validation_report: PlanningValidationReport,
+    source_planning_revision: Option<i64>,
 }
 
 // Cursor columns are character positions, not byte offsets. Text mutations
@@ -99,6 +100,11 @@ impl PlanningDraftEditorUiState {
     }
     pub fn buffer_revision(&self) -> Option<u64> {
         self.session.as_ref().map(|session| session.buffer_revision)
+    }
+    pub fn source_planning_revision(&self) -> Option<i64> {
+        self.session
+            .as_ref()
+            .and_then(|session| session.source_planning_revision)
     }
     pub fn buffers(&self) -> Option<&[PlanningDraftEditorBufferState]> {
         self.session
@@ -232,6 +238,23 @@ impl PlanningDraftEditorUiState {
         }
         true
     }
+    pub fn advance_correlated_source_planning_revision(
+        &mut self,
+        source_session: &PlanningEditorSessionIdentity,
+        source_planning_revision: i64,
+        committed_planning_revision: i64,
+    ) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        if session.session_identity.as_ref() != Some(source_session)
+            || session.source_planning_revision != Some(source_planning_revision)
+        {
+            return false;
+        }
+        session.source_planning_revision = Some(committed_planning_revision);
+        true
+    }
     pub fn validation_report(&self) -> Option<&PlanningValidationReport> {
         self.session
             .as_ref()
@@ -347,6 +370,7 @@ impl PlanningDraftEditorSessionState {
             selected_file_index: 0,
             buffer_revision: 0,
             validation_report: session.validation_report,
+            source_planning_revision: session.source_planning_revision,
         }
     }
 }
@@ -366,6 +390,7 @@ impl From<PlanningEditorSessionSnapshot> for PlanningDraftEditorSessionState {
             selected_file_index: 0,
             buffer_revision: 0,
             validation_report: session.validation_report,
+            source_planning_revision: session.source_planning_revision,
         }
     }
 }

@@ -487,12 +487,15 @@ impl SqlitePlanningAuthorityAdapter {
             snapshot.task_authority == *commit.task_authority
                 && snapshot.queue_projection == *commit.queue_projection
         });
-        let mut active_changed = apply_active_workspace_record(
-            &transaction,
-            &PlanningWorkspaceLoadRecord {
-                result_output_markdown: Some(commit.result_output_markdown.to_string()),
-            },
-        )?;
+        let mut active_changed = match commit.result_output_markdown {
+            Some(result_output_markdown) => apply_active_workspace_record(
+                &transaction,
+                &PlanningWorkspaceLoadRecord {
+                    result_output_markdown: Some(result_output_markdown.to_string()),
+                },
+            )?,
+            None => false,
+        };
         for mutation in commit.active_document_mutations {
             active_changed |= match mutation {
                 PlanningAuthorityActiveDocumentMutation::Replace {

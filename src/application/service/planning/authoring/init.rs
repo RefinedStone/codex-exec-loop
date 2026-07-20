@@ -24,7 +24,7 @@ use crate::domain::planning::{
     DirectionCatalogDocument, PLANNING_FORMAT_VERSION, PlanningValidationReport,
     TaskAuthorityDocument,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -100,6 +100,7 @@ pub struct PlanningDraftEditorSession {
     pub draft_directory: String,
     pub editable_files: Vec<PlanningDraftEditorFile>,
     pub validation_report: PlanningValidationReport,
+    pub source_planning_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +118,7 @@ pub struct PlanningDraftPromoteResult {
     pub draft_name: String,
     pub promoted_file_count: usize,
     pub validation_report: PlanningValidationReport,
+    pub committed_planning_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +193,7 @@ impl PlanningInitService {
                 })
                 .collect(),
             validation_report,
+            source_planning_revision: None,
         })
     }
 
@@ -243,7 +246,27 @@ impl PlanningInitService {
         // editor promotion은 먼저 최신 editor body를 draft directory에 저장한 뒤 staged draft promotion과 같은 경로를
         // 탄다. save와 promote가 서로 다른 validation source를 보지 않게 하는 흐름이다.
         let loaded = self.replace_and_load_draft_editor_files(workspace_dir, draft_name, files)?;
-        self.promote_loaded_draft(workspace_dir, draft_name, loaded)
+        self.promote_loaded_draft(workspace_dir, draft_name, loaded, None, None)
+    }
+    pub fn promote_draft_editor_files_at_revision(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        files: &[PlanningDraftEditorFile],
+        source_planning_revision: i64,
+    ) -> Result<PlanningDraftPromoteResult> {
+        let edited_active_paths = files
+            .iter()
+            .map(|file| file.active_path.clone())
+            .collect::<BTreeSet<_>>();
+        let loaded = self.replace_and_load_draft_editor_files(workspace_dir, draft_name, files)?;
+        self.promote_loaded_draft(
+            workspace_dir,
+            draft_name,
+            loaded,
+            Some(source_planning_revision),
+            Some(edited_active_paths),
+        )
     }
     pub fn promote_staged_draft(
         &self,
@@ -255,7 +278,7 @@ impl PlanningInitService {
         let loaded = self
             .planning_workspace_port
             .load_planning_draft_files(workspace_dir, draft_name)?;
-        self.promote_loaded_draft(workspace_dir, draft_name, loaded)
+        self.promote_loaded_draft(workspace_dir, draft_name, loaded, None, None)
     }
     fn replace_and_load_draft_editor_files(
         &self,
@@ -283,13 +306,22 @@ impl PlanningInitService {
         workspace_dir: &str,
         draft_name: &str,
         loaded: PlanningDraftLoadRecord,
+        source_planning_revision: Option<i64>,
+        edited_active_paths: Option<BTreeSet<String>>,
     ) -> Result<PlanningDraftPromoteResult> {
         with_authority_mutation_guard(
             self.planning_authority_port.as_ref(),
             workspace_dir,
             "promote planning draft",
             |owner_token| {
-                self.promote_loaded_draft_with_guard(workspace_dir, draft_name, loaded, owner_token)
+                self.promote_loaded_draft_with_guard(
+                    workspace_dir,
+                    draft_name,
+                    loaded,
+                    source_planning_revision,
+                    edited_active_paths,
+                    owner_token,
+                )
             },
         )
     }
@@ -299,18 +331,65 @@ impl PlanningInitService {
         workspace_dir: &str,
         draft_name: &str,
         loaded: PlanningDraftLoadRecord,
+        source_planning_revision: Option<i64>,
+        edited_active_paths: Option<BTreeSet<String>>,
         authority_mutation_owner_token: &str,
     ) -> Result<PlanningDraftPromoteResult> {
         // promotion은 validation-gated다. invalid draft는 error가 아니라 promoted_file_count 0인 정상 결과를 돌려
         // UI가 infrastructure failure처럼 보이지 않고 validation detail을 그대로 보여 줄 수 있게 한다.
-        let validation_result = self.validate_loaded_draft_result(workspace_dir, &loaded)?;
+        let repo_scoped_atomic_documents = self
+            .planning_workspace_port
+            .uses_repo_scoped_authority(workspace_dir)
+            && self
+                .planning_authority_port
+                .supports_atomic_planning_authority_documents();
+        if source_planning_revision.is_some() && !repo_scoped_atomic_documents {
+            bail!(
+                "revision-bound planning promotion requires the atomic workspace authority; reload through the production planning store"
+            );
+        }
+        let revision_bound_baseline = source_planning_revision
+            .map(|_| self.load_authority_rewrite_baseline(workspace_dir))
+            .transpose()?;
+        if let (Some(source_planning_revision), Some(baseline)) =
+            (source_planning_revision, revision_bound_baseline.as_ref())
+            && baseline.observed_planning_revision != Some(source_planning_revision)
+        {
+            let current_planning_revision = baseline
+                .observed_planning_revision
+                .map(|revision| revision.to_string())
+                .unwrap_or_else(|| "missing".to_string());
+            return Err(anyhow!(
+                "planning authority changed from revision {source_planning_revision} to {current_planning_revision}; reload and retry"
+            ));
+        }
+        let validation_result = self.validate_loaded_draft_result(
+            workspace_dir,
+            &loaded,
+            revision_bound_baseline
+                .as_ref()
+                .map(|baseline| &baseline.task_authority),
+        )?;
         let validation_report = validation_result.report.clone();
         if !validation_report.is_valid() {
             return Ok(PlanningDraftPromoteResult {
                 draft_name: draft_name.to_string(),
                 promoted_file_count: 0,
                 validation_report,
+                committed_planning_revision: None,
             });
+        }
+        let baseline = match revision_bound_baseline {
+            Some(baseline) => baseline,
+            None => self.load_authority_rewrite_baseline(workspace_dir)?,
+        };
+        let observed_planning_revision = baseline.observed_planning_revision;
+        if let Some(edited_active_paths) = edited_active_paths.as_ref() {
+            self.ensure_hidden_editor_sources_unchanged(
+                workspace_dir,
+                &loaded,
+                edited_active_paths,
+            )?;
         }
         // 여기부터는 validation이 parsed authority document를 제공한다는 전제 아래 active state transition을 준비한다.
         // raw staged text를 다시 조합하지 않고 validation_result의 domain value만 쓰는 이유는 promotion과 direct init이
@@ -333,17 +412,20 @@ impl PlanningInitService {
             .find(|file| file.active_path == RESULT_OUTPUT_FILE_PATH)
             .map(|file| file.body.as_str())
             .ok_or_else(|| anyhow!("valid staged draft did not include result output"))?;
-        let repo_scoped_atomic_documents = self
-            .planning_workspace_port
-            .uses_repo_scoped_authority(workspace_dir)
-            && self
-                .planning_authority_port
-                .supports_atomic_planning_authority_documents();
+        let result_output_rewrite = edited_active_paths
+            .as_ref()
+            .is_none_or(|paths| paths.contains(RESULT_OUTPUT_FILE_PATH))
+            .then_some(result_output_markdown);
         let active_document_mutations = if repo_scoped_atomic_documents {
             loaded
                 .staged_files
                 .iter()
-                .filter(|file| file.active_path != RESULT_OUTPUT_FILE_PATH)
+                .filter(|file| {
+                    file.active_path != RESULT_OUTPUT_FILE_PATH
+                        && edited_active_paths
+                            .as_ref()
+                            .is_none_or(|paths| paths.contains(&file.active_path))
+                })
                 .map(|file| PlanningAuthorityActiveDocumentMutation::Replace {
                     relative_path: file.active_path.as_str(),
                     body: file.body.as_str(),
@@ -358,8 +440,22 @@ impl PlanningInitService {
         let files_to_write = loaded
             .staged_files
             .iter()
-            .filter(|_| !repo_scoped_atomic_documents)
+            .filter(|file| {
+                !repo_scoped_atomic_documents
+                    && edited_active_paths
+                        .as_ref()
+                        .is_none_or(|paths| paths.contains(&file.active_path))
+            })
             .collect::<Vec<_>>();
+        let promoted_file_count = loaded
+            .staged_files
+            .iter()
+            .filter(|file| {
+                edited_active_paths
+                    .as_ref()
+                    .is_none_or(|paths| paths.contains(&file.active_path))
+            })
+            .count();
         for file in &files_to_write {
             previous_active_files.insert(
                 file.active_path.clone(),
@@ -368,7 +464,7 @@ impl PlanningInitService {
             );
         }
         let mut applied_paths = Vec::with_capacity(files_to_write.len());
-        let promote_result = (|| -> Result<()> {
+        let promote_result = (|| -> Result<i64> {
             // Repo-scoped result output은 direction/task/queue와 같은 SQLite transaction에서 저장한다.
             // Supplemental files and direct-filesystem result output are reversible prewrites.
             for file in &files_to_write {
@@ -386,48 +482,82 @@ impl PlanningInitService {
                     directions,
                     task_authority,
                     queue_projection: &queue_projection,
-                    result_output_markdown,
+                    result_output_markdown: result_output_rewrite,
                     active_document_mutations: &active_document_mutations,
                 },
+                observed_planning_revision,
+                baseline.previous_task_ids,
                 authority_mutation_owner_token,
-            )?;
-            Ok(())
+            )
         })();
-        if let Err(error) = promote_result {
-            // 여기서 rollback하는 대상은 workspace file write다. DB authority write가 workspace replacement 뒤 실패하면
-            // active file layer를 마지막으로 알던 상태로 되돌리고, 원래 authority error를 그대로 표면화한다.
-            // rollback 실패 메시지에 수동 복구 path를 싣는 이유는 이 service가 DB commit 실패와 file 복원 실패를 동시에
-            // 완전히 자동 복구할 수 없기 때문이다.
-            if let Err(rollback_error) = self.restore_promoted_active_state(
-                workspace_dir,
-                &applied_paths,
-                &previous_active_files,
-            ) {
-                let mut manual_recovery_paths = applied_paths.clone();
-                manual_recovery_paths.sort();
-                manual_recovery_paths.dedup();
-                return Err(anyhow!(
-                    "failed to promote staged draft `{draft_name}`: {error}; rollback failed: {rollback_error}; manual recovery may be required for: {}",
-                    manual_recovery_paths.join(", ")
-                ));
+        let committed_planning_revision = match promote_result {
+            Ok(planning_revision) => planning_revision,
+            Err(error) => {
+                // 여기서 rollback하는 대상은 workspace file write다. DB authority write가 workspace replacement 뒤 실패하면
+                // active file layer를 마지막으로 알던 상태로 되돌리고, 원래 authority error를 그대로 표면화한다.
+                // rollback 실패 메시지에 수동 복구 path를 싣는 이유는 이 service가 DB commit 실패와 file 복원 실패를 동시에
+                // 완전히 자동 복구할 수 없기 때문이다.
+                if let Err(rollback_error) = self.restore_promoted_active_state(
+                    workspace_dir,
+                    &applied_paths,
+                    &previous_active_files,
+                ) {
+                    let mut manual_recovery_paths = applied_paths.clone();
+                    manual_recovery_paths.sort();
+                    manual_recovery_paths.dedup();
+                    return Err(anyhow!(
+                        "failed to promote staged draft `{draft_name}`: {error}; rollback failed: {rollback_error}; manual recovery may be required for: {}",
+                        manual_recovery_paths.join(", ")
+                    ));
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
+        };
         Ok(PlanningDraftPromoteResult {
             draft_name: draft_name.to_string(),
-            promoted_file_count: loaded.staged_files.len(),
+            promoted_file_count,
             validation_report,
+            committed_planning_revision: Some(committed_planning_revision),
         })
+    }
+
+    fn ensure_hidden_editor_sources_unchanged(
+        &self,
+        workspace_dir: &str,
+        loaded: &PlanningDraftLoadRecord,
+        edited_active_paths: &BTreeSet<String>,
+    ) -> Result<()> {
+        // Hidden files are excluded from later active writes, and hidden result output is omitted
+        // from the authority document rewrite. The source revision and final authority CAS protect
+        // the production SQLite boundary; revision-bound direct-filesystem promotion is rejected.
+        for file in loaded
+            .staged_files
+            .iter()
+            .filter(|file| !edited_active_paths.contains(&file.active_path))
+        {
+            let unchanged = self
+                .planning_workspace_port
+                .load_optional_planning_file(workspace_dir, &file.active_path)?
+                .as_deref()
+                == Some(file.body.as_str());
+            if !unchanged {
+                return Err(anyhow!(
+                    "planning file `{}` changed while the editor was open; reload and retry",
+                    file.active_path
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn commit_complete_authority_rewrite(
         &self,
         workspace_dir: &str,
         rewrite: CompleteAuthorityRewrite<'_>,
+        observed_planning_revision: Option<i64>,
+        previous_task_ids: Vec<String>,
         authority_mutation_owner_token: &str,
-    ) -> Result<()> {
-        let (observed_planning_revision, previous_task_ids) =
-            self.load_authority_rewrite_baseline(workspace_dir)?;
+    ) -> Result<i64> {
         let retained_task_ids = rewrite
             .task_authority
             .tasks
@@ -486,12 +616,14 @@ impl PlanningInitService {
             }
         };
         match result {
-            PlanningTaskAuthorityCommitResult::Committed { .. } => Ok(()),
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision, ..
+            } => Ok(planning_revision),
             PlanningTaskAuthorityCommitResult::Conflict {
                 observed_planning_revision,
                 current_planning_revision,
             } => Err(anyhow!(
-                "planning authority changed during operator rewrite (observed revision {observed_planning_revision}, current revision {current_planning_revision}); reload and retry"
+                "planning authority changed from revision {observed_planning_revision} to {current_planning_revision}; reload and retry"
             )),
         }
     }
@@ -499,36 +631,46 @@ impl PlanningInitService {
     fn load_authority_rewrite_baseline(
         &self,
         workspace_dir: &str,
-    ) -> Result<(Option<i64>, Vec<String>)> {
+    ) -> Result<AuthorityRewriteBaseline> {
         if let Some(snapshot) = self
             .planning_authority_port
             .load_planning_authority_documents(workspace_dir)?
         {
-            return Ok((
-                Some(snapshot.planning_revision),
-                snapshot
-                    .task_authority
-                    .tasks
-                    .into_iter()
-                    .map(|task| task.id)
-                    .collect(),
-            ));
+            let previous_task_ids = snapshot
+                .task_authority
+                .tasks
+                .iter()
+                .map(|task| task.id.clone())
+                .collect();
+            return Ok(AuthorityRewriteBaseline {
+                observed_planning_revision: Some(snapshot.planning_revision),
+                previous_task_ids,
+                task_authority: snapshot.task_authority,
+            });
         }
         let (directions, tasks) = load_consistent_planning_authority_snapshots(
             self.planning_task_repository_port.as_ref(),
             workspace_dir,
         )?;
         match (directions, tasks) {
-            (None, None) => Ok((None, Vec::new())),
-            (Some(_directions), Some(tasks)) => Ok((
-                Some(tasks.planning_revision),
-                tasks
+            (None, None) => Ok(AuthorityRewriteBaseline {
+                observed_planning_revision: None,
+                previous_task_ids: Vec::new(),
+                task_authority: default_empty_task_authority(),
+            }),
+            (Some(_directions), Some(tasks)) => {
+                let previous_task_ids = tasks
                     .task_authority
                     .tasks
-                    .into_iter()
-                    .map(|task| task.id)
-                    .collect(),
-            )),
+                    .iter()
+                    .map(|task| task.id.clone())
+                    .collect();
+                Ok(AuthorityRewriteBaseline {
+                    observed_planning_revision: Some(tasks.planning_revision),
+                    previous_task_ids,
+                    task_authority: tasks.task_authority,
+                })
+            }
             _ => Err(anyhow!(
                 "planning authority is incomplete; repair direction/task authority before rewriting it"
             )),
@@ -594,7 +736,7 @@ impl PlanningInitService {
         loaded: &PlanningDraftLoadRecord,
     ) -> Result<PlanningValidationReport> {
         Ok(self
-            .validate_loaded_draft_result(workspace_dir, loaded)?
+            .validate_loaded_draft_result(workspace_dir, loaded, None)?
             .report)
     }
 
@@ -602,6 +744,7 @@ impl PlanningInitService {
         &self,
         workspace_dir: &str,
         loaded: &PlanningDraftLoadRecord,
+        preserved_task_authority: Option<&TaskAuthorityDocument>,
     ) -> Result<crate::domain::planning::PlanningValidationResult> {
         let staged_file_map = loaded
             .staged_files
@@ -620,9 +763,13 @@ impl PlanningInitService {
                     .build_artifacts_for_mode(fallback_mode_for_loaded_draft(&staged_file_map))
                     .directions
             });
-        let task_authority_json = default_empty_task_authority_json();
-        // manual bootstrap draft는 task authority editing을 노출하지 않는다. direction/result-output과 supporting-file
-        // reference를 검증하기 위해 empty valid authority document를 중립 입력으로 사용한다.
+        let task_authority_json = serde_json::to_string(
+            preserved_task_authority.unwrap_or(&default_empty_task_authority()),
+        )
+        .expect("task authority should serialize");
+        // manual bootstrap draft는 task authority editing을 노출하지 않는다. 초기 authoring은 빈
+        // authority를, revision-bound maintenance는 같은 source revision의 task authority를 검증 입력으로
+        // 사용해 노출되지 않은 task/queue를 유지한다.
         let mut result = self.planning_validation_service.validate_workspace_files(
             crate::domain::planning::PlanningWorkspaceFiles {
                 directions: &directions,
@@ -737,6 +884,7 @@ impl PlanningInitService {
                     .load_optional_planning_file(workspace_dir, &file.active_path)?,
             );
         }
+        let baseline = self.load_authority_rewrite_baseline(workspace_dir)?;
         let mut applied_paths = Vec::with_capacity(files_to_write.len());
         let initialize_result = (|| -> Result<()> {
             for file in &files_to_write {
@@ -754,11 +902,14 @@ impl PlanningInitService {
                     directions: &bootstrap.directions,
                     task_authority: &bootstrap.task_authority,
                     queue_projection: &queue_projection,
-                    result_output_markdown,
+                    result_output_markdown: Some(result_output_markdown),
                     active_document_mutations: &active_document_mutations,
                 },
+                baseline.observed_planning_revision,
+                baseline.previous_task_ids,
                 authority_mutation_owner_token,
-            )
+            )?;
+            Ok(())
         })();
         if let Err(error) = initialize_result {
             if let Err(rollback_error) = self.restore_promoted_active_state(
@@ -843,8 +994,14 @@ struct CompleteAuthorityRewrite<'a> {
     directions: &'a DirectionCatalogDocument,
     task_authority: &'a TaskAuthorityDocument,
     queue_projection: &'a crate::domain::planning::PriorityQueueProjection,
-    result_output_markdown: &'a str,
+    result_output_markdown: Option<&'a str>,
     active_document_mutations: &'a [PlanningAuthorityActiveDocumentMutation<'a>],
+}
+
+struct AuthorityRewriteBaseline {
+    observed_planning_revision: Option<i64>,
+    previous_task_ids: Vec<String>,
+    task_authority: TaskAuthorityDocument,
 }
 
 fn is_operator_editable_draft_path(active_path: &str) -> bool {
@@ -853,14 +1010,13 @@ fn is_operator_editable_draft_path(active_path: &str) -> bool {
     matches!(active_path, RESULT_OUTPUT_FILE_PATH)
 }
 
-fn default_empty_task_authority_json() -> String {
+fn default_empty_task_authority() -> TaskAuthorityDocument {
     // 이 surface가 direction/result-output만 편집하더라도 validation에는 task-authority document가 필요하다. 빈
     // versioned authority가 그 검사에 대한 neutral document다.
-    serde_json::to_string(&TaskAuthorityDocument {
+    TaskAuthorityDocument {
         version: PLANNING_FORMAT_VERSION,
         tasks: Vec::new(),
-    })
-    .expect("empty task authority should serialize")
+    }
 }
 
 fn fallback_mode_for_loaded_draft(staged_file_map: &HashMap<&str, &str>) -> PlanningBootstrapMode {
@@ -883,14 +1039,22 @@ fn build_bootstrap_draft_name(now: chrono::DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
-    use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
+    use crate::application::port::outbound::planning_authority_port::{
+        NoopPlanningAuthorityPort, PlanningAuthorityPort,
+    };
     use crate::application::port::outbound::planning_task_repository_port::{
-        NoopPlanningTaskRepositoryPort, PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
+        NoopPlanningTaskRepositoryPort, PlanningDirectionAuthorityCommit,
+        PlanningTaskAuthorityCommit, PlanningTaskAuthorityCommitResult,
+        PlanningTaskAuthoritySnapshot, PlanningTaskRepositoryPort,
     };
     use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::service::planning::RESULT_OUTPUT_FILE_PATH;
-    use crate::domain::planning::QueueIdlePolicy;
+    use crate::domain::planning::{
+        OriginSessionKind, QueueIdlePolicy, TaskActor, TaskDefinition, TaskMutationProvenance,
+        TaskStatus,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1061,6 +1225,7 @@ mod tests {
             .stage_manual_editor_session(fixture.workspace.path_str())
             .expect("manual editor session should stage");
 
+        assert_eq!(session.source_planning_revision, None);
         assert_eq!(session.editable_files.len(), 1);
         assert_eq!(
             session.editable_files[0].active_path,
@@ -1115,6 +1280,7 @@ mod tests {
             .expect("invalid draft promotion should return validation result");
 
         assert_eq!(promote_result.promoted_file_count, 0);
+        assert_eq!(promote_result.committed_planning_revision, None);
         assert!(!promote_result.validation_report.is_valid());
         assert!(
             !fixture
@@ -1151,6 +1317,10 @@ mod tests {
         assert_eq!(promote_result.promoted_file_count, 1);
         assert!(promote_result.validation_report.is_valid());
         assert_eq!(
+            promote_result.committed_planning_revision,
+            Some(fixture.task_snapshot().planning_revision)
+        );
+        assert_eq!(
             fs::read_to_string(fixture.workspace.path().join(RESULT_OUTPUT_FILE_PATH))
                 .expect("active result output should be readable"),
             edited_body
@@ -1159,6 +1329,268 @@ mod tests {
         assert_eq!(directions.directions[0].id, "example-direction");
         assert_eq!(directions.queue_idle.policy, QueueIdlePolicy::Stop);
         assert!(fixture.task_snapshot().task_authority.tasks.is_empty());
+    }
+
+    #[test]
+    fn revision_bound_editor_promotion_rejects_stale_authority_before_active_write() {
+        let fixture = InitFixture::new_sqlite("planning-init-stale-editor-promotion");
+        fixture
+            .service
+            .initialize_simple_workspace(fixture.workspace.path_str())
+            .expect("simple initialization should succeed");
+        let source_planning_revision = fixture.task_snapshot().planning_revision;
+        let stage = fixture
+            .service
+            .stage_simple_mode_draft(fixture.workspace.path_str())
+            .expect("simple draft should stage");
+        let session = fixture
+            .service
+            .load_manual_editor_session(fixture.workspace.path_str(), &stage.draft_name)
+            .expect("simple editor session should load");
+        let original_result_output = fixture
+            .workspace_port
+            .load_optional_planning_file(fixture.workspace.path_str(), RESULT_OUTPUT_FILE_PATH)
+            .expect("active result output should be readable");
+        let mut changed_directions = fixture.direction_snapshot();
+        changed_directions.directions[0].success_criteria.clear();
+        let committed_planning_revision = match fixture
+            .repository
+            .commit_direction_authority_snapshot(
+                fixture.workspace.path_str(),
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: Some(source_planning_revision),
+                    directions: &changed_directions,
+                    authority_mutation_owner_token: None,
+                },
+            )
+            .expect("concurrent direction mutation should commit")
+        {
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision, ..
+            } => planning_revision,
+            PlanningTaskAuthorityCommitResult::Conflict { .. } => {
+                panic!("concurrent direction mutation should not conflict")
+            }
+        };
+        let edited_file = PlanningDraftEditorFile {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            staged_path: session.editable_files[0].staged_path.clone(),
+            body: "# Result Output\n\n- Must not overwrite newer authority.\n".to_string(),
+        };
+
+        let error = fixture
+            .service
+            .promote_draft_editor_files_at_revision(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                &[edited_file],
+                source_planning_revision,
+            )
+            .expect_err("stale editor promotion should be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "planning authority changed from revision {source_planning_revision} to {committed_planning_revision}; reload and retry"
+            )
+        );
+        assert_eq!(
+            fixture
+                .workspace_port
+                .load_optional_planning_file(fixture.workspace.path_str(), RESULT_OUTPUT_FILE_PATH)
+                .expect("active result output should remain readable"),
+            original_result_output
+        );
+        assert!(
+            fixture.direction_snapshot().directions[0]
+                .success_criteria
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn revision_bound_editor_promotion_requires_atomic_workspace_authority() {
+        let fixture = InitFixture::new("planning-init-direct-revision-closed");
+        fixture
+            .service
+            .initialize_simple_workspace(fixture.workspace.path_str())
+            .expect("simple initialization should succeed");
+        let source_planning_revision = fixture.task_snapshot().planning_revision;
+        let stage = fixture
+            .service
+            .stage_simple_mode_draft(fixture.workspace.path_str())
+            .expect("simple draft should stage");
+        let session = fixture
+            .service
+            .load_manual_editor_session(fixture.workspace.path_str(), &stage.draft_name)
+            .expect("simple editor session should load");
+        let original_result_output =
+            fs::read_to_string(fixture.workspace.path().join(RESULT_OUTPUT_FILE_PATH))
+                .expect("active result output should be readable");
+        let edited_file = PlanningDraftEditorFile {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            staged_path: session.editable_files[0].staged_path.clone(),
+            body: "# Result Output\n\n- Must require transactional authority.\n".to_string(),
+        };
+
+        let error = fixture
+            .service
+            .promote_draft_editor_files_at_revision(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                &[edited_file],
+                source_planning_revision,
+            )
+            .expect_err("direct filesystem promotion should fail closed");
+
+        assert!(error.to_string().contains("atomic workspace authority"));
+        assert_eq!(
+            fs::read_to_string(fixture.workspace.path().join(RESULT_OUTPUT_FILE_PATH))
+                .expect("active result output should remain readable"),
+            original_result_output
+        );
+        assert_eq!(
+            fixture.task_snapshot().planning_revision,
+            source_planning_revision
+        );
+    }
+
+    #[test]
+    fn git_workspace_revision_bound_promotion_preserves_task_authority() {
+        let fixture = InitFixture::new_sqlite("planning-init-git-sqlite-promotion");
+        fixture
+            .service
+            .initialize_simple_workspace(fixture.workspace.path_str())
+            .expect("simple initialization should succeed through SQLite");
+        let initial_revision = fixture.task_snapshot().planning_revision;
+        let task_authority = TaskAuthorityDocument {
+            version: PLANNING_FORMAT_VERSION,
+            tasks: vec![TaskDefinition {
+                id: "task-preserved".to_string(),
+                direction_id: "general-workstream".to_string(),
+                direction_relation_note: "keeps the general workstream moving".to_string(),
+                title: "Preserve this task".to_string(),
+                description: "This task must survive a narrow editor promotion.".to_string(),
+                status: TaskStatus::Ready,
+                base_priority: 10,
+                dynamic_priority_delta: 0,
+                priority_reason: String::new(),
+                depends_on: Vec::new(),
+                blocked_by: Vec::new(),
+                created_by: TaskActor::User,
+                last_updated_by: TaskActor::User,
+                source_turn_id: None,
+                provenance: TaskMutationProvenance::new(OriginSessionKind::System),
+                updated_at: "2026-07-21T00:00:00Z".to_string(),
+            }],
+        };
+        let queue_projection = PriorityQueueService::new()
+            .build_projection(&fixture.direction_snapshot(), &task_authority)
+            .expect("task queue should build");
+        let source_planning_revision = match fixture
+            .repository
+            .commit_task_authority_snapshot(
+                fixture.workspace.path_str(),
+                PlanningTaskAuthorityCommit {
+                    observed_planning_revision: Some(initial_revision),
+                    task_authority: &task_authority,
+                    queue_projection: &queue_projection,
+                },
+            )
+            .expect("task authority should commit")
+        {
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision, ..
+            } => planning_revision,
+            PlanningTaskAuthorityCommitResult::Conflict { .. } => {
+                panic!("task authority seed should not conflict")
+            }
+        };
+        let stage = fixture
+            .service
+            .stage_simple_mode_draft(fixture.workspace.path_str())
+            .expect("simple draft should stage through SQLite");
+        let session = fixture
+            .service
+            .load_manual_editor_session(fixture.workspace.path_str(), &stage.draft_name)
+            .expect("simple editor session should load");
+        let edited_body = "# Result Output\n\n- Committed transactionally.\n";
+        let edited_file = PlanningDraftEditorFile {
+            active_path: RESULT_OUTPUT_FILE_PATH.to_string(),
+            staged_path: session.editable_files[0].staged_path.clone(),
+            body: edited_body.to_string(),
+        };
+
+        let first = fixture
+            .service
+            .promote_draft_editor_files_at_revision(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                std::slice::from_ref(&edited_file),
+                source_planning_revision,
+            )
+            .expect("revision-bound promotion should commit");
+        let first_revision = first
+            .committed_planning_revision
+            .expect("promotion should return the committed revision");
+
+        assert_eq!(first.promoted_file_count, 1);
+        assert!(first_revision > source_planning_revision);
+        assert_eq!(
+            fixture
+                .workspace_port
+                .load_optional_planning_file(fixture.workspace.path_str(), RESULT_OUTPUT_FILE_PATH,)
+                .expect("authority result output should load")
+                .as_deref(),
+            Some(edited_body)
+        );
+        assert!(
+            fixture
+                .workspace_port
+                .load_optional_planning_file(
+                    fixture.workspace.path_str(),
+                    DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH,
+                )
+                .expect("hidden prompt should load")
+                .is_some()
+        );
+        assert!(
+            !fixture
+                .workspace
+                .path()
+                .join(RESULT_OUTPUT_FILE_PATH)
+                .exists()
+        );
+
+        let second_body = "# Result Output\n\n- Committed again.\n";
+        let second = fixture
+            .service
+            .promote_draft_editor_files_at_revision(
+                fixture.workspace.path_str(),
+                &session.draft_name,
+                &[PlanningDraftEditorFile {
+                    body: second_body.to_string(),
+                    ..edited_file
+                }],
+                first_revision,
+            )
+            .expect("returned revision should support a second promotion");
+        assert!(
+            second
+                .committed_planning_revision
+                .expect("second promotion should return a revision")
+                > first_revision
+        );
+        let preserved = fixture.task_snapshot();
+        assert_eq!(preserved.task_authority, task_authority);
+        assert_eq!(
+            preserved
+                .queue_projection
+                .next_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("task-preserved")
+        );
     }
 
     struct InitFixture {
@@ -1181,6 +1613,35 @@ mod tests {
                 PlanningValidationService::new(),
                 repository.clone(),
                 Arc::new(NoopPlanningAuthorityPort::default()),
+                PriorityQueueService::new(),
+            );
+            Self {
+                workspace,
+                repository,
+                workspace_port,
+                service,
+            }
+        }
+
+        fn new_sqlite(prefix: &str) -> Self {
+            let workspace = TempPlanningWorkspace::new(prefix);
+            let output = std::process::Command::new("git")
+                .args(["init", "-q", workspace.path_str()])
+                .output()
+                .expect("git fixture initialization should run");
+            assert!(output.status.success());
+            let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+            let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+                FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone()),
+            );
+            let repository: Arc<dyn PlanningTaskRepositoryPort> = sqlite.clone();
+            let authority: Arc<dyn PlanningAuthorityPort> = sqlite;
+            let service = PlanningInitService::with_task_repository(
+                workspace_port.clone(),
+                PlanningBootstrapService::new(),
+                PlanningValidationService::new(),
+                repository.clone(),
+                authority,
                 PriorityQueueService::new(),
             );
             Self {

@@ -1696,7 +1696,7 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
                 directions: &baseline_directions,
                 task_authority: &baseline_task_authority,
                 queue_projection: &baseline_queue_projection,
-                result_output_markdown: "# Result Output\n\nBaseline",
+                result_output_markdown: Some("# Result Output\n\nBaseline"),
                 active_document_mutations: &[],
                 retired_task_ids: &[],
                 authority_mutation_owner_token: None,
@@ -1753,7 +1753,7 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
                 directions: &changed_directions,
                 task_authority: &changed_task_authority,
                 queue_projection: &changed_queue_projection,
-                result_output_markdown: "# Result Output\n\nChanged",
+                result_output_markdown: Some("# Result Output\n\nChanged"),
                 active_document_mutations: &[],
                 retired_task_ids: &[],
                 authority_mutation_owner_token: None,
@@ -1783,6 +1783,67 @@ fn authority_document_commit_rolls_back_when_active_document_write_fails() {
 }
 
 #[test]
+fn authority_document_commit_can_preserve_hidden_result_output() {
+    let workspace_dir = temp_workspace("authority-document-preserve-result-output");
+    let adapter = SqlitePlanningAuthorityAdapter::new();
+    let baseline_directions = test_direction_catalog(&["direction-a"]);
+    let empty_authority = TaskAuthorityDocument {
+        version: 1,
+        tasks: Vec::new(),
+    };
+    let empty_queue = empty_test_queue_projection();
+    let baseline = adapter
+        .commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: None,
+                directions: &baseline_directions,
+                task_authority: &empty_authority,
+                queue_projection: &empty_queue,
+                result_output_markdown: Some("# Result Output\n\nKeep this body.\n"),
+                active_document_mutations: &[],
+                retired_task_ids: &[],
+                authority_mutation_owner_token: None,
+            },
+        )
+        .expect("baseline authority documents should commit");
+    let PlanningTaskAuthorityCommitResult::Committed {
+        planning_revision, ..
+    } = baseline
+    else {
+        panic!("baseline authority documents should commit");
+    };
+    let mut changed_directions = baseline_directions.clone();
+    changed_directions.directions[0].title = "Changed direction".to_string();
+
+    adapter
+        .commit_planning_authority_documents(
+            &workspace_dir,
+            PlanningAuthorityDocumentCommit {
+                observed_planning_revision: Some(planning_revision),
+                directions: &changed_directions,
+                task_authority: &empty_authority,
+                queue_projection: &empty_queue,
+                result_output_markdown: None,
+                active_document_mutations: &[],
+                retired_task_ids: &[],
+                authority_mutation_owner_token: None,
+            },
+        )
+        .expect("authority rewrite should preserve hidden result output");
+
+    let reloaded = adapter
+        .load_planning_authority_documents(&workspace_dir)
+        .expect("authority documents should reload")
+        .expect("authority documents should remain present");
+    assert_eq!(reloaded.directions, changed_directions);
+    assert_eq!(
+        reloaded.result_output_markdown,
+        "# Result Output\n\nKeep this body.\n"
+    );
+}
+
+#[test]
 fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks() {
     let workspace_dir = temp_workspace("authority-document-support-retirement");
     let adapter = SqlitePlanningAuthorityAdapter::new();
@@ -1801,7 +1862,7 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
                 directions: &directions,
                 task_authority: &baseline_tasks,
                 queue_projection: &queue,
-                result_output_markdown: "# Result Output\n\nOld\n",
+                result_output_markdown: Some("# Result Output\n\nOld\n"),
                 active_document_mutations: &baseline_support,
                 retired_task_ids: &[],
                 authority_mutation_owner_token: None,
@@ -1851,7 +1912,7 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
             directions: &directions,
             task_authority: &empty_tasks,
             queue_projection: &queue,
-            result_output_markdown: "# Result Output\n\nNew\n",
+            result_output_markdown: Some("# Result Output\n\nNew\n"),
             active_document_mutations: &support_rewrite,
             retired_task_ids: &retired_task_ids,
             authority_mutation_owner_token: None,
@@ -1904,7 +1965,7 @@ fn authority_document_rewrite_atomically_mutates_support_files_and_retires_tasks
                 directions: &directions,
                 task_authority: &empty_tasks,
                 queue_projection: &queue,
-                result_output_markdown: "# Result Output\n\nNew\n",
+                result_output_markdown: Some("# Result Output\n\nNew\n"),
                 active_document_mutations: &support_rewrite,
                 retired_task_ids: &retired_task_ids,
                 authority_mutation_owner_token: None,
@@ -4060,7 +4121,7 @@ fn stale_direction_catalog_conflicts_without_deleting_new_authority() {
                 directions: &baseline_directions,
                 task_authority: &empty_authority,
                 queue_projection: &empty_queue,
-                result_output_markdown: "# Result Output\n",
+                result_output_markdown: Some("# Result Output\n"),
                 active_document_mutations: &[],
                 retired_task_ids: &[],
                 authority_mutation_owner_token: None,
@@ -4138,7 +4199,7 @@ fn stale_direction_catalog_conflicts_without_deleting_new_authority() {
                 directions: &changed_directions,
                 task_authority: &changed_authority,
                 queue_projection: &empty_queue,
-                result_output_markdown: "# Result Output\n\nConcurrent edit\n",
+                result_output_markdown: Some("# Result Output\n\nConcurrent edit\n"),
                 active_document_mutations: &[],
                 retired_task_ids: &[],
                 authority_mutation_owner_token: None,

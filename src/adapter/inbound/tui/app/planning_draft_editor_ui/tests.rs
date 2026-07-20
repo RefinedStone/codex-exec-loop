@@ -41,6 +41,7 @@ fn sample_session() -> PlanningDraftEditorSession {
             },
         ],
         validation_report: PlanningValidationReport::default(),
+        source_planning_revision: None,
     }
 }
 
@@ -58,6 +59,7 @@ fn single_buffer_session(body: &str) -> PlanningDraftEditorSession {
             body: body.to_string(),
         }],
         validation_report: PlanningValidationReport::default(),
+        source_planning_revision: None,
     }
 }
 
@@ -71,7 +73,19 @@ fn correlated_single_buffer_session(body: &str) -> PlanningEditorSessionSnapshot
             body: body.to_string(),
         }],
         validation_report: PlanningValidationReport::default(),
+        source_planning_revision: None,
     }
+}
+
+#[test]
+fn correlated_session_preserves_source_planning_revision() {
+    let mut session = correlated_single_buffer_session("body");
+    session.source_planning_revision = Some(41);
+    let mut state = PlanningDraftEditorUiState::default();
+
+    state.open_correlated_session(session);
+
+    assert_eq!(state.source_planning_revision(), Some(41));
 }
 
 #[test]
