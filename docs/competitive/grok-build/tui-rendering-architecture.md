@@ -30,7 +30,11 @@ Build 역시 작거나 본질적으로 단순한 reference implementation이 아
 map과 일치한다. 단 한 건의 type-aware 보정은 `postinstall.js`가 존재하지 않는 `file:`
 node가 아니라 `package.json`의 실제 `config:` node를 가리키도록 복원한 것이다. 최종
 검증은 dangling reference, duplicate ID, layer 누락이 0건이었고, 연결이 없는 독립
-symbol/document node 284개만 비차단 경고로 남겼다.
+symbol/document node 284개만 비차단 경고로 남겼다. 아래 layer 합계 2,779는 물리 파일
+수가 아니라 layerable graph node 수다. 2,691개 경로는 각각 `file`, `document`,
+`config` node 하나로 표현되고, `grok-tools.proto` 한 경로는 66개 `schema`와 22개
+`endpoint` node로 확장된다. 따라서 unique `filePath`는 원본 스캔과 같은 2,692개이며
+누락은 없다.
 
 ## Executive Verdict
 
@@ -246,9 +250,11 @@ xai-grok-pager-bin (composition root)
 ```
 
 Whole-repository import topology와 file role을 함께 적용한 layer 분포는 다음과 같다.
-각 file-level node는 정확히 한 layer에만 배정됐으며 총 2,779개다.
+각 layerable graph node는 정확히 한 layer에만 배정됐으며 총 2,779개다. 같은
+`grok-tools.proto`에서 추출한 88개 schema/endpoint node 때문에 이 합계는 unique
+source file 2,692개보다 크다.
 
-| Layer | File-level nodes |
+| Layer | Graph nodes |
 | --- | ---: |
 | 터미널 사용자 경험 | 536 |
 | 테스트 및 검증 | 535 |
