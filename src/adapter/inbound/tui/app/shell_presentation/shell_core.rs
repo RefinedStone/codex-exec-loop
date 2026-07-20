@@ -114,13 +114,13 @@ impl ConversationProjectionSample {
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
         let RevisionedPlanningParallelProjection {
             revision: core_revision,
-            planning_parallel:
-                PlanningParallelProjection {
-                    planning_runtime_workspace_directory,
-                    planning_runtime,
-                    parallel_mode,
-                },
+            planning_parallel,
         } = app.core_runtime.revisioned_planning_parallel_projection();
+        let PlanningParallelProjection {
+            planning_runtime_workspace_directory,
+            planning_runtime,
+            parallel_mode,
+        } = planning_parallel;
         let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();
         Self {
             core_revision,
