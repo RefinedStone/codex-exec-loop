@@ -11,9 +11,10 @@ use super::inline_terminal_adapter::backend::{InlineResizeBackend, InlineResizeS
 
 /*
  * Inline history insertion moves completed transcript rows into the host
- * scrollback while the live shell viewport stays on screen. The normal path uses
- * ratatui's scroll-region primitive; the newline fallback reconstructs the same
- * effect for terminals that mis-handle scroll regions, notably Windows Terminal.
+ * scrollback while the live shell viewport stays on screen. Automatic mode uses
+ * portable newline insertion for ordinary conversations and preserves the
+ * scroll-region primitive for the parallel renderer. Explicit overrides keep both
+ * strategies available for terminal-matrix validation and diagnosis.
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum HistoryInsertionMode {

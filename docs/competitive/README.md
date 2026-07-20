@@ -45,6 +45,9 @@ Cross-product reports:
   Snapshot: 2026-07-16 (Asia/Seoul).
 - [Grok Build Fast Worktree Deep Dive](reports/grok-build/fast-worktree.html): CoW / BTRFS /
   overlay / pool-sync technical deep dive for `xai-fast-worktree`. Snapshot: 2026-07-16.
+- [Grok Build TUI Rendering Architecture Deep Dive](grok-build/tui-rendering-architecture.md):
+  source-level reconstruction of Akra's lost-scrollback and settlement-clipping regressions against
+  Grok Build's full/minimal rendering paths. Snapshot: 2026-07-21.
 
 | Product | Snapshot | Status | Primary threat |
 | --- | --- | --- | --- |

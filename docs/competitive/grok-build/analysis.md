@@ -16,6 +16,8 @@
 Checkout is public, Apache-2.0 for first-party code. External contributions are not accepted.
 Interactive HTML report: [../reports/grok-build/index.html](../reports/grok-build/index.html).  
 Fast worktree deep dive: [../reports/grok-build/fast-worktree.html](../reports/grok-build/fast-worktree.html) · [fast-worktree.md](./fast-worktree.md).
+Fresh TUI rendering deep dive: [tui-rendering-architecture.md](./tui-rendering-architecture.md)
+(2026-07-21, Grok Build `ba76b0a6`, Akra `48b59e27`).
 
 ## Evidence Discipline
 
