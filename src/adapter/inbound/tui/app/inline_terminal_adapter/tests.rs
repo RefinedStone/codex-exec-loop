@@ -760,7 +760,7 @@ fn draw_transaction_flushes_history_and_live_tail_together() {
 }
 
 #[test]
-fn completed_agent_handoff_stays_visible_until_settlement_then_flushes_once() {
+fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
     const FINAL_MARKER: &str = "FINAL_ANSWER_HANDOFF_MARKER";
     const TOOL_MARKER: &str = "ORDERED_TOOL_SUFFIX_MARKER";
     let mut terminal =
@@ -821,8 +821,8 @@ fn completed_agent_handoff_stays_visible_until_settlement_then_flushes_once() {
         .expect("settlement handoff draw transaction");
     let settlement_screen = tui_testkit::screen_text(&terminal);
     let settlement_host = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
-    assert_eq!(settlement_screen.matches(FINAL_MARKER).count(), 1);
-    assert_eq!(settlement_host.matches(FINAL_MARKER).count(), 0);
+    assert_eq!(settlement_screen.matches(FINAL_MARKER).count(), 0);
+    assert_eq!(settlement_host.matches(FINAL_MARKER).count(), 1);
     assert_eq!(
         settlement_screen.matches("settling planning queue").count(),
         1
@@ -832,43 +832,20 @@ fn completed_agent_handoff_stays_visible_until_settlement_then_flushes_once() {
     assert!(!settlement_screen.contains("status: turn completed"));
     assert!(!settlement_screen.contains("Enter send"));
     assert!(!settlement_screen.contains("Enter when ready"));
-    assert!(
-        settlement_screen.find(FINAL_MARKER) < settlement_screen.find("◦ Working")
-            && settlement_screen.find("◦ Working") < settlement_screen.rfind("prompt:")
-    );
+    assert!(settlement_screen.find("◦ Working") < settlement_screen.rfind("prompt:"));
 
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("test app should keep a ready conversation state");
     };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
     assert!(conversation.complete_post_turn_settlement("turn-handoff"));
-    assert!(conversation.has_pending_viewport_transcript_handoff());
-    runtime
-        .app_mut()
-        .dispatch_conversation_intent(ConversationIntentEvent::NewDraftRequested);
-    assert!(matches!(
-        &runtime.app().conversation_state,
-        ConversationState::Ready(conversation)
-            if conversation.has_pending_viewport_transcript_handoff()
-                && conversation.thread_id == "thread-handoff"
-                && conversation.status_text.starts_with("conversation is busy;")
-    ));
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert!(conversation.can_accept_manual_prompt());
     draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
         .expect("released handoff draw transaction");
     let released_screen = tui_testkit::screen_text(&terminal);
     assert!(projected_live_transcript_lines(runtime.app()).is_empty());
     assert!(released_screen.matches(FINAL_MARKER).count() <= 1);
-    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
-        panic!("history flush must keep the current conversation ready");
-    };
-    assert!(!conversation.has_pending_viewport_transcript_handoff());
-    assert!(conversation.can_accept_manual_prompt());
-    assert!(
-        !conversation
-            .status_text
-            .starts_with("conversation is busy;")
-    );
-    assert!(!released_screen.contains("status: conversation is busy"));
-    assert!(released_screen.contains("prompt: waiting for startup"));
     assert_eq!(
         inline_terminal
             .history_flush
@@ -892,6 +869,56 @@ fn completed_agent_handoff_stays_visible_until_settlement_then_flushes_once() {
         .expect("stable released handoff draw transaction");
     let stable_history = tui_testkit::inline_vt100_scrollback_text(&mut terminal);
     assert_eq!(stable_history.matches(FINAL_MARKER).count(), 1);
+}
+
+#[test]
+fn settlement_flushes_long_completed_answer_to_host_scrollback() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.record_turn_started("turn-long-settlement".to_string());
+    let answer = (0..80)
+        .map(|index| match index {
+            0 => "SETTLEMENT_LONG_MARKER_FIRST".to_string(),
+            40 => "SETTLEMENT_LONG_MARKER_MIDDLE".to_string(),
+            79 => "SETTLEMENT_LONG_MARKER_LAST".to_string(),
+            _ => format!("settlement completion filler {index}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    conversation.complete_live_agent_message(
+        "agent-long-settlement".to_string(),
+        Some("final_answer".to_string()),
+        answer,
+    );
+    conversation.finish_turn("turn-long-settlement", &[]);
+    conversation.begin_post_turn_settlement("turn-long-settlement");
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+        .expect("settlement draw transaction");
+
+    let host_scrollback = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
+    for marker in [
+        "SETTLEMENT_LONG_MARKER_FIRST",
+        "SETTLEMENT_LONG_MARKER_MIDDLE",
+        "SETTLEMENT_LONG_MARKER_LAST",
+    ] {
+        assert!(
+            host_scrollback.contains(marker),
+            "settlement withheld {marker} inside the fixed inline viewport:\n{host_scrollback}"
+        );
+    }
+    assert!(
+        tui_testkit::screen_text(&terminal).contains("settling planning queue"),
+        "settlement status should remain visible after the answer handoff"
+    );
 }
 
 #[test]
@@ -1351,10 +1378,11 @@ fn late_completion_across_agent_items_flushes_each_final_once_in_order() {
         .expect("multi-item settlement draw transaction");
     let settlement_screen = tui_testkit::screen_text(&terminal);
     let settlement_host = tui_testkit::inline_vt100_host_scrollback_text(&mut terminal);
-    assert_eq!(settlement_screen.matches(FIRST_MARKER).count(), 1);
-    assert_eq!(settlement_screen.matches(SECOND_MARKER).count(), 1);
-    assert!(!settlement_host.contains(FIRST_MARKER));
-    assert!(!settlement_host.contains(SECOND_MARKER));
+    assert_eq!(settlement_screen.matches(FIRST_MARKER).count(), 0);
+    assert_eq!(settlement_screen.matches(SECOND_MARKER).count(), 0);
+    assert_eq!(settlement_host.matches(FIRST_MARKER).count(), 1);
+    assert_eq!(settlement_host.matches(SECOND_MARKER).count(), 1);
+    assert!(settlement_host.find(FIRST_MARKER) < settlement_host.find(SECOND_MARKER));
 
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("test app should keep a ready conversation state");
