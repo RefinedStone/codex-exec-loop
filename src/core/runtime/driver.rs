@@ -1,6 +1,6 @@
 use crate::core::app::{
     AppCommand, AppSnapshot, CoreController, CoreDispatchOutcome, CoreEffect, CoreInput,
-    ParallelModeProjection,
+    ParallelModeProjection, RevisionedPlanningParallelProjection,
 };
 
 use super::input_mailbox::CoreInputReceiver;
@@ -45,6 +45,10 @@ where
 
     pub fn snapshot(&self) -> AppSnapshot {
         self.controller.snapshot()
+    }
+
+    pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
+        self.controller.revisioned_planning_parallel_projection()
     }
 
     pub fn parallel_mode_projection(&self) -> ParallelModeProjection {

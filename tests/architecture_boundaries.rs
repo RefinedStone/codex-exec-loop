@@ -1926,10 +1926,24 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         .map(|line| line.text)
         .collect::<Vec<_>>()
         .join("\n");
+    // Keep frame projection reads narrow so the rendering boundary does not
+    // become coupled to unrelated Core state through a full AppSnapshot.
+    assert_eq!(
+        production_source
+            .matches("revisioned_planning_parallel_projection()")
+            .count(),
+        1,
+        "ConversationProjectionSample must read the revisioned planning/parallel projection exactly once"
+    );
     assert_eq!(
         production_source.matches("core_runtime.snapshot()").count(),
-        1,
-        "ConversationProjectionSample must capture core state through one choke point"
+        0,
+        "ConversationProjectionSample must not rebuild the frame from the full core snapshot"
+    );
+    assert_eq!(
+        production_source.matches("AppSnapshot").count(),
+        0,
+        "TUI shell_core must not import or use AppSnapshot for frame projection"
     );
     for forbidden in [
         ".application",
@@ -1997,6 +2011,68 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
 }
 
 #[test]
+fn core_revisioned_planning_parallel_projection_stays_narrow() {
+    let state_source = fs::read_to_string(repo_root().join("src/core/app/state.rs"))
+        .expect("core app state source should load");
+    let state_method =
+        top_level_impl_method_source(&state_source, "revisioned_planning_parallel_projection");
+    let compact_state_method = state_method
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for required in [
+        "RevisionedPlanningParallelProjection{",
+        "revision:self.revision",
+        "planning_parallel:self.planning_parallel.clone()",
+    ] {
+        assert!(
+            compact_state_method.contains(required),
+            "AppState must construct the narrow projection directly: {required}"
+        );
+    }
+    for forbidden in [
+        "snapshot(",
+        "AppSnapshot",
+        "self.startup",
+        "self.session_catalog",
+        "self.conversation",
+    ] {
+        assert!(
+            !compact_state_method.contains(forbidden),
+            "the narrow AppState projection must not materialize unrelated state: {forbidden}"
+        );
+    }
+
+    for (path, delegate) in [
+        (
+            "src/core/app/controller.rs",
+            "self.state.revisioned_planning_parallel_projection()",
+        ),
+        (
+            "src/core/runtime/driver.rs",
+            "self.controller.revisioned_planning_parallel_projection()",
+        ),
+    ] {
+        let source = fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        let method =
+            top_level_impl_method_source(&source, "revisioned_planning_parallel_projection");
+        let compact_method = method
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(
+            compact_method.contains(delegate),
+            "{path} must delegate the narrow projection without rebuilding it"
+        );
+        assert!(
+            !compact_method.contains("snapshot(") && !compact_method.contains("AppSnapshot"),
+            "{path} narrow projection wrapper must not fall back to AppSnapshot"
+        );
+    }
+}
+
+#[test]
 fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     assert_no_forbidden_references_in_paths(
         "TUI parallel presentation and rendering must not reread mutable control-plane state",
@@ -2046,8 +2122,10 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
     for required in [
         "pub(in crate::adapter::inbound::tui::app) struct ParallelPanelProjectionSample",
         "parallel_control_plane: ParallelModeControlPlanePresentationProjection",
-        "parallel_mode: app.core_runtime.parallel_mode_projection()",
+        "RevisionedPlanningParallelProjection {",
+        "PlanningParallelProjection {",
         "parallel_panel: ParallelPanelProjectionSample",
+        "parallel_panel: ParallelPanelProjectionSample::from_parts(",
         "let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();",
         "parallel_supervisor_events: app.parallel_supervisor_event_log.projection()",
     ] {
@@ -2056,6 +2134,25 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
             "ConversationProjectionSample must own the parallel frame fact: {required}"
         );
     }
+    let conversation_capture_start = sample_source
+        .find("impl ConversationProjectionSample")
+        .expect("conversation projection sample implementation should exist");
+    let conversation_capture_end = sample_source[conversation_capture_start..]
+        .find("pub(in crate::adapter::inbound::tui::app) fn parallel_mode_enabled")
+        .map(|offset| conversation_capture_start + offset)
+        .expect("conversation projection capture boundary should exist");
+    let conversation_capture = &sample_source[conversation_capture_start..conversation_capture_end];
+    assert_eq!(
+        conversation_capture
+            .matches("revisioned_planning_parallel_projection()")
+            .count(),
+        1,
+        "conversation frame must capture one revisioned planning/parallel projection"
+    );
+    assert!(
+        !conversation_capture.contains("parallel_mode_projection()"),
+        "conversation frame must move parallel state out of the revisioned projection instead of rereading Core"
+    );
 
     let terminal_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
@@ -4889,6 +4986,45 @@ fn collect_named_macro_token_lines(
 
 type MethodCallLocation = (String, usize);
 type ImplMethodCallSummary = (String, Vec<MethodCallLocation>, bool);
+
+fn top_level_impl_method_source(source: &str, method_name: &str) -> String {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
+    let methods = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(item) if !attributes_are_test_only(&item.attrs) => Some(item),
+            _ => None,
+        })
+        .flat_map(|item| item.items.iter())
+        .filter_map(|item| match item {
+            syn::ImplItem::Fn(method)
+                if !attributes_are_test_only(&method.attrs) && method.sig.ident == method_name =>
+            {
+                Some(method)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods.len(),
+        1,
+        "expected one non-test impl method named {method_name}"
+    );
+    let span = methods[0].span();
+    source
+        .lines()
+        .skip(span.start().line.saturating_sub(1))
+        .take(
+            span.end()
+                .line
+                .saturating_sub(span.start().line)
+                .saturating_add(1),
+        )
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 fn top_level_impl_method_calls(source: &str) -> Vec<ImplMethodCallSummary> {
     let syntax = syn::parse_file(source)

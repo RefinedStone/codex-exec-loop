@@ -1,6 +1,19 @@
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::RuntimeProjection;
 
+/*
+ * High-frequency inbound projections often need the planning/parallel facts and
+ * the Core revision, but not startup diagnostics, the session catalog, or the
+ * full conversation transcript. Keeping that coherent slice as one owned value
+ * avoids rebuilding a full AppSnapshot while preserving single-sample
+ * semantics for consumers.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisionedPlanningParallelProjection {
+    pub revision: u64,
+    pub planning_parallel: PlanningParallelProjection,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningParallelProjection {
     pub planning_runtime_workspace_directory: Option<String>,

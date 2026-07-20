@@ -1,7 +1,7 @@
 use super::{
     AppSnapshot, ConversationReadySnapshot, ConversationState, ParallelModeProjection,
-    PlanningParallelProjection, SessionCatalogReadySnapshot, SessionCatalogState,
-    StartupReadySnapshot, StartupState,
+    PlanningParallelProjection, RevisionedPlanningParallelProjection, SessionCatalogReadySnapshot,
+    SessionCatalogState, StartupReadySnapshot, StartupState,
 };
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::RuntimeProjection;
@@ -33,6 +33,13 @@ impl AppState {
             startup: self.startup.snapshot(),
             session_catalog: self.session_catalog.snapshot(),
             conversation: self.conversation.snapshot(),
+            planning_parallel: self.planning_parallel.clone(),
+        }
+    }
+
+    pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
+        RevisionedPlanningParallelProjection {
+            revision: self.revision,
             planning_parallel: self.planning_parallel.clone(),
         }
     }
@@ -211,6 +218,31 @@ mod tests {
                 session_catalog: SessionCatalogSnapshot::Idle,
                 conversation: ConversationSnapshot::Idle,
                 planning_parallel: PlanningParallelProjection::initial(),
+            }
+        );
+    }
+
+    #[test]
+    fn revisioned_planning_parallel_projection_is_a_coherent_narrow_state_slice() {
+        let mut state = AppState::new();
+        state.mark_startup_loading();
+        state.mark_session_catalog_loading();
+        state.mark_conversation_loading();
+        let runtime_projection = RuntimeProjection::invalid("blocked");
+        state.apply_planning_runtime_projection(
+            "/tmp/workspace".to_string(),
+            Box::new(runtime_projection.clone()),
+        );
+
+        assert_eq!(
+            state.revisioned_planning_parallel_projection(),
+            RevisionedPlanningParallelProjection {
+                revision: 4,
+                planning_parallel: PlanningParallelProjection {
+                    planning_runtime_workspace_directory: Some("/tmp/workspace".to_string()),
+                    planning_runtime: Box::new(runtime_projection),
+                    parallel_mode: ParallelModeProjection::default(),
+                },
             }
         );
     }

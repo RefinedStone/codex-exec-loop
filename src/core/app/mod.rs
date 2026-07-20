@@ -64,7 +64,9 @@ pub use planning_workspace::{
     PlanningWorkspaceOperationKind, PlanningWorkspaceResetIntent, PlanningWorkspaceResetSnapshot,
     PlanningWorkspaceResetTarget,
 };
-pub use projection::{ParallelModeProjection, PlanningParallelProjection};
+pub use projection::{
+    ParallelModeProjection, PlanningParallelProjection, RevisionedPlanningParallelProjection,
+};
 pub use queue::{
     QueueAuthorityLoadError, QueueAuthoritySnapshot, QueueMutationCommitSnapshot,
     QueueMutationCorrelation, QueueMutationIntent, QueueMutationKind, QueueMutationResult,
