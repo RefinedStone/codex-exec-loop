@@ -323,7 +323,10 @@ pub struct PlanningAuthorityDocumentCommit<'a> {
     pub directions: &'a DirectionCatalogDocument,
     pub task_authority: &'a TaskAuthorityDocument,
     pub queue_projection: &'a PriorityQueueProjection,
-    pub result_output_markdown: &'a str,
+    // None preserves the existing active result-output row. Narrow maintenance
+    // editors use this to commit direction/task authority without rewriting
+    // hidden editor context.
+    pub result_output_markdown: Option<&'a str>,
     // Supporting document and staged-draft lifecycle mutations that must become
     // visible in the same repo-scoped transaction as the authority rewrite.
     pub active_document_mutations: &'a [PlanningAuthorityActiveDocumentMutation<'a>],

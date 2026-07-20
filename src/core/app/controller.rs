@@ -2817,6 +2817,7 @@ mod tests {
                     draft_directory: "/workspace/drafts/draft-a".to_string(),
                     editable_files: Vec::new(),
                     validation_report: Default::default(),
+                    source_planning_revision: None,
                 },
             })
         };
@@ -3037,6 +3038,7 @@ mod tests {
                 draft_name: "draft-a".to_string(),
                 promoted_file_count: 1,
                 validation_report: Default::default(),
+                committed_planning_revision: None,
             },
             PlanningEditorMutationResult::Saved {
                 identity: identity.clone(),
@@ -3130,6 +3132,7 @@ mod tests {
                     draft_directory: "/workspace/drafts/draft-b".to_string(),
                     editable_files: Vec::new(),
                     validation_report: Default::default(),
+                    source_planning_revision: None,
                 })),
             },
         ));
@@ -3161,6 +3164,7 @@ mod tests {
                 body: "operator payload".to_string(),
             }],
             validation_report: Default::default(),
+            source_planning_revision: None,
         });
         let loaded = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PlanningSimpleEditorLoaded {

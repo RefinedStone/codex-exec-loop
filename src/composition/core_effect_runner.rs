@@ -983,6 +983,7 @@ fn planning_editor_session_snapshot(
             })
             .collect(),
         validation_report: result.validation_report,
+        source_planning_revision: result.source_planning_revision,
     }
 }
 
@@ -1079,11 +1080,20 @@ fn planning_editor_mutation_completion(
                 validation_report: result.validation_report,
             }),
             PlanningEditorMutationAction::Promote => catch_redacted_worker_unwind(|| {
-                planning_workspace.promote_draft_editor_files(
-                    workspace_directory,
-                    draft_name,
-                    &editable_files,
-                )
+                if let Some(source_planning_revision) = identity.source_planning_revision {
+                    planning_workspace.promote_draft_editor_files_at_revision(
+                        workspace_directory,
+                        draft_name,
+                        &editable_files,
+                        source_planning_revision,
+                    )
+                } else {
+                    planning_workspace.promote_draft_editor_files(
+                        workspace_directory,
+                        draft_name,
+                        &editable_files,
+                    )
+                }
             })
             .map_err(|_| anyhow::anyhow!("planning editor mutation worker panicked"))
             .and_then(|result| result)
@@ -1092,6 +1102,7 @@ fn planning_editor_mutation_completion(
                 draft_name: result.draft_name,
                 promoted_file_count: result.promoted_file_count,
                 validation_report: result.validation_report,
+                committed_planning_revision: result.committed_planning_revision,
             }),
         }
     });
@@ -2295,6 +2306,7 @@ mod tests {
                 draft_directory: format!("{}/drafts/draft-a", correlation.workspace_directory),
                 editable_files: Vec::new(),
                 validation_report: Default::default(),
+                source_planning_revision: None,
             },
         }
     }
@@ -2962,6 +2974,29 @@ mod tests {
             "planning editor stage operation mismatch"
         );
         assert_eq!(stage_call_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn planning_editor_session_snapshot_preserves_source_planning_revision() {
+        let correlation = planning_editor_stage_correlation(
+            9,
+            "/workspace",
+            PlanningEditorStageTarget::DirectionDetail {
+                direction_id: "general".to_string(),
+            },
+        );
+        let snapshot = planning_editor_session_snapshot(
+            &correlation,
+            ApplicationPlanningDraftEditorSession {
+                draft_name: "draft-a".to_string(),
+                draft_directory: "/workspace/drafts/draft-a".to_string(),
+                editable_files: Vec::new(),
+                validation_report: Default::default(),
+                source_planning_revision: Some(17),
+            },
+        );
+
+        assert_eq!(snapshot.source_planning_revision, Some(17));
     }
 
     #[test]

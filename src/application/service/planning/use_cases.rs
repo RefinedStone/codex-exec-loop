@@ -290,6 +290,20 @@ impl PlanningWorkspaceUseCases {
         self.init_service
             .promote_draft_editor_files(workspace_dir, draft_name, files)
     }
+    pub fn promote_draft_editor_files_at_revision(
+        &self,
+        workspace_dir: &str,
+        draft_name: &str,
+        files: &[PlanningDraftEditorFile],
+        source_planning_revision: i64,
+    ) -> anyhow::Result<PlanningDraftPromoteResult> {
+        self.init_service.promote_draft_editor_files_at_revision(
+            workspace_dir,
+            draft_name,
+            files,
+            source_planning_revision,
+        )
+    }
     pub fn promote_staged_draft(
         &self,
         workspace_dir: &str,
@@ -1586,6 +1600,7 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::*;
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::{
@@ -1942,6 +1957,7 @@ mod tests {
             .workspace
             .load_manual_editor_session(workspace.path_str(), &simple_stage.draft_name)
             .expect("staged simple draft should load through workspace facade");
+        assert_eq!(simple_session.source_planning_revision, None);
         assert!(
             simple_session
                 .editable_files
@@ -1958,6 +1974,7 @@ mod tests {
             .workspace
             .stage_manual_editor_session(workspace.path_str())
             .expect("manual editor session should stage through workspace facade");
+        assert_eq!(manual_session.source_planning_revision, None);
         let save = planning
             .workspace
             .save_draft_editor_files(
@@ -1977,6 +1994,68 @@ mod tests {
             .expect("manual editor promotion should return validation outcome");
         assert_eq!(manual_promote.promoted_file_count, 0);
 
+        let repository = NoopPlanningTaskRepositoryPort;
+        let direction_before_rejected_staging = repository
+            .load_direction_authority_snapshot(workspace.path_str())
+            .expect("direction authority should load before rejected staging")
+            .expect("direction authority should exist before rejected staging");
+        let detail_error = planning
+            .workspace
+            .stage_detail_doc_editor_session(workspace.path_str(), "general-workstream")
+            .expect_err("direct detail editor should fail closed");
+        assert!(
+            detail_error
+                .to_string()
+                .contains("atomic workspace authority")
+        );
+        let prompt_error = planning
+            .workspace
+            .stage_queue_idle_prompt_editor_session(workspace.path_str())
+            .expect_err("direct queue-idle editor should fail closed");
+        assert!(
+            prompt_error
+                .to_string()
+                .contains("atomic workspace authority")
+        );
+        assert_eq!(
+            repository
+                .load_direction_authority_snapshot(workspace.path_str())
+                .expect("direction authority should load after rejected staging")
+                .expect("direction authority should remain after rejected staging"),
+            direction_before_rejected_staging,
+            "capability rejection must happen before direction mapping or revision mutation"
+        );
+
+        let reset = planning
+            .workspace
+            .reset_workspace(workspace.path_str(), PlanningResetTarget::Queue)
+            .expect("queue reset should delegate through workspace facade");
+        assert_eq!(reset.target, PlanningResetTarget::Queue);
+    }
+
+    #[test]
+    fn git_workspace_use_cases_delegate_revision_bound_maintenance_editors() {
+        let workspace = TempPlanningWorkspace::new("planning-use-cases-git-maintenance");
+        let output = std::process::Command::new("git")
+            .args(["init", "-q", workspace.path_str()])
+            .output()
+            .expect("git fixture initialization should run");
+        assert!(output.status.success());
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+            FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone()),
+        );
+        let planning = PlanningServices::from_ports(
+            workspace_port,
+            sqlite.clone(),
+            sqlite,
+            Arc::new(NoopPlanningWorkerPort),
+        );
+        planning
+            .workspace
+            .initialize_simple_workspace(workspace.path_str())
+            .expect("Git planning workspace should initialize");
+
         let detail_session = planning
             .workspace
             .stage_detail_doc_editor_session(workspace.path_str(), "general-workstream")
@@ -1991,6 +2070,17 @@ mod tests {
                 .iter()
                 .any(|file| file.active_path == expected_detail_path)
         );
+        assert_eq!(
+            detail_session.source_planning_revision,
+            Some(
+                planning
+                    .queue
+                    .load_authority_snapshot(workspace.path_str())
+                    .expect("detail editor revision should remain readable")
+                    .planning_revision
+            )
+        );
+
         let prompt_session = planning
             .workspace
             .stage_queue_idle_prompt_editor_session(workspace.path_str())
@@ -2001,12 +2091,16 @@ mod tests {
                 .iter()
                 .any(|file| file.active_path.contains("queue-idle"))
         );
-
-        let reset = planning
-            .workspace
-            .reset_workspace(workspace.path_str(), PlanningResetTarget::Queue)
-            .expect("queue reset should delegate through workspace facade");
-        assert_eq!(reset.target, PlanningResetTarget::Queue);
+        assert_eq!(
+            prompt_session.source_planning_revision,
+            Some(
+                planning
+                    .queue
+                    .load_authority_snapshot(workspace.path_str())
+                    .expect("prompt editor revision should remain readable")
+                    .planning_revision
+            )
+        );
     }
 
     #[test]

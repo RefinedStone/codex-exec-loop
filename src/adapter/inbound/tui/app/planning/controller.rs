@@ -977,6 +977,23 @@ impl NativeTuiApp {
         self.refresh_ready_conversation_planning_runtime_projection_for_workspace(
             &workspace_directory,
         );
+        if source_is_current
+            && let (Some(source_planning_revision), Ok(result)) =
+                (identity.source_planning_revision, result.as_ref())
+            && let PlanningEditorMutationResult::Promoted {
+                promoted_file_count,
+                committed_planning_revision: Some(committed_planning_revision),
+                ..
+            } = result.as_ref()
+            && *promoted_file_count > 0
+        {
+            self.planning_draft_editor_ui_state
+                .advance_correlated_source_planning_revision(
+                    &identity.source_session,
+                    source_planning_revision,
+                    *committed_planning_revision,
+                );
+        }
         if !apply_presentation {
             if newer_edit_is_current {
                 let status_text = match result {
@@ -1356,9 +1373,14 @@ mod tests {
         NativeTuiParallelModeBinding, PendingResumedSessionPlanningRefresh,
         PlanningRuntimeRefreshUiState,
     };
+    use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+    use crate::application::port::outbound::planning_task_repository_port::{
+        PlanningDirectionAuthorityCommit, PlanningTaskAuthorityCommitResult,
+        PlanningTaskRepositoryPort,
+    };
     use crate::application::port::outbound::planning_workspace_port::{
         PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
         PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
@@ -1490,10 +1512,63 @@ mod tests {
         workspace: &TempPlanningWorkspace,
         planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
     ) -> NativeTuiApp {
-        let codex_port = Arc::new(FakeAppServerPort);
         let planning = crate::adapter::inbound::tui::app::test_helpers::test_planning_services(
             planning_workspace_port,
         );
+        make_test_app_with_planning_services(workspace, planning)
+    }
+
+    fn make_sqlite_test_app_with_initialized_workspace(
+        workspace: &TempPlanningWorkspace,
+    ) -> NativeTuiApp {
+        make_sqlite_test_app_with_initialized_workspace_and_authority(workspace).0
+    }
+
+    fn make_sqlite_test_app_with_initialized_workspace_and_authority(
+        workspace: &TempPlanningWorkspace,
+    ) -> (NativeTuiApp, Arc<SqlitePlanningAuthorityAdapter>) {
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let planning_workspace_port: Arc<dyn PlanningWorkspacePort> = Arc::new(
+            FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite.clone()),
+        );
+        let app = make_sqlite_test_app_with_initialized_workspace_port(
+            workspace,
+            planning_workspace_port,
+            sqlite.clone(),
+        );
+        (app, sqlite)
+    }
+
+    fn make_sqlite_test_app_with_initialized_workspace_port(
+        workspace: &TempPlanningWorkspace,
+        planning_workspace_port: Arc<dyn PlanningWorkspacePort>,
+        sqlite: Arc<SqlitePlanningAuthorityAdapter>,
+    ) -> NativeTuiApp {
+        let output = std::process::Command::new("git")
+            .args(["init", "-q", workspace.path_str()])
+            .output()
+            .expect("git fixture initialization should run");
+        assert!(output.status.success());
+        let planning = crate::application::service::planning::PlanningServices::from_ports(
+            planning_workspace_port,
+            sqlite.clone(),
+            sqlite,
+            Arc::new(
+                crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort,
+            ),
+        );
+        planning
+            .workspace
+            .initialize_simple_workspace(workspace.path_str())
+            .expect("SQLite planning fixture should initialize");
+        make_test_app_with_planning_services(workspace, planning)
+    }
+
+    fn make_test_app_with_planning_services(
+        workspace: &TempPlanningWorkspace,
+        planning: crate::application::service::planning::PlanningServices,
+    ) -> NativeTuiApp {
+        let codex_port = Arc::new(FakeAppServerPort);
         let parallel_mode_control_plane_composition = ParallelModeControlPlaneComposition::new(
             crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
             planning,
@@ -1637,6 +1712,19 @@ mod tests {
             }
         }
 
+        fn with_repo_scoped_store(
+            failure: PlanningWorkspacePortFailure,
+            sqlite: Arc<SqlitePlanningAuthorityAdapter>,
+        ) -> Self {
+            Self {
+                inner: FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite),
+                failure,
+                load_observation: None,
+                stage_gate: None,
+                load_gate: None,
+            }
+        }
+
         fn observed() -> (Self, PlanningWorkspaceLoadObservation) {
             Self::observed_with_failure(PlanningWorkspacePortFailure::SlowOptionalLoad)
         }
@@ -1673,6 +1761,24 @@ mod tests {
             )
         }
 
+        fn gated_stage_with_repo_scoped_store(
+            sqlite: Arc<SqlitePlanningAuthorityAdapter>,
+        ) -> (Self, PlanningTestGateControl, PlanningTestGateControl) {
+            let (stage_gate, stage_control) = planning_test_gate(true);
+            let (load_gate, load_control) = planning_test_gate(false);
+            (
+                Self {
+                    inner: FilesystemPlanningWorkspaceAdapter::with_repo_scoped_store(sqlite),
+                    failure: PlanningWorkspacePortFailure::ReplaceDraft,
+                    load_observation: None,
+                    stage_gate: Some(stage_gate),
+                    load_gate: Some(load_gate),
+                },
+                stage_control,
+                load_control,
+            )
+        }
+
         fn fail_if(&self, failure: PlanningWorkspacePortFailure) -> anyhow::Result<()> {
             if self.failure == failure {
                 anyhow::bail!("forced {failure:?} failure");
@@ -1682,6 +1788,10 @@ mod tests {
     }
 
     impl PlanningWorkspacePort for FailingPlanningWorkspacePort {
+        fn uses_repo_scoped_authority(&self, workspace_dir: &str) -> bool {
+            self.inner.uses_repo_scoped_authority(workspace_dir)
+        }
+
         fn stage_planning_draft_files(
             &self,
             workspace_dir: &str,
@@ -1773,6 +1883,19 @@ mod tests {
             self.fail_if(PlanningWorkspacePortFailure::ReplaceWorkspace)?;
             self.inner
                 .commit_planning_workspace_files(workspace_dir, record)
+        }
+
+        fn compare_and_swap_planning_workspace_files(
+            &self,
+            workspace_dir: &str,
+            observed: &PlanningWorkspaceLoadRecord,
+            replacement: &PlanningWorkspaceLoadRecord,
+        ) -> anyhow::Result<bool> {
+            self.inner.compare_and_swap_planning_workspace_files(
+                workspace_dir,
+                observed,
+                replacement,
+            )
         }
 
         fn load_optional_planning_file(
@@ -2005,6 +2128,22 @@ mod tests {
         generation: u64,
         draft_name: &str,
     ) -> crate::core::app::PlanningEditorSessionIdentity {
+        open_planning_editor_for_mutation_test_at_revision(
+            app,
+            workspace_directory,
+            generation,
+            draft_name,
+            None,
+        )
+    }
+
+    fn open_planning_editor_for_mutation_test_at_revision(
+        app: &mut NativeTuiApp,
+        workspace_directory: &str,
+        generation: u64,
+        draft_name: &str,
+        source_planning_revision: Option<i64>,
+    ) -> crate::core::app::PlanningEditorSessionIdentity {
         app.dispatch_shell_chrome(ShellChromeEvent::PlanningInitOverlayShown);
         app.planning_init_overlay_ui_state.open_manual_editor();
         let session_identity = crate::core::app::PlanningEditorSessionIdentity::new(
@@ -2024,6 +2163,7 @@ mod tests {
                     body: "# Result Output\n\n- Keep the latest editor body.\n".to_string(),
                 }],
                 validation_report: PlanningValidationReport::default(),
+                source_planning_revision,
             });
         session_identity
     }
@@ -2039,13 +2179,19 @@ mod tests {
             .planning_draft_editor_ui_state
             .buffer_revision()
             .expect("mutation test editor should expose a buffer revision");
-        let identity = PlanningEditorMutationIdentity::new(
+        let mut identity = PlanningEditorMutationIdentity::new(
             action,
             target,
             source_session.draft_name.clone(),
             source_session.clone(),
             buffer_revision,
         );
+        if let Some(source_planning_revision) = app
+            .planning_draft_editor_ui_state
+            .source_planning_revision()
+        {
+            identity = identity.with_source_planning_revision(source_planning_revision);
+        }
         let correlation = PlanningWorkspaceOperationCorrelation {
             generation,
             workspace_directory: source_session.workspace_directory.clone(),
@@ -2086,7 +2232,25 @@ mod tests {
             identity,
             promoted_file_count,
             validation_report: PlanningValidationReport::default(),
+            committed_planning_revision: None,
         }
+    }
+
+    fn promoted_editor_mutation_result_with_revision(
+        correlation: &PlanningWorkspaceOperationCorrelation,
+        promoted_file_count: usize,
+        committed_planning_revision: i64,
+    ) -> PlanningEditorMutationResult {
+        let mut result = promoted_editor_mutation_result(correlation, promoted_file_count);
+        let PlanningEditorMutationResult::Promoted {
+            committed_planning_revision: revision,
+            ..
+        } = &mut result
+        else {
+            unreachable!("promotion helper must return a promoted result");
+        };
+        *revision = Some(committed_planning_revision);
+        result
     }
 
     fn wait_for_directions_maintenance_load(app: &mut NativeTuiApp) {
@@ -3171,6 +3335,7 @@ mod tests {
                     body: "# Result Output\n\n- New session body.\n".to_string(),
                 }],
                 validation_report: PlanningValidationReport::default(),
+                source_planning_revision: None,
             });
         session_app
             .planning_draft_editor_ui_state
@@ -3334,11 +3499,12 @@ mod tests {
     fn editor_mutation_late_promote_never_closes_a_newer_or_suspended_editor() {
         let newer_workspace = TempPlanningWorkspace::new("tui-editor-promote-newer");
         let (mut newer_app, newer_observation) = make_observed_mutation_app(&newer_workspace);
-        let newer_source = open_planning_editor_for_mutation_test(
+        let newer_source = open_planning_editor_for_mutation_test_at_revision(
             &mut newer_app,
             newer_workspace.path_str(),
             121,
             "draft-promote-newer",
+            Some(40),
         );
         newer_app
             .planning_draft_editor_ui_state
@@ -3362,7 +3528,9 @@ mod tests {
 
         newer_app.apply_planning_editor_mutation_completion(
             newer.clone(),
-            Ok(Box::new(promoted_editor_mutation_result(&newer, 1))),
+            Ok(Box::new(promoted_editor_mutation_result_with_revision(
+                &newer, 1, 41,
+            ))),
         );
         wait_for_observed_load_completions(&mut newer_app, &newer_observation, 1);
 
@@ -3382,19 +3550,37 @@ mod tests {
         );
         assert!(newer_app.planning_draft_editor_ui_state.has_dirty_buffers());
         assert_eq!(
+            newer_app
+                .planning_draft_editor_ui_state
+                .source_planning_revision(),
+            Some(41)
+        );
+        assert_eq!(
             ready_status(&newer_app),
             "promotion completed for an older revision / newer edits remain unsaved"
         );
         assert_eq!(newer_observation.load_count.load(Ordering::SeqCst), 1);
+        let next = bind_planning_editor_mutation(
+            &mut newer_app,
+            222,
+            PlanningEditorMutationAction::Promote,
+            PlanningEditorMutationTarget::Planning,
+            newer_source,
+        );
+        assert_eq!(
+            editor_mutation_identity(&next).source_planning_revision,
+            Some(41)
+        );
 
         let approval_workspace = TempPlanningWorkspace::new("tui-editor-promote-approval");
         let (mut approval_app, approval_observation) =
             make_observed_mutation_app(&approval_workspace);
-        let approval_source = open_planning_editor_for_mutation_test(
+        let approval_source = open_planning_editor_for_mutation_test_at_revision(
             &mut approval_app,
             approval_workspace.path_str(),
             122,
             "draft-promote-approval",
+            Some(50),
         );
         approval_app
             .planning_draft_editor_ui_state
@@ -3412,7 +3598,9 @@ mod tests {
 
         approval_app.apply_planning_editor_mutation_completion(
             approval.clone(),
-            Ok(Box::new(promoted_editor_mutation_result(&approval, 1))),
+            Ok(Box::new(promoted_editor_mutation_result_with_revision(
+                &approval, 1, 51,
+            ))),
         );
         wait_for_observed_load_completions(&mut approval_app, &approval_observation, 1);
 
@@ -3428,6 +3616,12 @@ mod tests {
             approval_app
                 .planning_draft_editor_ui_state
                 .has_dirty_buffers()
+        );
+        assert_eq!(
+            approval_app
+                .planning_draft_editor_ui_state
+                .source_planning_revision(),
+            Some(51)
         );
         assert_eq!(ready_status(&approval_app), approval_status);
         assert_eq!(approval_observation.load_count.load(Ordering::SeqCst), 1);
@@ -3502,6 +3696,7 @@ mod tests {
                     body: "# Result Output\n\n- New session body.\n".to_string(),
                 }],
                 validation_report: PlanningValidationReport::default(),
+                source_planning_revision: None,
             });
         session_app
             .planning_draft_editor_ui_state
@@ -3969,6 +4164,7 @@ mod tests {
                 draft_directory: "/tmp/draft-drift".to_string(),
                 editable_files: Vec::new(),
                 validation_report: Default::default(),
+                source_planning_revision: None,
             })),
         );
 
@@ -4110,8 +4306,14 @@ mod tests {
     #[test]
     fn approval_during_direction_editor_staging_restores_confirm_without_opening_editor() {
         let workspace = TempPlanningWorkspace::new("tui-direction-editor-stage-approval");
-        let (port, stage_gate, _load_gate) = FailingPlanningWorkspacePort::gated_stage();
-        let mut app = make_test_app_with_planning_workspace_port(&workspace, Arc::new(port));
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let (port, stage_gate, _load_gate) =
+            FailingPlanningWorkspacePort::gated_stage_with_repo_scoped_store(sqlite.clone());
+        let mut app = make_sqlite_test_app_with_initialized_workspace_port(
+            &workspace,
+            Arc::new(port),
+            sqlite,
+        );
         app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut app);
         start_direction_detail_editor(&mut app, "general-workstream");
@@ -4309,6 +4511,7 @@ mod tests {
                 draft_directory: "/tmp/newer-draft-session".to_string(),
                 editable_files: Vec::new(),
                 validation_report: Default::default(),
+                source_planning_revision: None,
             });
         app.planning_init_overlay_ui_state.open_simple_editor();
 
@@ -4319,6 +4522,7 @@ mod tests {
                 draft_directory: "/tmp/late-draft-session".to_string(),
                 editable_files: Vec::new(),
                 validation_report: Default::default(),
+                source_planning_revision: None,
             })),
         );
 
@@ -4442,11 +4646,14 @@ mod tests {
         );
 
         let stage_workspace = TempPlanningWorkspace::new("tui-controller-stage-failure");
-        let mut stage_app = make_test_app_with_planning_workspace_port(
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let mut stage_app = make_sqlite_test_app_with_initialized_workspace_port(
             &stage_workspace,
-            Arc::new(FailingPlanningWorkspacePort::new(
+            Arc::new(FailingPlanningWorkspacePort::with_repo_scoped_store(
                 PlanningWorkspacePortFailure::StageDraft,
+                sqlite.clone(),
             )),
+            sqlite,
         );
         stage_app.stage_simple_mode_planning_init_draft();
         wait_for_planning_workspace_operation(&mut stage_app);
@@ -4656,7 +4863,7 @@ mod tests {
     #[test]
     fn directions_overlay_key_router_handles_detail_doc_confirmation_and_manual_editor() {
         let workspace = TempPlanningWorkspace::new("tui-directions-detail-keys");
-        let mut app = make_test_app(&workspace);
+        let mut app = make_sqlite_test_app_with_initialized_workspace(&workspace);
         app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut app);
 
@@ -4746,7 +4953,7 @@ mod tests {
     #[test]
     fn directions_overlay_key_router_reports_overview_guards_and_reload() {
         let workspace = TempPlanningWorkspace::new("tui-directions-overview-keys");
-        let mut app = make_test_app(&workspace);
+        let mut app = make_sqlite_test_app_with_initialized_workspace(&workspace);
         app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
         app.directions_maintenance_overlay_ui_state
             .open_summary(directions_summary(
@@ -4936,7 +5143,7 @@ mod tests {
     #[test]
     fn directions_detail_doc_editor_promotes_back_to_maintenance_overview() {
         let workspace = TempPlanningWorkspace::new("tui-directions-detail-promote");
-        let mut app = make_test_app(&workspace);
+        let mut app = make_sqlite_test_app_with_initialized_workspace(&workspace);
         app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut app);
 
@@ -4984,9 +5191,122 @@ mod tests {
     }
 
     #[test]
+    fn directions_editor_rejects_stale_hidden_planning_authority_on_promote() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-stale-source-revision");
+        let (mut app, repository) =
+            make_sqlite_test_app_with_initialized_workspace_and_authority(&workspace);
+        app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut app);
+        start_direction_detail_editor(&mut app, "general-workstream");
+        wait_for_planning_workspace_operation(&mut app);
+        let source_revision = app
+            .planning_draft_editor_ui_state
+            .source_planning_revision()
+            .expect("maintenance editor must retain its source planning revision");
+
+        let mut direction_snapshot = repository
+            .load_direction_authority_snapshot(workspace.path_str())
+            .expect("direction authority should load")
+            .expect("direction authority should exist");
+        assert_eq!(direction_snapshot.planning_revision, source_revision);
+        direction_snapshot.directions.directions[0]
+            .summary
+            .push_str(" / concurrent planning change");
+        let committed_revision = match repository
+            .commit_direction_authority_snapshot(
+                workspace.path_str(),
+                PlanningDirectionAuthorityCommit {
+                    observed_planning_revision: Some(source_revision),
+                    directions: &direction_snapshot.directions,
+                    authority_mutation_owner_token: None,
+                },
+            )
+            .expect("concurrent planning change should commit")
+        {
+            PlanningTaskAuthorityCommitResult::Committed {
+                planning_revision, ..
+            } => planning_revision,
+            conflict => panic!("unexpected concurrent planning result: {conflict:?}"),
+        };
+        assert!(committed_revision > source_revision);
+
+        let concurrent_body = "# Result Output\n\n- Keep concurrent planning result.\n";
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            workspace.path_str(),
+            crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+            Some(concurrent_body),
+        )
+        .expect("concurrent result output should be written");
+
+        app.promote_directions_manual_editor();
+        wait_for_planning_workspace_operation(&mut app);
+
+        assert!(
+            ready_status(&app).contains("directions draft promote failed:")
+                && ready_status(&app).contains("reload and retry"),
+            "status: {}",
+            ready_status(&app)
+        );
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::load_active_planning_file(
+                workspace.path_str(),
+                crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+            )
+            .expect("result output should remain readable")
+            .as_deref(),
+            Some(concurrent_body)
+        );
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state.step(),
+            DirectionsMaintenanceOverlayStep::ManualEditor
+        );
+        assert!(
+            app.planning_draft_editor_ui_state
+                .session_identity()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn directions_editor_preserves_hidden_result_output_on_promote() {
+        let workspace = TempPlanningWorkspace::new("tui-directions-hidden-file-preservation");
+        let (mut app, _repository) =
+            make_sqlite_test_app_with_initialized_workspace_and_authority(&workspace);
+        let hidden_body = "# Result Output\n\n- Preserve hidden planning result.\n";
+        SqlitePlanningAuthorityAdapter::replace_active_planning_file(
+            workspace.path_str(),
+            crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+            Some(hidden_body),
+        )
+        .expect("hidden result output should be seeded");
+        app.show_directions_maintenance_overlay();
+        wait_for_directions_maintenance_load(&mut app);
+        start_direction_detail_editor(&mut app, "general-workstream");
+        wait_for_planning_workspace_operation(&mut app);
+
+        app.promote_directions_manual_editor();
+        wait_for_planning_workspace_operation(&mut app);
+
+        assert!(
+            ready_status(&app).contains("directions draft promoted / draft: "),
+            "status: {}",
+            ready_status(&app)
+        );
+        assert_eq!(
+            SqlitePlanningAuthorityAdapter::load_active_planning_file(
+                workspace.path_str(),
+                crate::application::service::planning::RESULT_OUTPUT_FILE_PATH,
+            )
+            .expect("hidden result output should remain readable")
+            .as_deref(),
+            Some(hidden_body)
+        );
+    }
+
+    #[test]
     fn directions_editor_preserves_buffers_and_blocks_writes_after_workspace_drift() {
         let workspace = TempPlanningWorkspace::new("tui-directions-editor-workspace-drift");
-        let mut app = make_test_app(&workspace);
+        let mut app = make_sqlite_test_app_with_initialized_workspace(&workspace);
         app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut app);
         start_direction_detail_editor(&mut app, "general-workstream");
@@ -5025,7 +5345,7 @@ mod tests {
     #[test]
     fn approval_overlay_suspends_and_restores_dirty_directions_editor() {
         let workspace = TempPlanningWorkspace::new("tui-directions-editor-approval-suspend");
-        let mut app = make_test_app(&workspace);
+        let mut app = make_sqlite_test_app_with_initialized_workspace(&workspace);
         app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut app);
         start_direction_detail_editor(&mut app, "general-workstream");
@@ -5082,7 +5402,7 @@ mod tests {
     #[test]
     fn directions_manual_editor_close_confirmation_returns_to_overview() {
         let workspace = TempPlanningWorkspace::new("tui-directions-editor-close");
-        let mut app = make_test_app(&workspace);
+        let mut app = make_sqlite_test_app_with_initialized_workspace(&workspace);
         app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut app);
         app.open_queue_idle_prompt_editor();
@@ -5288,7 +5608,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_save_and_promote_report_workspace_port_failures() {
+    fn editor_save_and_promote_report_workspace_failures_and_atomic_guard() {
         let save_workspace = TempPlanningWorkspace::new("tui-planning-save-failure");
         let mut save_app = make_test_app_with_planning_workspace_port(
             &save_workspace,
@@ -5308,11 +5628,14 @@ mod tests {
         );
 
         let directions_save_workspace = TempPlanningWorkspace::new("tui-directions-save-failure");
-        let mut directions_save_app = make_test_app_with_planning_workspace_port(
+        let sqlite = Arc::new(SqlitePlanningAuthorityAdapter::new());
+        let mut directions_save_app = make_sqlite_test_app_with_initialized_workspace_port(
             &directions_save_workspace,
-            Arc::new(FailingPlanningWorkspacePort::new(
+            Arc::new(FailingPlanningWorkspacePort::with_repo_scoped_store(
                 PlanningWorkspacePortFailure::ReplaceDraft,
+                sqlite.clone(),
             )),
+            sqlite,
         );
         directions_save_app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut directions_save_app);
@@ -5353,21 +5676,14 @@ mod tests {
         wait_for_planning_init_refresh(&mut seed_app);
         seed_app.promote_simple_mode_planning_draft();
         wait_for_planning_workspace_operation(&mut seed_app);
-        let mut directions_promote_app = make_test_app_with_planning_workspace_port(
-            &directions_promote_workspace,
-            Arc::new(FailingPlanningWorkspacePort::new(
-                PlanningWorkspacePortFailure::ReplaceWorkspace,
-            )),
-        );
+        let mut directions_promote_app = make_test_app(&directions_promote_workspace);
         directions_promote_app.show_directions_maintenance_overlay();
         wait_for_directions_maintenance_load(&mut directions_promote_app);
         start_direction_detail_editor(&mut directions_promote_app, "general-workstream");
         wait_for_planning_workspace_operation(&mut directions_promote_app);
-        directions_promote_app.promote_directions_manual_editor();
-        wait_for_planning_workspace_operation(&mut directions_promote_app);
         assert!(
             ready_status(&directions_promote_app)
-                .starts_with("directions draft promote failed: forced "),
+                .starts_with("directions editor failed: planning maintenance editors require the atomic workspace authority"),
             "status: {}",
             ready_status(&directions_promote_app)
         );
@@ -5375,7 +5691,7 @@ mod tests {
             directions_promote_app
                 .directions_maintenance_overlay_ui_state
                 .step(),
-            DirectionsMaintenanceOverlayStep::ManualEditor
+            DirectionsMaintenanceOverlayStep::DetailDocConfirm
         );
     }
 

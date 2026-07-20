@@ -213,7 +213,8 @@ promotion share one Core-owned planning-workspace operation coordinator. Core as
 correlation containing the exact workspace and operation kind, plus reset target,
 simple-draft/session identity, editor-stage target, or editor-mutation identity where applicable.
 An editor-mutation identity includes action, planning/directions target, draft, full source editor
-session, and session-local buffer revision. Editor-stage targets distinguish planning manual,
+session, session-local buffer revision, and the source planning revision for direction-detail or
+queue-idle maintenance drafts. Editor-stage targets distinguish planning manual,
 direction detail with its exact direction id, and queue-idle prompt. Repeating that exact operation
 coalesces without starting another worker; any different operation is reported as busy.
 Composition executes provider work off the TUI input thread and converts panics into exact
@@ -244,7 +245,15 @@ Editor buffer revisions start at zero for each session and advance only after an
 mutation. Save keeps the editor interactive and never pauses continuation or refreshes runtime
 authority: an exact completion updates validation and clears dirty state, while a completion for an
 older revision may update validation but preserves the newer body and dirty state. Promote also
-keeps editing available while in flight. In the current workspace every exact promote completion
+keeps editing available while in flight. A maintenance promotion must still match its staged
+planning revision and its hidden active-file baselines before any active write. It writes only the
+files exposed by that editor, preserves hidden result output in the authority document commit,
+commits active documents and structured authority through one SQLite revision transaction, and
+returns the committed revision so newer in-flight edits can promote again without conflicting with
+their own previous commit. Production uses that private authority for Git workspaces (and for all
+workspaces on Windows). Legacy plain Unix workspaces stay file-backed so existing files are not
+silently replaced without an adoption migration; revision-bound maintenance staging fails closed
+there before it mutates accepted authority. In the current workspace every exact promote completion
 pauses continuation and refreshes runtime authority, even if presentation has since changed; only a
 positive success for the exact current target, session, and buffer revision closes planning or
 returns directions maintenance to overview. Zero-count success keeps the editor open after

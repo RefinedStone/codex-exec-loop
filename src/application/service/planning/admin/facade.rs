@@ -1,5 +1,6 @@
 // admin facade는 여러 outbound port와 services를 clone 가능한 handle로 공유하므로 Arc를 사용한다.
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{Arc, Mutex};
 
 // authority port는 accepted planning authority DB/state를 읽고 쓰는 admin boundary이다.
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
@@ -15,6 +16,16 @@ use crate::application::service::planning::runtime::validation::PlanningValidati
 use crate::application::service::planning::task_mutation::PlanningTaskMutationService;
 // priority queue service는 admin에서 task priority/order를 계산하고 갱신하는 domain service이다.
 use crate::domain::planning::PriorityQueueService;
+
+use super::PlanningAdminDraftKind;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PlanningAdminDraftStageMetadata {
+    pub(super) kind: PlanningAdminDraftKind,
+    pub(super) direction_id: Option<String>,
+    pub(super) source_planning_revision: i64,
+    pub(super) editable_active_paths: BTreeSet<String>,
+}
 
 // PlanningAdminFacadeService는 inbound admin API가 planning subsystem을 호출할 때 쓰는 application facade이다.
 // 하위 impl 파일들이 CRUD, draft session, reset, overview, document mutation을 이 같은 struct에 메서드로 붙인다.
@@ -37,6 +48,9 @@ pub struct PlanningAdminFacadeService {
     pub(super) priority_queue_service: PriorityQueueService,
     // task mutation service는 admin task action을 validated repository update로 감싸는 application service이다.
     pub(super) task_mutation_service: PlanningTaskMutationService,
+    // draft metadata는 client가 다시 보내는 kind/revision 대신 stage 시점의 server-side identity와 exact editable
+    // path를 보존한다. 서버가 재시작되어 이 기록이 없으면 admin draft promotion은 fail closed한다.
+    pub(super) draft_stage_metadata: Arc<Mutex<HashMap<String, PlanningAdminDraftStageMetadata>>>,
 }
 
 // 이 impl에는 facade의 작은 identity/accessor만 둔다. 큰 admin use cases는 파일별 impl로 나뉘어
