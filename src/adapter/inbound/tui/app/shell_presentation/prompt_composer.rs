@@ -19,17 +19,16 @@ pub(super) struct PromptBufferView {
 }
 
 pub(super) fn build_shell_command_palette_lines(
-    conversation: &ConversationViewModel,
+    composer: &ConversationComposerScreenModel<'_>,
     language: TuiLanguage,
 ) -> Vec<Line<'static>> {
-    let palette_state = &conversation.composer.inline_shell_command_palette_state;
+    let palette_state = &composer.state.inline_shell_command_palette_state;
     // Dismissed palettes should leave the typed buffer visible without suggestion rows.
     if !palette_state.is_active() {
         return Vec::new();
     }
     // Suggestion prefix is only present while the user is typing the command token, not arguments.
-    let Some(prefix) = InlineShellCommand::suggestion_prefix(&conversation.composer.input_buffer)
-    else {
+    let Some(prefix) = InlineShellCommand::suggestion_prefix(&composer.state.input_buffer) else {
         return Vec::new();
     };
     // Empty results still render feedback so the user knows the palette is active and filtering.
@@ -102,22 +101,22 @@ fn build_shell_command_palette_window(
 }
 
 pub(super) fn build_prompt_cursor_offset(
-    conversation: &ConversationViewModel,
+    composer: &ConversationComposerScreenModel<'_>,
     content_width: u16,
 ) -> Option<(u16, u16)> {
     // A zero-width area means the renderer cannot place a cursor safely.
     if content_width == 0 {
         return None;
     }
-    locate_prompt_cursor_with_word_wrap(conversation, content_width)
+    locate_prompt_cursor_with_word_wrap(composer, content_width)
 }
 
 fn locate_prompt_cursor_with_word_wrap(
-    conversation: &ConversationViewModel,
+    composer: &ConversationComposerScreenModel<'_>,
     content_width: u16,
 ) -> Option<(u16, u16)> {
-    let cursor_byte_index = conversation.composer.input_cursor_byte_index();
-    let cursor_prefix = &conversation.composer.input_buffer[..cursor_byte_index];
+    let cursor_byte_index = composer.state.input_cursor_byte_index();
+    let cursor_prefix = &composer.state.input_buffer[..cursor_byte_index];
     let mut prefix_lines = cursor_prefix
         .split('\n')
         .enumerate()
@@ -148,7 +147,7 @@ fn locate_prompt_cursor_with_word_wrap(
     let cursor_byte_in_rendered_line = prompt_line_prefix(cursor_line_index)
         .len()
         .saturating_add(cursor_byte_index.saturating_sub(cursor_line_start));
-    let mut marked_lines = build_prompt_buffer_view(conversation).lines;
+    let mut marked_lines = build_prompt_buffer_view(composer).lines;
     let rendered_line = marked_lines[cursor_line_index].to_string();
     let (before_cursor, from_cursor) = rendered_line.split_at(cursor_byte_in_rendered_line);
     marked_lines[cursor_line_index] =
@@ -186,15 +185,13 @@ fn locate_prompt_cursor_with_word_wrap(
     None
 }
 
-pub(super) fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> PromptBufferView {
+pub(super) fn build_prompt_buffer_view(
+    composer: &ConversationComposerScreenModel<'_>,
+) -> PromptBufferView {
     /*
     Prefixes are part of the prompt projection so rendered input and cursor probes share the same copy.
     */
-    let buffer_lines = conversation
-        .composer
-        .input_buffer
-        .split('\n')
-        .collect::<Vec<_>>();
+    let buffer_lines = composer.state.input_buffer.split('\n').collect::<Vec<_>>();
     let mut lines = Vec::with_capacity(buffer_lines.len().max(1));
 
     for (index, buffer_line) in buffer_lines.iter().enumerate() {
@@ -233,13 +230,22 @@ pub(super) fn wrapped_row_count(line_width: usize, content_width: u16) -> usize 
 mod tests {
     use super::*;
 
+    fn composer_screen_model(
+        conversation: &ConversationViewModel,
+    ) -> ConversationComposerScreenModel<'_> {
+        ConversationComposerScreenModel::from_conversation(conversation)
+    }
+
     #[test]
     fn prompt_cursor_offset_uses_conversation_cursor_position() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
         conversation.composer.input_buffer = "hello".to_string();
         conversation.composer.set_input_cursor_byte_index(2);
 
-        assert_eq!(build_prompt_cursor_offset(&conversation, 80), Some((4, 0)));
+        assert_eq!(
+            build_prompt_cursor_offset(&composer_screen_model(&conversation), 80),
+            Some((4, 0))
+        );
     }
 
     #[test]
@@ -250,7 +256,10 @@ mod tests {
             .composer
             .set_input_cursor_byte_index("one\n".len() + 1);
 
-        assert_eq!(build_prompt_cursor_offset(&conversation, 80), Some((3, 1)));
+        assert_eq!(
+            build_prompt_cursor_offset(&composer_screen_model(&conversation), 80),
+            Some((3, 1))
+        );
     }
 
     #[test]
@@ -266,6 +275,9 @@ mod tests {
             .composer
             .set_input_cursor_byte_index(emoji_start);
 
-        assert!(build_prompt_cursor_offset(&conversation, 12).is_some());
+        assert_eq!(
+            build_prompt_cursor_offset(&composer_screen_model(&conversation), 12),
+            Some((11, 0))
+        );
     }
 }

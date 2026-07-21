@@ -9,13 +9,13 @@ use super::super::planning::build_planning_worker_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
 use super::super::{
-    AkraTheme, ConversationInputState, ConversationScreenModel, ConversationViewModel,
-    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+    AkraTheme, ConversationComposerScreenModel, ConversationInputState, ConversationScreenModel,
+    ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
     INLINE_TAIL_PLANNING_DETAIL_LIMIT, INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
     INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode,
     InlineShellCommandInput, Modifier, QueueMutationTailState, ShellActionAvailability,
-    ShellConversationState, ShellOverlay, StartupState, TuiLanguage,
-    auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
+    ShellConversationState, ShellOverlay, StartupState, TuiLanguage, build_working_line,
+    compact_inline_detail,
 };
 use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
@@ -102,8 +102,8 @@ pub(super) fn build_inline_tail_content_with_context(
 
     if screen_model.startup_screen_is_active() {
         let has_buffered_input = screen_model
-            .ready_conversation()
-            .is_some_and(|conversation| !conversation.composer.input_buffer.is_empty());
+            .composer()
+            .is_some_and(|composer| !composer.state.input_buffer.is_empty());
         // The full startup masthead is useful only before the operator starts typing.
         // Once an overlay or buffered prompt exists, keep the tail compact so the
         // prompt remains close to its status line.
@@ -728,10 +728,9 @@ fn startup_masthead_lines() -> Vec<Line<'static>> {
 }
 
 fn startup_prompt_buffered_in_context(screen_model: &ConversationScreenModel<'_>) -> bool {
-    let Some(conversation) = screen_model.ready_conversation() else {
-        return false;
-    };
-    !conversation.composer.input_buffer.trim().is_empty()
+    screen_model
+        .composer()
+        .is_some_and(|composer| !composer.state.input_buffer.trim().is_empty())
 }
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
@@ -747,11 +746,10 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
             "prompt: paused while an approval decision is pending",
         )];
     }
-    if matches!(
-        screen_model.conversation_state,
-        ShellConversationState::Ready(conversation)
-            if conversation.has_pending_viewport_transcript_handoff()
-    ) && (screen_model.shell_overlay != ShellOverlay::Hidden || screen_model.dialog_visible())
+    if screen_model
+        .composer()
+        .is_some_and(|composer| composer.viewport_transcript_handoff_pending)
+        && (screen_model.shell_overlay != ShellOverlay::Hidden || screen_model.dialog_visible())
     {
         return vec![Line::from("prompt: response held while the dialog is open")];
     }
@@ -760,11 +758,16 @@ pub(super) fn build_inline_tail_prompt_lines_with_context(
         ShellConversationState::Failed(message) => {
             vec![Line::from(format!("prompt: unavailable  |  {message}"))]
         }
-        ShellConversationState::Ready(conversation) => build_inline_ready_prompt_lines(
-            conversation,
-            screen_model.shell_action_availability,
-            screen_model.tui_language,
-        ),
+        ShellConversationState::Ready(_) => {
+            let composer = screen_model
+                .composer()
+                .expect("ready conversation must project composer state");
+            build_inline_ready_prompt_lines(
+                composer,
+                screen_model.shell_action_availability,
+                screen_model.tui_language,
+            )
+        }
     };
     if screen_model.parallel_mode_loading_prompt_indicator_visible
         && let Some(first_line) = lines.first_mut()
@@ -790,30 +793,34 @@ fn parallel_loading_prompt_indicator_frame(animation_elapsed_millis: u128) -> &'
 }
 
 fn build_inline_ready_prompt_lines(
-    conversation: &ConversationViewModel,
+    composer: &ConversationComposerScreenModel<'_>,
     shell_action_availability: ShellActionAvailability,
     language: TuiLanguage,
 ) -> Vec<Line<'static>> {
-    let prompt_buffer = build_prompt_buffer_view(conversation);
+    let prompt_buffer = build_prompt_buffer_view(composer);
     let mut lines = prompt_buffer.lines;
 
     // Empty prompt copy prioritizes what blocks or enables the next Enter press.
     // Buffered prompt copy instead explains what will happen to the typed text.
-    if conversation.composer.input_buffer.is_empty() {
+    if composer.state.input_buffer.is_empty() {
         /*
         Empty-buffer copy is command guidance rather than content preview. It
         must explain whether Enter can send immediately, is gated by startup, or
         is blocked by a running/paused automation state.
         */
-        if let Some(status_line) = auto_follow_prompt_status_line(conversation, true) {
-            lines.push(Line::from(status_line));
+        if composer.post_turn_settlement_in_flight {
+            lines.push(Line::from("prompt: type now  |  Enter when settled"));
             return lines;
         }
-        let line = match (conversation.input_state, shell_action_availability) {
-            (_, ShellActionAvailability::Pending) if conversation.input_state.can_submit_now() => {
+        if composer.auto_follow_has_live_activity {
+            lines.push(Line::from("prompt: type now  |  Enter when idle"));
+            return lines;
+        }
+        let line = match (composer.input_state, shell_action_availability) {
+            (_, ShellActionAvailability::Pending) if composer.input_state.can_submit_now() => {
                 "prompt: waiting for startup  |  type now, Enter sends when ready".to_string()
             }
-            (_, ShellActionAvailability::Blocked) if conversation.input_state.can_submit_now() => {
+            (_, ShellActionAvailability::Blocked) if composer.input_state.can_submit_now() => {
                 "prompt: blocked by startup diagnostics  |  Ctrl+d inspect".to_string()
             }
             (ConversationInputState::DraftReady, _) => {
@@ -833,8 +840,8 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
-    if conversation
-        .composer
+    if composer
+        .state
         .inline_shell_command_palette_state
         .is_active()
     {
@@ -843,7 +850,7 @@ fn build_inline_ready_prompt_lines(
         operator is navigating an already-open menu; showing parse hints here
         would fight with Up/Down/Enter semantics.
         */
-        let palette = &conversation.composer.inline_shell_command_palette_state;
+        let palette = &composer.state.inline_shell_command_palette_state;
         let selected = palette.selected_index().map_or(0, |index| index + 1);
         lines.push(Line::from(language.inline_command_palette_header(
             selected,
@@ -859,11 +866,11 @@ fn build_inline_ready_prompt_lines(
                     .map(Line::from),
             );
         }
-        lines.extend(build_shell_command_palette_lines(conversation, language));
+        lines.extend(build_shell_command_palette_lines(composer, language));
         return lines;
     }
 
-    if let Some(command) = InlineShellCommandInput::parse(&conversation.composer.input_buffer) {
+    if let Some(command) = InlineShellCommandInput::parse(&composer.state.input_buffer) {
         /*
         Parsed shell commands get a dedicated hint line before generic prompt
         guidance. That keeps destructive or overlay-opening commands legible
@@ -876,16 +883,12 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
-    if conversation.has_post_turn_settlement_in_flight()
-        && conversation.input_state.can_submit_now()
-    {
+    if composer.post_turn_settlement_in_flight && composer.input_state.can_submit_now() {
         lines.push(Line::from("buffered  |  Enter when settled  |  Ctrl+j nl"));
         return lines;
     }
 
-    if conversation.auto_follow_state.has_live_activity()
-        && conversation.input_state.can_submit_now()
-    {
+    if composer.auto_follow_has_live_activity && composer.input_state.can_submit_now() {
         /*
         Auto follow-up activity can make the shell appear idle enough to type into,
         but Enter would race the continuation. This line keeps the buffered prompt
@@ -897,11 +900,11 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
-    let hint = match (conversation.input_state, shell_action_availability) {
+    let hint = match (composer.input_state, shell_action_availability) {
         (
             ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
             ShellActionAvailability::Pending,
-        ) if conversation.composer.startup_submit_armed => {
+        ) if composer.state.startup_submit_armed => {
             /*
             The startup-armed path means Enter was already accepted while startup
             was pending. Editing the buffer should cancel that queued send, so the
@@ -966,6 +969,18 @@ mod coverage_tests {
             .join("\n")
     }
 
+    fn rendered_ready_prompt(
+        conversation: &ConversationViewModel,
+        availability: ShellActionAvailability,
+        language: TuiLanguage,
+    ) -> String {
+        rendered(build_inline_ready_prompt_lines(
+            &ConversationComposerScreenModel::from_conversation(conversation),
+            availability,
+            language,
+        ))
+    }
+
     fn render_tail(app: &NativeTuiApp, recent_changes: Option<&str>) -> String {
         let mut screen_model = ConversationScreenModel::from_app(app);
         screen_model.github_review_recent_changes_summary = recent_changes.map(str::to_string);
@@ -1009,6 +1024,31 @@ mod coverage_tests {
             shell_action_availability,
             conversation_state,
         )
+    }
+
+    #[test]
+    fn composer_projection_exists_only_for_ready_conversations() {
+        let startup_state = StartupState::Idle;
+        let conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let failed_message = "startup failed".to_string();
+
+        for state in [
+            ShellConversationState::Loading,
+            ShellConversationState::Failed(&failed_message),
+        ] {
+            let screen_model = context_for(&startup_state, ShellActionAvailability::Pending, state);
+            assert!(screen_model.composer().is_none());
+        }
+
+        let screen_model = context_for(
+            &startup_state,
+            ShellActionAvailability::Ready,
+            ShellConversationState::Ready(&conversation),
+        );
+        let composer = screen_model
+            .composer()
+            .expect("ready conversation should project composer state");
+        assert!(std::ptr::eq(composer.state, &conversation.composer));
     }
 
     #[test]
@@ -1213,11 +1253,7 @@ mod coverage_tests {
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
             conversation.input_state = state;
-            let prompt = rendered(build_inline_ready_prompt_lines(
-                &conversation,
-                availability,
-                TuiLanguage::English,
-            ));
+            let prompt = rendered_ready_prompt(&conversation, availability, TuiLanguage::English);
             assert!(
                 prompt.contains(expected),
                 "expected `{expected}` in `{prompt}`"
@@ -1230,21 +1266,21 @@ mod coverage_tests {
         palette
             .composer
             .move_inline_shell_command_palette_selection(2);
-        let palette_prompt = rendered(build_inline_ready_prompt_lines(
+        let palette_prompt = rendered_ready_prompt(
             &palette,
             ShellActionAvailability::Ready,
             TuiLanguage::English,
-        ));
+        );
         assert!(palette_prompt.contains("palette 3/19"));
         assert!(palette_prompt.contains("Up/Shift+Tab previous"));
         assert!(palette_prompt.contains("Down/Tab next"));
         assert!(palette_prompt.contains(":diag"));
 
-        let korean_palette_prompt = rendered(build_inline_ready_prompt_lines(
+        let korean_palette_prompt = rendered_ready_prompt(
             &palette,
             ShellActionAvailability::Ready,
             TuiLanguage::Korean,
-        ));
+        );
         assert!(
             korean_palette_prompt
                 .contains(&TuiLanguage::Korean.inline_command_palette_header(3, 19))
@@ -1259,11 +1295,11 @@ mod coverage_tests {
 
         let mut korean_command = ConversationViewModel::new_draft("/tmp/root".to_string());
         korean_command.composer.input_buffer = ":reset queue".to_string();
-        let korean_command_prompt = rendered(build_inline_ready_prompt_lines(
+        let korean_command_prompt = rendered_ready_prompt(
             &korean_command,
             ShellActionAvailability::Ready,
             TuiLanguage::Korean,
-        ));
+        );
         let korean_hint = InlineShellCommandInput::parse(":reset queue")
             .expect("reset command should parse")
             .localized_buffered_hint(TuiLanguage::Korean);
@@ -1272,11 +1308,11 @@ mod coverage_tests {
 
         let mut command = ConversationViewModel::new_draft("/tmp/root".to_string());
         command.composer.input_buffer = ":reset queue".to_string();
-        let command_prompt = rendered(build_inline_ready_prompt_lines(
+        let command_prompt = rendered_ready_prompt(
             &command,
             ShellActionAvailability::Ready,
             TuiLanguage::English,
-        ));
+        );
         assert!(
             command_prompt.contains("command: Press Enter to reset queue-side planning state.")
         );
@@ -1284,21 +1320,23 @@ mod coverage_tests {
         let mut busy = ConversationViewModel::new_draft("/tmp/root".to_string());
         busy.composer.input_buffer = "next prompt".to_string();
         busy.auto_follow_state.mark_auto_turn_queued();
-        let busy_prompt = rendered(build_inline_ready_prompt_lines(
-            &busy,
-            ShellActionAvailability::Ready,
-            TuiLanguage::English,
-        ));
+        let busy_prompt =
+            rendered_ready_prompt(&busy, ShellActionAvailability::Ready, TuiLanguage::English);
         assert!(busy_prompt.contains("auto-follow busy"));
+
+        busy.composer.clear_input_buffer();
+        let empty_busy_prompt =
+            rendered_ready_prompt(&busy, ShellActionAvailability::Ready, TuiLanguage::English);
+        assert!(empty_busy_prompt.contains("prompt: type now  |  Enter when idle"));
 
         let mut armed = ConversationViewModel::new_draft("/tmp/root".to_string());
         armed.composer.input_buffer = "queued".to_string();
         armed.composer.startup_submit_armed = true;
-        let armed_prompt = rendered(build_inline_ready_prompt_lines(
+        let armed_prompt = rendered_ready_prompt(
             &armed,
             ShellActionAvailability::Pending,
             TuiLanguage::English,
-        ));
+        );
         assert!(armed_prompt.contains("editing cancels the queued send"));
 
         for (state, availability, expected) in [
@@ -1326,11 +1364,7 @@ mod coverage_tests {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
             conversation.composer.input_buffer = "buffered".to_string();
             conversation.input_state = state;
-            let prompt = rendered(build_inline_ready_prompt_lines(
-                &conversation,
-                availability,
-                TuiLanguage::English,
-            ));
+            let prompt = rendered_ready_prompt(&conversation, availability, TuiLanguage::English);
             assert!(
                 prompt.contains(expected),
                 "expected `{expected}` in `{prompt}`"
@@ -1345,27 +1379,28 @@ mod coverage_tests {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
         conversation.begin_post_turn_settlement("turn-1");
         conversation.auto_follow_state.set_max_auto_turns(0);
+        conversation.auto_follow_state.mark_auto_turn_queued();
 
         assert!(!conversation.can_accept_manual_prompt());
         assert!(
             build_working_line(&conversation, 40, Instant::now())
                 .is_some_and(|line| line.to_string().contains("settling planning queue"))
         );
-        let empty_prompt = rendered(build_inline_ready_prompt_lines(
+        let empty_prompt = rendered_ready_prompt(
             &conversation,
             ShellActionAvailability::Ready,
             TuiLanguage::English,
-        ));
+        );
         assert!(empty_prompt.contains("Enter when settled"));
         assert!(!empty_prompt.contains("Enter send"));
         assert!(!empty_prompt.contains("Enter when ready"));
 
         conversation.composer.input_buffer = "next request".to_string();
-        let buffered_prompt = rendered(build_inline_ready_prompt_lines(
+        let buffered_prompt = rendered_ready_prompt(
             &conversation,
             ShellActionAvailability::Ready,
             TuiLanguage::English,
-        ));
+        );
         assert!(buffered_prompt.contains("Enter when settled"));
         assert!(!buffered_prompt.contains("Enter when ready"));
         assert!(

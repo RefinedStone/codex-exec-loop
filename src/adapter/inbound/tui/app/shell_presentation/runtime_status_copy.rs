@@ -98,42 +98,6 @@ fn auto_follow_working_detail(conversation: &ConversationViewModel) -> String {
     }
 }
 
-pub(super) fn auto_follow_prompt_status_line(
-    conversation: &ConversationViewModel,
-    inline: bool,
-) -> Option<String> {
-    if conversation.has_post_turn_settlement_in_flight() {
-        return Some(if inline {
-            "prompt: type now  |  Enter when settled".to_string()
-        } else {
-            "planning queue settling".to_string()
-        });
-    }
-    let max_auto_turns = conversation.auto_follow_state.max_auto_turns_label();
-    // prompt 영역 문구는 working line보다 짧다. interrupt 가능 여부는 이미 working
-    // line에 있으므로 여기서는 사용자가 지금 입력해도 되는지에 초점을 둔다.
-    let detail = match &conversation.auto_follow_state.runtime_phase {
-        AutoFollowRuntimePhase::Idle => return None,
-        AutoFollowRuntimePhase::Queued { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} queued")
-        }
-        AutoFollowRuntimePhase::Submitting { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} starting")
-        }
-        AutoFollowRuntimePhase::Running { turn_index, .. } => {
-            format!("auto turn {turn_index}/{max_auto_turns} running")
-        }
-    };
-
-    Some(if inline {
-        // The working rail already owns phase and turn identity. Keep the prompt
-        // action-only so compact tails do not repeat the same running truth.
-        "prompt: type now  |  Enter when idle".to_string()
-    } else {
-        detail
-    })
-}
-
 pub(in super::super) fn format_elapsed(duration: Duration) -> String {
     let total_seconds = duration.as_secs();
     let hours = total_seconds / 3600;
@@ -158,7 +122,7 @@ mod tests {
     use crate::adapter::inbound::tui::app::{AutoFollowState, ConversationViewModel};
 
     #[test]
-    fn auto_follow_status_lines_use_infinite_label() {
+    fn auto_follow_working_line_uses_infinite_label() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/workspace".to_string());
         conversation.auto_follow_state = AutoFollowState::new();
         conversation
@@ -169,15 +133,10 @@ mod tests {
             turn_index: 2,
         };
 
-        // infinite 설정은 working line과 prompt notice 모두에서 같은 max-turn label을
-        // 써야 사용자가 자동 후속 실행 한계를 다르게 읽지 않는다.
+        // infinite 설정은 working line에서 같은 max-turn label을 유지해야 한다.
         assert_eq!(
             auto_follow_working_detail(&conversation),
             "auto turn 2/infinite running / interrupt runtime-native"
-        );
-        assert_eq!(
-            auto_follow_prompt_status_line(&conversation, true).as_deref(),
-            Some("prompt: type now  |  Enter when idle")
         );
     }
 }
