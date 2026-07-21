@@ -9,13 +9,13 @@ use super::super::planning::build_planning_worker_panel_lines;
 use super::super::planning::status_projection::build_planning_status_surface_projection;
 use super::super::prompt_composer::{build_prompt_buffer_view, build_shell_command_palette_lines};
 use super::super::{
-    AkraTheme, ConversationComposerScreenModel, ConversationInputState, ConversationScreenModel,
-    ConversationViewModel, INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
+    AkraTheme, ConversationComposerScreenModel, ConversationInputState,
+    ConversationLiveTranscriptScreenModel, ConversationScreenModel, ConversationViewModel,
+    INLINE_TAIL_AUTO_FOLLOW_DETAIL_LIMIT, INLINE_TAIL_NOTICE_DETAIL_LIMIT,
     INLINE_TAIL_PLANNING_DETAIL_LIMIT, INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
-    INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineHistoryRenderMode,
-    InlineShellCommandInput, Modifier, QueueMutationTailState, ShellActionAvailability,
-    ShellConversationState, ShellOverlay, StartupState, TuiLanguage, build_working_line,
-    compact_inline_detail,
+    INLINE_TAIL_STATUS_DETAIL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, InlineShellCommandInput,
+    Modifier, QueueMutationTailState, ShellActionAvailability, ShellConversationState,
+    ShellOverlay, StartupState, TuiLanguage, build_working_line, compact_inline_detail,
 };
 use super::parallel_working_copy::build_parallel_slot_working_line;
 use super::tail_shared::{
@@ -25,7 +25,6 @@ use super::tail_shared::{
 };
 
 use crate::adapter::inbound::tui::conversation_text::conversation_message_kind_label;
-use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
 
 pub(super) const QUEUE_RECEIPT_UNDO_ACTION_LABEL: &str = "[ Undo queue ]";
 
@@ -312,22 +311,14 @@ pub(super) fn build_inline_tail_content_with_context(
                     .into_iter()
                     .map(|line| InlineTailLine::new(InlineTailPriority::Detail, Line::from(line))),
             );
-            let renders_viewport_handoff = matches!(
-                screen_model.inline_history_render_mode,
-                InlineHistoryRenderMode::ViewportReplay
-            ) && screen_model
+            let live_transcript = screen_model
                 .live_transcript()
-                .is_some_and(|live_transcript| live_transcript.handoff_pending);
-            if !renders_viewport_handoff {
-                lines.extend(
-                    build_recent_transcript_summary_lines(
-                        screen_model.inline_history_render_mode,
-                        conversation,
-                    )
+                .expect("ready conversation must retain its live transcript projection");
+            lines.extend(
+                build_recent_transcript_summary_lines(live_transcript)
                     .into_iter()
                     .map(|line| InlineTailLine::new(InlineTailPriority::Detail, line)),
-                );
-            }
+            );
             if let Some(notice) = build_operator_notice(
                 github_review_recent_changes_summary.as_deref(),
                 conversation,
@@ -496,24 +487,12 @@ fn build_completion_alert_line(conversation: &ConversationViewModel) -> Option<L
 }
 
 fn build_recent_transcript_summary_lines(
-    render_mode: InlineHistoryRenderMode,
-    conversation: &ConversationViewModel,
+    live_transcript: &ConversationLiveTranscriptScreenModel<'_>,
 ) -> Vec<Line<'static>> {
-    /*
-    Recent transcript mirroring is only needed for render modes that do not keep
-    host scrollback visible. The tail becomes a small continuity buffer, so it
-    selects human-authored user/assistant content before falling back to status.
-    */
-    if !render_mode.mirrors_recent_transcript_in_tail() {
-        return Vec::new();
-    }
-    let recent_messages = recent_transcript_messages(conversation);
-    if recent_messages.is_empty() {
-        return Vec::new();
-    }
-
-    recent_messages
+    live_transcript
+        .recent_tail_messages
         .into_iter()
+        .flatten()
         .map(|message| {
             let label = conversation_message_kind_label(message.kind, message.phase.as_deref())
                 .to_ascii_lowercase();
@@ -526,42 +505,6 @@ fn build_recent_transcript_summary_lines(
             Line::from(format!("recent {label}: {summary}"))
         })
         .collect()
-}
-
-fn recent_transcript_messages(conversation: &ConversationViewModel) -> Vec<&ConversationMessage> {
-    // Ignore tool/status noise first; fall back to status rows only when there is no
-    // user/assistant content so viewport replay still gives the operator context.
-    /*
-    The reverse/take/reverse pattern keeps selection cheap while preserving chronological
-    display order. Tail replay should read like the last two human-visible messages,
-    not like an implementation stack.
-    */
-    let mut recent_messages = conversation
-        .messages
-        .iter()
-        .rev()
-        .filter(|message| {
-            message.kind != ConversationMessageKind::Tool
-                && message.kind != ConversationMessageKind::Status
-        })
-        .take(2)
-        .collect::<Vec<_>>();
-    if recent_messages.is_empty() {
-        /*
-        Status rows are fallback context, not first-choice transcript content. They
-        become useful for startup/loading streams where app-server has emitted
-        lifecycle messages but no user or assistant text yet.
-        */
-        recent_messages = conversation
-            .messages
-            .iter()
-            .rev()
-            .filter(|message| message.kind != ConversationMessageKind::Tool)
-            .take(2)
-            .collect::<Vec<_>>();
-    }
-    recent_messages.reverse();
-    recent_messages
 }
 
 fn build_inline_startup_screen_lines_with_context(
@@ -925,7 +868,8 @@ mod coverage_tests {
     use crate::adapter::inbound::tui::app::queue_overlay_ui::QueueMutationKind;
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
-        AutoFollowRuntimePhase, ConversationState, InlineShellCommand, NativeTuiApp,
+        AutoFollowRuntimePhase, ConversationState, InlineHistoryRenderMode, InlineShellCommand,
+        NativeTuiApp,
     };
     use crate::core::app::{QueueMutationCorrelation, QueueMutationIntent, StartupReadySnapshot};
     use crate::domain::conversation::{ConversationMessage, ConversationMessageKind};
@@ -979,6 +923,14 @@ mod coverage_tests {
             screen_model.github_review_recent_changes_summary.clone(),
             INLINE_TAIL_NOTICE_DETAIL_LIMIT,
         ))
+    }
+
+    fn render_recent_transcript_tail(app: &NativeTuiApp) -> String {
+        let screen_model = ConversationScreenModel::from_app(app);
+        let live_transcript = screen_model
+            .live_transcript()
+            .expect("ready conversation must retain its live transcript projection");
+        rendered(build_recent_transcript_summary_lines(live_transcript))
     }
 
     fn startup_ready_snapshot(can_continue: bool) -> Box<StartupReadySnapshot> {
@@ -1142,7 +1094,7 @@ mod coverage_tests {
     }
 
     #[test]
-    fn ready_status_helpers_cover_auto_follow_completion_warnings_and_transcript() {
+    fn ready_status_helpers_cover_auto_follow_completion_and_warnings() {
         let startup_state = StartupState::Loading;
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
         conversation.thread_id = "thread-1".to_string();
@@ -1206,15 +1158,19 @@ mod coverage_tests {
                 .to_string()
                 .contains("all planning tasks complete")
         );
+    }
 
-        assert!(
-            build_recent_transcript_summary_lines(
-                InlineHistoryRenderMode::HostScrollback,
-                &conversation
-            )
-            .is_empty()
-        );
-        conversation.messages = vec![
+    #[test]
+    fn recent_transcript_projection_prioritizes_human_copy_and_falls_back_to_status() {
+        let mut app = test_native_tui_app();
+        app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+        ready_conversation_mut(&mut app).messages = vec![
+            ConversationMessage::new(
+                ConversationMessageKind::Agent,
+                "oldest agent",
+                Some("final_answer".to_string()),
+                None,
+            ),
             ConversationMessage::new(ConversationMessageKind::Tool, "tool noise", None, None),
             ConversationMessage::new(ConversationMessageKind::User, "first user", None, None),
             ConversationMessage::new(ConversationMessageKind::Status, "status noise", None, None),
@@ -1225,22 +1181,20 @@ mod coverage_tests {
                 None,
             ),
         ];
-        let transcript = rendered(build_recent_transcript_summary_lines(
-            InlineHistoryRenderMode::ViewportReplay,
-            &conversation,
-        ));
-        assert!(transcript.contains("recent you: first user"));
-        assert!(transcript.contains("recent codex: second agent line"));
-        assert!(!transcript.contains("tool noise"));
+        assert!(render_recent_transcript_tail(&app).is_empty());
 
-        conversation.messages = vec![
+        app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+        let transcript = render_recent_transcript_tail(&app);
+        assert_eq!(
+            transcript,
+            "recent you: first user\nrecent codex: second agent line"
+        );
+
+        ready_conversation_mut(&mut app).messages = vec![
             ConversationMessage::new(ConversationMessageKind::Tool, "tool noise", None, None),
             ConversationMessage::new(ConversationMessageKind::Status, "   ", None, None),
         ];
-        let fallback = rendered(build_recent_transcript_summary_lines(
-            InlineHistoryRenderMode::ViewportReplay,
-            &conversation,
-        ));
+        let fallback = render_recent_transcript_tail(&app);
         assert!(fallback.contains("recent status: (blank)"));
     }
 

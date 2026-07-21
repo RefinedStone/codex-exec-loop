@@ -13,7 +13,9 @@ use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::{
     ParallelModeProjection, PlanningParallelProjection, RevisionedPlanningParallelProjection,
 };
-use crate::domain::conversation::{ConversationMessage, ConversationTurnSteerRequest};
+use crate::domain::conversation::{
+    ConversationMessage, ConversationMessageKind, ConversationTurnSteerRequest,
+};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::PlanningWorkerPanelState;
 
@@ -277,6 +279,8 @@ impl ConversationRuntimeStatusScreenModel {
 pub(in crate::adapter::inbound::tui::app) struct ConversationLiveTranscriptScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) handoff_messages: Option<&'a [ConversationMessage]>,
     pub(in crate::adapter::inbound::tui::app) live_agent_message: Option<&'a ConversationMessage>,
+    pub(in crate::adapter::inbound::tui::app) recent_tail_messages:
+        [Option<&'a ConversationMessage>; 2],
     pub(in crate::adapter::inbound::tui::app) handoff_pending: bool,
     pub(in crate::adapter::inbound::tui::app) acknowledge_handoff_after_successful_draw: bool,
 }
@@ -292,10 +296,16 @@ impl<'a> ConversationLiveTranscriptScreenModel<'a> {
         let handoff_messages = conversation
             .viewport_transcript_handoff_messages()
             .or(release_handoff_messages);
+        let handoff_pending = conversation.has_pending_viewport_transcript_handoff();
         Self {
             handoff_messages,
             live_agent_message: conversation.live_agent_message.as_ref(),
-            handoff_pending: conversation.has_pending_viewport_transcript_handoff(),
+            recent_tail_messages: if handoff_pending {
+                [None, None]
+            } else {
+                Self::recent_tail_messages(conversation, inline_history_render_mode)
+            },
+            handoff_pending,
             acknowledge_handoff_after_successful_draw: shell_overlay == ShellOverlay::Hidden
                 && !dialog_visible
                 && matches!(
@@ -304,6 +314,35 @@ impl<'a> ConversationLiveTranscriptScreenModel<'a> {
                 )
                 && release_handoff_messages.is_some(),
         }
+    }
+
+    fn recent_tail_messages(
+        conversation: &'a ConversationViewModel,
+        inline_history_render_mode: InlineHistoryRenderMode,
+    ) -> [Option<&'a ConversationMessage>; 2] {
+        if !inline_history_render_mode.mirrors_recent_transcript_in_tail() {
+            return [None, None];
+        }
+
+        // Prefer the last two human-visible rows, in chronological display order.
+        let mut messages = conversation.messages.iter().rev().filter(|message| {
+            message.kind != ConversationMessageKind::Tool
+                && message.kind != ConversationMessageKind::Status
+        });
+        let newest = messages.next();
+        let previous = messages.next();
+        if newest.is_some() {
+            return [previous, newest];
+        }
+
+        // Status is useful fallback context before any user or agent message exists.
+        let mut messages = conversation
+            .messages
+            .iter()
+            .rev()
+            .filter(|message| message.kind != ConversationMessageKind::Tool);
+        let newest = messages.next();
+        [messages.next(), newest]
     }
 }
 
