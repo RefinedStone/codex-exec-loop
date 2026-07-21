@@ -342,7 +342,8 @@ impl<'a> ConversationLiveTranscriptScreenModel<'a> {
             .rev()
             .filter(|message| message.kind != ConversationMessageKind::Tool);
         let newest = messages.next();
-        [messages.next(), newest]
+        let previous = messages.next();
+        [previous, newest]
     }
 }
 
