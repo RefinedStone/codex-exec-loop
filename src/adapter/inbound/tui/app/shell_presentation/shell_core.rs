@@ -23,9 +23,9 @@ use super::super::parallel_presentation_bridge::{
 use super::super::parallel_supervisor_events::ParallelSupervisorEventProjection;
 use super::capability_projection::recent_session_status_label;
 use super::{
-    ConversationState, ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode,
-    NativeTuiApp, ParallelPanelStateController, ShellActionAvailability, ShellOverlay,
-    StartupState, TuiLanguage,
+    ConversationComposerState, ConversationInputState, ConversationState, ConversationViewModel,
+    HistoryInsertionMode, InlineHistoryRenderMode, NativeTuiApp, ParallelPanelStateController,
+    ShellActionAvailability, ShellOverlay, StartupState, TuiLanguage,
 };
 
 const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
@@ -225,6 +225,30 @@ pub(in crate::adapter::inbound::tui::app) enum ShellConversationState<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::adapter::inbound::tui::app) struct ConversationComposerScreenModel<'a> {
+    pub(in crate::adapter::inbound::tui::app) state: &'a ConversationComposerState,
+    pub(in crate::adapter::inbound::tui::app) input_state: ConversationInputState,
+    pub(in crate::adapter::inbound::tui::app) post_turn_settlement_in_flight: bool,
+    pub(in crate::adapter::inbound::tui::app) auto_follow_has_live_activity: bool,
+    pub(in crate::adapter::inbound::tui::app) viewport_transcript_handoff_pending: bool,
+}
+
+impl<'a> ConversationComposerScreenModel<'a> {
+    pub(in crate::adapter::inbound::tui::app) fn from_conversation(
+        conversation: &'a ConversationViewModel,
+    ) -> Self {
+        Self {
+            state: &conversation.composer,
+            input_state: conversation.input_state,
+            post_turn_settlement_in_flight: conversation.has_post_turn_settlement_in_flight(),
+            auto_follow_has_live_activity: conversation.auto_follow_state.has_live_activity(),
+            viewport_transcript_handoff_pending: conversation
+                .has_pending_viewport_transcript_handoff(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::adapter::inbound::tui::app) enum QueueMutationTailState {
     Idle,
     Pending(u64),
@@ -270,6 +294,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) turn_steer_confirmation:
         Option<TurnSteerConfirmationScreenModel>,
     pub(in crate::adapter::inbound::tui::app) prompt_input_has_focus: bool,
+    composer: Option<ConversationComposerScreenModel<'a>>,
     pub(in crate::adapter::inbound::tui::app) conversation_state: ShellConversationState<'a>,
 }
 
@@ -353,6 +378,12 @@ impl<'a> ConversationScreenModel<'a> {
             } else {
                 QueueMutationTailState::Idle
             };
+        let conversation_state = match &app.conversation_state {
+            ConversationState::Loading => ShellConversationState::Loading,
+            ConversationState::Failed(message) => ShellConversationState::Failed(message),
+            ConversationState::Ready(conversation) => ShellConversationState::Ready(conversation),
+        };
+        let composer = Self::composer_for_state(conversation_state);
 
         Self {
             core_revision,
@@ -389,13 +420,8 @@ impl<'a> ConversationScreenModel<'a> {
             exit_confirmation_visible,
             turn_steer_confirmation,
             prompt_input_has_focus,
-            conversation_state: match &app.conversation_state {
-                ConversationState::Loading => ShellConversationState::Loading,
-                ConversationState::Failed(message) => ShellConversationState::Failed(message),
-                ConversationState::Ready(conversation) => {
-                    ShellConversationState::Ready(conversation)
-                }
-            },
+            composer,
+            conversation_state,
         }
     }
 
@@ -405,6 +431,27 @@ impl<'a> ConversationScreenModel<'a> {
         match self.conversation_state {
             ShellConversationState::Ready(conversation) => Some(conversation),
             _ => None,
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn composer(
+        &self,
+    ) -> Option<&ConversationComposerScreenModel<'a>> {
+        match (self.conversation_state, self.composer.as_ref()) {
+            (ShellConversationState::Ready(_), Some(composer)) => Some(composer),
+            (ShellConversationState::Loading | ShellConversationState::Failed(_), None) => None,
+            _ => unreachable!("conversation and composer projections must agree"),
+        }
+    }
+
+    fn composer_for_state(
+        conversation_state: ShellConversationState<'a>,
+    ) -> Option<ConversationComposerScreenModel<'a>> {
+        match conversation_state {
+            ShellConversationState::Ready(conversation) => Some(
+                ConversationComposerScreenModel::from_conversation(conversation),
+            ),
+            ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
         }
     }
 
@@ -453,6 +500,7 @@ impl<'a> ConversationScreenModel<'a> {
         shell_action_availability: ShellActionAvailability,
         conversation_state: ShellConversationState<'a>,
     ) -> Self {
+        let composer = Self::composer_for_state(conversation_state);
         Self {
             core_revision: 0,
             rendered_at: Instant::now(),
@@ -485,6 +533,7 @@ impl<'a> ConversationScreenModel<'a> {
             exit_confirmation_visible: false,
             turn_steer_confirmation: None,
             prompt_input_has_focus: true,
+            composer,
             conversation_state,
         }
     }

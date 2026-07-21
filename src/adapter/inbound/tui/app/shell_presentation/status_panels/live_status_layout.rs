@@ -2,9 +2,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::super::prompt_composer::{build_prompt_cursor_offset, wrapped_row_count};
-use super::super::{
-    ConversationScreenModel, Line, MAX_INLINE_TAIL_HEIGHT, ShellConversationState, ShellOverlay,
-};
+use super::super::{ConversationScreenModel, Line, MAX_INLINE_TAIL_HEIGHT, ShellOverlay};
 use super::tail_copy::{
     InlineTailLine, QUEUE_RECEIPT_UNDO_ACTION_LABEL, build_inline_tail_content_with_context,
     build_inline_tail_prompt_lines_with_context,
@@ -196,10 +194,8 @@ fn build_inline_prompt_cursor_offset_for_lines(
     if !screen_model.prompt_input_has_focus {
         return None;
     }
-    // Only a ready conversation owns a reliable input buffer cursor.
-    let ShellConversationState::Ready(conversation) = screen_model.conversation_state else {
-        return None;
-    };
+    // Only a ready conversation projects a reliable composer cursor.
+    let composer = screen_model.composer()?;
 
     // Rebuild only the prompt suffix to find where that suffix begins in the already assembled tail.
     let prompt_lines = build_inline_tail_prompt_lines_with_context(screen_model);
@@ -212,7 +208,7 @@ fn build_inline_prompt_cursor_offset_for_lines(
         .unwrap_or(u16::MAX);
 
     // Prompt composer returns cursor coordinates relative to the prompt text alone.
-    let (cursor_x, cursor_y) = build_prompt_cursor_offset(conversation, content_width)?;
+    let (cursor_x, cursor_y) = build_prompt_cursor_offset(composer, content_width)?;
 
     // Add pre-prompt rows to reach tail-local coordinates, saturating for extremely tall notice stacks.
     Some((cursor_x, prompt_start_row.saturating_add(cursor_y)))
@@ -293,6 +289,8 @@ mod tests {
 
         assert_eq!(first.lines, second.lines);
         assert_eq!(first.prompt_cursor_offset, second.prompt_cursor_offset);
+        assert_eq!(first.lines[1].to_string(), "> 한글 prompt");
+        assert_eq!(first.prompt_cursor_offset, Some((6, 1)));
         assert_eq!(first.render_from_top, second.render_from_top);
         assert_eq!(
             first.queue_receipt_undo_hit_area,

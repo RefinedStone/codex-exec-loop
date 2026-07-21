@@ -64,12 +64,11 @@ pub(super) use overlays::{
     build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
     build_view_selection_overlay_view,
 };
-use runtime_status_copy::{
-    auto_follow_prompt_status_line, build_working_line, compact_inline_detail,
-};
+use runtime_status_copy::{build_working_line, compact_inline_detail};
 pub(super) use shell_core::{
-    ConversationProjectionSample, ConversationScreenModel, ParallelPanelProjectionSample,
-    TurnSteerConfirmationScreenModel, conversation_startup_screen_is_active,
+    ConversationComposerScreenModel, ConversationProjectionSample, ConversationScreenModel,
+    ParallelPanelProjectionSample, TurnSteerConfirmationScreenModel,
+    conversation_startup_screen_is_active,
 };
 use shell_core::{QueueMutationTailState, ShellConversationState};
 pub(super) use startup_banner::startup_ascii_art_lines;

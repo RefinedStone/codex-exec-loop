@@ -2832,6 +2832,247 @@ fn conversation_input_reducer_is_isolated_to_composer_state() {
 }
 
 #[test]
+fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
+    let shell_core_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
+    )
+    .expect("shell presentation core source should load");
+    let shell_core_syntax =
+        syn::parse_file(&shell_core_source).expect("shell presentation core should parse");
+    let composer_fields =
+        named_struct_fields(&shell_core_syntax, "ConversationComposerScreenModel");
+    let composer_field_types = composer_fields
+        .iter()
+        .map(|field| {
+            (
+                field
+                    .ident
+                    .as_ref()
+                    .expect("composer screen-model field should be named")
+                    .to_string(),
+                &field.ty,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        composer_field_types.keys().cloned().collect::<HashSet<_>>(),
+        [
+            "state",
+            "input_state",
+            "post_turn_settlement_in_flight",
+            "auto_follow_has_live_activity",
+            "viewport_transcript_handoff_pending",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<HashSet<_>>(),
+        "composer screen model must stay limited to prompt presentation facts"
+    );
+    assert!(
+        is_shared_reference_to_named_type_with_lifetime(
+            composer_field_types["state"],
+            "ConversationComposerState",
+            "a",
+        ),
+        "composer screen model must borrow ConversationComposerState without cloning it"
+    );
+    assert!(
+        is_named_path_type(
+            composer_field_types["input_state"],
+            "ConversationInputState"
+        ),
+        "composer screen model must retain the typed submit state"
+    );
+    for boolean_field in [
+        "post_turn_settlement_in_flight",
+        "auto_follow_has_live_activity",
+        "viewport_transcript_handoff_pending",
+    ] {
+        assert!(
+            is_named_path_type(composer_field_types[boolean_field], "bool"),
+            "composer screen-model fact {boolean_field} must stay boolean"
+        );
+    }
+
+    let screen_model_fields = named_struct_fields(&shell_core_syntax, "ConversationScreenModel");
+    let composer_projection = screen_model_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "composer")
+        })
+        .expect("ConversationScreenModel must retain one composer projection");
+    assert!(
+        is_option_of_single_lifetime_named_type(
+            &composer_projection.ty,
+            "ConversationComposerScreenModel",
+            "a",
+        ),
+        "ConversationScreenModel.composer must be Option<ConversationComposerScreenModel>"
+    );
+
+    let references_identifier = |references: &[String], identifier: &str| {
+        references
+            .iter()
+            .any(|path| path.split("::").any(|segment| segment == identifier))
+    };
+    let prompt_composer_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/prompt_composer.rs"),
+    )
+    .expect("prompt composer source should load");
+    let prompt_composer_references = rust_semantic_references(&prompt_composer_source).paths;
+    assert!(
+        references_identifier(
+            &prompt_composer_references,
+            "ConversationComposerScreenModel"
+        ),
+        "prompt composer must consume ConversationComposerScreenModel"
+    );
+    for forbidden_reference in ["ConversationViewModel", "ConversationComposerState"] {
+        assert!(
+            !references_identifier(&prompt_composer_references, forbidden_reference),
+            "production prompt_composer.rs must not consume {forbidden_reference} directly"
+        );
+    }
+
+    let prompt_composer_syntax =
+        syn::parse_file(&prompt_composer_source).expect("prompt composer source should parse");
+    for function_name in [
+        "build_shell_command_palette_lines",
+        "build_prompt_cursor_offset",
+        "locate_prompt_cursor_with_word_wrap",
+        "build_prompt_buffer_view",
+    ] {
+        let function = top_level_function(&prompt_composer_syntax, function_name);
+        let Some(syn::FnArg::Typed(first_argument)) = function.sig.inputs.first() else {
+            panic!("{function_name} must accept a composer screen model first");
+        };
+        assert!(
+            is_shared_reference_to_single_lifetime_named_type(
+                &first_argument.ty,
+                "ConversationComposerScreenModel",
+                "_",
+            ),
+            "{function_name} must accept &ConversationComposerScreenModel<'_> first"
+        );
+    }
+
+    let consumer_contracts = [
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+            "build_inline_ready_prompt_lines",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs",
+            "build_inline_prompt_cursor_offset_for_lines",
+        ),
+    ];
+    for (path, function_name) in consumer_contracts {
+        let source = fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        let syntax =
+            syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
+        let function = top_level_function(&syntax, function_name);
+        if function_name == "build_inline_ready_prompt_lines" {
+            let Some(syn::FnArg::Typed(first_argument)) = function.sig.inputs.first() else {
+                panic!("{function_name} must accept a composer screen model first");
+            };
+            assert!(
+                is_shared_reference_to_single_lifetime_named_type(
+                    &first_argument.ty,
+                    "ConversationComposerScreenModel",
+                    "_",
+                ),
+                "{function_name} must accept &ConversationComposerScreenModel<'_> first"
+            );
+        }
+        let function_source = top_level_function_source(&source, function_name);
+        let references = rust_semantic_references(&function_source).paths;
+        for forbidden_reference in [
+            "ConversationViewModel",
+            "ConversationComposerState",
+            "ShellConversationState",
+        ] {
+            assert!(
+                !references_identifier(&references, forbidden_reference),
+                "{function_name} must not consume {forbidden_reference}"
+            );
+        }
+    }
+
+    for (path, function_name, called_function, argument_count) in [
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+            "build_inline_tail_prompt_lines_with_context",
+            "build_inline_ready_prompt_lines",
+            3,
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+            "build_inline_ready_prompt_lines",
+            "build_prompt_buffer_view",
+            1,
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+            "build_inline_ready_prompt_lines",
+            "build_shell_command_palette_lines",
+            2,
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs",
+            "build_inline_prompt_cursor_offset_for_lines",
+            "build_prompt_cursor_offset",
+            2,
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/prompt_composer.rs",
+            "build_prompt_cursor_offset",
+            "locate_prompt_cursor_with_word_wrap",
+            2,
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/prompt_composer.rs",
+            "locate_prompt_cursor_with_word_wrap",
+            "build_prompt_buffer_view",
+            1,
+        ),
+    ] {
+        let source = fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        let syntax =
+            syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
+        let function = top_level_function(&syntax, function_name);
+        assert_direct_function_call(function, called_function, argument_count);
+    }
+
+    for path in [
+        "src/adapter/inbound/tui/app/shell_presentation/prompt_composer.rs",
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels/live_status_layout.rs",
+    ] {
+        let source = fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        let production_references = rust_semantic_references(&source).paths;
+        assert!(
+            !references_identifier(&production_references, "from_conversation"),
+            "{path} must consume the prebuilt composer projection instead of rebuilding it"
+        );
+        let syntax =
+            syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
+        let mut composer_fields = ComposerFieldAccessVisitor::default();
+        composer_fields.visit_file(&syntax);
+        assert!(
+            composer_fields.lines.is_empty(),
+            "{path} must not bypass ConversationScreenModel with direct .composer field reads; invalid lines: {:?}",
+            composer_fields.lines
+        );
+    }
+}
+
+#[test]
 fn tui_planning_worker_state_uses_the_domain_contract_without_round_trip_mappers() {
     assert_no_forbidden_references_in_paths(
         "TUI planning worker diagnostics must store the domain snapshot directly",
@@ -4736,6 +4977,50 @@ struct CallExpressionVisitor {
     callable_candidates: Vec<String>,
 }
 
+#[derive(Default)]
+struct ComposerFieldAccessVisitor {
+    lines: Vec<usize>,
+}
+
+#[derive(Default)]
+struct DirectFunctionCallVisitor {
+    calls: Vec<(String, usize)>,
+}
+
+impl<'ast> Visit<'ast> for DirectFunctionCallVisitor {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(function) = call.func.as_ref() {
+            self.calls.push((
+                function
+                    .path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                call.args.len(),
+            ));
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
+impl<'ast> Visit<'ast> for ComposerFieldAccessVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if matches!(&field.member, syn::Member::Named(member) if member == "composer") {
+            self.lines.push(field.member.span().start().line);
+        }
+        visit::visit_expr_field(self, field);
+    }
+}
+
 impl<'ast> Visit<'ast> for CallExpressionVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if item_is_test_only(item) {
@@ -5318,6 +5603,131 @@ fn named_struct_fields<'a>(syntax: &'a syn::File, struct_name: &str) -> Vec<&'a 
         panic!("{struct_name} should use named fields");
     };
     fields.named.iter().collect()
+}
+
+fn top_level_function<'a>(syntax: &'a syn::File, function_name: &str) -> &'a syn::ItemFn {
+    syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function)
+                if !attributes_are_test_only(&function.attrs)
+                    && function.sig.ident == function_name =>
+            {
+                Some(function)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected one non-test function named {function_name}"))
+}
+
+fn assert_direct_function_call(
+    function: &syn::ItemFn,
+    called_function: &str,
+    argument_count: usize,
+) {
+    let mut calls = DirectFunctionCallVisitor::default();
+    calls.visit_block(&function.block);
+    let matching_calls = calls
+        .calls
+        .iter()
+        .filter(|(called, _)| called == called_function)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching_calls.len(),
+        1,
+        "{} must call the direct path {called_function} exactly once",
+        function.sig.ident
+    );
+    assert_eq!(
+        matching_calls[0].1, argument_count,
+        "{} must call {called_function} with {argument_count} arguments",
+        function.sig.ident
+    );
+}
+
+fn is_shared_reference_to_named_type_with_lifetime(
+    ty: &syn::Type,
+    expected_name: &str,
+    expected_lifetime: &str,
+) -> bool {
+    let syn::Type::Reference(reference) = ty else {
+        return false;
+    };
+    reference.mutability.is_none()
+        && reference
+            .lifetime
+            .as_ref()
+            .is_some_and(|lifetime| lifetime.ident == expected_lifetime)
+        && matches!(
+            reference.elem.as_ref(),
+            syn::Type::Path(type_path)
+                if type_path.qself.is_none()
+                    && type_path.path.is_ident(expected_name)
+        )
+}
+
+fn is_shared_reference_to_single_lifetime_named_type(
+    ty: &syn::Type,
+    expected_name: &str,
+    expected_lifetime: &str,
+) -> bool {
+    let syn::Type::Reference(reference) = ty else {
+        return false;
+    };
+    reference.mutability.is_none()
+        && reference.lifetime.is_none()
+        && is_single_lifetime_named_type(&reference.elem, expected_name, expected_lifetime)
+}
+
+fn is_option_of_single_lifetime_named_type(
+    ty: &syn::Type,
+    expected_inner_name: &str,
+    expected_lifetime: &str,
+) -> bool {
+    let syn::Type::Path(option_type) = ty else {
+        return false;
+    };
+    if option_type.qself.is_some() || option_type.path.segments.len() != 1 {
+        return false;
+    }
+    let option_segment = option_type
+        .path
+        .segments
+        .first()
+        .expect("one Option segment");
+    let syn::PathArguments::AngleBracketed(arguments) = &option_segment.arguments else {
+        return false;
+    };
+    let Some(syn::GenericArgument::Type(inner)) = arguments.args.first() else {
+        return false;
+    };
+    option_segment.ident == "Option"
+        && arguments.args.len() == 1
+        && is_single_lifetime_named_type(inner, expected_inner_name, expected_lifetime)
+}
+
+fn is_single_lifetime_named_type(
+    ty: &syn::Type,
+    expected_name: &str,
+    expected_lifetime: &str,
+) -> bool {
+    let syn::Type::Path(type_path) = ty else {
+        return false;
+    };
+    if type_path.qself.is_some() || type_path.path.segments.len() != 1 {
+        return false;
+    }
+    let segment = type_path.path.segments.first().expect("one type segment");
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    arguments.args.len() == 1
+        && matches!(
+            arguments.args.first(),
+            Some(syn::GenericArgument::Lifetime(lifetime))
+                if segment.ident == expected_name && lifetime.ident == expected_lifetime
+        )
 }
 
 fn is_named_path_type(ty: &syn::Type, expected_name: &str) -> bool {
