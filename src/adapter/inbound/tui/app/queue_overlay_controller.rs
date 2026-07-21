@@ -148,9 +148,15 @@ impl NativeTuiApp {
                 self.queue_overlay_ui_state.move_selection(&task_ids, 1);
             }
             (KeyCode::Char('x') | KeyCode::Delete, KeyModifiers::NONE) => {
-                self.cancel_selected_queue_task();
+                self.arm_or_confirm_selected_queue_task_removal();
+            }
+            (KeyCode::Enter, KeyModifiers::NONE)
+                if self.queue_overlay_ui_state.armed_remove_task_id().is_some() =>
+            {
+                self.confirm_selected_queue_task_removal();
             }
             (KeyCode::Char('u'), KeyModifiers::NONE) => {
+                self.queue_overlay_ui_state.disarm_remove_task();
                 self.undo_latest_queue_registration();
             }
             _ => {}
@@ -158,30 +164,69 @@ impl NativeTuiApp {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn cancel_selected_queue_task(&mut self) {
+        self.queue_overlay_ui_state.disarm_remove_task();
+        let Some(intent) = self.prepare_selected_queue_task_removal() else {
+            return;
+        };
+        self.submit_queue_mutation(intent);
+    }
+
+    fn arm_or_confirm_selected_queue_task_removal(&mut self) {
+        let Some(intent) = self.prepare_selected_queue_task_removal() else {
+            self.queue_overlay_ui_state.disarm_remove_task();
+            return;
+        };
+        if self.queue_overlay_ui_state.remove_is_armed_for(&intent) {
+            self.queue_overlay_ui_state.disarm_remove_task();
+            self.submit_queue_mutation(intent);
+        } else {
+            self.queue_overlay_ui_state.arm_remove_task(intent);
+        }
+    }
+
+    fn confirm_selected_queue_task_removal(&mut self) {
+        let Some(intent) = self.prepare_selected_queue_task_removal() else {
+            self.queue_overlay_ui_state.disarm_remove_task();
+            return;
+        };
+        if !self.queue_overlay_ui_state.remove_is_armed_for(&intent) {
+            self.queue_overlay_ui_state.disarm_remove_task();
+            self.queue_overlay_ui_state.set_feedback(
+                self.tui_language
+                    .queue_mutation_selected_item_changed_feedback(),
+            );
+            return;
+        }
+        self.queue_overlay_ui_state.disarm_remove_task();
+        self.submit_queue_mutation(intent);
+    }
+
+    fn prepare_selected_queue_task_removal(&mut self) -> Option<QueueMutationIntent> {
         if let Some(operation_id) = self.pending_queue_mutation_operation_id() {
             self.queue_overlay_ui_state.set_feedback(
                 self.tui_language
                     .queue_mutation_pending_feedback(operation_id),
             );
-            return;
+            return None;
         }
         if self.reload_queue_overlay_authority_before_action() {
-            return;
+            return None;
         }
         if let Some(feedback) = self.queue_overlay_authority_action_feedback() {
             self.queue_overlay_ui_state.set_feedback(feedback);
-            return;
+            return None;
         }
         if self.queue_mutation_requires_authority_refresh() {
             self.queue_overlay_ui_state
                 .set_feedback(self.tui_language.queue_mutation_refresh_required_feedback());
-            return;
+            return None;
         }
         if let Some(reason) = self.queue_mutation_block_reason() {
             self.queue_overlay_ui_state
                 .set_feedback(self.tui_language.queue_action_block_reason(reason));
-            return;
+            return None;
         }
         let selected = self.queue_overlay_ui_state.selected_authority_token().map(
             |(revision, task_id, token)| {
@@ -198,10 +243,10 @@ impl NativeTuiApp {
                 self.tui_language
                     .queue_mutation_selected_item_changed_feedback(),
             );
-            return;
+            return None;
         };
         let context = self.current_queue_mutation_context();
-        self.submit_queue_mutation(QueueMutationIntent {
+        Some(QueueMutationIntent {
             workspace_directory: context.workspace_directory,
             active_thread_id: context.active_thread_id,
             kind: queue_overlay_ui::QueueMutationKind::RemoveSelected,
@@ -212,7 +257,7 @@ impl NativeTuiApp {
                 expected_updated_at: updated_at,
             }],
             receipt_at_start: self.latest_queue_mutation_receipt(),
-        });
+        })
     }
 
     pub(super) fn undo_latest_queue_registration(&mut self) -> bool {
@@ -343,6 +388,7 @@ impl NativeTuiApp {
         {
             return;
         }
+        self.queue_overlay_ui_state.disarm_remove_task();
         self.queue_overlay_ui_state.set_feedback(
             self.tui_language
                 .queue_mutation_pending_feedback(correlation.generation),

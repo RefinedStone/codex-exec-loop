@@ -9,7 +9,9 @@ use crate::application::service::planning::{
     PlanningQueueAuthorityProjection, PlanningQueueAuthoritySnapshot, PlanningRuntimeProjection,
 };
 pub(super) use crate::core::app::QueueMutationKind;
-use crate::core::app::{QueueAuthorityLoadCorrelation, QueueMutationCorrelation};
+use crate::core::app::{
+    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, QueueMutationIntent,
+};
 use crate::domain::planning::TaskStatus;
 
 use super::{ConversationInputState, ConversationState, NativeTuiApp, TuiLanguage};
@@ -112,6 +114,7 @@ pub(super) struct QueueOverlayScreenModel {
     pub(super) conversation: QueueOverlayConversationScreenModel,
     pub(super) authority: QueueOverlayAuthorityScreenModel,
     pub(super) selected_task_id: Option<String>,
+    pub(super) armed_remove_task_id: Option<String>,
     pub(super) feedback: Option<String>,
     pub(super) pending_operation_id: Option<u64>,
     pub(super) authority_refresh_required: bool,
@@ -188,6 +191,7 @@ impl From<PlanningApplicationSkippedTask> for QueueOverlayActionTask {
 pub(super) struct QueueOverlayUiState {
     authority_projection: QueueOverlayAuthorityProjectionState,
     selected_task_id: Option<String>,
+    armed_remove_intent: Option<QueueMutationIntent>,
     feedback: Option<String>,
     receipt_undo_hit_area: Option<Rect>,
 }
@@ -197,6 +201,7 @@ impl Default for QueueOverlayUiState {
         Self {
             authority_projection: QueueOverlayAuthorityProjectionState::Idle,
             selected_task_id: None,
+            armed_remove_intent: None,
             feedback: None,
             receipt_undo_hit_area: None,
         }
@@ -210,6 +215,7 @@ impl QueueOverlayUiState {
     ) -> QueueOverlayAuthorityLoadRequest {
         let request = QueueOverlayAuthorityLoadRequest { correlation };
         self.authority_projection = QueueOverlayAuthorityProjectionState::Loading(request.clone());
+        self.armed_remove_intent = None;
         self.feedback = None;
         request
     }
@@ -282,6 +288,7 @@ impl QueueOverlayUiState {
             planning_revision,
             authority_tokens,
         };
+        self.armed_remove_intent = None;
         true
     }
 
@@ -326,6 +333,25 @@ impl QueueOverlayUiState {
         self.selected_task_id.as_deref()
     }
 
+    pub(super) fn armed_remove_task_id(&self) -> Option<&str> {
+        let intent = self.armed_remove_intent.as_ref()?;
+        (intent.kind == QueueMutationKind::RemoveSelected && intent.targets.len() == 1)
+            .then(|| intent.targets[0].task_id.as_str())
+    }
+
+    pub(super) fn arm_remove_task(&mut self, intent: QueueMutationIntent) {
+        self.armed_remove_intent = Some(intent);
+        self.feedback = None;
+    }
+
+    pub(super) fn remove_is_armed_for(&self, intent: &QueueMutationIntent) -> bool {
+        self.armed_remove_intent.as_ref() == Some(intent)
+    }
+
+    pub(super) fn disarm_remove_task(&mut self) {
+        self.armed_remove_intent = None;
+    }
+
     pub(super) fn feedback(&self) -> Option<&str> {
         self.feedback.as_deref()
     }
@@ -362,6 +388,7 @@ impl QueueOverlayUiState {
                 planning_revision,
                 authority_tokens,
             };
+            self.armed_remove_intent = None;
         }
         true
     }
@@ -379,6 +406,7 @@ impl QueueOverlayUiState {
 
     pub(super) fn clear_authority_binding(&mut self) {
         self.authority_projection = QueueOverlayAuthorityProjectionState::Idle;
+        self.armed_remove_intent = None;
     }
 
     pub(super) fn bind_receipt_undo_hit_area(&mut self, hit_area: Option<Rect>) {
@@ -423,8 +451,10 @@ impl QueueOverlayUiState {
     }
 
     pub(super) fn sync(&mut self, task_ids: &[String]) {
+        let previous_selection = self.selected_task_id.clone();
         if task_ids.is_empty() {
             self.selected_task_id = None;
+            self.armed_remove_intent = None;
             return;
         }
         if self
@@ -434,9 +464,13 @@ impl QueueOverlayUiState {
         {
             self.selected_task_id = task_ids.first().cloned();
         }
+        if self.selected_task_id != previous_selection {
+            self.armed_remove_intent = None;
+        }
     }
 
     pub(super) fn move_selection(&mut self, task_ids: &[String], delta: isize) {
+        self.armed_remove_intent = None;
         self.sync(task_ids);
         let Some(selected) = self.selected_task_id.as_ref() else {
             return;
@@ -538,6 +572,10 @@ impl NativeTuiApp {
             selected_task_id: self
                 .queue_overlay_ui_state
                 .selected_task_id()
+                .map(str::to_string),
+            armed_remove_task_id: self
+                .queue_overlay_ui_state
+                .armed_remove_task_id()
                 .map(str::to_string),
             feedback: self.queue_overlay_ui_state.feedback().map(str::to_string),
             pending_operation_id,
@@ -796,6 +834,7 @@ mod tests {
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{
         QueueAuthorityLoadCorrelation, QueueMutationCorrelation, QueueMutationIntent,
+        QueueMutationTarget,
     };
     use crate::domain::planning::TaskStatus;
 
@@ -844,6 +883,21 @@ mod tests {
         )
     }
 
+    fn remove_intent(task_id: &str, updated_at: &str) -> QueueMutationIntent {
+        QueueMutationIntent {
+            workspace_directory: "/tmp/workspace".to_string(),
+            active_thread_id: Some("thread-a".to_string()),
+            kind: QueueMutationKind::RemoveSelected,
+            expected_planning_revision: 7,
+            targets: vec![QueueMutationTarget {
+                task_id: task_id.to_string(),
+                expected_status: TaskStatus::Ready,
+                expected_updated_at: updated_at.to_string(),
+            }],
+            receipt_at_start: None,
+        }
+    }
+
     #[test]
     fn selection_tracks_task_identity_when_rows_change() {
         let mut state = QueueOverlayUiState::default();
@@ -864,6 +918,51 @@ mod tests {
 
         state.sync(&[]);
         assert_eq!(state.selected_task_id(), None);
+    }
+
+    #[test]
+    fn remove_confirmation_is_bound_to_the_exact_authority_intent() {
+        let mut state = QueueOverlayUiState::default();
+        let tasks = vec!["task-a".to_string(), "task-b".to_string()];
+        state.sync(&tasks);
+        let armed = remove_intent("task-a", "2026-07-15T00:00:00Z");
+        state.arm_remove_task(armed.clone());
+
+        assert_eq!(state.armed_remove_task_id(), Some("task-a"));
+        assert!(state.remove_is_armed_for(&armed));
+        let mut changed_context = armed.clone();
+        changed_context.active_thread_id = Some("thread-b".to_string());
+        let mut changed_revision = armed.clone();
+        changed_revision.expected_planning_revision = 8;
+        let mut changed_status = armed.clone();
+        changed_status.targets[0].expected_status = TaskStatus::Proposed;
+        for changed in [
+            changed_context,
+            changed_revision,
+            changed_status,
+            remove_intent("task-a", "2026-07-15T00:00:01Z"),
+        ] {
+            assert!(!state.remove_is_armed_for(&changed));
+        }
+
+        state.move_selection(&tasks, 1);
+        assert_eq!(state.selected_task_id(), Some("task-b"));
+        assert_eq!(state.armed_remove_task_id(), None);
+    }
+
+    #[test]
+    fn authority_refresh_and_selection_repair_disarm_remove_confirmation() {
+        let mut state = QueueOverlayUiState::default();
+        state.sync(&["task-a".to_string()]);
+        state.arm_remove_task(remove_intent("task-a", "2026-07-15T00:00:00Z"));
+
+        let _request = begin_load(&mut state, 1, context("/tmp/workspace", Some("thread-a")));
+        assert_eq!(state.armed_remove_task_id(), None);
+
+        state.arm_remove_task(remove_intent("task-a", "2026-07-15T00:00:00Z"));
+        state.sync(&["task-b".to_string()]);
+        assert_eq!(state.selected_task_id(), Some("task-b"));
+        assert_eq!(state.armed_remove_task_id(), None);
     }
 
     #[test]

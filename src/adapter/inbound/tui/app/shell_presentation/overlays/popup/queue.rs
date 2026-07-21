@@ -31,6 +31,24 @@ pub(crate) fn build_queue_overlay_view(screen_model: QueueOverlayScreenModel) ->
     let remove_block_reason = screen_model.remove_block_reason;
     let undo_block_reason = screen_model.undo_block_reason;
     let tui_language = screen_model.tui_language;
+    let remove_confirmation_task_id =
+        screen_model
+            .armed_remove_task_id
+            .as_deref()
+            .filter(|task_id| {
+                pending_operation_id.is_none()
+                    && !authority_refresh_required
+                    && matches!(
+                        &screen_model.authority,
+                        QueueOverlayAuthorityScreenModel::Ready { .. }
+                    )
+                    && matches!(
+                        &screen_model.conversation,
+                        QueueOverlayConversationScreenModel::Ready { .. }
+                    )
+                    && remove_block_reason.is_none()
+                    && selected_task_id == Some(*task_id)
+            });
 
     match screen_model.conversation {
         QueueOverlayConversationScreenModel::Loading => QueueOverlayView {
@@ -50,15 +68,16 @@ pub(crate) fn build_queue_overlay_view(screen_model: QueueOverlayScreenModel) ->
             proposal_lines: Vec::new(),
             note_lines: Vec::new(),
             selected_content_line_index: None,
-            key_lines: build_queue_overlay_key_lines(
-                false,
+            key_lines: build_queue_overlay_key_lines(QueueOverlayKeyState {
+                latest_registration_undo_available: false,
+                remove_confirmation_task_id,
                 pending_operation_id,
                 authority_refresh_required,
-                &screen_model.authority,
+                authority: &screen_model.authority,
                 remove_block_reason,
                 undo_block_reason,
                 tui_language,
-            ),
+            }),
         },
         QueueOverlayConversationScreenModel::Failed(message) => QueueOverlayView {
             header_lines,
@@ -80,15 +99,16 @@ pub(crate) fn build_queue_overlay_view(screen_model: QueueOverlayScreenModel) ->
                 compact_whitespace_detail(&message, QUEUE_INSPECTION_NOTE_DETAIL_LIMIT)
             ))],
             selected_content_line_index: None,
-            key_lines: build_queue_overlay_key_lines(
-                false,
+            key_lines: build_queue_overlay_key_lines(QueueOverlayKeyState {
+                latest_registration_undo_available: false,
+                remove_confirmation_task_id,
                 pending_operation_id,
                 authority_refresh_required,
-                &screen_model.authority,
+                authority: &screen_model.authority,
                 remove_block_reason,
                 undo_block_reason,
                 tui_language,
-            ),
+            }),
         },
         QueueOverlayConversationScreenModel::Ready {
             runtime_projection,
@@ -155,13 +175,20 @@ pub(crate) fn build_queue_overlay_view(screen_model: QueueOverlayScreenModel) ->
             if queued_count == 0 {
                 summary_segments.push(format!("idle: {}", projection.queue_idle_policy.label()));
             }
-            let summary_lines = build_queue_overlay_summary_lines(
+            let mut summary_lines = build_queue_overlay_summary_lines(
                 summary_segments.join("  |  "),
                 pending_operation_id,
                 authority_refresh_required,
                 &screen_model.authority,
                 tui_language,
             );
+            if let Some(task_id) = remove_confirmation_task_id {
+                summary_lines.insert(
+                    0,
+                    Line::from(tui_language.queue_overlay_remove_confirmation_line(task_id))
+                        .style(AkraTheme::danger()),
+                );
+            }
 
             /*
              * Note section은 actionability 순서로 채운다. auto-follow pause와 failure reason은 queue row보다
@@ -232,15 +259,17 @@ pub(crate) fn build_queue_overlay_view(screen_model: QueueOverlayScreenModel) ->
                 proposal_lines,
                 note_lines,
                 selected_content_line_index,
-                key_lines: build_queue_overlay_key_lines(
-                    screen_model.latest_registration_undo_available,
+                key_lines: build_queue_overlay_key_lines(QueueOverlayKeyState {
+                    latest_registration_undo_available: screen_model
+                        .latest_registration_undo_available,
+                    remove_confirmation_task_id,
                     pending_operation_id,
                     authority_refresh_required,
-                    &screen_model.authority,
+                    authority: &screen_model.authority,
                     remove_block_reason,
                     undo_block_reason,
                     tui_language,
-                ),
+                }),
             }
         }
     }
@@ -291,15 +320,29 @@ fn build_queue_overlay_summary_lines(
     lines
 }
 
-fn build_queue_overlay_key_lines(
+#[derive(Clone, Copy)]
+struct QueueOverlayKeyState<'a> {
     latest_registration_undo_available: bool,
+    remove_confirmation_task_id: Option<&'a str>,
     pending_operation_id: Option<u64>,
     authority_refresh_required: bool,
-    authority: &QueueOverlayAuthorityScreenModel,
+    authority: &'a QueueOverlayAuthorityScreenModel,
     remove_block_reason: Option<QueueActionBlockReason>,
     undo_block_reason: Option<QueueActionBlockReason>,
     tui_language: TuiLanguage,
-) -> Vec<Line<'static>> {
+}
+
+fn build_queue_overlay_key_lines(state: QueueOverlayKeyState<'_>) -> Vec<Line<'static>> {
+    let QueueOverlayKeyState {
+        latest_registration_undo_available,
+        remove_confirmation_task_id,
+        pending_operation_id,
+        authority_refresh_required,
+        authority,
+        remove_block_reason,
+        undo_block_reason,
+        tui_language,
+    } = state;
     if let Some(operation_id) = pending_operation_id {
         // Navigation and dismissal stay live while the authority gate owns every destructive action.
         return vec![
@@ -342,6 +385,14 @@ fn build_queue_overlay_key_lines(
             AkraTheme::key_line(tui_language.queue_overlay_select_key_line()),
             Line::from(tui_language.queue_overlay_authority_loading_disabled_key_line())
                 .style(AkraTheme::warning()),
+            AkraTheme::key_line(tui_language.queue_overlay_close_key_line()),
+        ];
+    }
+    if remove_confirmation_task_id.is_some() && remove_block_reason.is_none() {
+        return vec![
+            AkraTheme::key_line(tui_language.queue_overlay_select_key_line()),
+            Line::from(tui_language.queue_overlay_remove_confirmation_key_line())
+                .style(AkraTheme::danger()),
             AkraTheme::key_line(tui_language.queue_overlay_close_key_line()),
         ];
     }
@@ -507,11 +558,31 @@ fn build_skipped_queue_note_line(
 
 #[cfg(test)]
 mod tests {
+    use crate::adapter::inbound::tui::app::test_helpers::sample_planning_runtime_projection;
+
     use super::super::super::super::terminal_text::display_width;
     use super::{
-        QueueActionBlockReason, QueueOverlayAuthorityScreenModel, TuiLanguage,
-        build_queue_overlay_key_lines, build_queue_overlay_summary_lines, compact_queue_title,
+        AkraTheme, QueueActionBlockReason, QueueOverlayAuthorityScreenModel,
+        QueueOverlayConversationScreenModel, QueueOverlayKeyState, QueueOverlayScreenModel,
+        TuiLanguage, build_queue_overlay_key_lines, build_queue_overlay_summary_lines,
+        build_queue_overlay_view, compact_queue_title,
     };
+
+    fn key_state(
+        authority: &QueueOverlayAuthorityScreenModel,
+        tui_language: TuiLanguage,
+    ) -> QueueOverlayKeyState<'_> {
+        QueueOverlayKeyState {
+            latest_registration_undo_available: false,
+            remove_confirmation_task_id: None,
+            pending_operation_id: None,
+            authority_refresh_required: false,
+            authority,
+            remove_block_reason: None,
+            undo_block_reason: None,
+            tui_language,
+        }
+    }
 
     #[test]
     fn queue_titles_compact_whitespace_and_respect_terminal_cell_budget() {
@@ -529,28 +600,15 @@ mod tests {
             request_id: 1,
             planning_revision: 7,
         };
-        let normal = build_queue_overlay_key_lines(
-            false,
-            None,
-            false,
-            &authority,
-            None,
-            None,
-            TuiLanguage::English,
-        )
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-        let cancellable = build_queue_overlay_key_lines(
-            true,
-            None,
-            false,
-            &authority,
-            None,
-            None,
-            TuiLanguage::English,
-        )
+        let normal = build_queue_overlay_key_lines(key_state(&authority, TuiLanguage::English))
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cancellable = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            ..key_state(&authority, TuiLanguage::English)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -580,15 +638,12 @@ mod tests {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let keys = build_queue_overlay_key_lines(
-            true,
-            Some(17),
-            false,
-            &authority,
-            None,
-            None,
-            TuiLanguage::English,
-        )
+        let keys = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_confirmation_task_id: Some("task-1"),
+            pending_operation_id: Some(17),
+            ..key_state(&authority, TuiLanguage::English)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -613,15 +668,12 @@ mod tests {
         .collect::<Vec<_>>()
         .join("\n");
         assert!(korean.contains("op-17 | 권한 확인 대기 중"));
-        let korean_keys = build_queue_overlay_key_lines(
-            true,
-            Some(17),
-            false,
-            &authority,
-            None,
-            None,
-            TuiLanguage::Korean,
-        )
+        let korean_keys = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_confirmation_task_id: Some("task-1"),
+            pending_operation_id: Some(17),
+            ..key_state(&authority, TuiLanguage::Korean)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -648,15 +700,12 @@ mod tests {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let keys = build_queue_overlay_key_lines(
-            true,
-            None,
-            true,
-            &authority,
-            None,
-            None,
-            TuiLanguage::English,
-        )
+        let keys = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_confirmation_task_id: Some("task-1"),
+            authority_refresh_required: true,
+            ..key_state(&authority, TuiLanguage::English)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -667,15 +716,12 @@ mod tests {
         assert!(!keys.contains("x/Delete"));
         assert!(!keys.contains("u: undo"));
 
-        let korean = build_queue_overlay_key_lines(
-            true,
-            None,
-            true,
-            &authority,
-            None,
-            None,
-            TuiLanguage::Korean,
-        )
+        let korean = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_confirmation_task_id: Some("task-1"),
+            authority_refresh_required: true,
+            ..key_state(&authority, TuiLanguage::Korean)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -697,15 +743,11 @@ mod tests {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let keys = build_queue_overlay_key_lines(
-            true,
-            None,
-            false,
-            &authority,
-            None,
-            None,
-            TuiLanguage::English,
-        )
+        let keys = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_confirmation_task_id: Some("task-1"),
+            ..key_state(&authority, TuiLanguage::English)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -734,15 +776,11 @@ mod tests {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let keys = build_queue_overlay_key_lines(
-            true,
-            None,
-            false,
-            &authority,
-            None,
-            None,
-            TuiLanguage::Korean,
-        )
+        let keys = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_confirmation_task_id: Some("task-1"),
+            ..key_state(&authority, TuiLanguage::Korean)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -771,15 +809,12 @@ mod tests {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let keys = build_queue_overlay_key_lines(
-            true,
-            None,
-            true,
-            &authority,
-            None,
-            None,
-            TuiLanguage::English,
-        )
+        let keys = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_confirmation_task_id: Some("task-1"),
+            authority_refresh_required: true,
+            ..key_state(&authority, TuiLanguage::English)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -794,33 +829,87 @@ mod tests {
     }
 
     #[test]
+    fn armed_queue_removal_projects_localized_confirmation_before_other_notes() {
+        for (language, expected_line, expected_key) in [
+            (
+                TuiLanguage::English,
+                "remove task-1?",
+                "Enter/x/Delete: confirm remove",
+            ),
+            (
+                TuiLanguage::Korean,
+                "task-1 제거할까요?",
+                "Enter/x/Delete: 제거 확인",
+            ),
+        ] {
+            let view = build_queue_overlay_view(QueueOverlayScreenModel {
+                conversation: QueueOverlayConversationScreenModel::Ready {
+                    runtime_projection: Box::new(sample_planning_runtime_projection(
+                        "prompt",
+                        "queue ready",
+                    )),
+                    planning_notice: None,
+                },
+                authority: QueueOverlayAuthorityScreenModel::Ready {
+                    request_id: 1,
+                    planning_revision: 7,
+                },
+                selected_task_id: Some("task-1".to_string()),
+                armed_remove_task_id: Some("task-1".to_string()),
+                feedback: Some("ordinary feedback".to_string()),
+                pending_operation_id: None,
+                authority_refresh_required: false,
+                latest_registration_undo_available: true,
+                remove_block_reason: None,
+                undo_block_reason: None,
+                planning_worker_host_detail: None,
+                tui_language: language,
+            });
+            let keys = view
+                .key_lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let confirmation = view
+                .summary_lines
+                .first()
+                .expect("armed removal should pin confirmation in the summary");
+            assert_eq!(confirmation.to_string(), expected_line);
+            assert_eq!(confirmation.style, AkraTheme::danger());
+            assert!(keys.contains(expected_key), "{keys}");
+            assert!(
+                keys.contains(language.queue_overlay_close_key_line()),
+                "{keys}"
+            );
+            assert!(!keys.contains("u: "), "{keys}");
+            assert!(!keys.contains("x/Delete: remove"), "{keys}");
+            assert!(!keys.contains("x/Delete: 제거 |"), "{keys}");
+        }
+    }
+
+    #[test]
     fn ready_authority_only_advertises_actions_allowed_by_the_screen_model() {
         let authority = QueueOverlayAuthorityScreenModel::Ready {
             request_id: 1,
             planning_revision: 7,
         };
-        let fully_blocked = build_queue_overlay_key_lines(
-            true,
-            None,
-            false,
-            &authority,
-            Some(QueueActionBlockReason::PostTurnPlanningInFlight),
-            Some(QueueActionBlockReason::PostTurnPlanningInFlight),
-            TuiLanguage::English,
-        )
+        let fully_blocked = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_block_reason: Some(QueueActionBlockReason::PostTurnPlanningInFlight),
+            undo_block_reason: Some(QueueActionBlockReason::PostTurnPlanningInFlight),
+            ..key_state(&authority, TuiLanguage::English)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        let undo_only = build_queue_overlay_key_lines(
-            true,
-            None,
-            false,
-            &authority,
-            Some(QueueActionBlockReason::ActiveTurnInFlight),
-            None,
-            TuiLanguage::English,
-        )
+        let undo_only = build_queue_overlay_key_lines(QueueOverlayKeyState {
+            latest_registration_undo_available: true,
+            remove_block_reason: Some(QueueActionBlockReason::ActiveTurnInFlight),
+            ..key_state(&authority, TuiLanguage::English)
+        })
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
@@ -856,15 +945,12 @@ mod tests {
                 "병렬 모드가 작업 임대를 소유하는 동안 큐를 변경할 수 없습니다",
             ),
         ] {
-            let keys = build_queue_overlay_key_lines(
-                true,
-                None,
-                false,
-                &authority,
-                Some(reason),
-                Some(reason),
-                TuiLanguage::Korean,
-            )
+            let keys = build_queue_overlay_key_lines(QueueOverlayKeyState {
+                latest_registration_undo_available: true,
+                remove_block_reason: Some(reason),
+                undo_block_reason: Some(reason),
+                ..key_state(&authority, TuiLanguage::Korean)
+            })
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
