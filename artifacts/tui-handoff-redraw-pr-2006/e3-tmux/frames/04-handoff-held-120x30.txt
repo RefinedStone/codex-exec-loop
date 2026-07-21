@@ -1,0 +1,16 @@
+Akra / Shell Commands / inline inspection
+Type commands in the prompt; type `:` to open the palette.
+Commands
+:diag                                                 diagnostics
+:parallel [off]                                       parallel mode
+:peek                                                 parallel agent peek
+:activity [all|diff|output|command|patch|mcp|plan|…]  progressive activity cards
+:sessions                                             recent sessions
+Keys
+Up/Down or j/k: scroll  |  PgUp/PgDn: page  |  Home/End  |  Esc/Ctrl+C: close
+Akra  |  thread: Handoff redraw ca...
+status: turn completed / auto-follow disabled; us...
+runtime: notice: bridge attach...
+now: HANDOFF_CAPTURE_START_E3R4
+notice: auto: disabled: explicit opt-in required  |  detail: auto-follow is disabled; use :turns <...
+prompt: response held while the dialog is open

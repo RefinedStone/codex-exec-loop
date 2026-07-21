@@ -1,0 +1,17 @@
+scenario_set: pr2006-handoff-redraw-viewport-replay-v1
+overall_result: pass
+
+1. candidate_integrity: pass
+   Exact commit, tree, clean state, and Linux candidate binary hash were unchanged.
+2. active_turn_and_resize: pass
+   One held synthetic turn stayed visible through wide, narrow, and restored Windows Terminal windows.
+3. modal_handoff: pass
+   Help remained open when completion arrived; the held frame showed the explicit response-held prompt.
+4. post_ack_semantic_redraw: pass
+   Closing Help produced one visible exact canary, removed the held prompt, and restored session ready.
+5. clean_exit: pass
+   Ctrl+q closed the terminal row and the typescript footer recorded COMMAND_EXIT_CODE=0.
+6. methodology_addendum: pass
+   Unchanged primitive branches and lifecycle scenarios use the named proofs in ../automated-proof.txt.
+
+deviation: synthetic app-server used to control the completion instant; no production activity claim

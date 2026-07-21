@@ -1,0 +1,16 @@
+Akra / Shell Commands / inline inspection
+Type commands in the prompt; type `:` to open the palette.
+Commands
+:diag                                                 diagnostics
+:parallel [off]                                       parallel mode
+:peek                                                 parallel agent peek
+:activity [all|diff|output|command|patch|mcp|plan|…]  progressive activity cards
+:sessions                                             recent sessions
+Keys
+Up/Down or j/k: scroll  |  PgUp/PgDn: page  |  Home/End  |  Esc/Ctrl+C: close
+runtime: notice: bridge attach...
+◦ Working (10s • waiting for response / interrupt runtime-...)
+planning: stale
+notice: activity: active:command | model:gpt-5.6-handoff-capture | task:HANDOFF_CAPTURE_START_E3R4
+>
+prompt: Enter queue | Tab steer | Ctrl+j nl

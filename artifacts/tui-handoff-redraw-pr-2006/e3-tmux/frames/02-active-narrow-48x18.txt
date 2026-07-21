@@ -1,0 +1,16 @@
+
+
+
+
+
+
+
+Akra  |  thread: Handoff redraw ca...
+runtime: notice: bridge attach...
+◦ Working (8s • waiting for response / inter...)
+planning: stale
+now: HANDOFF_CAPTURE_START_E3R4
+recent you: HANDOFF_CAPTURE_START_E3R4
+notice: activity: active:command
+>
+prompt: Enter queue | Tab steer | Ctrl+j nl

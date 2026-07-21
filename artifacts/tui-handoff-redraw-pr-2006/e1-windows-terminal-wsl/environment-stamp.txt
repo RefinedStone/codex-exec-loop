@@ -1,0 +1,37 @@
+artifact_id: pr2006-e1-r3-synthetic
+pr_or_work_item: PR 2006
+capture_role: supplemental-unmatched
+environment_class: first-class E1
+check_profile: pr2006-handoff-redraw-viewport-replay-v1
+captured_at_utc: 2026-07-21T07:05:21Z
+operator: Codex /root
+reviewer: Codex /root/handoff_evidence_review
+candidate_commit: f0ca13f87e70ca99132abc219ca3618910f4442a
+candidate_tree: f821a1ce4145926d24fc76a38dc4c9ab2a5aff1c
+candidate_clean_before: true
+candidate_clean_after: true
+binary_sha256: c183ec68fb747f70e963f9606eb34653f280da25db1104e5a5695cabb64fa4d9
+source_build: true
+runtime_authority: deterministic synthetic Codex app-server
+codex_version: codex-cli 0.144.6-handoff-capture
+terminal: Windows Terminal 1.24.11911.0
+shell: WSL bash 5.2.21(1)-release
+os: Microsoft Windows 11 10.0.26200 / WSL Ubuntu 24.04.2 LTS
+kernel: 6.18.33.2-microsoft-standard-WSL2
+frontend: inline
+multiplexer: none
+term: xterm-256color
+inline_history_render_mode: ViewportReplay
+inline_history_render_mode_source: CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=viewport-replay
+history_insertion_mode: StandardScrollRegion
+history_insertion_mode_source: CODEX_EXEC_LOOP_HISTORY_INSERT_MODE=standard
+wt_session: present
+initial_window: 1249x635 pixels
+narrow_window: 650x460 pixels
+restored_window: 1100x720 pixels
+terminal_cell_geometry: not recorded
+raw_typescript_sha256: 27288032e6caa24347e25628c640b2df9ccd8e5ec61e2415e5f1af0a4f553ea7
+raw_typescript_bytes: 18712
+raw_typescript_checked_in: false
+runtime_exit_status: 0
+notes_on_deviations: deterministic synthetic provider; raw ANSI transcript excluded
