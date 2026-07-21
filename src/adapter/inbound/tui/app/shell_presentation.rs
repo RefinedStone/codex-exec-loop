@@ -66,9 +66,9 @@ pub(super) use overlays::{
 };
 use runtime_status_copy::{build_working_line, compact_inline_detail};
 pub(super) use shell_core::{
-    ConversationComposerScreenModel, ConversationProjectionSample, ConversationScreenModel,
-    ParallelPanelProjectionSample, TurnSteerConfirmationScreenModel,
-    conversation_startup_screen_is_active,
+    ConversationComposerScreenModel, ConversationLiveTranscriptScreenModel,
+    ConversationProjectionSample, ConversationScreenModel, ParallelPanelProjectionSample,
+    TurnSteerConfirmationScreenModel, conversation_startup_screen_is_active,
 };
 use shell_core::{QueueMutationTailState, ShellConversationState};
 pub(super) use startup_banner::startup_ascii_art_lines;
@@ -99,16 +99,11 @@ pub(super) fn build_inline_tail_view(
 pub(super) fn build_inline_live_transcript_lines(
     screen_model: &ConversationScreenModel<'_>,
 ) -> Vec<Line<'static>> {
-    // loading/failed 상태에서는 live agent message가 존재할 수 없으므로 빈 view를 반환한다.
-    // Ready에서만 cached conversation과 live streaming tail을 같은 panel 규칙으로 합친다.
-    let ShellConversationState::Ready(conversation) = screen_model.conversation_state else {
+    // loading/failed 상태에서는 live transcript projection이 없으므로 빈 view를 반환한다.
+    let Some(live_transcript) = screen_model.live_transcript() else {
         return Vec::new();
     };
-    status_panels::current_live_agent_lines(
-        conversation,
-        screen_model.live_transcript_lines_include_committed_handoff(),
-    )
-    .unwrap_or_default()
+    status_panels::current_live_agent_lines(live_transcript).unwrap_or_default()
 }
 
 pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {

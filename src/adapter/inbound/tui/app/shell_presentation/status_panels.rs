@@ -4,8 +4,7 @@ use ratatui::text::Line;
 
 use crate::application::service::planning::PlanningRuntimeProjection;
 
-use super::ConversationScreenModel;
-use super::ConversationViewModel;
+use super::{ConversationLiveTranscriptScreenModel, ConversationScreenModel};
 
 // Activity rail copy owns cross-source priority and width budgeting for the live operator notice.
 #[path = "status_panels/activity_rail.rs"]
@@ -47,10 +46,9 @@ pub(super) fn build_inline_tail_lines(
 
 // Shared live-agent projection used by main tail and overlays so streaming/tool activity speaks with one vocabulary.
 pub(super) fn current_live_agent_lines(
-    conversation: &ConversationViewModel,
-    include_committed_handoff: bool,
+    live_transcript: &ConversationLiveTranscriptScreenModel<'_>,
 ) -> Option<Vec<Line<'static>>> {
-    tail_shared::current_live_agent_lines(conversation, include_committed_handoff)
+    tail_shared::current_live_agent_lines(live_transcript)
 }
 
 // Re-export the planning substate label so workspace popups and footer indicators share the same wording.

@@ -3073,6 +3073,137 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
 }
 
 #[test]
+fn conversation_live_transcript_projection_uses_one_narrow_screen_model() {
+    const SHELL_CORE: &str = "src/adapter/inbound/tui/app/shell_presentation/shell_core.rs";
+    const LIVE_CONSUMERS: &[&str] = &[
+        "src/adapter/inbound/tui/app/shell_presentation.rs",
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+    ];
+
+    let shell_core_source =
+        fs::read_to_string(repo_root().join(SHELL_CORE)).expect("shell core source should load");
+    let shell_core_syntax =
+        syn::parse_file(&shell_core_source).expect("shell core source should parse");
+    named_struct_fields(&shell_core_syntax, "ConversationLiveTranscriptScreenModel");
+
+    let screen_model_fields = named_struct_fields(&shell_core_syntax, "ConversationScreenModel");
+    let live_projection = screen_model_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "live_transcript")
+        })
+        .expect("ConversationScreenModel must retain one live transcript projection");
+    assert!(
+        is_option_of_single_lifetime_named_type(
+            &live_projection.ty,
+            "ConversationLiveTranscriptScreenModel",
+            "a",
+        ),
+        "ConversationScreenModel.live_transcript must retain the narrow projection"
+    );
+
+    for path in [
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
+        "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
+    ] {
+        let source = fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        let syntax =
+            syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
+        let function = top_level_function(&syntax, "current_live_agent_lines");
+        let Some(syn::FnArg::Typed(first_argument)) = function.sig.inputs.first() else {
+            panic!("{path} current_live_agent_lines must accept a projection first");
+        };
+        assert!(
+            is_shared_reference_to_single_lifetime_named_type(
+                &first_argument.ty,
+                "ConversationLiveTranscriptScreenModel",
+                "_",
+            ),
+            "{path} current_live_agent_lines must accept only the narrow projection"
+        );
+    }
+
+    for callable in [
+        "viewport_transcript_handoff_messages",
+        "viewport_transcript_handoff_release_messages",
+        "has_pending_viewport_transcript_handoff",
+    ] {
+        assert_no_production_callable_reference_named_in_paths(
+            "live transcript consumers must use the prebuilt screen projection",
+            LIVE_CONSUMERS,
+            callable,
+        );
+    }
+
+    let references_identifier = |references: &[String], identifier: &str| {
+        references
+            .iter()
+            .any(|path| path.split("::").any(|segment| segment == identifier))
+    };
+    for (path, function_name) in [
+        (
+            "src/adapter/inbound/tui/app/shell_presentation.rs",
+            "build_inline_live_transcript_lines",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
+            "current_live_agent_lines",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
+            "current_live_agent_lines",
+        ),
+    ] {
+        let source = fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        let function_source = top_level_function_source(&source, function_name);
+        let references = rust_semantic_references(&function_source).paths;
+        for forbidden in ["ConversationViewModel", "ShellConversationState"] {
+            assert!(
+                !references_identifier(&references, forbidden),
+                "{path}::{function_name} must not consume {forbidden}"
+            );
+        }
+    }
+
+    for (function_source, boundary) in [
+        (
+            top_level_function_source(
+                &fs::read_to_string(repo_root().join(LIVE_CONSUMERS[0]))
+                    .expect("shell presentation source should load"),
+                "build_inline_live_transcript_lines",
+            ),
+            "live transcript copy",
+        ),
+        (
+            top_level_impl_method_source(&shell_core_source, "renders_viewport_transcript_handoff"),
+            "viewport handoff ACK",
+        ),
+    ] {
+        let compact = function_source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(
+            compact.contains("live_transcript()"),
+            "{boundary} must consume the narrow live transcript projection"
+        );
+        for forbidden in [".conversation_state", "ready_conversation("] {
+            assert!(
+                !compact.contains(forbidden),
+                "{boundary} must not bypass the live transcript projection: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn tui_planning_worker_state_uses_the_domain_contract_without_round_trip_mappers() {
     assert_no_forbidden_references_in_paths(
         "TUI planning worker diagnostics must store the domain snapshot directly",

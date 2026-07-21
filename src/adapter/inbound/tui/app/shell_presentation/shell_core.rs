@@ -13,7 +13,7 @@ use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::{
     ParallelModeProjection, PlanningParallelProjection, RevisionedPlanningParallelProjection,
 };
-use crate::domain::conversation::ConversationTurnSteerRequest;
+use crate::domain::conversation::{ConversationMessage, ConversationTurnSteerRequest};
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::PlanningWorkerPanelState;
 
@@ -249,6 +249,40 @@ impl<'a> ConversationComposerScreenModel<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::adapter::inbound::tui::app) struct ConversationLiveTranscriptScreenModel<'a> {
+    pub(in crate::adapter::inbound::tui::app) handoff_messages: Option<&'a [ConversationMessage]>,
+    pub(in crate::adapter::inbound::tui::app) live_agent_message: Option<&'a ConversationMessage>,
+    pub(in crate::adapter::inbound::tui::app) handoff_pending: bool,
+    pub(in crate::adapter::inbound::tui::app) acknowledge_handoff_after_successful_draw: bool,
+}
+
+impl<'a> ConversationLiveTranscriptScreenModel<'a> {
+    fn from_conversation(
+        conversation: &'a ConversationViewModel,
+        inline_history_render_mode: InlineHistoryRenderMode,
+        shell_overlay: ShellOverlay,
+        dialog_visible: bool,
+    ) -> Self {
+        let release_handoff_messages = conversation.viewport_transcript_handoff_release_messages();
+        let handoff_messages = conversation
+            .viewport_transcript_handoff_messages()
+            .or(release_handoff_messages);
+        Self {
+            handoff_messages,
+            live_agent_message: conversation.live_agent_message.as_ref(),
+            handoff_pending: conversation.has_pending_viewport_transcript_handoff(),
+            acknowledge_handoff_after_successful_draw: shell_overlay == ShellOverlay::Hidden
+                && !dialog_visible
+                && matches!(
+                    inline_history_render_mode,
+                    InlineHistoryRenderMode::ViewportReplay
+                )
+                && release_handoff_messages.is_some(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::adapter::inbound::tui::app) enum QueueMutationTailState {
     Idle,
     Pending(u64),
@@ -295,6 +329,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
         Option<TurnSteerConfirmationScreenModel>,
     pub(in crate::adapter::inbound::tui::app) prompt_input_has_focus: bool,
     composer: Option<ConversationComposerScreenModel<'a>>,
+    live_transcript: Option<ConversationLiveTranscriptScreenModel<'a>>,
     pub(in crate::adapter::inbound::tui::app) conversation_state: ShellConversationState<'a>,
 }
 
@@ -378,12 +413,19 @@ impl<'a> ConversationScreenModel<'a> {
             } else {
                 QueueMutationTailState::Idle
             };
+        let inline_history_render_mode = sample.inline_history_render_mode();
         let conversation_state = match &app.conversation_state {
             ConversationState::Loading => ShellConversationState::Loading,
             ConversationState::Failed(message) => ShellConversationState::Failed(message),
             ConversationState::Ready(conversation) => ShellConversationState::Ready(conversation),
         };
         let composer = Self::composer_for_state(conversation_state);
+        let live_transcript = Self::live_transcript_for_state(
+            conversation_state,
+            inline_history_render_mode,
+            app.shell_overlay,
+            dialog_visible,
+        );
 
         Self {
             core_revision,
@@ -416,11 +458,12 @@ impl<'a> ConversationScreenModel<'a> {
             turn_options_summary: (!app.turn_options.is_default())
                 .then(|| app.turn_options.summary_label()),
             shell_overlay: app.shell_overlay,
-            inline_history_render_mode: sample.inline_history_render_mode(),
+            inline_history_render_mode,
             exit_confirmation_visible,
             turn_steer_confirmation,
             prompt_input_has_focus,
             composer,
+            live_transcript,
             conversation_state,
         }
     }
@@ -455,6 +498,35 @@ impl<'a> ConversationScreenModel<'a> {
         }
     }
 
+    pub(in crate::adapter::inbound::tui::app) fn live_transcript(
+        &self,
+    ) -> Option<&ConversationLiveTranscriptScreenModel<'a>> {
+        match (self.conversation_state, self.live_transcript.as_ref()) {
+            (ShellConversationState::Ready(_), Some(live_transcript)) => Some(live_transcript),
+            (ShellConversationState::Loading | ShellConversationState::Failed(_), None) => None,
+            _ => unreachable!("conversation and live transcript projections must agree"),
+        }
+    }
+
+    fn live_transcript_for_state(
+        conversation_state: ShellConversationState<'a>,
+        inline_history_render_mode: InlineHistoryRenderMode,
+        shell_overlay: ShellOverlay,
+        dialog_visible: bool,
+    ) -> Option<ConversationLiveTranscriptScreenModel<'a>> {
+        match conversation_state {
+            ShellConversationState::Ready(conversation) => {
+                Some(ConversationLiveTranscriptScreenModel::from_conversation(
+                    conversation,
+                    inline_history_render_mode,
+                    shell_overlay,
+                    dialog_visible,
+                ))
+            }
+            ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
+        }
+    }
+
     pub(in crate::adapter::inbound::tui::app) fn startup_screen_is_active(&self) -> bool {
         conversation_startup_screen_is_active(self.parallel_mode_enabled, self.ready_conversation())
     }
@@ -466,32 +538,13 @@ impl<'a> ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) fn renders_viewport_transcript_handoff(
         &self,
     ) -> bool {
-        self.shell_overlay == ShellOverlay::Hidden
-            && !self.dialog_visible()
-            && matches!(
-                self.inline_history_render_mode,
-                InlineHistoryRenderMode::ViewportReplay
-            )
-            && matches!(
-                self.conversation_state,
-                ShellConversationState::Ready(conversation)
-                    if conversation
-                        .viewport_transcript_handoff_release_messages()
-                        .is_some()
-            )
+        self.live_transcript().is_some_and(|live_transcript| {
+            live_transcript.acknowledge_handoff_after_successful_draw
+        })
     }
 
     pub(in crate::adapter::inbound::tui::app) fn renders_parallel_viewport_handoff(&self) -> bool {
         self.parallel_mode_enabled && self.renders_viewport_transcript_handoff()
-    }
-
-    pub(in crate::adapter::inbound::tui::app) fn live_transcript_lines_include_committed_handoff(
-        &self,
-    ) -> bool {
-        self.inline_history_render_mode.writes_host_scrollback()
-            || self
-                .ready_conversation()
-                .is_some_and(ConversationViewModel::has_pending_viewport_transcript_handoff)
     }
 
     #[cfg(test)]
@@ -501,6 +554,12 @@ impl<'a> ConversationScreenModel<'a> {
         conversation_state: ShellConversationState<'a>,
     ) -> Self {
         let composer = Self::composer_for_state(conversation_state);
+        let live_transcript = Self::live_transcript_for_state(
+            conversation_state,
+            InlineHistoryRenderMode::HostScrollback,
+            ShellOverlay::Hidden,
+            false,
+        );
         Self {
             core_revision: 0,
             rendered_at: Instant::now(),
@@ -534,6 +593,7 @@ impl<'a> ConversationScreenModel<'a> {
             turn_steer_confirmation: None,
             prompt_input_has_focus: true,
             composer,
+            live_transcript,
             conversation_state,
         }
     }

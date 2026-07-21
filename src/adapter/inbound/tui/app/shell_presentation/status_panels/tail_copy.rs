@@ -326,8 +326,9 @@ pub(super) fn build_inline_tail_content_with_context(
             let renders_viewport_handoff = matches!(
                 screen_model.inline_history_render_mode,
                 InlineHistoryRenderMode::ViewportReplay
-            ) && conversation
-                .has_pending_viewport_transcript_handoff();
+            ) && screen_model
+                .live_transcript()
+                .is_some_and(|live_transcript| live_transcript.handoff_pending);
             if !renders_viewport_handoff {
                 lines.extend(
                     build_recent_transcript_summary_lines(
