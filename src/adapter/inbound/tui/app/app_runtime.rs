@@ -978,6 +978,7 @@ mod tests {
     #[test]
     fn workspace_and_conversation_supersession_invalidate_continuation_permits() {
         let mut app = test_helpers::test_native_tui_app();
+        let initial_history_identity_revision = app.conversation_history_identity_revision;
 
         let unchanged_workspace_permit = app.post_turn_continuation_gate.capture();
         app.dispatch_auto_follow_controls(AutoFollowControlEvent::DraftWorkspaceSynced {
@@ -999,6 +1000,10 @@ mod tests {
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::NewDraftOpened {
             workspace_directory: "/tmp/root".to_string(),
         });
+        assert_ne!(
+            app.conversation_history_identity_revision,
+            initial_history_identity_revision
+        );
         assert!(!new_draft_permit.is_current());
         assert!(app.pending_manual_prompt_preparation.is_none());
         assert!(app.pending_conversation_load.is_none());
@@ -1009,25 +1014,19 @@ mod tests {
         assert_eq!(app.max_auto_turns_edit_buffer(), None);
 
         let session_permit = app.post_turn_continuation_gate.capture();
+        let draft_history_identity_revision = app.conversation_history_identity_revision;
         arm_pending_manual_prompt_for_identity_test(&mut app, "session prompt");
         app.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditStarted {
             current_value: "off".to_string(),
         });
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
-            session: SessionSummary {
-                id: "thread-2".to_string(),
-                name: Some("Thread 2".to_string()),
-                preview: "preview".to_string(),
-                cwd: "/tmp/root".to_string(),
-                source: "test".to_string(),
-                model_provider: "test".to_string(),
-                updated_at_epoch: 1,
-                status_type: "idle".to_string(),
-                path: "/tmp/root/thread-2".to_string(),
-                git_branch: None,
-            },
+            session: test_session_summary("thread-2"),
             fallback_workspace_directory: "/tmp/root".to_string(),
         });
+        assert_eq!(
+            app.conversation_history_identity_revision,
+            draft_history_identity_revision
+        );
         assert!(!session_permit.is_current());
         assert!(app.pending_manual_prompt_preparation.is_none());
         assert!(matches!(app.conversation_state, ConversationState::Loading));
@@ -1037,6 +1036,112 @@ mod tests {
                 .as_ref()
                 .map(|pending| pending.requested_thread_id.as_str()),
             Some("thread-2")
+        );
+        let correlation = app
+            .pending_conversation_load
+            .clone()
+            .expect("accepted load should have a correlation");
+        app.apply_correlated_conversation_snapshot(
+            Some(correlation),
+            test_core_conversation_snapshot("thread-2"),
+        );
+        assert_ne!(
+            app.conversation_history_identity_revision, draft_history_identity_revision,
+            "only accepted Ready publishes the loaded history identity"
+        );
+    }
+
+    #[test]
+    fn draft_promotion_and_same_thread_reattach_preserve_history_identity() {
+        let mut app = test_helpers::test_native_tui_app();
+        let history_identity_revision = app.conversation_history_identity_revision;
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start ready");
+        };
+        conversation.record_thread_prepared(
+            "thread-same".to_string(),
+            "Same thread".to_string(),
+            "/tmp/root".to_string(),
+        );
+        assert_eq!(
+            app.conversation_history_identity_revision,
+            history_identity_revision
+        );
+
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+            session: test_session_summary("thread-same"),
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        });
+        assert_eq!(
+            app.conversation_history_identity_revision,
+            history_identity_revision
+        );
+        let failed_correlation = app
+            .pending_conversation_load
+            .clone()
+            .expect("same-thread load should have a correlation");
+        app.apply_correlated_conversation_snapshot(
+            Some(failed_correlation),
+            CoreConversationSnapshot::Failed {
+                message: "temporary failure".to_string(),
+            },
+        );
+        assert_eq!(
+            app.conversation_history_thread_id.as_deref(),
+            Some("thread-same")
+        );
+        assert_eq!(
+            app.conversation_history_identity_revision,
+            history_identity_revision
+        );
+
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+            session: test_session_summary("thread-same"),
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        });
+        let retry_correlation = app
+            .pending_conversation_load
+            .clone()
+            .expect("same-thread retry should have a correlation");
+        app.apply_correlated_conversation_snapshot(
+            Some(retry_correlation),
+            test_core_conversation_snapshot("thread-same"),
+        );
+        assert_eq!(
+            app.conversation_history_identity_revision, history_identity_revision,
+            "a failed same-thread reattach must not make its retry a new history"
+        );
+    }
+
+    #[test]
+    fn deferred_session_load_preserves_ready_history_identity_until_core_accepts_it() {
+        let mut app = test_helpers::test_native_tui_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start ready");
+        };
+        conversation.record_thread_prepared(
+            "thread-a".to_string(),
+            "Thread A".to_string(),
+            "/tmp/root".to_string(),
+        );
+        app.dispatch_core_command(AppCommand::RenameSession(
+            crate::domain::recent_sessions::SessionRenameRequest::new("thread-b", "Thread B"),
+        ));
+        let history_identity_revision = app.conversation_history_identity_revision;
+
+        app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+            session: test_session_summary("thread-b"),
+            fallback_workspace_directory: "/tmp/root".to_string(),
+        });
+
+        assert!(matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation) if conversation.thread_id == "thread-a"
+        ));
+        assert!(app.pending_conversation_load.is_none());
+        assert_eq!(
+            app.conversation_history_identity_revision, history_identity_revision,
+            "a deferred load intent must not publish a terminal history reset"
         );
     }
 
@@ -1157,6 +1262,7 @@ mod tests {
     #[test]
     fn tui_conversation_projection_rejects_stale_result() {
         let mut app = test_helpers::test_native_tui_app();
+        let history_identity_revision = app.conversation_history_identity_revision;
         let latest = ConversationLoadCorrelation::new(2, "thread-b");
         app.pending_conversation_load = Some(latest.clone());
         app.conversation_state = ConversationState::Loading;
@@ -1166,6 +1272,10 @@ mod tests {
             test_core_conversation_snapshot("thread-a"),
         );
         assert!(matches!(app.conversation_state, ConversationState::Loading));
+        assert_eq!(
+            app.conversation_history_identity_revision,
+            history_identity_revision
+        );
 
         app.apply_correlated_conversation_snapshot(
             Some(latest),
@@ -1175,6 +1285,8 @@ mod tests {
             &app.conversation_state,
             ConversationState::Ready(conversation) if conversation.thread_id == "thread-b"
         ));
+        let loaded_history_identity_revision = app.conversation_history_identity_revision;
+        assert_ne!(loaded_history_identity_revision, history_identity_revision);
 
         app.apply_correlated_conversation_snapshot(
             Some(ConversationLoadCorrelation::new(1, "thread-a")),
@@ -1186,6 +1298,10 @@ mod tests {
             &app.conversation_state,
             ConversationState::Ready(conversation) if conversation.thread_id == "thread-b"
         ));
+        assert_eq!(
+            app.conversation_history_identity_revision,
+            loaded_history_identity_revision
+        );
     }
 
     #[test]
@@ -1302,6 +1418,21 @@ mod tests {
                 item_lifecycle: Default::default(),
             }),
         ))
+    }
+
+    fn test_session_summary(thread_id: &str) -> SessionSummary {
+        SessionSummary {
+            id: thread_id.to_string(),
+            name: Some(thread_id.to_string()),
+            preview: format!("{thread_id} preview"),
+            cwd: "/tmp/root".to_string(),
+            source: "test".to_string(),
+            model_provider: "test".to_string(),
+            updated_at_epoch: 1,
+            status_type: "idle".to_string(),
+            path: format!("/tmp/root/{thread_id}"),
+            git_branch: None,
+        }
     }
 
     fn arm_pending_manual_prompt_for_identity_test(app: &mut NativeTuiApp, transcript_text: &str) {
@@ -1472,6 +1603,8 @@ impl NativeTuiApp {
             parallel_mode_control_plane,
             global_runtime_notice_state: super::GlobalRuntimeNoticeState::default(),
             conversation_state: ConversationState::ready(initial_conversation),
+            conversation_history_identity_revision: 0,
+            conversation_history_thread_id: None,
             pending_conversation_load: None,
             pending_resumed_session_planning_refresh: None,
             selected_session_index: 0,
@@ -2084,6 +2217,17 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_conversation_lifecycle(&mut self, event: ConversationLifecycleEvent) {
+        self.capture_ready_conversation_history_thread();
+        let opens_new_history = matches!(&event, ConversationLifecycleEvent::NewDraftOpened { .. });
+        let loaded_history_thread_id = match &event {
+            ConversationLifecycleEvent::CoreConversationSnapshotApplied {
+                snapshot: CoreConversationSnapshot::Ready(ready),
+                ..
+            } => Some(ready.conversation.thread_id.clone()),
+            ConversationLifecycleEvent::NewDraftOpened { .. }
+            | ConversationLifecycleEvent::SessionChosen { .. }
+            | ConversationLifecycleEvent::CoreConversationSnapshotApplied { .. } => None,
+        };
         let target_workspace_directory = match &event {
             ConversationLifecycleEvent::NewDraftOpened {
                 workspace_directory,
@@ -2126,11 +2270,54 @@ impl NativeTuiApp {
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
         self.apply_conversation_lifecycle_state(reduction.state);
+        if opens_new_history {
+            self.advance_conversation_history_identity_revision();
+            self.conversation_history_thread_id = None;
+        } else if let Some(thread_id) = loaded_history_thread_id {
+            if self.conversation_history_thread_id.as_deref() != Some(thread_id.as_str()) {
+                self.advance_conversation_history_identity_revision();
+            }
+            self.conversation_history_thread_id = Some(thread_id);
+        }
         self.advance_planning_ui_intent_revision();
         self.surface_global_runtime_notices_if_ready();
         for effect in reduction.effects {
             self.execute_conversation_lifecycle_effect(effect);
         }
+    }
+
+    fn capture_ready_conversation_history_thread(&mut self) {
+        let ConversationState::Ready(conversation) = &self.conversation_state else {
+            return;
+        };
+        if self.conversation_history_thread_id.is_none() && conversation.has_active_thread() {
+            self.conversation_history_thread_id = Some(conversation.thread_id.clone());
+        }
+    }
+
+    fn reconcile_runtime_conversation_history_thread(&mut self) {
+        let ConversationState::Ready(conversation) = &self.conversation_state else {
+            return;
+        };
+        if !conversation.has_active_thread() {
+            return;
+        }
+        let thread_id = conversation.thread_id.clone();
+        if self
+            .conversation_history_thread_id
+            .as_deref()
+            .is_some_and(|current| current != thread_id.as_str())
+        {
+            self.advance_conversation_history_identity_revision();
+        }
+        self.conversation_history_thread_id = Some(thread_id);
+    }
+
+    fn advance_conversation_history_identity_revision(&mut self) {
+        self.conversation_history_identity_revision = self
+            .conversation_history_identity_revision
+            .wrapping_add(1)
+            .max(1);
     }
 
     fn execute_conversation_lifecycle_effect(&mut self, effect: ConversationLifecycleEffect) {
@@ -2162,6 +2349,7 @@ impl NativeTuiApp {
         &mut self,
         event: ConversationRuntimeEvent,
     ) -> bool {
+        self.capture_ready_conversation_history_thread();
         let supersedes_planning_ui_intent = event.supersedes_planning_ui_intent();
         let post_turn_context = self.post_turn_continuation_context(&event);
         let Some(conversation) = self.take_ready_conversation_state() else {
@@ -2177,6 +2365,7 @@ impl NativeTuiApp {
             )
         });
         self.conversation_state = ConversationState::ready(reduction.state);
+        self.reconcile_runtime_conversation_history_thread();
         if supersedes_planning_ui_intent {
             self.advance_planning_ui_intent_revision();
         }

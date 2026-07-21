@@ -11,14 +11,18 @@ use crate::adapter::inbound::tui::app::shell_presentation::{
     ConversationProjectionSample, ConversationScreenModel, build_inline_live_transcript_lines,
 };
 use crate::adapter::inbound::tui::app::{
-    ConversationIntentEvent, ConversationMessage, ConversationMessageKind, ConversationState,
-    ConversationViewMode, INLINE_VIEWPORT_HEIGHT, InlineHistoryRenderMode, NativeTuiApp,
-    PlanningWorkerVisibility, ProgressiveActivityDetailKind,
+    ConversationIntentEvent, ConversationLifecycleEvent, ConversationMessage,
+    ConversationMessageKind, ConversationState, ConversationViewMode, INLINE_VIEWPORT_HEIGHT,
+    InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility, ProgressiveActivityDetailKind,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
-use crate::domain::conversation::{ConversationApprovalRequest, ConversationApprovalRequestKind};
+use crate::core::app::ConversationSnapshot as CoreConversationSnapshot;
+use crate::domain::conversation::{
+    ConversationApprovalRequest, ConversationApprovalRequestKind,
+    ConversationSnapshot as DomainConversationSnapshot,
+};
 use crate::domain::github_review::{GithubPullRequestActivitySnapshot, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterEntry, ParallelModeAgentRosterSnapshot,
@@ -28,6 +32,7 @@ use crate::domain::parallel_mode::{
     ParallelModeRuntimeEventFeedEntry, ParallelModeSupervisorDetailSnapshot,
     ParallelModeSupervisorSnapshot, ParallelModeSupervisorState,
 };
+use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
@@ -757,6 +762,192 @@ fn draw_transaction_flushes_history_and_live_tail_together() {
     assert!(
         !tui_testkit::inline_scrollback_text(&terminal).contains("live tail in same transaction")
     );
+}
+
+#[test]
+fn conversation_identity_switch_replays_shared_prefix_once_without_loading_frame() {
+    for insert_mode in [
+        HistoryInsertionMode::StandardScrollRegion,
+        HistoryInsertionMode::NewlineFallback,
+    ] {
+        assert_conversation_identity_switch_replays_shared_prefix_once(insert_mode);
+    }
+}
+
+fn assert_conversation_identity_switch_replays_shared_prefix_once(
+    insert_mode: HistoryInsertionMode,
+) {
+    const COMMON_PREFIX: &str = "THREAD_COMMON_PREFIX";
+    const SHARED_AGENT_ANSWER: &str = "SHARED_AGENT_ANSWER";
+    const THREAD_B_SUFFIX: &str = "THREAD_B_SUFFIX";
+    const SAME_THREAD_SUFFIX: &str = "SAME_THREAD_SUFFIX";
+    let mut terminal =
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 48, 24);
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = InlineHistoryRenderMode::HostScrollback;
+    app.history_insert_mode = insert_mode;
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start ready");
+    };
+    conversation.thread_id = "thread-a".to_string();
+    conversation.title = "Thread A".to_string();
+    append_user_history_message(
+        &mut app,
+        &format!("{COMMON_PREFIX} / 한글 재연결 공통 문장이 좁은 화면에서 줄바꿈됩니다"),
+    );
+    append_history_message(&mut app, SHARED_AGENT_ANSWER);
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    let mut frames = tui_testkit::InlineFrameRecorder::default();
+
+    frames.draw_and_record(
+        "thread-a",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    assert_eq!(
+        frames
+            .frame("thread-a")
+            .terminal_history_text
+            .matches(COMMON_PREFIX)
+            .count(),
+        1
+    );
+
+    let next_messages = {
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("thread A should remain ready");
+        };
+        let mut messages = conversation.messages.clone();
+        messages.push(ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            THREAD_B_SUFFIX.to_string(),
+            None,
+            None,
+        ));
+        messages
+    };
+    load_history_snapshot(runtime.app_mut(), "thread-b", next_messages);
+
+    frames.draw_and_record(
+        "thread-b-without-loading-frame",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let switched = frames.frame("thread-b-without-loading-frame");
+    assert_eq!(
+        switched
+            .terminal_history_text
+            .matches(COMMON_PREFIX)
+            .count(),
+        2,
+        "a different conversation must deliver its complete shared prefix:\n{}",
+        switched.terminal_history_text
+    );
+    assert_eq!(
+        switched
+            .terminal_history_text
+            .matches(THREAD_B_SUFFIX)
+            .count(),
+        1
+    );
+    assert_eq!(
+        switched
+            .terminal_history_text
+            .matches(SHARED_AGENT_ANSWER)
+            .count(),
+        2,
+        "the complete shared prefix must be delivered once per conversation"
+    );
+    assert!(!switched.host_scrollback_text.contains("prompt:"));
+
+    let same_thread_snapshot = {
+        let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+            panic!("thread B should remain ready");
+        };
+        (**conversation).clone()
+    };
+    runtime.app_mut().conversation_state = ConversationState::Loading;
+    frames.draw_and_record(
+        "same-thread-loading",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    runtime.app_mut().conversation_state = ConversationState::ready(same_thread_snapshot);
+    frames.draw_and_record(
+        "same-thread-reattached",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let reattached = frames.frame("same-thread-reattached");
+    assert_eq!(
+        reattached
+            .terminal_history_text
+            .matches(COMMON_PREFIX)
+            .count(),
+        2
+    );
+    assert_eq!(
+        reattached
+            .terminal_history_text
+            .matches(THREAD_B_SUFFIX)
+            .count(),
+        1,
+        "a transient same-thread Loading frame must not replay committed history"
+    );
+    assert_eq!(
+        reattached
+            .terminal_history_text
+            .matches(SHARED_AGENT_ANSWER)
+            .count(),
+        2
+    );
+
+    append_history_message(runtime.app_mut(), SAME_THREAD_SUFFIX);
+    frames.draw_and_record(
+        "same-thread-append",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    frames.draw_and_record(
+        "stable-same-thread-redraw",
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal,
+    );
+    let stable = frames.frame("stable-same-thread-redraw");
+    assert_eq!(
+        stable.terminal_history_text.matches(COMMON_PREFIX).count(),
+        2
+    );
+    assert_eq!(
+        stable
+            .terminal_history_text
+            .matches(THREAD_B_SUFFIX)
+            .count(),
+        1
+    );
+    assert_eq!(
+        stable
+            .terminal_history_text
+            .matches(SAME_THREAD_SUFFIX)
+            .count(),
+        1
+    );
+    assert_eq!(
+        stable
+            .terminal_history_text
+            .matches(SHARED_AGENT_ANSWER)
+            .count(),
+        2
+    );
+    assert!(inline_terminal.back_buffer_trustworthy());
 }
 
 #[test]
@@ -2728,29 +2919,64 @@ fn vt100_terminal_app_preserves_newline_fallback_history_after_live_resize() {
 // history into host scrollback; host-scrollback mode should do the opposite.
 #[test]
 fn viewport_replay_sync_skips_host_scrollback_insertions() {
+    const THREAD_A_MARKER: &str = "REPLAY_THREAD_A_MARKER";
+    const THREAD_B_MARKER: &str = "REPLAY_THREAD_B_MARKER";
     let mut replay_terminal =
-        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+        tui_testkit::inline_history_terminal(InlineHistoryRenderMode::ViewportReplay, 80, 24);
     let mut replay_app = make_test_app();
     replay_app.show_startup_ascii_art = false;
     replay_app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
-    append_history_message(
-        &mut replay_app,
-        "history should not be inserted in replay mode",
-    );
+    append_history_message(&mut replay_app, THREAD_A_MARKER);
     let mut replay_runtime = ShellRuntime::new(replay_app);
     let mut replay_viewport = InlineTerminalState::default();
+    let mut replay_frames = tui_testkit::InlineFrameRecorder::default();
 
-    assert!(
-        sync_inline_viewport(
-            &mut replay_terminal,
-            &mut replay_runtime,
-            &mut replay_viewport
-        )
-        .unwrap()
+    replay_frames.draw_and_record(
+        "replay-thread-a",
+        &mut replay_terminal,
+        &mut replay_runtime,
+        &mut replay_viewport,
     );
     assert!(
-        !tui_testkit::screen_text(&replay_terminal)
-            .contains("history should not be inserted in replay mode")
+        replay_frames
+            .frame("replay-thread-a")
+            .screen_text
+            .contains(THREAD_A_MARKER)
+    );
+    let replay_scrollback_before = replay_frames
+        .frame("replay-thread-a")
+        .host_scrollback_text
+        .clone();
+
+    load_history_snapshot(
+        replay_runtime.app_mut(),
+        "replay-thread-b",
+        vec![ConversationMessage::new(
+            ConversationMessageKind::Agent,
+            THREAD_B_MARKER,
+            None,
+            None,
+        )],
+    );
+    replay_frames.draw_and_record(
+        "replay-thread-b",
+        &mut replay_terminal,
+        &mut replay_runtime,
+        &mut replay_viewport,
+    );
+    let replay_switched = replay_frames.frame("replay-thread-b");
+    assert_eq!(
+        replay_switched.screen_text.matches(THREAD_B_MARKER).count(),
+        1
+    );
+    assert!(!replay_switched.screen_text.contains(THREAD_A_MARKER));
+    assert_eq!(
+        replay_switched.host_scrollback_text, replay_scrollback_before,
+        "replay identity switches must repaint without host insertion"
+    );
+    assert!(
+        replay_viewport.back_buffer_trustworthy(),
+        "the replacement replay frame should establish a fresh trusted buffer"
     );
     let mut host_terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
@@ -3912,6 +4138,46 @@ fn append_message(app: &mut NativeTuiApp, kind: ConversationMessageKind, text: &
     conversation
         .messages
         .push(ConversationMessage::new(kind, text.to_string(), None, None));
+}
+
+fn load_history_snapshot(
+    app: &mut NativeTuiApp,
+    thread_id: &str,
+    messages: Vec<ConversationMessage>,
+) {
+    app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
+        session: SessionSummary {
+            id: thread_id.to_string(),
+            name: Some(thread_id.to_string()),
+            preview: format!("{thread_id} preview"),
+            cwd: "/tmp/root".to_string(),
+            source: "test".to_string(),
+            model_provider: "test".to_string(),
+            updated_at_epoch: 1,
+            status_type: "idle".to_string(),
+            path: format!("/tmp/root/{thread_id}"),
+            git_branch: None,
+        },
+        fallback_workspace_directory: "/tmp/root".to_string(),
+    });
+    let correlation = app
+        .pending_conversation_load
+        .clone()
+        .expect("accepted history load should have a correlation");
+    app.apply_correlated_conversation_snapshot(
+        Some(correlation),
+        CoreConversationSnapshot::Ready(Box::new(
+            crate::core::app::ConversationReadySnapshot::from(DomainConversationSnapshot {
+                thread_id: thread_id.to_string(),
+                title: thread_id.to_string(),
+                cwd: "/tmp/root".to_string(),
+                messages,
+                warnings: Vec::new(),
+                runtime_notices: Vec::new(),
+                item_lifecycle: Default::default(),
+            }),
+        )),
+    );
 }
 
 // Counting backend is a probe for adapter behavior: it exposes accidental

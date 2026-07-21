@@ -55,6 +55,14 @@ pub(crate) struct HistoryFlushResult {
 }
 
 impl HistoryFlushResult {
+    pub(crate) fn preserved_baseline() -> Self {
+        Self {
+            inserted_rows: 0,
+            stable_geometry: true,
+            history_committed: false,
+        }
+    }
+
     // Callers only need to know whether the host scrollback moved so they can invalidate buffers.
     pub(crate) fn inserted(self) -> bool {
         self.inserted_rows > 0
@@ -77,6 +85,17 @@ impl HistoryFlushResult {
 const MIN_SHIFTED_HISTORY_OVERLAP: usize = 8;
 
 impl HistoryFlushState {
+    pub(crate) fn reset_conversation_projection(&mut self) {
+        /*
+         * A different conversation may have the same rendered prefix. Drop only
+         * the conversation diff baseline so its complete transcript is delivered
+         * once. Parallel events and shared physical-row accounting describe the
+         * same terminal surface and must survive the conversation switch.
+         */
+        self.rendered_lines.clear();
+        self.pending_history_lines.clear();
+    }
+
     /*
      * A physical terminal resize already moves rows between the visible screen and host
      * scrollback. Reconcile only the accounting cache in that case; appending more blank lines
@@ -206,13 +225,8 @@ impl HistoryFlushState {
             }
             if !insertion.stable_geometry() {
                 let viewport_top_after_insert = terminal.get_frame().area().top();
-                self.visible_history_rows = self.visible_rows_after_insert(
-                    pending_history_lines.len(),
-                    current_lines.len(),
-                    inserted_rows,
-                    viewport_top_after_insert,
-                    parallel_projection,
-                );
+                self.visible_history_rows =
+                    self.visible_rows_after_insert(inserted_rows, viewport_top_after_insert);
                 self.pending_history_lines = pending_history_lines;
                 self.remember(current_lines);
                 self.pending_history_lines.clear();
@@ -226,16 +240,9 @@ impl HistoryFlushState {
         }
         self.pending_history_lines = pending_history_lines;
         let viewport_top_after_insert = terminal.get_frame().area().top();
-        if current_lines.is_empty() && !parallel_projection {
-            self.visible_history_rows = 0;
-        } else if inserted_rows > 0 {
-            self.visible_history_rows = self.visible_rows_after_insert(
-                self.pending_history_lines.len(),
-                current_lines.len(),
-                inserted_rows,
-                viewport_top_after_insert,
-                parallel_projection,
-            );
+        if inserted_rows > 0 {
+            self.visible_history_rows =
+                self.visible_rows_after_insert(inserted_rows, viewport_top_after_insert);
         }
         /*
          * The baseline is updated even when no rows were inserted. That covers render modes that
@@ -300,9 +307,6 @@ impl HistoryFlushState {
      * scrollback-writing mode would dump the full already-rendered transcript as new history.
      */
     pub(crate) fn remember_without_flush(&mut self, current_lines: &[Line<'static>]) {
-        if current_lines.is_empty() {
-            self.visible_history_rows = 0;
-        }
         self.visible_history_rows_dirty = false;
         self.pending_history_lines.clear();
         self.remember(current_lines);
@@ -334,21 +338,10 @@ impl HistoryFlushState {
         self.rendered_lines = current_lines.to_vec();
     }
 
-    fn visible_rows_after_insert(
-        &self,
-        pending_line_count: usize,
-        current_line_count: usize,
-        inserted_rows: u16,
-        viewport_top: u16,
-        preserve_visible_rows_on_full_insert: bool,
-    ) -> u16 {
-        if pending_line_count == current_line_count && !preserve_visible_rows_on_full_insert {
-            inserted_rows.min(viewport_top)
-        } else {
-            self.visible_history_rows
-                .saturating_add(inserted_rows)
-                .min(viewport_top)
-        }
+    fn visible_rows_after_insert(&self, inserted_rows: u16, viewport_top: u16) -> u16 {
+        self.visible_history_rows
+            .saturating_add(inserted_rows)
+            .min(viewport_top)
     }
 
     /*

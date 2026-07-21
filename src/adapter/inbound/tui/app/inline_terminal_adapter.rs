@@ -241,6 +241,9 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     // Capture render settings before mutating terminal state so one transaction uses
     // a stable compatibility policy snapshot instead of ad hoc env-owned fields.
     let projection_sample = ConversationProjectionSample::capture(runtime.app_mut());
+    inline_terminal.observe_conversation_history_identity_revision(
+        projection_sample.conversation_history_identity_revision(),
+    );
     let policy = InlineTerminalSyncPolicy::from_sample(&projection_sample);
     /*
      * Autoresize can itself move the inline viewport. It happens before history
@@ -271,12 +274,14 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         } else {
             None
         };
-    let current_lines = current_inline_history_lines_for_viewport(
+    let current_history_projection = current_inline_history_lines_for_viewport(
         runtime.app_mut(),
         viewport_area,
         &projection_sample,
         sampled_parallel_frame_projection.as_ref(),
     );
+    let preserves_conversation_baseline = current_history_projection.is_none();
+    let current_lines = current_history_projection.unwrap_or_default();
     let parallel_handoff_pending_lines = parallel_handoff_conversation_lines
         .as_deref()
         .map(|conversation_lines| {
@@ -306,14 +311,16 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
             defer_resize_redraw(runtime, inline_terminal);
             return Ok(InlineViewportSync::Deferred);
         }
-        if policy.parallel_mode_enabled {
-            inline_terminal
-                .history_flush
-                .remember_parallel_without_flush(&current_lines);
-        } else {
-            inline_terminal
-                .history_flush
-                .remember_without_flush(&current_lines);
+        if !preserves_conversation_baseline {
+            if policy.parallel_mode_enabled {
+                inline_terminal
+                    .history_flush
+                    .remember_parallel_without_flush(&current_lines);
+            } else {
+                inline_terminal
+                    .history_flush
+                    .remember_without_flush(&current_lines);
+            }
         }
         if physical_terminal_resized {
             inline_terminal.invalidate_back_buffer();
@@ -407,7 +414,9 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
      * in the inline viewport so the operator can scroll back through durable
      * transcript rows without duplicating the live status panel.
      */
-    let history_sync_result = if policy.parallel_mode_enabled {
+    let history_sync_result = if preserves_conversation_baseline {
+        Ok(self::history_flush::HistoryFlushResult::preserved_baseline())
+    } else if policy.parallel_mode_enabled {
         inline_terminal.history_flush.sync_parallel(
             terminal,
             &current_lines,
@@ -608,6 +617,7 @@ fn current_inline_history_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {
         &sample,
         parallel_frame_projection.as_ref(),
     )
+    .unwrap_or_default()
 }
 
 fn current_inline_history_lines_for_viewport(
@@ -615,7 +625,7 @@ fn current_inline_history_lines_for_viewport(
     viewport_area: Rect,
     sample: &ConversationProjectionSample,
     parallel_frame_projection: Option<&InlineConversationFrameProjection>,
-) -> Vec<Line<'static>> {
+) -> Option<Vec<Line<'static>>> {
     if sample.parallel_mode_enabled() {
         /*
          * Parallel mode owns the main inline body with the supervisor board. The
@@ -623,9 +633,11 @@ fn current_inline_history_lines_for_viewport(
          * operators can scroll back through past activity without replaying the
          * live panel title or footer chrome.
          */
-        return parallel_frame_projection.map_or_else(Vec::new, |projection| {
-            current_inline_parallel_history_lines(viewport_area, sample, projection)
-        });
+        return Some(
+            parallel_frame_projection.map_or_else(Vec::new, |projection| {
+                current_inline_parallel_history_lines(viewport_area, sample, projection)
+            }),
+        );
     }
     if let Some(startup_banner_lines) =
         build_startup_banner_lines(app, sample.parallel_mode_enabled(), None)
@@ -635,7 +647,7 @@ fn current_inline_history_lines_for_viewport(
          * ready conversation the scrollback should explain boot diagnostics, not
          * show an empty transcript placeholder.
          */
-        return startup_banner_lines;
+        return Some(startup_banner_lines);
     }
     match &app.conversation_state {
         ConversationState::Ready(conversation) => {
@@ -650,17 +662,20 @@ fn current_inline_history_lines_for_viewport(
                     .viewport_transcript_handoff_messages()
                     .is_some()
             {
-                return Vec::new();
+                return Some(Vec::new());
             }
-            format_conversation_scrollback_lines_with_expand(
+            Some(format_conversation_scrollback_lines_with_expand(
                 messages,
                 app.conversation_view_mode,
                 app.conversation_view_mode.shows_debug_details()
                     || app.planning_worker_shows_debug_details(),
                 Some(app.progressive_activity_overlay_ui_state.expand_state()),
-            )
+            ))
         }
-        ConversationState::Loading | ConversationState::Failed(_) => Vec::new(),
+        // Loading and failure are not authoritative empty conversations. Keep
+        // the prior diff baseline until a semantic identity revision or a Ready
+        // projection decides what should be delivered next.
+        ConversationState::Loading | ConversationState::Failed(_) => None,
     }
 }
 
@@ -682,9 +697,19 @@ pub(super) struct InlineTerminalState {
     viewport: TerminalViewportState,
     history_flush: HistoryFlushState,
     frame_cache: FrameCacheState,
+    last_conversation_history_identity_revision: u64,
 }
 
 impl InlineTerminalState {
+    fn observe_conversation_history_identity_revision(&mut self, revision: u64) {
+        if self.last_conversation_history_identity_revision == revision {
+            return;
+        }
+        self.last_conversation_history_identity_revision = revision;
+        self.history_flush.reset_conversation_projection();
+        self.invalidate_back_buffer();
+    }
+
     fn screen_size_changed(&self, terminal_size: Size) -> bool {
         self.viewport
             .last_known_screen_size

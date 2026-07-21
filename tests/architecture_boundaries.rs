@@ -1947,6 +1947,16 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         0,
         "TUI shell_core must not import or use AppSnapshot for frame projection"
     );
+    for required in [
+        "conversation_history_identity_revision: u64",
+        "conversation_history_identity_revision: app.conversation_history_identity_revision",
+        "fn conversation_history_identity_revision(",
+    ] {
+        assert!(
+            production_source.contains(required),
+            "ConversationProjectionSample must own the terminal history identity fact: {required}"
+        );
+    }
     for forbidden in [
         ".application",
         ".planning()",
@@ -2009,6 +2019,13 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
             .count(),
         1,
         "one terminal sync transaction must capture conversation projection facts exactly once"
+    );
+    assert_eq!(
+        transaction_source
+            .matches("observe_conversation_history_identity_revision(")
+            .count(),
+        1,
+        "one terminal sync transaction must observe the sampled conversation history identity exactly once"
     );
 }
 

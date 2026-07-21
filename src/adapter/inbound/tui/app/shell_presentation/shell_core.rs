@@ -100,6 +100,7 @@ impl ParallelPanelProjectionSample {
 
 pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
     core_revision: u64,
+    conversation_history_identity_revision: u64,
     planning_runtime_workspace_directory: Option<String>,
     planning_runtime: Box<PlanningRuntimeProjection>,
     parallel_panel: ParallelPanelProjectionSample,
@@ -124,6 +125,7 @@ impl ConversationProjectionSample {
         let parallel_control_plane = app.parallel_mode_control_plane.presentation_projection();
         Self {
             core_revision,
+            conversation_history_identity_revision: app.conversation_history_identity_revision,
             planning_runtime_workspace_directory,
             planning_runtime,
             parallel_panel: ParallelPanelProjectionSample::from_parts(
@@ -142,6 +144,12 @@ impl ConversationProjectionSample {
 
     pub(in crate::adapter::inbound::tui::app) fn parallel_mode_enabled(&self) -> bool {
         self.parallel_panel.parallel_mode_enabled()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn conversation_history_identity_revision(
+        &self,
+    ) -> u64 {
+        self.conversation_history_identity_revision
     }
 
     pub(in crate::adapter::inbound::tui::app) fn parallel_mode_control_effect_in_flight(

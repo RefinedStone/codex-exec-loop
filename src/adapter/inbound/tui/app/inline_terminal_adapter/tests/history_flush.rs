@@ -1,9 +1,15 @@
+use ratatui::Terminal;
+use ratatui::backend::{Backend, TestBackend};
+use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 
 use crate::adapter::inbound::tui::app::{InlineHistoryRenderMode, MAX_CONVERSATION_HISTORY_LINES};
 
 use super::super::backend::InlineResizeBackend;
-use super::super::{HistoryFlushState, HistoryInsertionMode};
+use super::super::{
+    HistoryFlushState, HistoryInsertionMode, InlineTerminalBackend,
+    terminal_options_for_render_mode,
+};
 use super::tui_testkit;
 
 /*
@@ -381,12 +387,12 @@ fn shifted_parallel_window_inserts_only_its_new_tail() {
 }
 
 #[test]
-fn history_sync_for_empty_thread_clears_remembered_history_without_insert() {
+fn history_sync_for_empty_thread_clears_baseline_without_losing_geometry() {
     /*
      * Empty transcripts appear while a thread is being replaced or before history
-     * has loaded. They should clear the old baseline and visible row count without
-     * emitting blank scrollback rows; the next non-empty thread then replays in
-     * full instead of diffing against stale history.
+     * has loaded. They should clear the old semantic baseline without pretending
+     * that already-rendered terminal rows disappeared; the next non-empty thread
+     * then replays in full and adds to the physical row count.
      */
     let mut terminal =
         tui_testkit::inline_history_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
@@ -418,7 +424,100 @@ fn history_sync_for_empty_thread_clears_remembered_history_without_insert() {
             .inserted()
     );
     assert!(state.rendered_lines.is_empty());
+    assert_eq!(state.visible_history_rows, 6);
 
     let next_thread_lines = vec![Line::from("Status:"), Line::from("  new thread loaded")];
     assert_eq!(state.pending_lines(&next_thread_lines), next_thread_lines);
+}
+
+#[test]
+fn conversation_projection_reset_preserves_parallel_baseline_and_geometry() {
+    let mut state = HistoryFlushState {
+        rendered_lines: vec![Line::from("old conversation")],
+        parallel_rendered_lines: vec![Line::from("parallel event")],
+        pending_history_lines: vec![Line::from("pending conversation")],
+        visible_history_rows: 7,
+        visible_history_rows_dirty: true,
+    };
+
+    state.reset_conversation_projection();
+
+    assert!(state.rendered_lines.is_empty());
+    assert!(state.pending_history_lines.is_empty());
+    assert_eq!(
+        state.parallel_rendered_lines,
+        vec![Line::from("parallel event")]
+    );
+    assert_eq!(state.visible_history_rows, 7);
+    assert!(state.visible_history_rows_dirty);
+}
+
+#[test]
+fn conversation_reset_full_insert_accumulates_rows_after_viewport_fit() {
+    for insert_mode in [
+        HistoryInsertionMode::StandardScrollRegion,
+        HistoryInsertionMode::NewlineFallback,
+    ] {
+        let mut backend = TestBackend::new(80, 24);
+        backend
+            .set_cursor_position(Position::new(0, 23))
+            .expect("fixture cursor should start at the physical bottom");
+        let mut terminal = Terminal::with_options(
+            InlineTerminalBackend::new(backend),
+            terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+        )
+        .expect("bottom-anchored inline fixture");
+        let mut state = HistoryFlushState::default();
+        let old_conversation = (0..8)
+            .map(|index| Line::from(format!("old conversation row {index}")))
+            .collect::<Vec<_>>();
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert!(
+            state
+                .sync(&mut terminal, &old_conversation, snapshot, insert_mode)
+                .unwrap()
+                .inserted()
+        );
+        let frame_area = terminal.get_frame().area();
+        assert!(frame_area.top() >= 3, "inline fixture needs history space");
+        state.reset_conversation_projection();
+
+        let fit_top = frame_area.top() - 2;
+        let fit_area = Rect::new(
+            frame_area.x,
+            fit_top,
+            frame_area.width,
+            frame_area.bottom().saturating_sub(fit_top),
+        );
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert_eq!(
+            state
+                .fit_visible_rows_to_viewport(&mut terminal, snapshot, fit_area)
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(state.visible_history_rows, fit_top);
+
+        let replacement = vec![Line::from("new conversation"), Line::from("second row")];
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert!(
+            state
+                .sync(&mut terminal, &replacement, snapshot, insert_mode)
+                .unwrap()
+                .inserted()
+        );
+        let expected_rows = fit_top
+            .saturating_add(2)
+            .min(terminal.get_frame().area().top());
+        assert_eq!(state.visible_history_rows, expected_rows);
+
+        let snapshot = terminal.backend().resize_snapshot().unwrap();
+        assert!(
+            !state
+                .sync(&mut terminal, &replacement, snapshot, insert_mode)
+                .unwrap()
+                .inserted()
+        );
+        assert_eq!(state.visible_history_rows, expected_rows);
+    }
 }
