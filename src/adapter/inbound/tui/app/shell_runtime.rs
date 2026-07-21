@@ -86,6 +86,9 @@ impl ShellRuntime {
     fn request_redraw_at(&mut self, now: Instant) {
         self.frame_scheduler.request_immediate(now);
     }
+    pub(super) fn request_delivery_redraw(&mut self) {
+        self.request_redraw_at(Instant::now());
+    }
     pub(super) fn request_resize_redraw_retry(&mut self) {
         self.request_resize_redraw_retry_at(Instant::now());
     }
