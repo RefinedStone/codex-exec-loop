@@ -2019,6 +2019,84 @@ fn viewport_handoff_waits_for_a_successful_draw_before_ack() {
     assert_viewport_handoff_waits_for_a_successful_draw(true);
 }
 
+#[test]
+fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
+    const FINAL_MARKER: &str = "released handoff answer";
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::ViewportReplay),
+    )
+    .expect("viewport replay terminal should initialize");
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::ViewportReplay,
+        false,
+        ShellOverlay::Hidden,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    let width = terminal.size().expect("terminal size").width;
+    let projection = frame_projection(runtime.app(), width);
+    let resize_snapshot = terminal
+        .backend()
+        .resize_snapshot()
+        .expect("stable pre-draw resize snapshot");
+    let observation_epoch = terminal.backend().resize_observation_epoch();
+    // The expected snapshot is already frozen. The next two draw-time size
+    // observations emulate a physical shrink and same-size restore.
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .report_resize_then_restore(2, Size::new(48, 10), 3, Size::new(80, 40));
+
+    assert!(
+        !draw_inline_frame(
+            &mut terminal,
+            &mut runtime,
+            &mut inline_terminal,
+            projection,
+            false,
+            resize_snapshot,
+        )
+        .expect("ABA-raced draw should return cleanly"),
+        "same-size ABA geometry must not commit the drawn frame"
+    );
+    assert_eq!(
+        terminal.backend().resize_observation_epoch(),
+        observation_epoch + 2,
+        "the draw must observe both sides of the resize ABA"
+    );
+    assert_eq!(terminal.size().unwrap(), Size::new(80, 40));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("deferred handoff should keep a ready conversation");
+    };
+    assert!(conversation.has_pending_viewport_transcript_handoff());
+    assert!(!inline_terminal.back_buffer_trustworthy());
+    assert_resize_retry_scheduled(
+        &mut runtime,
+        "same-size ABA geometry must schedule a stable rebuild",
+    );
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert!(draw_test_frame(
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal
+    ));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("stable retry should keep a ready conversation");
+    };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    let screen = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
+    assert_eq!(screen.matches(FINAL_MARKER).count(), 1, "{screen}");
+}
+
 fn assert_viewport_handoff_waits_for_a_successful_draw(parallel_mode_enabled: bool) {
     const FINAL_MARKER: &str = "RESIZE_GUARDED_VIEWPORT_HANDOFF";
     let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
@@ -4330,8 +4408,19 @@ where
 {
     let width = terminal.size().expect("terminal size").width;
     let projection = frame_projection(runtime.app(), width);
-    draw_inline_frame(terminal, runtime, inline_terminal, projection, false)
-        .expect("draw test frame")
+    let resize_snapshot = terminal
+        .backend()
+        .resize_snapshot()
+        .expect("stable resize snapshot");
+    draw_inline_frame(
+        terminal,
+        runtime,
+        inline_terminal,
+        projection,
+        false,
+        resize_snapshot,
+    )
+    .expect("draw test frame")
 }
 fn append_history_message(app: &mut NativeTuiApp, text: &str) {
     append_message(app, ConversationMessageKind::Agent, text);
