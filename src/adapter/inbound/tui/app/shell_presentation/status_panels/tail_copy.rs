@@ -125,16 +125,31 @@ pub(super) fn build_inline_tail_content_with_context(
     }
     let mut lines = Vec::new();
     match screen_model.conversation_state {
-        ShellConversationState::Loading => {
+        state @ (ShellConversationState::Loading | ShellConversationState::Failed(_)) => {
             /*
             Loading and failed states still render a full tail because the inline
             terminal layout needs stable prompt/status rows even before a thread
             snapshot exists. These branches avoid conversation-only helpers.
             */
+            let (thread_status, runtime_status, status_line) = match state {
+                ShellConversationState::Loading => (
+                    "loading",
+                    "loading thread history",
+                    Line::from(thread_history_loading_status_line()),
+                ),
+                ShellConversationState::Failed(message) => (
+                    "unavailable",
+                    "unavailable",
+                    Line::from(format!("status: {message}")),
+                ),
+                ShellConversationState::Ready(_) => {
+                    unreachable!("ready conversation uses the ready tail branch")
+                }
+            };
             lines.push(InlineTailLine::new(
                 InlineTailPriority::Identity,
                 Line::from(format!(
-                    "Akra  |  thread: loading  |  startup: {}  |  sessions: {}",
+                    "Akra  |  thread: {thread_status}  |  startup: {}  |  sessions: {}",
                     screen_model.shell_action_availability.status_text(),
                     screen_model.recent_session_status_label.as_str(),
                 )),
@@ -149,42 +164,11 @@ pub(super) fn build_inline_tail_content_with_context(
             lines.push(InlineTailLine::new(
                 InlineTailPriority::Warning,
                 Line::from(format!(
-                    "runtime: loading thread history{}  |  flow: terminal main buffer",
+                    "runtime: {runtime_status}{}  |  flow: terminal main buffer",
                     github_status.unwrap_or_default(),
                 )),
             ));
-            lines.push(InlineTailLine::new(
-                InlineTailPriority::Detail,
-                Line::from(format!("status: {}", thread_history_loading_status_line())),
-            ));
-        }
-        ShellConversationState::Failed(message) => {
-            lines.push(InlineTailLine::new(
-                InlineTailPriority::Identity,
-                Line::from(format!(
-                    "Akra  |  thread: unavailable  |  startup: {}  |  sessions: {}",
-                    screen_model.shell_action_availability.status_text(),
-                    screen_model.recent_session_status_label.as_str(),
-                )),
-            ));
-            let github_status =
-                (screen_model.github_review_polling_status_label != "off").then(|| {
-                    format!(
-                        "  |  gh: {}",
-                        screen_model.github_review_polling_status_label.as_str()
-                    )
-                });
-            lines.push(InlineTailLine::new(
-                InlineTailPriority::Warning,
-                Line::from(format!(
-                    "runtime: unavailable{}  |  flow: terminal main buffer",
-                    github_status.unwrap_or_default(),
-                )),
-            ));
-            lines.push(InlineTailLine::new(
-                InlineTailPriority::Detail,
-                Line::from(format!("status: {message}")),
-            ));
+            lines.push(InlineTailLine::new(InlineTailPriority::Detail, status_line));
         }
         ShellConversationState::Ready(conversation) => {
             /*
@@ -1095,13 +1079,21 @@ mod coverage_tests {
         let loading = render_tail(&app, None);
         assert!(loading.contains("thread: loading"));
         assert!(loading.contains("runtime: loading thread history"));
+        assert_eq!(
+            loading.lines().nth(2),
+            Some(thread_history_loading_status_line())
+        );
         assert!(loading.contains("prompt: waiting for shell readiness"));
 
         app.conversation_state =
             ConversationState::Failed("session catalog unavailable".to_string());
         let failed = render_tail(&app, None);
         assert!(failed.contains("thread: unavailable"));
-        assert!(failed.contains("status: session catalog unavailable"));
+        assert!(failed.contains("runtime: unavailable"));
+        assert_eq!(
+            failed.lines().nth(2),
+            Some("status: session catalog unavailable")
+        );
         assert!(failed.contains("prompt: unavailable  |  session catalog unavailable"));
     }
 
