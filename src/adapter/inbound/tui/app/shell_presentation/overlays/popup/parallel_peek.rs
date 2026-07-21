@@ -11,7 +11,9 @@ use super::ParallelPeekOverlayView;
 
 pub(crate) fn build_parallel_peek_overlay_view(app: &NativeTuiApp) -> ParallelPeekOverlayView {
     let active_agents = app.active_parallel_peek_entries();
-    let selected_index = app.parallel_peek_overlay_ui_state.selected_agent_index();
+    let selected_index = app
+        .parallel_peek_overlay_ui_state
+        .selected_agent_index(&active_agents);
     let step = app.parallel_peek_overlay_ui_state.step();
     let preview = app.parallel_peek_overlay_ui_state.preview();
 

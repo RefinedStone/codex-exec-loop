@@ -6,9 +6,10 @@ use super::*;
 
 impl NativeTuiApp {
     pub(super) fn open_parallel_peek_overlay(&mut self, argument: Option<&str>) {
-        let active_agent_count = self.active_parallel_peek_entries().len();
+        let active_agents = self.active_parallel_peek_entries();
+        let active_agent_count = active_agents.len();
         self.parallel_peek_overlay_ui_state
-            .clamp_selection(active_agent_count);
+            .sync_selection(&active_agents);
         self.dispatch_shell_chrome(ShellChromeEvent::ParallelPeekOverlayShown);
 
         let status_text = if argument.is_some() {
@@ -38,13 +39,13 @@ impl NativeTuiApp {
             return false;
         }
 
-        let active_agent_count = self.active_parallel_peek_entries().len();
+        let active_agents = self.active_parallel_peek_entries();
         self.parallel_peek_overlay_ui_state
-            .clamp_selection(active_agent_count);
+            .sync_selection(&active_agents);
 
         match self.parallel_peek_overlay_ui_state.step() {
             ParallelPeekOverlayStep::AgentList => {
-                self.handle_parallel_peek_agent_list_key(key, active_agent_count)
+                self.handle_parallel_peek_agent_list_key(key, &active_agents)
             }
             ParallelPeekOverlayStep::ConversationPreview => {
                 self.handle_parallel_peek_conversation_key(key)
@@ -55,21 +56,21 @@ impl NativeTuiApp {
     fn handle_parallel_peek_agent_list_key(
         &mut self,
         key: event::KeyEvent,
-        active_agent_count: usize,
+        active_agents: &[ParallelModeAgentRosterEntry],
     ) -> bool {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                 self.parallel_peek_overlay_ui_state
-                    .move_selection(active_agent_count, -1);
+                    .move_selection(active_agents, -1);
                 true
             }
             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                 self.parallel_peek_overlay_ui_state
-                    .move_selection(active_agent_count, 1);
+                    .move_selection(active_agents, 1);
                 true
             }
             KeyCode::Enter if key.modifiers.is_empty() => {
-                self.open_selected_parallel_peek_conversation();
+                self.open_selected_parallel_peek_conversation(active_agents);
                 true
             }
             KeyCode::Esc => {
@@ -128,8 +129,11 @@ impl NativeTuiApp {
         }
     }
 
-    fn open_selected_parallel_peek_conversation(&mut self) {
-        let Some(entry) = self.selected_parallel_peek_entry() else {
+    fn open_selected_parallel_peek_conversation(
+        &mut self,
+        active_agents: &[ParallelModeAgentRosterEntry],
+    ) {
+        let Some(entry) = self.selected_parallel_peek_entry(active_agents) else {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: "parallel peek: no active agent is selected".to_string(),
             });
@@ -192,9 +196,15 @@ impl NativeTuiApp {
         });
     }
 
-    fn selected_parallel_peek_entry(&self) -> Option<ParallelModeAgentRosterEntry> {
-        self.active_parallel_peek_entries()
-            .get(self.parallel_peek_overlay_ui_state.selected_agent_index())
+    fn selected_parallel_peek_entry(
+        &self,
+        active_agents: &[ParallelModeAgentRosterEntry],
+    ) -> Option<ParallelModeAgentRosterEntry> {
+        active_agents
+            .get(
+                self.parallel_peek_overlay_ui_state
+                    .selected_agent_index(active_agents),
+            )
             .cloned()
     }
 }
