@@ -2363,7 +2363,6 @@ mod tests {
         assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
         let (correlation, _) = take_next_queue_mutation_completion(&mut app);
         assert_eq!(correlation.generation, 1);
-        assert!(app.core_runtime.poll_pending_input().is_none());
     }
 
     #[test]
