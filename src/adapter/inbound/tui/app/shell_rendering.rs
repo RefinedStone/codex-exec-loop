@@ -2,7 +2,8 @@ use std::rc::Rc;
 
 use super::shell_presentation::{
     ConversationProjectionSample, ConversationScreenModel, InlineTailView, SupersessionOverlayView,
-    build_inline_live_transcript_lines, build_inline_tail_view, build_supersession_overlay_view,
+    TurnSteerConfirmationScreenModel, build_inline_live_transcript_lines, build_inline_tail_view,
+    build_supersession_overlay_view,
 };
 use super::*;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -37,7 +38,7 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) renders_viewport_transcript_handoff: bool,
     pub(super) renders_parallel_viewport_handoff: bool,
     pub(super) exit_confirmation_visible: bool,
-    pub(super) turn_steer_confirmation_visible: bool,
+    pub(super) turn_steer_confirmation: Option<Box<TurnSteerConfirmationScreenModel>>,
     pub(super) parallel_supervisor_event_lines: Vec<Line<'static>>,
     pub(super) supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
 }
@@ -64,26 +65,31 @@ impl InlineConversationFrameProjection {
                     &app.supersession_mud_ui_state,
                 ))
             });
-        Self::from_screen_model(&screen_model, content_width, supersession_overlay_view)
+        Self::from_screen_model(screen_model, content_width, supersession_overlay_view)
     }
 
     fn from_screen_model(
-        screen_model: &ConversationScreenModel<'_>,
+        screen_model: ConversationScreenModel<'_>,
         content_width: u16,
         supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
     ) -> Self {
+        let tail_view = build_inline_tail_view(&screen_model, content_width);
+        let live_transcript_lines = build_inline_live_transcript_lines(&screen_model);
+        let renders_viewport_transcript_handoff =
+            screen_model.renders_viewport_transcript_handoff();
+        let renders_parallel_viewport_handoff = screen_model.renders_parallel_viewport_handoff();
         Self {
             core_revision: screen_model.core_revision,
-            tail_view: build_inline_tail_view(screen_model, content_width),
-            live_transcript_lines: build_inline_live_transcript_lines(screen_model),
+            tail_view,
+            live_transcript_lines,
             shell_overlay: screen_model.shell_overlay,
             inline_history_render_mode: screen_model.inline_history_render_mode,
             parallel_mode_enabled: screen_model.parallel_mode_enabled,
-            renders_viewport_transcript_handoff: screen_model.renders_viewport_transcript_handoff(),
-            renders_parallel_viewport_handoff: screen_model.renders_parallel_viewport_handoff(),
+            renders_viewport_transcript_handoff,
+            renders_parallel_viewport_handoff,
             exit_confirmation_visible: screen_model.exit_confirmation_visible,
-            turn_steer_confirmation_visible: screen_model.turn_steer_confirmation_visible,
-            parallel_supervisor_event_lines: screen_model.parallel_supervisor_event_lines.clone(),
+            turn_steer_confirmation: screen_model.turn_steer_confirmation.map(Box::new),
+            parallel_supervisor_event_lines: screen_model.parallel_supervisor_event_lines,
             supersession_overlay_view,
         }
     }
@@ -171,7 +177,7 @@ pub(super) fn draw_projected(
     let shell_overlay = projection.shell_overlay;
     let parallel_mode_enabled = projection.parallel_mode_enabled;
     let renders_parallel_viewport_handoff = projection.renders_parallel_viewport_handoff;
-    let turn_steer_confirmation_visible = projection.turn_steer_confirmation_visible;
+    let turn_steer_confirmation = projection.turn_steer_confirmation.take();
     let exit_confirmation_visible = projection.exit_confirmation_visible;
     let supersession_overlay_view = projection.supersession_overlay_view.take();
 
@@ -194,8 +200,8 @@ pub(super) fn draw_projected(
                 .expect("parallel frame projection must own the supervisor view"),
         );
     }
-    if turn_steer_confirmation_visible {
-        draw_turn_steer_confirmation(frame, app);
+    if let Some(confirmation) = turn_steer_confirmation.as_ref() {
+        draw_turn_steer_confirmation(frame, confirmation);
     }
     // exit confirmation은 모든 shell/overlay state 위의 modal이므로 마지막 draw operation이어야 한다.
     if exit_confirmation_visible {
@@ -203,18 +209,18 @@ pub(super) fn draw_projected(
     }
 }
 
-fn draw_turn_steer_confirmation(frame: &mut Frame<'_>, app: &NativeTuiApp) {
-    let Some(intent) = app.turn_steer_confirmation.as_ref() else {
-        return;
-    };
-    let request = &intent.request;
+fn draw_turn_steer_confirmation(
+    frame: &mut Frame<'_>,
+    confirmation: &TurnSteerConfirmationScreenModel,
+) {
+    let request = &confirmation.request;
     let title = AkraTheme::title_line(
-        app.tui_language.turn_steer_confirmation_title(),
+        confirmation.language.turn_steer_confirmation_title(),
         " / exact turn",
     );
     let (prompt_preview, prompt_truncated) = steer_prompt_preview(&request.prompt, 240, 6);
     let mut lines = vec![
-        Line::from(app.tui_language.turn_steer_confirmation_question()),
+        Line::from(confirmation.language.turn_steer_confirmation_question()),
         Line::from(format!(
             "thread: {}  |  turn: {}",
             compact_steer_identity(&request.thread_id),
@@ -225,11 +231,13 @@ fn draw_turn_steer_confirmation(frame: &mut Frame<'_>, app: &NativeTuiApp) {
     ];
     lines.extend(prompt_preview.into_iter().map(Line::from));
     if prompt_truncated {
-        lines.push(Line::from(app.tui_language.turn_steer_preview_truncated()));
+        lines.push(Line::from(
+            confirmation.language.turn_steer_preview_truncated(),
+        ));
     }
     lines.extend([
         Line::from(""),
-        AkraTheme::key_line(app.tui_language.turn_steer_confirmation_keys()),
+        AkraTheme::key_line(confirmation.language.turn_steer_confirmation_keys()),
     ]);
     let desired_width = lines
         .iter()

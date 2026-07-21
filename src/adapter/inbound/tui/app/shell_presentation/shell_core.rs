@@ -13,6 +13,7 @@ use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::{
     ParallelModeProjection, PlanningParallelProjection, RevisionedPlanningParallelProjection,
 };
+use crate::domain::conversation::ConversationTurnSteerRequest;
 use crate::domain::parallel_mode::{ParallelModeReadinessSnapshot, ParallelModeSupervisorSnapshot};
 use crate::domain::planning::PlanningWorkerPanelState;
 
@@ -231,6 +232,12 @@ pub(in crate::adapter::inbound::tui::app) enum QueueMutationTailState {
     UndoAvailable(usize),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::adapter::inbound::tui::app) struct TurnSteerConfirmationScreenModel {
+    pub(in crate::adapter::inbound::tui::app) language: TuiLanguage,
+    pub(in crate::adapter::inbound::tui::app) request: ConversationTurnSteerRequest,
+}
+
 pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) core_revision: u64,
     pub(in crate::adapter::inbound::tui::app) rendered_at: Instant,
@@ -260,7 +267,8 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) shell_overlay: ShellOverlay,
     pub(in crate::adapter::inbound::tui::app) inline_history_render_mode: InlineHistoryRenderMode,
     pub(in crate::adapter::inbound::tui::app) exit_confirmation_visible: bool,
-    pub(in crate::adapter::inbound::tui::app) turn_steer_confirmation_visible: bool,
+    pub(in crate::adapter::inbound::tui::app) turn_steer_confirmation:
+        Option<TurnSteerConfirmationScreenModel>,
     pub(in crate::adapter::inbound::tui::app) prompt_input_has_focus: bool,
     pub(in crate::adapter::inbound::tui::app) conversation_state: ShellConversationState<'a>,
 }
@@ -321,8 +329,17 @@ impl<'a> ConversationScreenModel<'a> {
             )
         });
         let exit_confirmation_visible = app.is_exit_confirmation_visible();
-        let turn_steer_confirmation_visible = app.is_turn_steer_confirmation_visible();
-        let dialog_visible = exit_confirmation_visible || turn_steer_confirmation_visible;
+        let turn_steer_confirmation = app.is_turn_steer_confirmation_visible().then(|| {
+            let intent = app
+                .turn_steer_confirmation
+                .as_ref()
+                .expect("visible turn-steer confirmation must retain its intent");
+            TurnSteerConfirmationScreenModel {
+                language: app.tui_language,
+                request: intent.request.clone(),
+            }
+        });
+        let dialog_visible = exit_confirmation_visible || turn_steer_confirmation.is_some();
         let prompt_input_has_focus = app
             .shell_overlay
             .prompt_input_has_focus(dialog_visible, parallel_mode_prompt_input_locked);
@@ -370,7 +387,7 @@ impl<'a> ConversationScreenModel<'a> {
             shell_overlay: app.shell_overlay,
             inline_history_render_mode: sample.inline_history_render_mode(),
             exit_confirmation_visible,
-            turn_steer_confirmation_visible,
+            turn_steer_confirmation,
             prompt_input_has_focus,
             conversation_state: match &app.conversation_state {
                 ConversationState::Loading => ShellConversationState::Loading,
@@ -396,7 +413,7 @@ impl<'a> ConversationScreenModel<'a> {
     }
 
     pub(in crate::adapter::inbound::tui::app) fn dialog_visible(&self) -> bool {
-        self.exit_confirmation_visible || self.turn_steer_confirmation_visible
+        self.exit_confirmation_visible || self.turn_steer_confirmation.is_some()
     }
 
     pub(in crate::adapter::inbound::tui::app) fn renders_viewport_transcript_handoff(
@@ -466,7 +483,7 @@ impl<'a> ConversationScreenModel<'a> {
             shell_overlay: ShellOverlay::Hidden,
             inline_history_render_mode: InlineHistoryRenderMode::HostScrollback,
             exit_confirmation_visible: false,
-            turn_steer_confirmation_visible: false,
+            turn_steer_confirmation: None,
             prompt_input_has_focus: true,
             conversation_state,
         }

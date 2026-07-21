@@ -2030,6 +2030,56 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
 }
 
 #[test]
+fn tui_turn_steer_confirmation_draws_one_owned_screen_model() {
+    let screen_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
+    )
+    .expect("conversation screen-model source should load");
+    let screen_model_production = production_lines(&screen_model_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let screen_model_compact = screen_model_production
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for required in [
+        "structTurnSteerConfirmationScreenModel",
+        "turn_steer_confirmation:Option<TurnSteerConfirmationScreenModel>",
+        "request:intent.request.clone()",
+    ] {
+        assert!(
+            screen_model_compact.contains(required),
+            "turn-steer projection must capture its owned confirmation fact: {required}"
+        );
+    }
+
+    let rendering_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
+            .expect("shell rendering source should load");
+    let draw = top_level_function_source(&rendering_source, "draw_turn_steer_confirmation");
+    let draw_compact = draw
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        draw_compact.contains("confirmation:&TurnSteerConfirmationScreenModel"),
+        "turn-steer renderer must receive the immutable confirmation screen model"
+    );
+    for forbidden in [
+        "NativeTuiApp",
+        "app.turn_steer_confirmation",
+        "app.tui_language",
+    ] {
+        assert!(
+            !draw.contains(forbidden),
+            "turn-steer renderer must not reread live app state: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn tui_session_overlay_reads_one_immutable_screen_model_per_draw() {
     let model_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/session_overlay_screen_model.rs"),

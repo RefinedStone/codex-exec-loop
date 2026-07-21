@@ -8,12 +8,14 @@ use super::{
 use crate::adapter::inbound::tui::app::conversation_input::InputCursorMovement;
 use crate::adapter::inbound::tui::app::ratatui_frontend::prepare_runtime_for_due_draw;
 use crate::adapter::inbound::tui::app::shell_presentation::{
-    ConversationProjectionSample, ConversationScreenModel, build_inline_live_transcript_lines,
+    ConversationProjectionSample, ConversationScreenModel, TurnSteerConfirmationScreenModel,
+    build_inline_live_transcript_lines,
 };
 use crate::adapter::inbound::tui::app::{
     ConversationIntentEvent, ConversationLifecycleEvent, ConversationMessage,
     ConversationMessageKind, ConversationState, ConversationViewMode, INLINE_VIEWPORT_HEIGHT,
     InlineHistoryRenderMode, NativeTuiApp, PlanningWorkerVisibility, ProgressiveActivityDetailKind,
+    TuiLanguage,
 };
 use crate::adapter::inbound::tui::shell_chrome::{ShellChromeEvent, ShellOverlay};
 use crate::application::port::outbound::github_review_poller_port::GithubReviewPollerPort;
@@ -21,7 +23,7 @@ use crate::application::service::github_review_poller_service::GithubReviewPolle
 use crate::core::app::ConversationSnapshot as CoreConversationSnapshot;
 use crate::domain::conversation::{
     ConversationApprovalRequest, ConversationApprovalRequestKind,
-    ConversationSnapshot as DomainConversationSnapshot,
+    ConversationSnapshot as DomainConversationSnapshot, ConversationTurnSteerRequest,
 };
 use crate::domain::github_review::{GithubPullRequestActivitySnapshot, GithubPullRequestTarget};
 use crate::domain::parallel_mode::{
@@ -1260,7 +1262,14 @@ fn frame_cache_never_reuses_a_dialog_frame_and_redraws_after_close() {
     assert!(!cache.should_draw_inline_frame(&baseline, &viewport, 80, 24));
 
     let mut dialog = frame_projection(&app, 80);
-    dialog.turn_steer_confirmation_visible = true;
+    dialog.turn_steer_confirmation = Some(Box::new(TurnSteerConfirmationScreenModel {
+        language: TuiLanguage::English,
+        request: ConversationTurnSteerRequest {
+            thread_id: "thread-cache".to_string(),
+            expected_turn_id: "turn-cache".to_string(),
+            prompt: "steer cache frame".to_string(),
+        },
+    }));
     assert!(cache.should_draw_inline_frame(&dialog, &viewport, 80, 24));
     assert!(cache.should_draw_inline_frame(&dialog, &viewport, 80, 24));
 
