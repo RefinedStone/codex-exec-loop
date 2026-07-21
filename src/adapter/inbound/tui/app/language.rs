@@ -468,6 +468,20 @@ impl TuiLanguage {
         }
     }
 
+    pub(super) fn queue_overlay_remove_confirmation_line(self, task_id: &str) -> String {
+        match self {
+            Self::English => format!("remove {task_id}?"),
+            Self::Korean => format!("{task_id} 제거할까요?"),
+        }
+    }
+
+    pub(super) const fn queue_overlay_remove_confirmation_key_line(self) -> &'static str {
+        match self {
+            Self::English => "Enter/x/Delete: confirm remove",
+            Self::Korean => "Enter/x/Delete: 제거 확인",
+        }
+    }
+
     pub(super) const fn queue_overlay_undo_only_key_line(self) -> &'static str {
         match self {
             Self::English => "u: undo added",

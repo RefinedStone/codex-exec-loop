@@ -447,6 +447,25 @@ fn queue_overlay_matches_snapshot() {
         .position(|line| line.contains("Summary"))
         .expect("queue summary should be visible");
     assert_eq!(summary_line, title_line + 1, "{narrow}");
+
+    assert!(
+        app.handle_queue_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ))
+    );
+    assert_eq!(app.pending_queue_mutation_operation_id(), None);
+    let armed = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
+    assert!(armed.contains("> #1 [ready]"), "{armed}");
+    assert!(armed.contains("remove task-1?"), "{armed}");
+    assert!(armed.contains("Enter/x/Delete: confirm remove"), "{armed}");
+    assert!(!armed.contains("x/Delete: remove |"), "{armed}");
+
+    app.tui_language = TuiLanguage::Korean;
+    let korean = tui_testkit::render_shell_snapshot(&mut app, 48, 18);
+    assert!(korean.contains("> #1 [ready]"), "{korean}");
+    assert!(korean.contains("task-1 제거할까요?"), "{korean}");
+    assert!(korean.contains("Enter/x/Delete: 제거 확인"), "{korean}");
 }
 
 #[test]
@@ -498,7 +517,20 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
         .with_planning_revision(Some(9)),
     );
     app.shell_overlay = ShellOverlay::Queue;
-    app.sync_queue_overlay_selection();
+    let authority_tokens = app
+        .queue_action_tasks()
+        .into_iter()
+        .map(|task| {
+            (
+                task.task_id,
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: task.status,
+                    updated_at: "2026-07-15T00:00:09Z".to_string(),
+                },
+            )
+        })
+        .collect();
+    app.bind_queue_overlay_authority_for_test(9, authority_tokens);
     let task_ids = app
         .queue_action_tasks()
         .into_iter()
@@ -509,11 +541,43 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
     let hidden = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
     assert!(hidden.contains("> #4 [ready]"));
     assert!(hidden.contains("Deep queue task 4"));
+    assert!(
+        app.handle_queue_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ))
+    );
+    let armed_active = tui_testkit::render_shell_snapshot(&mut app, 48, 16);
+    assert!(armed_active.contains("> #4 [ready]"), "{armed_active}");
+    assert!(armed_active.contains("remove task-4?"), "{armed_active}");
+    assert!(
+        armed_active.contains("Enter/x/Delete: confirm remove"),
+        "{armed_active}"
+    );
 
     app.queue_overlay_ui_state.move_selection(&task_ids, 1);
     let proposal = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
     assert!(proposal.contains("> #1 [proposed]"));
     assert!(proposal.contains("Deep proposal selection"));
+    assert!(
+        app.handle_queue_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ))
+    );
+    let armed_proposal = tui_testkit::render_shell_snapshot(&mut app, 48, 16);
+    assert!(
+        armed_proposal.contains("> #1 [proposed]"),
+        "{armed_proposal}"
+    );
+    assert!(
+        armed_proposal.contains("remove proposal-deep?"),
+        "{armed_proposal}"
+    );
+    assert!(
+        armed_proposal.contains("Enter/x/Delete: confirm remove"),
+        "{armed_proposal}"
+    );
 
     app.queue_overlay_ui_state.move_selection(&task_ids, 1);
     let skipped = tui_testkit::render_shell_snapshot(&mut app, 80, 16);
@@ -522,6 +586,26 @@ fn compact_queue_overlay_keeps_hidden_proposal_and_skipped_selection_visible() {
 
     let narrow_skipped = tui_testkit::render_shell_snapshot(&mut app, 48, 16);
     assert!(narrow_skipped.contains("> [ready / skipped]"));
+
+    assert!(
+        app.handle_queue_overlay_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ))
+    );
+    let armed_skipped = tui_testkit::render_shell_snapshot(&mut app, 48, 16);
+    assert!(
+        armed_skipped.contains("remove skipped-deep?"),
+        "{armed_skipped}"
+    );
+    assert!(
+        armed_skipped.contains("> [ready / skipped]"),
+        "{armed_skipped}"
+    );
+    assert!(
+        armed_skipped.contains("Enter/x/Delete: confirm remove"),
+        "{armed_skipped}"
+    );
 }
 
 #[test]

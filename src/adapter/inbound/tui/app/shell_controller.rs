@@ -2262,6 +2262,19 @@ mod tests {
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert_eq!(
+            app.pending_queue_mutation_operation_id(),
+            None,
+            "the first destructive key must only arm the selected row"
+        );
+        assert_eq!(
+            app.queue_overlay_screen_model()
+                .armed_remove_task_id
+                .as_deref(),
+            Some("task-2")
+        );
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.queue_overlay_screen_model().armed_remove_task_id, None);
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
 
         assert_eq!(ready_conversation(&app).input_buffer, "keep draft");
@@ -2271,6 +2284,86 @@ mod tests {
             Some("Queue change op-1 is waiting for authority acknowledgement.")
         );
         let _completion = take_next_queue_mutation_completion(&mut app);
+    }
+
+    #[test]
+    fn queue_remove_confirmation_disarms_on_selection_refresh_and_reopen() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(
+            sample_planning_runtime_projection("context", "queue").with_planning_revision(Some(1)),
+        );
+        app.shell_overlay = ShellOverlay::Queue;
+        app.bind_queue_overlay_authority_for_test(
+            1,
+            std::collections::BTreeMap::from([
+                (
+                    "task-1".to_string(),
+                    queue_overlay_ui::QueueOverlayAuthorityToken {
+                        status: TaskStatus::Ready,
+                        updated_at: "2026-04-10T00:00:00Z".to_string(),
+                    },
+                ),
+                (
+                    "task-2".to_string(),
+                    queue_overlay_ui::QueueOverlayAuthorityToken {
+                        status: TaskStatus::Ready,
+                        updated_at: "2026-04-10T01:00:00Z".to_string(),
+                    },
+                ),
+            ]),
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert_eq!(
+            app.queue_overlay_screen_model()
+                .armed_remove_task_id
+                .as_deref(),
+            Some("task-1")
+        );
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('j'))));
+        assert_eq!(app.queue_overlay_screen_model().armed_remove_task_id, None);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        let _request = begin_test_queue_overlay_authority_load(&mut app, 2);
+        assert_eq!(app.queue_overlay_screen_model().armed_remove_task_id, None);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+
+        app.close_shell_overlay();
+        assert_eq!(app.queue_overlay_screen_model().armed_remove_task_id, None);
+        app.dispatch_shell_chrome(ShellChromeEvent::QueueOverlayShown);
+        assert_eq!(app.queue_overlay_screen_model().armed_remove_task_id, None);
+    }
+
+    #[test]
+    fn pressing_remove_twice_confirms_one_queue_mutation() {
+        let mut app = test_native_tui_app();
+        app.sync_ready_conversation_planning_runtime_projection(single_queue_projection(
+            "task-confirm",
+            "Confirm this task",
+            7,
+        ));
+        app.shell_overlay = ShellOverlay::Queue;
+        app.bind_queue_overlay_authority_for_test(
+            7,
+            std::collections::BTreeMap::from([(
+                "task-confirm".to_string(),
+                queue_overlay_ui::QueueOverlayAuthorityToken {
+                    status: TaskStatus::Ready,
+                    updated_at: "2026-04-10T00:00:00Z".to_string(),
+                },
+            )]),
+        );
+
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Delete)));
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Delete)));
+        assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
+        let (correlation, _) = take_next_queue_mutation_completion(&mut app);
+        assert_eq!(correlation.generation, 1);
+        assert!(app.core_runtime.poll_pending_input().is_none());
     }
 
     #[test]
@@ -2996,6 +3089,8 @@ mod tests {
             Some(snapshot.planning_revision)
         );
 
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert_eq!(app.pending_queue_mutation_operation_id(), None);
         repository.arm();
         let terminal_thread_id = std::thread::current().id();
         let (cancel_watchdog, watchdog_cancelled) = mpsc::sync_channel(1);
@@ -3009,7 +3104,7 @@ mod tests {
             }
         });
         let input_started = Instant::now();
-        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
         let input_elapsed = input_started.elapsed();
         cancel_watchdog
             .send(())
@@ -3567,6 +3662,7 @@ mod tests {
             .expect("concurrent task should create");
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         app.tui_language = TuiLanguage::Korean;
         apply_next_queue_mutation_completion(&mut app);
         assert!(
@@ -3603,6 +3699,7 @@ mod tests {
         );
         assert!(reconciled_receipt.created_batch_is_cancellable());
 
+        assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
         apply_next_queue_mutation_completion(&mut app);
         let after_individual_remove = planning
