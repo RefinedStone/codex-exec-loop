@@ -3169,6 +3169,14 @@ fn conversation_live_transcript_projection_uses_one_narrow_screen_model() {
     let shell_core_syntax =
         syn::parse_file(&shell_core_source).expect("shell core source should parse");
     named_struct_fields(&shell_core_syntax, "ConversationLiveTranscriptScreenModel");
+    let shell_core_compact = shell_core_source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        shell_core_compact.contains("recent_tail_messages:[Option<&'aConversationMessage>;2],"),
+        "live transcript projection must retain only two recent tail message references"
+    );
 
     let screen_model_fields = named_struct_fields(&shell_core_syntax, "ConversationScreenModel");
     let live_projection = screen_model_fields
@@ -3189,17 +3197,32 @@ fn conversation_live_transcript_projection_uses_one_narrow_screen_model() {
         "ConversationScreenModel.live_transcript must retain the narrow projection"
     );
 
-    for path in [
-        "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
-        "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
+    for (path, function_name) in [
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels.rs",
+            "current_live_agent_lines",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
+            "current_live_agent_lines",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+            "build_recent_transcript_summary_lines",
+        ),
     ] {
         let source = fs::read_to_string(repo_root().join(path))
             .unwrap_or_else(|error| panic!("{path} should load: {error}"));
         let syntax =
             syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
-        let function = top_level_function(&syntax, "current_live_agent_lines");
+        let function = top_level_function(&syntax, function_name);
+        assert_eq!(
+            function.sig.inputs.len(),
+            1,
+            "{path}::{function_name} must accept only the live transcript projection"
+        );
         let Some(syn::FnArg::Typed(first_argument)) = function.sig.inputs.first() else {
-            panic!("{path} current_live_agent_lines must accept a projection first");
+            panic!("{path}::{function_name} must accept a projection first");
         };
         assert!(
             is_shared_reference_to_single_lifetime_named_type(
@@ -3207,7 +3230,7 @@ fn conversation_live_transcript_projection_uses_one_narrow_screen_model() {
                 "ConversationLiveTranscriptScreenModel",
                 "_",
             ),
-            "{path} current_live_agent_lines must accept only the narrow projection"
+            "{path}::{function_name} must accept only the narrow projection"
         );
     }
 
@@ -3240,6 +3263,10 @@ fn conversation_live_transcript_projection_uses_one_narrow_screen_model() {
         (
             "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_shared.rs",
             "current_live_agent_lines",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs",
+            "build_recent_transcript_summary_lines",
         ),
     ] {
         let source = fs::read_to_string(repo_root().join(path))
