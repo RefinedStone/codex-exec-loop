@@ -2,7 +2,9 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::super::prompt_composer::{build_prompt_cursor_offset, wrapped_row_count};
-use super::super::{ConversationScreenModel, Line, ShellConversationState, ShellOverlay};
+use super::super::{
+    ConversationScreenModel, Line, MAX_INLINE_TAIL_HEIGHT, ShellConversationState, ShellOverlay,
+};
 use super::tail_copy::{
     InlineTailLine, QUEUE_RECEIPT_UNDO_ACTION_LABEL, build_inline_tail_content_with_context,
     build_inline_tail_prompt_lines_with_context,
@@ -101,9 +103,14 @@ fn compact_inspection_tail_lines(
 ) -> Vec<Line<'static>> {
     const MAX_INSPECTION_TAIL_ROWS: usize = 6;
     const MAX_ACTIVITY_TAIL_ROWS: usize = 4;
+    let is_primary_tail = screen_model.shell_overlay == ShellOverlay::Hidden;
     if content_width == 0
-        || screen_model.shell_overlay == ShellOverlay::Hidden
         || screen_model.startup_screen_is_active()
+        || (is_primary_tail
+            && (screen_model.parallel_mode_enabled
+                || screen_model
+                    .inline_history_render_mode
+                    .mirrors_recent_transcript_in_tail()))
     {
         return lines.into_iter().map(|entry| entry.line).collect();
     }
@@ -118,12 +125,19 @@ fn compact_inspection_tail_lines(
     let prompt_rows = rendered_rows(&prompt_lines, content_width);
     let compact_activity_tail =
         screen_model.shell_overlay == ShellOverlay::Activity && content_width <= 48;
-    let max_tail_rows = if compact_activity_tail {
+    let max_tail_rows = if is_primary_tail {
+        usize::from(MAX_INLINE_TAIL_HEIGHT)
+    } else if compact_activity_tail {
         MAX_ACTIVITY_TAIL_ROWS
     } else {
         MAX_INSPECTION_TAIL_ROWS
     };
     if prompt_rows >= max_tail_rows {
+        if is_primary_tail {
+            // The hidden-tail renderer keeps the focused suffix and cursor visible. Preserve the
+            // complete logical prompt so it can choose that suffix without losing input text.
+            return lines.into_iter().map(|entry| entry.line).collect();
+        }
         return prompt_lines
             .into_iter()
             .rev()
@@ -148,7 +162,7 @@ fn compact_inspection_tail_lines(
     let mut selected_lines = Vec::new();
     let mut used_prefix_rows = 0usize;
     for (index, entry) in priority_lines {
-        let line_rows = wrapped_row_count(entry.line.width(), content_width);
+        let line_rows = rendered_rows(std::slice::from_ref(&entry.line), content_width);
         if used_prefix_rows.saturating_add(line_rows) > prefix_row_budget {
             continue;
         }
@@ -210,14 +224,52 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::queue_overlay_ui::QueueMutationKind;
     use crate::adapter::inbound::tui::app::shell_presentation::{
-        ConversationScreenModel, build_inline_live_transcript_lines,
+        ConversationScreenModel, QueueMutationTailState, build_inline_live_transcript_lines,
     };
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
-        ConversationInputState, ConversationState, ShellActionAvailability, TuiLanguage,
+        ConversationInputState, ConversationState, MAX_INLINE_TAIL_HEIGHT, NativeTuiApp,
+        ShellActionAvailability, TuiLanguage,
     };
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{QueueMutationCorrelation, QueueMutationIntent};
+    use crate::domain::planning::{PlanningWorkerPanelState, PlanningWorkerStatus};
+
+    const LOW_PRIORITY_DETAIL: &str = "LOW_PRIORITY_DETAIL";
+
+    fn dense_hidden_tail_app() -> NativeTuiApp {
+        let mut app = test_native_tui_app();
+        app.tui_language = TuiLanguage::Korean;
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.record_thread_prepared(
+            "thread-hidden-priority".to_string(),
+            "Hidden priority".to_string(),
+            "/tmp/root".to_string(),
+        );
+        conversation.input_state = ConversationInputState::ReadyToContinue;
+        conversation.input_buffer = "우선순위가 보존된 짧은 prompt".to_string();
+        conversation.set_input_cursor_byte_index(conversation.input_buffer.len());
+        conversation.base_warnings = vec!["긴한글경고상세".repeat(10)];
+        conversation.runtime_notices = vec!["긴한글복구상세".repeat(10)];
+        app
+    }
+
+    fn add_dense_low_priority_details(screen_model: &mut ConversationScreenModel<'_>) {
+        screen_model.shell_action_availability = ShellActionAvailability::Ready;
+        screen_model.planning_worker_shows_debug_details = true;
+        screen_model.planning_worker_panel_state = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RepairFailed,
+            last_operation_label: Some("repair dense tail projection".to_string()),
+            last_queue_summary: Some("ready task with dense framing".to_string()),
+            last_summary: Some("secondary summary detail".to_string()),
+            last_notice_detail: Some("secondary worker notice".to_string()),
+            last_host_detail: Some("secondary host detail".to_string()),
+            last_rejected_summary: Some(LOW_PRIORITY_DETAIL.to_string()),
+            ..Default::default()
+        };
+    }
 
     #[test]
     fn one_screen_model_produces_stable_cjk_copy_layout_and_live_lines() {
@@ -396,5 +448,154 @@ mod tests {
         assert!(rendered.contains("planning: stale"), "{rendered}");
         assert!(!rendered.contains("Akra"), "{rendered}");
         assert_eq!(rendered_rows(&tail_view.lines, WIDTH), 6);
+    }
+
+    #[test]
+    fn hidden_host_scrollback_keeps_pinned_queue_warning_prompt_and_undo_target() {
+        for width in [80, 120] {
+            for (queue_state, expected_queue_copy, expects_undo_target) in [
+                (
+                    QueueMutationTailState::Pending(7),
+                    "큐: op-7  |  권한 확인 대기 중",
+                    false,
+                ),
+                (
+                    QueueMutationTailState::UndoAvailable(1),
+                    QUEUE_RECEIPT_UNDO_ACTION_LABEL,
+                    true,
+                ),
+            ] {
+                let app = dense_hidden_tail_app();
+                let mut screen_model = ConversationScreenModel::from_app(&app);
+                add_dense_low_priority_details(&mut screen_model);
+                screen_model.queue_mutation_tail_state = queue_state;
+                assert_eq!(screen_model.shell_overlay, ShellOverlay::Hidden);
+                assert!(!screen_model.parallel_mode_enabled);
+                assert!(
+                    !screen_model
+                        .inline_history_render_mode
+                        .mirrors_recent_transcript_in_tail()
+                );
+
+                let raw_lines = build_inline_tail_content_with_context(&screen_model, None, 72)
+                    .into_iter()
+                    .map(|entry| entry.line)
+                    .collect::<Vec<_>>();
+                assert!(
+                    rendered_rows(&raw_lines, width) > usize::from(MAX_INLINE_TAIL_HEIGHT),
+                    "fixture must exceed the renderer tail budget at width {width}"
+                );
+
+                let tail_view = build_inline_tail_view(&screen_model, width);
+                let rendered = tail_view
+                    .lines
+                    .iter()
+                    .map(Line::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                assert!(
+                    rendered_rows(&tail_view.lines, width) <= usize::from(MAX_INLINE_TAIL_HEIGHT),
+                    "{rendered}"
+                );
+                assert!(rendered.contains(expected_queue_copy), "{rendered}");
+                assert!(rendered.contains("runtime:"), "{rendered}");
+                assert!(
+                    rendered.contains("우선순위가 보존된 짧은 prompt"),
+                    "{rendered}"
+                );
+                assert!(!rendered.contains(LOW_PRIORITY_DETAIL), "{rendered}");
+                assert_eq!(
+                    tail_view.queue_receipt_undo_hit_area.is_some(),
+                    expects_undo_target,
+                    "{rendered}"
+                );
+                if let Some(hit_area) = tail_view.queue_receipt_undo_hit_area {
+                    assert_eq!(hit_area.width, QUEUE_RECEIPT_UNDO_ACTION_LABEL.len() as u16);
+                    assert_eq!(hit_area.height, 1);
+                }
+                let (_, cursor_y) = tail_view
+                    .prompt_cursor_offset
+                    .expect("focused prompt must keep its cursor");
+                assert!(cursor_y < MAX_INLINE_TAIL_HEIGHT, "{rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn hidden_host_scrollback_budgets_prefix_with_ratatui_word_wrap() {
+        const WIDTH: u16 = 48;
+        const PINNED_QUEUE: &str = "PINNED_QUEUE";
+        let app = dense_hidden_tail_app();
+        let screen_model = ConversationScreenModel::from_app(&app);
+        let adversarial_line = |marker: char| {
+            let word = marker.to_string().repeat(25);
+            Line::from(format!("{word} {word} {word}"))
+        };
+        let dropped_detail = adversarial_line('C');
+        assert_eq!(wrapped_row_count(dropped_detail.width(), WIDTH), 2);
+        assert_eq!(
+            rendered_rows(std::slice::from_ref(&dropped_detail), WIDTH),
+            3,
+            "fixture must exercise Ratatui word wrapping rather than width division"
+        );
+
+        let mut content = vec![InlineTailLine {
+            line: Line::from(PINNED_QUEUE),
+            priority: InlineTailPriority::Pinned,
+        }];
+        content.extend(['A', 'B', 'C'].map(|marker| InlineTailLine {
+            line: adversarial_line(marker),
+            priority: InlineTailPriority::Detail,
+        }));
+        content.extend(
+            build_inline_tail_prompt_lines_with_context(&screen_model)
+                .into_iter()
+                .map(|line| InlineTailLine {
+                    line,
+                    priority: InlineTailPriority::Pinned,
+                }),
+        );
+
+        let compacted = compact_inspection_tail_lines(&screen_model, WIDTH, content);
+        let rendered = compacted
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered_rows(&compacted, WIDTH) <= usize::from(MAX_INLINE_TAIL_HEIGHT),
+            "{rendered}"
+        );
+        assert!(rendered.contains(PINNED_QUEUE), "{rendered}");
+        assert!(
+            !rendered.contains(&dropped_detail.to_string()),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn hidden_host_scrollback_leaves_an_over_budget_prompt_to_the_suffix_renderer() {
+        const WIDTH: u16 = 48;
+        let mut app = dense_hidden_tail_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.input_buffer = format!("{}PROMPT_END", "긴 prompt ".repeat(120));
+        conversation.set_input_cursor_byte_index(conversation.input_buffer.len());
+        let mut screen_model = ConversationScreenModel::from_app(&app);
+        add_dense_low_priority_details(&mut screen_model);
+        let raw_lines = build_inline_tail_content_with_context(&screen_model, None, 40)
+            .into_iter()
+            .map(|entry| entry.line)
+            .collect::<Vec<_>>();
+        let prompt_lines = build_inline_tail_prompt_lines_with_context(&screen_model);
+        assert!(rendered_rows(&prompt_lines, WIDTH) >= usize::from(MAX_INLINE_TAIL_HEIGHT));
+
+        let tail_view = build_inline_tail_view(&screen_model, WIDTH);
+
+        assert_eq!(tail_view.lines, raw_lines);
+        assert!(tail_view.prompt_cursor_offset.is_some());
     }
 }
