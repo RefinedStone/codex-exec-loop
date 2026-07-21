@@ -68,6 +68,7 @@ fn build_agent_lines(
             Line::from("Run `:parallel` or wait for the pool to lease a slot."),
         ];
     }
+    let selected_index = selected_index.min(active_agents.len().saturating_sub(1));
 
     let mut lines = Vec::new();
     for (index, entry) in active_agents.iter().enumerate() {
@@ -243,4 +244,33 @@ fn truncate_peek_text(text: &str, max_chars: usize) -> String {
     let mut truncated = trimmed.chars().take(keep).collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active_agent(agent_id: &str, slot_id: &str) -> ParallelModeAgentRosterEntry {
+        ParallelModeAgentRosterEntry::new(
+            agent_id,
+            "Inspect selection",
+            slot_id,
+            format!("akra-agent/{slot_id}/inspect-selection"),
+            "running",
+            "1m",
+            "working",
+        )
+    }
+
+    #[test]
+    fn agent_lines_clamp_stale_selection_to_the_surviving_roster() {
+        let active_agents = vec![
+            active_agent("agent-1", "slot-1"),
+            active_agent("agent-2", "slot-2"),
+        ];
+
+        let lines = build_agent_lines(&active_agents, 2);
+
+        assert!(lines[1].to_string().starts_with("> 2. agent-2"));
+    }
 }
