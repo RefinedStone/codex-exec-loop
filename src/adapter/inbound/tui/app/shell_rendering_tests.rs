@@ -157,6 +157,65 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
 }
 
 #[test]
+fn captured_turn_steer_confirmation_keeps_language_and_exact_identity_after_app_mutation() {
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.tui_language = TuiLanguage::Korean;
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.thread_id = "thread-A".to_string();
+    conversation.record_turn_started("turn-A".to_string());
+    conversation.input_buffer = "CAPTURED_STEER_PROMPT 한글".to_string();
+    assert!(app.show_turn_steer_confirmation());
+
+    let projection = InlineConversationFrameProjection::from_app(&app, 80);
+
+    app.tui_language = TuiLanguage::English;
+    let intent = app
+        .turn_steer_confirmation
+        .as_mut()
+        .expect("captured turn-steer intent should remain visible");
+    intent.request = ConversationTurnSteerRequest {
+        thread_id: "thread-B".to_string(),
+        expected_turn_id: "turn-B".to_string(),
+        prompt: "MUTATED_STEER_PROMPT".to_string(),
+    };
+
+    let mut terminal = tui_testkit::shell_terminal(80, 24);
+    terminal
+        .draw(|frame| {
+            draw_projected(
+                frame,
+                &mut app,
+                ShellFrontendMode::InlineMainBuffer,
+                projection,
+            )
+        })
+        .expect("captured turn-steer projection should render");
+    let rendered = tui_testkit::screen_text(&terminal);
+
+    for expected in [
+        "현재 턴에 전달",
+        "이 초안을 현재 실행 중인 턴에 정확히 전달할까요?",
+        "thread: thread-A  |  turn: turn-A",
+        "CAPTURED_STEER_PROMPT 한글",
+        "Enter/Tab: 전달",
+    ] {
+        assert!(rendered.contains(expected), "{rendered}");
+    }
+    for stale in [
+        "Steer Active Turn",
+        "Send this exact draft",
+        "thread-B",
+        "turn-B",
+        "MUTATED_STEER_PROMPT",
+    ] {
+        assert!(!rendered.contains(stale), "{rendered}");
+    }
+}
+
+#[test]
 fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
     let mut terminal =
         ratatui::Terminal::new(tui_testkit::Vt100Backend::new(48, 18)).expect("vt100 terminal");

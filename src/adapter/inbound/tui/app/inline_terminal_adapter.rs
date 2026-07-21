@@ -879,7 +879,7 @@ impl FrameCacheState {
     ) -> bool {
         if frame_projection.shell_overlay != ShellOverlay::Hidden
             || frame_projection.exit_confirmation_visible
-            || frame_projection.turn_steer_confirmation_visible
+            || frame_projection.turn_steer_confirmation.is_some()
         {
             // Overlay frames are modal and can overwrite the tail; drop the cache so
             // returning to the main shell redraws from a fresh signature.
