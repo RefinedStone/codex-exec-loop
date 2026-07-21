@@ -67,8 +67,9 @@ pub(super) use overlays::{
 use runtime_status_copy::{build_working_line, compact_inline_detail};
 pub(super) use shell_core::{
     ConversationComposerScreenModel, ConversationLiveTranscriptScreenModel,
-    ConversationProjectionSample, ConversationScreenModel, ParallelPanelProjectionSample,
-    TurnSteerConfirmationScreenModel, conversation_startup_screen_is_active,
+    ConversationProjectionSample, ConversationRuntimeStatusScreenModel, ConversationScreenModel,
+    ParallelPanelProjectionSample, TurnSteerConfirmationScreenModel,
+    conversation_startup_screen_is_active,
 };
 use shell_core::{QueueMutationTailState, ShellConversationState};
 pub(super) use startup_banner::startup_ascii_art_lines;

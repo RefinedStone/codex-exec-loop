@@ -193,6 +193,9 @@ pub(super) fn build_inline_tail_content_with_context(
             worker detail, recent transcript context, and finally notices. This
             mirrors how operators scan the tail while a turn is active.
             */
+            let runtime_status = screen_model
+                .runtime_status()
+                .expect("ready conversation must retain its runtime status projection");
             let warning_summary = compact_inline_summary_label(
                 &conversation.warning_summary(INLINE_TAIL_WARNING_DETAIL_LIMIT),
             );
@@ -266,9 +269,11 @@ pub(super) fn build_inline_tail_content_with_context(
             }
             let working_detail_limit =
                 INLINE_TAIL_STATUS_DETAIL_LIMIT.min(notice_detail_limit.saturating_sub(9));
-            if let Some(working_line) =
-                build_working_line(conversation, working_detail_limit, screen_model.rendered_at)
-            {
+            if let Some(working_line) = build_working_line(
+                runtime_status,
+                working_detail_limit,
+                screen_model.rendered_at,
+            ) {
                 lines.push(InlineTailLine::new(
                     InlineTailPriority::LiveActivity,
                     working_line,
@@ -1053,6 +1058,35 @@ mod coverage_tests {
     }
 
     #[test]
+    fn runtime_status_projection_exists_only_for_ready_conversations() {
+        let startup_state = StartupState::Idle;
+        let conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let failed_message = "startup failed".to_string();
+
+        for state in [
+            ShellConversationState::Loading,
+            ShellConversationState::Failed(&failed_message),
+        ] {
+            let screen_model = context_for(&startup_state, ShellActionAvailability::Pending, state);
+            assert!(screen_model.runtime_status().is_none());
+        }
+
+        let screen_model = context_for(
+            &startup_state,
+            ShellActionAvailability::Ready,
+            ShellConversationState::Ready(&conversation),
+        );
+        let runtime_status = screen_model
+            .runtime_status()
+            .expect("ready conversation should project runtime status");
+        assert_eq!(
+            runtime_status.input_state,
+            ConversationInputState::DraftReady
+        );
+        assert!(runtime_status.working_started_at.is_none());
+    }
+
+    #[test]
     fn shell_loading_and_failed_tails_keep_prompt_copy_without_ready_conversation() {
         let mut app = test_native_tui_app();
 
@@ -1383,9 +1417,21 @@ mod coverage_tests {
         conversation.auto_follow_state.mark_auto_turn_queued();
 
         assert!(!conversation.can_accept_manual_prompt());
+        let startup_state = StartupState::Idle;
+        let screen_model = context_for(
+            &startup_state,
+            ShellActionAvailability::Ready,
+            ShellConversationState::Ready(&conversation),
+        );
         assert!(
-            build_working_line(&conversation, 40, Instant::now())
-                .is_some_and(|line| line.to_string().contains("settling planning queue"))
+            build_working_line(
+                screen_model
+                    .runtime_status()
+                    .expect("ready conversation should retain runtime status"),
+                40,
+                Instant::now(),
+            )
+            .is_some_and(|line| line.to_string().contains("settling planning queue"))
         );
         let empty_prompt = rendered_ready_prompt(
             &conversation,

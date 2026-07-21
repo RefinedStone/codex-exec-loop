@@ -3073,6 +3073,88 @@ fn conversation_prompt_projection_uses_one_narrow_composer_screen_model() {
 }
 
 #[test]
+fn conversation_runtime_status_projection_uses_one_narrow_screen_model() {
+    let shell_core_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
+    )
+    .expect("shell presentation core source should load");
+    let shell_core_syntax =
+        syn::parse_file(&shell_core_source).expect("shell presentation core should parse");
+    let runtime_status_fields =
+        named_struct_fields(&shell_core_syntax, "ConversationRuntimeStatusScreenModel");
+    assert_eq!(
+        runtime_status_fields
+            .iter()
+            .map(|field| {
+                field
+                    .ident
+                    .as_ref()
+                    .expect("runtime status field should be named")
+                    .to_string()
+            })
+            .collect::<HashSet<_>>(),
+        [
+            "working_started_at",
+            "post_turn_settlement_in_flight",
+            "auto_follow_phase",
+            "auto_follow_max_turns_label",
+            "input_state",
+            "live_agent_message_present",
+            "interrupt_support_label",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<HashSet<_>>(),
+        "runtime status screen model must stay limited to working-line presentation facts"
+    );
+
+    let shell_core_production = production_lines(&shell_core_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        shell_core_production
+            .contains("runtime_status:Option<ConversationRuntimeStatusScreenModel>"),
+        "ConversationScreenModel must retain one ready-only runtime status projection"
+    );
+
+    let runtime_copy_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/runtime_status_copy.rs"),
+    )
+    .expect("runtime status copy source should load");
+    let production_copy = production_lines(&runtime_copy_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(production_copy.contains("ConversationRuntimeStatusScreenModel"));
+    assert!(
+        !production_copy.contains("ConversationViewModel"),
+        "runtime status copy must consume the narrow projection instead of the conversation view model"
+    );
+
+    let tail_source = fs::read_to_string(
+        repo_root()
+            .join("src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs"),
+    )
+    .expect("inline tail copy source should load");
+    let ready_tail =
+        top_level_function_source(&tail_source, "build_inline_tail_content_with_context")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+    assert!(
+        ready_tail.contains("runtime_status()")
+            && ready_tail.contains("build_working_line(runtime_status,"),
+        "inline tail must pass the prebuilt runtime status projection to working-line copy"
+    );
+}
+
+#[test]
 fn conversation_live_transcript_projection_uses_one_narrow_screen_model() {
     const SHELL_CORE: &str = "src/adapter/inbound/tui/app/shell_presentation/shell_core.rs";
     const LIVE_CONSUMERS: &[&str] = &[

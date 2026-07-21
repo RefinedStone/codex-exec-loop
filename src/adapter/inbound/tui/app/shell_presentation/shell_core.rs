@@ -23,9 +23,9 @@ use super::super::parallel_presentation_bridge::{
 use super::super::parallel_supervisor_events::ParallelSupervisorEventProjection;
 use super::capability_projection::recent_session_status_label;
 use super::{
-    ConversationComposerState, ConversationInputState, ConversationState, ConversationViewModel,
-    HistoryInsertionMode, InlineHistoryRenderMode, NativeTuiApp, ParallelPanelStateController,
-    ShellActionAvailability, ShellOverlay, StartupState, TuiLanguage,
+    AutoFollowRuntimePhase, ConversationComposerState, ConversationInputState, ConversationState,
+    ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode, NativeTuiApp,
+    ParallelPanelStateController, ShellActionAvailability, ShellOverlay, StartupState, TuiLanguage,
 };
 
 const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
@@ -248,6 +248,31 @@ impl<'a> ConversationComposerScreenModel<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(in crate::adapter::inbound::tui::app) struct ConversationRuntimeStatusScreenModel {
+    pub(in crate::adapter::inbound::tui::app) working_started_at: Option<Instant>,
+    pub(in crate::adapter::inbound::tui::app) post_turn_settlement_in_flight: bool,
+    pub(in crate::adapter::inbound::tui::app) auto_follow_phase: AutoFollowRuntimePhase,
+    pub(in crate::adapter::inbound::tui::app) auto_follow_max_turns_label: String,
+    pub(in crate::adapter::inbound::tui::app) input_state: ConversationInputState,
+    pub(in crate::adapter::inbound::tui::app) live_agent_message_present: bool,
+    pub(in crate::adapter::inbound::tui::app) interrupt_support_label: &'static str,
+}
+
+impl ConversationRuntimeStatusScreenModel {
+    fn from_conversation(conversation: &ConversationViewModel) -> Self {
+        Self {
+            working_started_at: conversation.live_activity_started_at(),
+            post_turn_settlement_in_flight: conversation.has_post_turn_settlement_in_flight(),
+            auto_follow_phase: conversation.auto_follow_state.runtime_phase.clone(),
+            auto_follow_max_turns_label: conversation.auto_follow_state.max_auto_turns_label(),
+            input_state: conversation.input_state,
+            live_agent_message_present: conversation.live_agent_message.is_some(),
+            interrupt_support_label: conversation.interrupt_support_label(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::adapter::inbound::tui::app) struct ConversationLiveTranscriptScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) handoff_messages: Option<&'a [ConversationMessage]>,
@@ -329,6 +354,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
         Option<TurnSteerConfirmationScreenModel>,
     pub(in crate::adapter::inbound::tui::app) prompt_input_has_focus: bool,
     composer: Option<ConversationComposerScreenModel<'a>>,
+    runtime_status: Option<ConversationRuntimeStatusScreenModel>,
     live_transcript: Option<ConversationLiveTranscriptScreenModel<'a>>,
     pub(in crate::adapter::inbound::tui::app) conversation_state: ShellConversationState<'a>,
 }
@@ -420,6 +446,7 @@ impl<'a> ConversationScreenModel<'a> {
             ConversationState::Ready(conversation) => ShellConversationState::Ready(conversation),
         };
         let composer = Self::composer_for_state(conversation_state);
+        let runtime_status = Self::runtime_status_for_state(conversation_state);
         let live_transcript = Self::live_transcript_for_state(
             conversation_state,
             inline_history_render_mode,
@@ -463,6 +490,7 @@ impl<'a> ConversationScreenModel<'a> {
             turn_steer_confirmation,
             prompt_input_has_focus,
             composer,
+            runtime_status,
             live_transcript,
             conversation_state,
         }
@@ -493,6 +521,27 @@ impl<'a> ConversationScreenModel<'a> {
         match conversation_state {
             ShellConversationState::Ready(conversation) => Some(
                 ConversationComposerScreenModel::from_conversation(conversation),
+            ),
+            ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
+        }
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn runtime_status(
+        &self,
+    ) -> Option<&ConversationRuntimeStatusScreenModel> {
+        match (self.conversation_state, self.runtime_status.as_ref()) {
+            (ShellConversationState::Ready(_), Some(runtime_status)) => Some(runtime_status),
+            (ShellConversationState::Loading | ShellConversationState::Failed(_), None) => None,
+            _ => unreachable!("conversation and runtime status projections must agree"),
+        }
+    }
+
+    fn runtime_status_for_state(
+        conversation_state: ShellConversationState<'a>,
+    ) -> Option<ConversationRuntimeStatusScreenModel> {
+        match conversation_state {
+            ShellConversationState::Ready(conversation) => Some(
+                ConversationRuntimeStatusScreenModel::from_conversation(conversation),
             ),
             ShellConversationState::Loading | ShellConversationState::Failed(_) => None,
         }
@@ -554,6 +603,7 @@ impl<'a> ConversationScreenModel<'a> {
         conversation_state: ShellConversationState<'a>,
     ) -> Self {
         let composer = Self::composer_for_state(conversation_state);
+        let runtime_status = Self::runtime_status_for_state(conversation_state);
         let live_transcript = Self::live_transcript_for_state(
             conversation_state,
             InlineHistoryRenderMode::HostScrollback,
@@ -593,6 +643,7 @@ impl<'a> ConversationScreenModel<'a> {
             turn_steer_confirmation: None,
             prompt_input_has_focus: true,
             composer,
+            runtime_status,
             live_transcript,
             conversation_state,
         }
