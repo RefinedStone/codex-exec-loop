@@ -103,7 +103,7 @@ pub(super) fn build_inline_tail_content_with_context(
     if screen_model.startup_screen_is_active() {
         let has_buffered_input = screen_model
             .ready_conversation()
-            .is_some_and(|conversation| !conversation.input_buffer.is_empty());
+            .is_some_and(|conversation| !conversation.composer.input_buffer.is_empty());
         // The full startup masthead is useful only before the operator starts typing.
         // Once an overlay or buffered prompt exists, keep the tail compact so the
         // prompt remains close to its status line.
@@ -731,7 +731,7 @@ fn startup_prompt_buffered_in_context(screen_model: &ConversationScreenModel<'_>
     let Some(conversation) = screen_model.ready_conversation() else {
         return false;
     };
-    !conversation.input_buffer.trim().is_empty()
+    !conversation.composer.input_buffer.trim().is_empty()
 }
 
 pub(super) fn build_inline_tail_prompt_lines_with_context(
@@ -799,7 +799,7 @@ fn build_inline_ready_prompt_lines(
 
     // Empty prompt copy prioritizes what blocks or enables the next Enter press.
     // Buffered prompt copy instead explains what will happen to the typed text.
-    if conversation.input_buffer.is_empty() {
+    if conversation.composer.input_buffer.is_empty() {
         /*
         Empty-buffer copy is command guidance rather than content preview. It
         must explain whether Enter can send immediately, is gated by startup, or
@@ -833,13 +833,17 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
-    if conversation.inline_shell_command_palette_state.is_active() {
+    if conversation
+        .composer
+        .inline_shell_command_palette_state
+        .is_active()
+    {
         /*
         Palette copy takes precedence over raw command parsing because the
         operator is navigating an already-open menu; showing parse hints here
         would fight with Up/Down/Enter semantics.
         */
-        let palette = &conversation.inline_shell_command_palette_state;
+        let palette = &conversation.composer.inline_shell_command_palette_state;
         let selected = palette.selected_index().map_or(0, |index| index + 1);
         lines.push(Line::from(language.inline_command_palette_header(
             selected,
@@ -859,7 +863,7 @@ fn build_inline_ready_prompt_lines(
         return lines;
     }
 
-    if let Some(command) = InlineShellCommandInput::parse(&conversation.input_buffer) {
+    if let Some(command) = InlineShellCommandInput::parse(&conversation.composer.input_buffer) {
         /*
         Parsed shell commands get a dedicated hint line before generic prompt
         guidance. That keeps destructive or overlay-opening commands legible
@@ -897,7 +901,7 @@ fn build_inline_ready_prompt_lines(
         (
             ConversationInputState::DraftReady | ConversationInputState::ReadyToContinue,
             ShellActionAvailability::Pending,
-        ) if conversation.startup_submit_armed => {
+        ) if conversation.composer.startup_submit_armed => {
             /*
             The startup-armed path means Enter was already accepted while startup
             was pending. Editing the buffer should cancel that queued send, so the
@@ -1052,7 +1056,8 @@ mod coverage_tests {
         let failed = render_tail(&app, None);
         assert!(failed.contains("codex missing"));
 
-        ready_conversation_mut(&mut app).input_buffer = "queued startup prompt".to_string();
+        ready_conversation_mut(&mut app).composer.input_buffer =
+            "queued startup prompt".to_string();
         let overlay = render_tail(&app, None);
         assert!(overlay.contains("Akra"));
         assert!(!overlay.contains("████"));
@@ -1220,9 +1225,11 @@ mod coverage_tests {
         }
 
         let mut palette = ConversationViewModel::new_draft("/tmp/root".to_string());
-        palette.input_buffer = ":".to_string();
-        palette.sync_inline_shell_command_palette();
-        palette.move_inline_shell_command_palette_selection(2);
+        palette.composer.input_buffer = ":".to_string();
+        palette.composer.sync_inline_shell_command_palette();
+        palette
+            .composer
+            .move_inline_shell_command_palette_selection(2);
         let palette_prompt = rendered(build_inline_ready_prompt_lines(
             &palette,
             ShellActionAvailability::Ready,
@@ -1251,7 +1258,7 @@ mod coverage_tests {
         )));
 
         let mut korean_command = ConversationViewModel::new_draft("/tmp/root".to_string());
-        korean_command.input_buffer = ":reset queue".to_string();
+        korean_command.composer.input_buffer = ":reset queue".to_string();
         let korean_command_prompt = rendered(build_inline_ready_prompt_lines(
             &korean_command,
             ShellActionAvailability::Ready,
@@ -1264,7 +1271,7 @@ mod coverage_tests {
         assert!(!korean_command_prompt.contains("Press Enter"));
 
         let mut command = ConversationViewModel::new_draft("/tmp/root".to_string());
-        command.input_buffer = ":reset queue".to_string();
+        command.composer.input_buffer = ":reset queue".to_string();
         let command_prompt = rendered(build_inline_ready_prompt_lines(
             &command,
             ShellActionAvailability::Ready,
@@ -1275,7 +1282,7 @@ mod coverage_tests {
         );
 
         let mut busy = ConversationViewModel::new_draft("/tmp/root".to_string());
-        busy.input_buffer = "next prompt".to_string();
+        busy.composer.input_buffer = "next prompt".to_string();
         busy.auto_follow_state.mark_auto_turn_queued();
         let busy_prompt = rendered(build_inline_ready_prompt_lines(
             &busy,
@@ -1285,8 +1292,8 @@ mod coverage_tests {
         assert!(busy_prompt.contains("auto-follow busy"));
 
         let mut armed = ConversationViewModel::new_draft("/tmp/root".to_string());
-        armed.input_buffer = "queued".to_string();
-        armed.startup_submit_armed = true;
+        armed.composer.input_buffer = "queued".to_string();
+        armed.composer.startup_submit_armed = true;
         let armed_prompt = rendered(build_inline_ready_prompt_lines(
             &armed,
             ShellActionAvailability::Pending,
@@ -1317,7 +1324,7 @@ mod coverage_tests {
             ),
         ] {
             let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-            conversation.input_buffer = "buffered".to_string();
+            conversation.composer.input_buffer = "buffered".to_string();
             conversation.input_state = state;
             let prompt = rendered(build_inline_ready_prompt_lines(
                 &conversation,
@@ -1353,7 +1360,7 @@ mod coverage_tests {
         assert!(!empty_prompt.contains("Enter send"));
         assert!(!empty_prompt.contains("Enter when ready"));
 
-        conversation.input_buffer = "next request".to_string();
+        conversation.composer.input_buffer = "next request".to_string();
         let buffered_prompt = rendered(build_inline_ready_prompt_lines(
             &conversation,
             ShellActionAvailability::Ready,
@@ -1471,7 +1478,7 @@ mod coverage_tests {
         conversation.base_warnings.push("warning one".to_string());
         conversation.warnings.push("warning one".to_string());
         conversation.runtime_notices.push("runtime one".to_string());
-        conversation.input_buffer = "buffered".to_string();
+        conversation.composer.input_buffer = "buffered".to_string();
 
         let tail = render_tail(&app, Some("review changed"));
 

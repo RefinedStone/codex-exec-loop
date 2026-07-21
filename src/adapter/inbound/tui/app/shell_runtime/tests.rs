@@ -1650,14 +1650,14 @@ fn resize_event_leaves_transcript_state_unchanged() {
         Some("final_answer".to_string()),
         Some("agent-1".to_string()),
     ));
-    conversation.input_buffer = "buffered prompt".to_string();
+    conversation.composer.input_buffer = "buffered prompt".to_string();
 
     runtime.take_redraw_request();
     runtime.handle_terminal_event(Event::Resize(120, 40));
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "buffered prompt");
+    assert_eq!(conversation.composer.input_buffer, "buffered prompt");
     assert_eq!(conversation.messages.len(), 1);
     assert!(runtime.take_redraw_request());
 }

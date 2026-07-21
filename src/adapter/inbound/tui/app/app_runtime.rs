@@ -31,16 +31,17 @@ use crate::domain::operator_alert::OperatorAlert;
 
 use super::{
     AutoFollowControlEvent, AutoFollowOverlayUiEvent, AutoFollowOverlayUiState,
-    ConversationInputEvent, ConversationIntentEffect, ConversationIntentEvent,
-    ConversationIntentMode, ConversationIntentState, ConversationLifecycleEffect,
-    ConversationLifecycleEvent, ConversationLifecycleState, ConversationRuntimeEffect,
-    ConversationRuntimeEvent, ConversationState, ConversationViewModel, ExitConfirmationState,
-    GithubReviewPollingBootstrap, NativeTuiApp, PendingResumedSessionPlanningRefresh,
-    PlanningInitOverlayUiState, SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState,
-    ShellChromeEffect, ShellChromeEvent, ShellChromeState, ShellOverlay, StartupState,
-    reduce_auto_follow_controls, reduce_auto_follow_overlay_ui, reduce_conversation_input,
-    reduce_conversation_intents, reduce_conversation_lifecycle, reduce_conversation_runtime,
-    reduce_shell_chrome, startup_ascii_art_enabled_from_environment,
+    ConversationComposerEffect, ConversationComposerEvent, ConversationInputEvent,
+    ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
+    ConversationIntentState, ConversationLifecycleEffect, ConversationLifecycleEvent,
+    ConversationLifecycleState, ConversationRuntimeEffect, ConversationRuntimeEvent,
+    ConversationState, ConversationViewModel, ExitConfirmationState, GithubReviewPollingBootstrap,
+    NativeTuiApp, PendingResumedSessionPlanningRefresh, PlanningInitOverlayUiState,
+    SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent,
+    ShellChromeState, ShellOverlay, StartupState, reduce_auto_follow_controls,
+    reduce_auto_follow_overlay_ui, reduce_conversation_input, reduce_conversation_intents,
+    reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_shell_chrome,
+    startup_ascii_art_enabled_from_environment,
 };
 
 // Background control-plane and poll results are lower volume than token events,
@@ -210,8 +211,8 @@ mod tests {
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::domain::conversation::{
-        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationToolActivity,
-        ConversationToolActivityKind,
+        ConversationApprovalReview, ConversationApprovalReviewStatus, ConversationMessage,
+        ConversationMessageKind, ConversationToolActivity, ConversationToolActivityKind,
     };
     use crate::domain::conversation_progressive_activity::{
         ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
@@ -1452,6 +1453,70 @@ mod tests {
             },
         );
     }
+
+    #[test]
+    fn composer_dispatch_preserves_semantic_conversation_state() {
+        let mut app = test_helpers::test_native_tui_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start with a ready conversation");
+        };
+        conversation.messages.push(ConversationMessage::new(
+            ConversationMessageKind::User,
+            "existing transcript",
+            None,
+            None,
+        ));
+        conversation.record_turn_started("turn-1".to_string());
+        conversation.approval_review = Some(ConversationApprovalReview {
+            target_item_id: "tool-1".to_string(),
+            status: ConversationApprovalReviewStatus::InProgress,
+            risk_level: Some("medium".to_string()),
+            rationale: Some("confirm this command".to_string()),
+        });
+        conversation.status_text = "semantic status".to_string();
+
+        let messages_before = conversation.messages.clone();
+        let active_turn_before = conversation.active_turn_id.clone();
+        let approval_before = conversation.approval_review.clone();
+        let planning_repair_before = conversation.planning_repair_state.clone();
+        let status_before = conversation.status_text.clone();
+
+        app.dispatch_conversation_input(ConversationComposerEvent::CharacterTyped {
+            character: 'x',
+        });
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("composer dispatch should preserve ready conversation state");
+        };
+        assert_eq!(conversation.composer.input_buffer, "x");
+        assert_eq!(conversation.messages, messages_before);
+        assert_eq!(conversation.active_turn_id, active_turn_before);
+        assert_eq!(conversation.approval_review, approval_before);
+        assert_eq!(conversation.planning_repair_state, planning_repair_before);
+        assert_eq!(conversation.status_text, status_before);
+    }
+
+    #[test]
+    fn semantic_status_dispatch_preserves_composer_state() {
+        let mut app = test_helpers::test_native_tui_app();
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should start with a ready conversation");
+        };
+        conversation.composer.input_buffer = ":p".to_string();
+        conversation.composer.sync_inline_shell_command_palette();
+        conversation.composer.arm_startup_submit();
+        let composer_before = conversation.composer.clone();
+
+        app.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: "runtime status".to_string(),
+        });
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("status dispatch should preserve ready conversation state");
+        };
+        assert_eq!(conversation.composer, composer_before);
+        assert_eq!(conversation.status_text, "runtime status");
+    }
 }
 
 pub(crate) struct NativeTuiParallelModeBinding {
@@ -2380,7 +2445,8 @@ impl NativeTuiApp {
         turn_submission_admitted
     }
 
-    pub(super) fn dispatch_conversation_input(&mut self, event: ConversationInputEvent) {
+    pub(super) fn dispatch_conversation_input(&mut self, event: impl Into<ConversationInputEvent>) {
+        let event = event.into();
         let event =
             if self.pending_manual_prompt_preparation.is_some() && event.mutates_input_buffer() {
                 ConversationInputEvent::StatusMessageShown {
@@ -2395,8 +2461,31 @@ impl NativeTuiApp {
         let Some(conversation) = self.take_ready_conversation_state() else {
             return;
         };
-        let reduction = reduce_conversation_input(conversation, event);
-        self.conversation_state = ConversationState::ready(reduction.state);
+        let mut conversation = conversation;
+        match event {
+            ConversationInputEvent::Composer(event) => {
+                let composer = std::mem::take(&mut conversation.composer);
+                let reduction = reduce_conversation_input(composer, event);
+                conversation.composer = reduction.state;
+                for effect in reduction.effects {
+                    match effect {
+                        ConversationComposerEffect::ReplaceStatus { status_text } => {
+                            conversation.status_text = status_text;
+                        }
+                    }
+                }
+            }
+            ConversationInputEvent::StatusMessageShown { status_text } => {
+                conversation.record_status_message(status_text);
+            }
+            ConversationInputEvent::ManualPromptPreparationFailed {
+                transcript_text,
+                status_text,
+            } => {
+                conversation.record_manual_preparation_failure(transcript_text, status_text);
+            }
+        }
+        self.conversation_state = ConversationState::ready(conversation);
         self.advance_planning_ui_intent_revision();
         if mutates_input_buffer {
             self.prompt_input_revision = self.prompt_input_revision.wrapping_add(1).max(1);
@@ -2404,7 +2493,7 @@ impl NativeTuiApp {
     }
 
     pub(super) fn clear_input_buffer(&mut self) {
-        self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+        self.dispatch_conversation_input(ConversationComposerEvent::InputCleared);
     }
 
     fn conversation_intent_state(&self) -> ConversationIntentState {

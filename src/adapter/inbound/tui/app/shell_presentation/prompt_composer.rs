@@ -22,13 +22,14 @@ pub(super) fn build_shell_command_palette_lines(
     conversation: &ConversationViewModel,
     language: TuiLanguage,
 ) -> Vec<Line<'static>> {
-    let palette_state = &conversation.inline_shell_command_palette_state;
+    let palette_state = &conversation.composer.inline_shell_command_palette_state;
     // Dismissed palettes should leave the typed buffer visible without suggestion rows.
     if !palette_state.is_active() {
         return Vec::new();
     }
     // Suggestion prefix is only present while the user is typing the command token, not arguments.
-    let Some(prefix) = InlineShellCommand::suggestion_prefix(&conversation.input_buffer) else {
+    let Some(prefix) = InlineShellCommand::suggestion_prefix(&conversation.composer.input_buffer)
+    else {
         return Vec::new();
     };
     // Empty results still render feedback so the user knows the palette is active and filtering.
@@ -115,8 +116,8 @@ fn locate_prompt_cursor_with_word_wrap(
     conversation: &ConversationViewModel,
     content_width: u16,
 ) -> Option<(u16, u16)> {
-    let cursor_byte_index = conversation.input_cursor_byte_index();
-    let cursor_prefix = &conversation.input_buffer[..cursor_byte_index];
+    let cursor_byte_index = conversation.composer.input_cursor_byte_index();
+    let cursor_prefix = &conversation.composer.input_buffer[..cursor_byte_index];
     let mut prefix_lines = cursor_prefix
         .split('\n')
         .enumerate()
@@ -189,7 +190,11 @@ pub(super) fn build_prompt_buffer_view(conversation: &ConversationViewModel) -> 
     /*
     Prefixes are part of the prompt projection so rendered input and cursor probes share the same copy.
     */
-    let buffer_lines = conversation.input_buffer.split('\n').collect::<Vec<_>>();
+    let buffer_lines = conversation
+        .composer
+        .input_buffer
+        .split('\n')
+        .collect::<Vec<_>>();
     let mut lines = Vec::with_capacity(buffer_lines.len().max(1));
 
     for (index, buffer_line) in buffer_lines.iter().enumerate() {
@@ -231,8 +236,8 @@ mod tests {
     #[test]
     fn prompt_cursor_offset_uses_conversation_cursor_position() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        conversation.input_buffer = "hello".to_string();
-        conversation.set_input_cursor_byte_index(2);
+        conversation.composer.input_buffer = "hello".to_string();
+        conversation.composer.set_input_cursor_byte_index(2);
 
         assert_eq!(build_prompt_cursor_offset(&conversation, 80), Some((4, 0)));
     }
@@ -240,8 +245,10 @@ mod tests {
     #[test]
     fn prompt_cursor_offset_handles_multiline_middle_cursor() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        conversation.input_buffer = "one\ntwo".to_string();
-        conversation.set_input_cursor_byte_index("one\n".len() + 1);
+        conversation.composer.input_buffer = "one\ntwo".to_string();
+        conversation
+            .composer
+            .set_input_cursor_byte_index("one\n".len() + 1);
 
         assert_eq!(build_prompt_cursor_offset(&conversation, 80), Some((3, 1)));
     }
@@ -249,12 +256,15 @@ mod tests {
     #[test]
     fn prompt_cursor_probe_handles_combining_and_zwj_graphemes() {
         let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
-        conversation.input_buffer = "before e\u{301} 👩‍💻 after".to_string();
+        conversation.composer.input_buffer = "before e\u{301} 👩‍💻 after".to_string();
         let emoji_start = conversation
+            .composer
             .input_buffer
             .find("👩‍💻")
             .expect("emoji fixture should exist");
-        conversation.set_input_cursor_byte_index(emoji_start);
+        conversation
+            .composer
+            .set_input_cursor_byte_index(emoji_start);
 
         assert!(build_prompt_cursor_offset(&conversation, 12).is_some());
     }

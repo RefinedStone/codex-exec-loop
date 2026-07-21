@@ -184,7 +184,10 @@ use auto_follow_controls::{AutoFollowControlEvent, reduce_auto_follow_controls};
 use auto_follow_overlay_ui::{
     AutoFollowOverlayUiEvent, AutoFollowOverlayUiState, reduce_auto_follow_overlay_ui,
 };
-use conversation_input::{ConversationInputEvent, InputCursorMovement, reduce_conversation_input};
+use conversation_input::{
+    ConversationComposerEffect, ConversationComposerEvent, ConversationInputEvent,
+    InputCursorMovement, reduce_conversation_input,
+};
 use conversation_intents::{
     ConversationIntentEffect, ConversationIntentEvent, ConversationIntentMode,
     ConversationIntentState, reduce_conversation_intents,
@@ -195,10 +198,10 @@ use conversation_lifecycle::{
 };
 #[allow(unused_imports)]
 pub(super) use conversation_model::{
-    AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationInputState,
-    ConversationState, ConversationViewModel, ProgressiveActivityCard, ProgressiveActivityCardKind,
-    ProgressiveActivityDetailKind, ProgressiveActivityExpandState, StopKeywordRule,
-    filter_cards_by_kind,
+    AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationComposerState,
+    ConversationInputState, ConversationState, ConversationViewModel, ProgressiveActivityCard,
+    ProgressiveActivityCardKind, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
+    StopKeywordRule, filter_cards_by_kind,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,

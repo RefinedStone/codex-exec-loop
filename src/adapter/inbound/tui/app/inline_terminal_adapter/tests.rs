@@ -180,7 +180,7 @@ fn github_setup_starts_once_only_after_the_first_successful_frame() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("fixture should keep a ready conversation");
     };
-    assert_eq!(conversation.input_buffer, "x");
+    assert_eq!(conversation.composer.input_buffer, "x");
     assert!(
         runtime.take_redraw_request(),
         "input and setup-start state must remain redrawable while setup is blocked"
@@ -3119,7 +3119,7 @@ fn physical_shrink_requeries_cursor_before_inline_autoresize() {
     let mut app = make_test_app();
     app.show_startup_ascii_art = false;
     if let ConversationState::Ready(conversation) = &mut app.conversation_state {
-        conversation.input_buffer = "physical shrink prompt".to_string();
+        conversation.composer.input_buffer = "physical shrink prompt".to_string();
     }
     append_history_message(&mut app, "physical shrink history");
     let mut runtime = ShellRuntime::new(app);
@@ -3674,7 +3674,7 @@ fn assert_resize_sequence_does_not_leak_live_tail(
     app.inline_history_render_mode = render_mode;
     app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
     if let ConversationState::Ready(conversation) = &mut app.conversation_state {
-        conversation.input_buffer = "live prompt must not move to scrollback".to_string();
+        conversation.composer.input_buffer = "live prompt must not move to scrollback".to_string();
     }
     append_history_message(&mut app, history_message);
     let mut runtime = ShellRuntime::new(app);
@@ -3701,7 +3701,7 @@ fn assert_draw_internal_resize_does_not_leak_live_tail(
     app.inline_history_render_mode = render_mode;
     app.history_insert_mode = HistoryInsertionMode::StandardScrollRegion;
     if let ConversationState::Ready(conversation) = &mut app.conversation_state {
-        conversation.input_buffer = "live prompt must not move to scrollback".to_string();
+        conversation.composer.input_buffer = "live prompt must not move to scrollback".to_string();
     }
     append_history_message(&mut app, history_message);
     let mut runtime = ShellRuntime::new(app);
@@ -3895,7 +3895,7 @@ fn inline_history_uses_startup_banner_while_typing_in_new_draft() {
     if let crate::adapter::inbound::tui::app::ConversationState::Ready(conversation) =
         &mut app.conversation_state
     {
-        conversation.input_buffer = "hello banner".to_string();
+        conversation.composer.input_buffer = "hello banner".to_string();
     }
     let lines = current_inline_history_lines(&app)
         .into_iter()

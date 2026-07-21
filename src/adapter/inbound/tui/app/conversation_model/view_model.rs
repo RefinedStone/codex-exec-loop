@@ -1,7 +1,5 @@
 use std::time::Instant;
 
-use unicode_segmentation::UnicodeSegmentation;
-
 /*
  * This file owns the mutable TUI projection of a conversation. The domain
  * snapshot gives persisted transcript facts; the view model layers on transient
@@ -24,9 +22,9 @@ use crate::domain::conversation::{
 use crate::domain::conversation_runtime_envelope::ConversationRuntimeEnvelope;
 use crate::domain::planning::{PlanningQueueMutationReceipt, PlanningRepairRequestSnapshot};
 
-use super::super::inline_shell_commands::{InlineShellCommand, InlineShellCommandPaletteState};
 use super::activity_rail::ActivityRailTerminalState;
 use super::auto_follow::{AutoFollowSkipReason, AutoFollowState};
+use super::composer_state::ConversationComposerState;
 use super::progressive_activity::ProgressiveActivityState;
 use super::progressive_activity_detail::ProgressiveActivityDetailState;
 use super::turn_activity::TurnActivityState;
@@ -125,11 +123,9 @@ pub(crate) struct ConversationViewModel {
     // Headless core owns correlation and applied-state reduction. The TUI retains
     // the resulting envelope for later P0-D presentation without reparsing wire data.
     pub(crate) runtime_envelope: Option<ConversationRuntimeEnvelope>,
-    pub(crate) input_buffer: String,
-    input_cursor_byte_index: Option<usize>,
-    pub(crate) inline_shell_command_palette_state: InlineShellCommandPaletteState,
-    // Startup submit lets initial CLI text wait until the draft/thread is ready to accept it.
-    pub(crate) startup_submit_armed: bool,
+    // Prompt editing is isolated from transcript, runtime, planning, approval,
+    // and viewport state by the composer reducer boundary.
+    pub(crate) composer: ConversationComposerState,
     // Active-turn fields bridge submission, app-server turn start, stream reduction, and finish.
     pub(crate) active_turn_id: Option<String>,
     pub(crate) active_turn_workspace_directory: Option<String>,
@@ -183,10 +179,7 @@ impl ConversationViewModel {
             warnings: Vec::new(),
             runtime_notices: Vec::new(),
             runtime_envelope: None,
-            input_buffer: String::new(),
-            input_cursor_byte_index: None,
-            inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
-            startup_submit_armed: false,
+            composer: ConversationComposerState::default(),
             active_turn_id: None,
             active_turn_workspace_directory: None,
             active_turn_started_at: None,
@@ -262,10 +255,7 @@ impl ConversationViewModel {
             warnings,
             runtime_notices,
             runtime_envelope: None,
-            input_buffer: String::new(),
-            input_cursor_byte_index: None,
-            inline_shell_command_palette_state: InlineShellCommandPaletteState::default(),
-            startup_submit_armed: false,
+            composer: ConversationComposerState::default(),
             active_turn_id: None,
             active_turn_workspace_directory: None,
             active_turn_started_at: None,
@@ -311,34 +301,6 @@ impl ConversationViewModel {
             .manual_handoff_context
             .as_deref()
     }
-    pub(crate) fn sync_inline_shell_command_palette(&mut self) {
-        let preferred_selection = self.inline_shell_command_palette_state.selected_command();
-        self.inline_shell_command_palette_state
-            .sync_to_input(&self.input_buffer, preferred_selection);
-    }
-    pub(crate) fn input_cursor_byte_index(&self) -> usize {
-        self.input_cursor_byte_index
-            .map(|index| clamp_to_grapheme_boundary(&self.input_buffer, index))
-            .unwrap_or(self.input_buffer.len())
-    }
-    pub(crate) fn set_input_cursor_byte_index(&mut self, index: usize) {
-        self.input_cursor_byte_index = Some(clamp_to_grapheme_boundary(&self.input_buffer, index));
-    }
-    pub(crate) fn move_input_cursor_to_end(&mut self) {
-        self.input_cursor_byte_index = None;
-    }
-    pub(crate) fn move_inline_shell_command_palette_selection(&mut self, delta: isize) -> bool {
-        self.inline_shell_command_palette_state
-            .move_selection(delta)
-    }
-    pub(crate) fn dismiss_inline_shell_command_palette(&mut self) -> bool {
-        self.inline_shell_command_palette_state.dismiss()
-    }
-    pub(crate) fn insert_inline_shell_command_completion(&mut self, command: InlineShellCommand) {
-        self.input_buffer = command.completion_text().to_string();
-        self.move_input_cursor_to_end();
-        self.sync_inline_shell_command_palette();
-    }
     pub(crate) fn draft_workspace_directory(&self) -> &str {
         self.draft_workspace_directory.as_str()
     }
@@ -374,9 +336,7 @@ impl ConversationViewModel {
         // Submission writes the user transcript immediately; stream callbacks fill in the reply.
         self.push_message(transcript_message);
         if clear_input_buffer {
-            self.input_buffer.clear();
-            self.input_cursor_byte_index = None;
-            self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
+            self.composer.clear_input_buffer();
         }
         self.mark_turn_submitting(workspace_directory);
     }
@@ -391,9 +351,7 @@ impl ConversationViewModel {
             None,
             None,
         ));
-        self.input_buffer.clear();
-        self.input_cursor_byte_index = None;
-        self.inline_shell_command_palette_state = InlineShellCommandPaletteState::default();
+        self.composer.clear_input_buffer();
         self.status_text = status_text;
         self.hold_latest_transcript_message_in_viewport();
         self.begin_viewport_transcript_handoff_release();
@@ -443,7 +401,7 @@ impl ConversationViewModel {
     pub(crate) fn is_blank_draft(&self) -> bool {
         !self.has_active_thread()
             && self.messages.is_empty()
-            && self.input_buffer.trim().is_empty()
+            && self.composer.input_buffer.trim().is_empty()
             && self.active_turn_id.is_none()
     }
     pub(crate) fn ready_input_state(&self) -> ConversationInputState {
@@ -477,14 +435,8 @@ impl ConversationViewModel {
                     .filter(|_| self.has_running_turn())
             })
     }
-    pub(crate) fn arm_startup_submit(&mut self) {
-        self.startup_submit_armed = true;
-    }
-    pub(crate) fn clear_startup_submit(&mut self) -> bool {
-        std::mem::replace(&mut self.startup_submit_armed, false)
-    }
     pub(crate) fn mark_turn_submitting(&mut self, workspace_directory: String) {
-        self.startup_submit_armed = false;
+        self.composer.startup_submit_armed = false;
         self.activity_rail_terminal_state = None;
         self.input_state = ConversationInputState::SubmittingTurn;
         self.active_turn_workspace_directory = Some(workspace_directory);
@@ -822,19 +774,6 @@ fn retain_bounded_string_history(values: &mut Vec<String>, max_items: usize) {
     if remove_count > 0 {
         values.drain(0..remove_count);
     }
-}
-
-fn clamp_to_grapheme_boundary(buffer: &str, index: usize) -> usize {
-    let clamped_index = index.min(buffer.len());
-    if clamped_index == buffer.len() {
-        return buffer.len();
-    }
-    buffer
-        .grapheme_indices(true)
-        .map(|(byte_index, _)| byte_index)
-        .take_while(|byte_index| *byte_index <= clamped_index)
-        .last()
-        .unwrap_or(0)
 }
 
 fn hydrate_thread_review_status_projection(

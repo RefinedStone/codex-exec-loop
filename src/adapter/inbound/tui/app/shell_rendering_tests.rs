@@ -51,7 +51,7 @@ fn dense_hidden_tail_preserves_prompt_suffix_snapshot() {
     conversation.warnings = vec!["runtime recovery needs operator attention".to_string()];
     conversation.runtime_notices =
         vec!["attachment recovered with a long operational notice".to_string()];
-    conversation.input_buffer = "queued follow-up must remain visible".to_string();
+    conversation.composer.input_buffer = "queued follow-up must remain visible".to_string();
     conversation.latest_queue_mutation_receipt = Some(PlanningQueueMutationReceipt {
         completed_turn_id: "turn-dense-tail".to_string(),
         planning_revision: 9,
@@ -125,19 +125,19 @@ fn narrow_turn_steer_confirmation_keeps_exact_identity_prompt_and_keys() {
     };
     conversation.thread_id = "thread-steer-123456789".to_string();
     conversation.record_turn_started("turn-steer-123456789".to_string());
-    conversation.input_buffer =
+    conversation.composer.input_buffer =
         "Prioritize the exact queue cancellation regression before continuing.\n    cargo test --lib"
             .to_string();
     app.turn_steer_confirmation = Some(TurnSteerUiIntent {
         input_revision: 0,
-        source_input_buffer: conversation.input_buffer.clone(),
+        source_input_buffer: conversation.composer.input_buffer.clone(),
         request: ConversationTurnSteerRequest {
             thread_id: conversation.thread_id.clone(),
             expected_turn_id: conversation
                 .active_turn_id
                 .clone()
                 .expect("running turn should have identity"),
-            prompt: conversation.input_buffer.clone(),
+            prompt: conversation.composer.input_buffer.clone(),
         },
     });
 
@@ -166,7 +166,7 @@ fn captured_turn_steer_confirmation_keeps_language_and_exact_identity_after_app_
     };
     conversation.thread_id = "thread-A".to_string();
     conversation.record_turn_started("turn-A".to_string());
-    conversation.input_buffer = "CAPTURED_STEER_PROMPT 한글".to_string();
+    conversation.composer.input_buffer = "CAPTURED_STEER_PROMPT 한글".to_string();
     assert!(app.show_turn_steer_confirmation());
 
     let projection = InlineConversationFrameProjection::from_app(&app, 80);
@@ -228,8 +228,10 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
         };
         conversation.thread_id = "thread-cursor-steer".to_string();
         conversation.record_turn_started("turn-cursor-steer".to_string());
-        conversation.input_buffer = draft.clone();
-        conversation.set_input_cursor_byte_index("keep this exact ".len());
+        conversation.composer.input_buffer = draft.clone();
+        conversation
+            .composer
+            .set_input_cursor_byte_index("keep this exact ".len());
         (
             conversation.thread_id.clone(),
             conversation
@@ -262,7 +264,7 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("test app should keep a ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, draft);
+    assert_eq!(conversation.composer.input_buffer, draft);
 
     assert!(app.handle_turn_steer_confirmation_key(event::KeyEvent::new(
         KeyCode::Esc,
@@ -277,7 +279,7 @@ fn vt100_turn_steer_confirmation_hides_prompt_cursor_and_escape_restores_it() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("test app should keep a ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, draft);
+    assert_eq!(conversation.composer.input_buffer, draft);
 }
 
 #[test]
@@ -290,8 +292,10 @@ fn vt100_exit_confirmation_hides_prompt_cursor_and_cancel_restores_it() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start in a ready conversation state");
     };
-    conversation.input_buffer = draft.clone();
-    conversation.set_input_cursor_byte_index("cancel exit ".len());
+    conversation.composer.input_buffer = draft.clone();
+    conversation
+        .composer
+        .set_input_cursor_byte_index("cancel exit ".len());
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -308,7 +312,7 @@ fn vt100_exit_confirmation_hides_prompt_cursor_and_cancel_restores_it() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("test app should keep a ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, draft);
+    assert_eq!(conversation.composer.input_buffer, draft);
 
     assert_eq!(
         app.handle_exit_confirmation_key(event::KeyEvent::new(
@@ -326,7 +330,7 @@ fn vt100_exit_confirmation_hides_prompt_cursor_and_cancel_restores_it() {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         panic!("test app should keep a ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, draft);
+    assert_eq!(conversation.composer.input_buffer, draft);
 }
 
 #[test]

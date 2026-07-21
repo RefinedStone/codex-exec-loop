@@ -14,6 +14,8 @@ pub(super) use crate::domain::conversation::ConversationMessageKind;
 mod activity_rail;
 #[path = "conversation_model/auto_follow.rs"]
 mod auto_follow;
+#[path = "conversation_model/composer_state.rs"]
+mod composer_state;
 #[path = "conversation_model/progressive_activity.rs"]
 mod progressive_activity;
 #[path = "conversation_model/progressive_activity_cards.rs"]
@@ -31,6 +33,7 @@ pub(crate) use activity_rail::ActivityRailTerminalState;
 pub(crate) use auto_follow::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, StopKeywordRule,
 };
+pub(crate) use composer_state::ConversationComposerState;
 pub(crate) use progressive_activity::ProgressiveActivityItemKind;
 #[cfg(test)]
 pub(crate) use progressive_activity::ProgressiveActivityState;

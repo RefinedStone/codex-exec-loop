@@ -427,14 +427,14 @@ impl NativeTuiApp {
         });
     }
     pub(super) fn push_input_character(&mut self, character: char) {
-        self.dispatch_conversation_input(ConversationInputEvent::CharacterTyped { character });
+        self.dispatch_conversation_input(ConversationComposerEvent::CharacterTyped { character });
     }
     pub(super) fn insert_input_text(&mut self, text: String) -> bool {
         if text.is_empty() || !self.can_edit_prompt_input() {
             return false;
         }
 
-        self.dispatch_conversation_input(ConversationInputEvent::TextInserted { text });
+        self.dispatch_conversation_input(ConversationComposerEvent::TextInserted { text });
         true
     }
     pub(super) fn can_edit_prompt_input(&self) -> bool {
@@ -450,7 +450,7 @@ impl NativeTuiApp {
         matches!(
             &self.conversation_state,
             ConversationState::Ready(conversation)
-                if conversation.inline_shell_command_palette_state.is_active()
+                if conversation.composer.inline_shell_command_palette_state.is_active()
         )
     }
     pub(super) fn move_inline_command_palette_selection(&mut self, delta: isize) -> bool {
@@ -459,7 +459,7 @@ impl NativeTuiApp {
         }
 
         self.dispatch_conversation_input(
-            ConversationInputEvent::InlineCommandPaletteSelectionMoved { delta },
+            ConversationComposerEvent::InlineCommandPaletteSelectionMoved { delta },
         );
         true
     }
@@ -468,15 +468,19 @@ impl NativeTuiApp {
             return false;
         }
 
-        self.dispatch_conversation_input(ConversationInputEvent::InlineCommandPaletteDismissed);
+        self.dispatch_conversation_input(ConversationComposerEvent::InlineCommandPaletteDismissed);
         true
     }
     pub(super) fn accept_inline_command_palette_selection(&mut self) -> bool {
         let selected_command = match &self.conversation_state {
             ConversationState::Ready(conversation)
-                if conversation.inline_shell_command_palette_state.is_active() =>
+                if conversation
+                    .composer
+                    .inline_shell_command_palette_state
+                    .is_active() =>
             {
                 conversation
+                    .composer
                     .inline_shell_command_palette_state
                     .selected_command()
             }
@@ -489,7 +493,7 @@ impl NativeTuiApp {
         // commands execute immediately through the same inline command handler.
         if command.requires_argument() {
             self.dispatch_conversation_input(
-                ConversationInputEvent::InlineCommandPaletteCommandInserted { command },
+                ConversationComposerEvent::InlineCommandPaletteCommandInserted { command },
             );
             return true;
         }
@@ -498,19 +502,19 @@ impl NativeTuiApp {
         true
     }
     pub(super) fn insert_input_newline(&mut self) {
-        self.dispatch_conversation_input(ConversationInputEvent::NewlineInserted);
+        self.dispatch_conversation_input(ConversationComposerEvent::NewlineInserted);
     }
     pub(super) fn pop_input_character(&mut self) {
-        self.dispatch_conversation_input(ConversationInputEvent::BackspacePressed);
+        self.dispatch_conversation_input(ConversationComposerEvent::BackspacePressed);
     }
     pub(super) fn delete_next_input_character(&mut self) {
-        self.dispatch_conversation_input(ConversationInputEvent::DeletePressed);
+        self.dispatch_conversation_input(ConversationComposerEvent::DeletePressed);
     }
     pub(super) fn delete_previous_input_word(&mut self) {
-        self.dispatch_conversation_input(ConversationInputEvent::PreviousWordDeleted);
+        self.dispatch_conversation_input(ConversationComposerEvent::PreviousWordDeleted);
     }
     pub(super) fn move_input_cursor(&mut self, movement: InputCursorMovement) {
-        self.dispatch_conversation_input(ConversationInputEvent::CursorMoved { movement });
+        self.dispatch_conversation_input(ConversationComposerEvent::CursorMoved { movement });
     }
     pub(super) fn clear_prompt_input(&mut self) {
         self.clear_input_buffer();
@@ -550,7 +554,7 @@ impl NativeTuiApp {
         let (request, source_input_buffer) = match &self.conversation_state {
             ConversationState::Ready(conversation)
                 if conversation.has_running_turn()
-                    && !conversation.input_buffer.trim().is_empty() =>
+                    && !conversation.composer.input_buffer.trim().is_empty() =>
             {
                 let Some(expected_turn_id) = conversation.active_turn_id.clone() else {
                     self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -574,14 +578,14 @@ impl NativeTuiApp {
                     ConversationTurnSteerRequest {
                         thread_id: conversation.thread_id.clone(),
                         expected_turn_id,
-                        prompt: conversation.input_buffer.trim().to_string(),
+                        prompt: conversation.composer.input_buffer.trim().to_string(),
                     },
-                    conversation.input_buffer.clone(),
+                    conversation.composer.input_buffer.clone(),
                 )
             }
             ConversationState::Ready(conversation)
                 if conversation.has_running_turn()
-                    && conversation.input_buffer.trim().is_empty() =>
+                    && conversation.composer.input_buffer.trim().is_empty() =>
             {
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: self
@@ -635,7 +639,7 @@ impl NativeTuiApp {
                 if conversation.thread_id == intent.request.thread_id
                     && conversation.active_turn_id.as_deref()
                         == Some(intent.request.expected_turn_id.as_str())
-                    && conversation.input_buffer == intent.source_input_buffer
+                    && conversation.composer.input_buffer == intent.source_input_buffer
         ) && self.prompt_input_revision == intent.input_revision;
         if !still_exact {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -706,10 +710,10 @@ impl NativeTuiApp {
                     &self.conversation_state,
                     ConversationState::Ready(conversation)
                         if conversation.thread_id == intent.request.thread_id
-                            && conversation.input_buffer == intent.source_input_buffer
+                            && conversation.composer.input_buffer == intent.source_input_buffer
                 ) && input_revision == intent.input_revision;
                 if draft_is_current {
-                    self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+                    self.dispatch_conversation_input(ConversationComposerEvent::InputCleared);
                 }
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                     status_text: self
@@ -2212,7 +2216,7 @@ mod tests {
         app.pop_input_character();
         app.delete_next_input_character();
         app.clear_prompt_input();
-        assert!(ready_conversation(&app).input_buffer.is_empty());
+        assert!(ready_conversation(&app).composer.input_buffer.is_empty());
 
         assert!(!app.move_inline_command_palette_selection(1));
         assert!(!app.dismiss_inline_command_palette());
@@ -2222,7 +2226,12 @@ mod tests {
         app.push_input_character('t');
         assert!(app.is_inline_command_palette_active());
         assert!(app.accept_inline_command_palette_selection());
-        assert!(ready_conversation(&app).input_buffer.starts_with(":turns"));
+        assert!(
+            ready_conversation(&app)
+                .composer
+                .input_buffer
+                .starts_with(":turns")
+        );
 
         app.clear_prompt_input();
         app.push_input_character(':');
@@ -2235,7 +2244,7 @@ mod tests {
     #[test]
     fn queue_overlay_consumes_direct_manipulation_keys_without_editing_prompt() {
         let mut app = test_native_tui_app();
-        ready_conversation_mut(&mut app).input_buffer = "keep draft".to_string();
+        ready_conversation_mut(&mut app).composer.input_buffer = "keep draft".to_string();
         app.sync_ready_conversation_planning_runtime_projection(
             sample_planning_runtime_projection("context", "queue").with_planning_revision(Some(1)),
         );
@@ -2277,7 +2286,7 @@ mod tests {
         assert_eq!(app.queue_overlay_screen_model().armed_remove_task_id, None);
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('u'))));
 
-        assert_eq!(ready_conversation(&app).input_buffer, "keep draft");
+        assert_eq!(ready_conversation(&app).composer.input_buffer, "keep draft");
         assert_eq!(app.pending_queue_mutation_operation_id(), Some(1));
         assert_eq!(
             app.queue_overlay_ui_state.feedback(),
@@ -3821,7 +3830,7 @@ mod tests {
     #[test]
     fn approval_overlay_consumes_all_input_and_routes_only_explicit_decisions() {
         let mut app = test_native_tui_app();
-        ready_conversation_mut(&mut app).input_buffer = "draft prompt".to_string();
+        ready_conversation_mut(&mut app).composer.input_buffer = "draft prompt".to_string();
         let turn_submission = arm_pending_approval(
             &mut app,
             ConversationApprovalRequest {
@@ -3835,12 +3844,18 @@ mod tests {
         );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Char('x'))));
-        assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "draft prompt"
+        );
         assert_eq!(app.shell_overlay, ShellOverlay::Approval);
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Down)));
         assert_eq!(ready_conversation(&app).approval_detail_scroll_offset, 1);
-        assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "draft prompt"
+        );
 
         assert!(app.handle_shell_overlay_key(key(KeyCode::Enter)));
         assert_eq!(ready_conversation(&app).pending_approval_decision(), None);
@@ -3897,7 +3912,10 @@ mod tests {
             ready_conversation(&app).pending_approval_decision(),
             Some(crate::domain::conversation::ConversationApprovalDecision::Accept)
         );
-        assert_eq!(ready_conversation(&app).input_buffer, "draft prompt");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "draft prompt"
+        );
     }
 
     #[test]
@@ -4021,7 +4039,7 @@ mod tests {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = request.thread_id.clone();
             conversation.record_turn_started(request.expected_turn_id.clone());
-            conversation.input_buffer = request.prompt.clone();
+            conversation.composer.input_buffer = request.prompt.clone();
         }
         app.pending_turn_steer = Some(steer_intent(
             1,
@@ -4032,7 +4050,7 @@ mod tests {
 
         app.apply_turn_steer_completion(steer_correlation(1), Err("not steerable".to_string()));
         assert_eq!(
-            ready_conversation(&app).input_buffer,
+            ready_conversation(&app).composer.input_buffer,
             "focus the current work"
         );
         assert!(app.pending_turn_steer.is_none());
@@ -4049,7 +4067,7 @@ mod tests {
                 turn_id: "turn-steer".to_string(),
             }),
         );
-        assert!(ready_conversation(&app).input_buffer.is_empty());
+        assert!(ready_conversation(&app).composer.input_buffer.is_empty());
         assert!(app.pending_turn_steer.is_none());
     }
 
@@ -4073,7 +4091,7 @@ mod tests {
                 runtime_request: Box::default(),
             },
         });
-        ready_conversation_mut(&mut app).input_buffer = "keep this draft".to_string();
+        ready_conversation_mut(&mut app).composer.input_buffer = "keep this draft".to_string();
 
         assert!(app.show_turn_steer_confirmation());
         assert!(app.handle_turn_steer_confirmation_key(key(KeyCode::Enter)));
@@ -4086,7 +4104,10 @@ mod tests {
         }
 
         assert!(app.pending_turn_steer.is_none());
-        assert_eq!(ready_conversation(&app).input_buffer, "keep this draft");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "keep this draft"
+        );
         assert!(
             ready_conversation(&app)
                 .status_text
@@ -4106,7 +4127,7 @@ mod tests {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = request.thread_id.clone();
             conversation.record_turn_started(request.expected_turn_id.clone());
-            conversation.input_buffer = "newer draft".to_string();
+            conversation.composer.input_buffer = "newer draft".to_string();
         }
         app.pending_turn_steer = Some(steer_intent(
             1,
@@ -4122,7 +4143,10 @@ mod tests {
             }),
         );
 
-        assert_eq!(ready_conversation(&app).input_buffer, "newer draft");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "newer draft"
+        );
     }
 
     #[test]
@@ -4137,7 +4161,7 @@ mod tests {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = request.thread_id.clone();
             conversation.record_turn_started("turn-new".to_string());
-            conversation.input_buffer = request.prompt.clone();
+            conversation.composer.input_buffer = request.prompt.clone();
         }
         app.pending_turn_steer = Some(steer_intent(1, 0, "same draft", request));
         app.prompt_input_revision = 1;
@@ -4149,7 +4173,7 @@ mod tests {
             }),
         );
 
-        assert_eq!(ready_conversation(&app).input_buffer, "same draft");
+        assert_eq!(ready_conversation(&app).composer.input_buffer, "same draft");
     }
 
     #[test]
@@ -4164,7 +4188,7 @@ mod tests {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = request.thread_id.clone();
             conversation.record_turn_started(request.expected_turn_id.clone());
-            conversation.input_buffer = "delivered draft".to_string();
+            conversation.composer.input_buffer = "delivered draft".to_string();
             conversation.mark_turn_finished();
         }
         app.pending_turn_steer = Some(steer_intent(1, 0, "delivered draft", request));
@@ -4176,7 +4200,7 @@ mod tests {
             }),
         );
 
-        assert!(ready_conversation(&app).input_buffer.is_empty());
+        assert!(ready_conversation(&app).composer.input_buffer.is_empty());
     }
 
     #[test]
@@ -4191,7 +4215,7 @@ mod tests {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = request.thread_id.clone();
             conversation.record_turn_started(request.expected_turn_id.clone());
-            conversation.input_buffer = "same request".to_string();
+            conversation.composer.input_buffer = "same request".to_string();
         }
         app.pending_turn_steer = Some(steer_intent(2, 0, "same request", request));
 
@@ -4208,6 +4232,9 @@ mod tests {
                 .map(|pending| pending.correlation.generation),
             Some(2)
         );
-        assert_eq!(ready_conversation(&app).input_buffer, "same request");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "same request"
+        );
     }
 }
