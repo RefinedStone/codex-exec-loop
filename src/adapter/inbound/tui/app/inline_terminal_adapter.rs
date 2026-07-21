@@ -62,6 +62,7 @@ enum InlineViewportSync {
     Stable {
         redraw_required: bool,
         frame_projection: InlineConversationFrameProjection,
+        redraw_after_successful_frame: bool,
     },
 }
 
@@ -114,11 +115,19 @@ pub(super) fn draw_inline_transaction<B: InlineResizeBackend>(
     let InlineViewportSync::Stable {
         redraw_required,
         frame_projection,
+        redraw_after_successful_frame,
     } = sync_inline_viewport_transaction(terminal, runtime, inline_terminal)?
     else {
         return Ok(false);
     };
-    if redraw_required && !draw_inline_frame(terminal, runtime, inline_terminal, frame_projection)?
+    if redraw_required
+        && !draw_inline_frame(
+            terminal,
+            runtime,
+            inline_terminal,
+            frame_projection,
+            redraw_after_successful_frame,
+        )?
     {
         return Ok(false);
     }
@@ -130,6 +139,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     runtime: &mut ShellRuntime,
     inline_terminal: &mut InlineTerminalState,
     frame_projection: InlineConversationFrameProjection,
+    redraw_after_successful_frame: bool,
 ) -> Result<bool, B::Error> {
     let acknowledge_viewport_handoff_after_draw =
         frame_projection.renders_viewport_transcript_handoff;
@@ -194,8 +204,13 @@ fn draw_inline_frame<B: InlineResizeBackend>(
      * able to decide whether the back buffer is still trustworthy.
      */
     inline_terminal.mark_frame_drawn(terminal_size, drawn_viewport_area, cursor_position);
-    if acknowledge_viewport_handoff_after_draw {
-        acknowledge_transcript_handoff_after_delivery(runtime, true);
+    let viewport_handoff_acknowledged = acknowledge_viewport_handoff_after_draw
+        && acknowledge_transcript_handoff_after_delivery(runtime, true);
+    if viewport_handoff_acknowledged || redraw_after_successful_frame {
+        // ACK changes the semantic viewport from the held transcript to the
+        // ordinary shell/parallel frame. Make that state change its own draw.
+        inline_terminal.invalidate_back_buffer();
+        runtime.request_delivery_redraw();
     }
     runtime.record_successful_frame_delivery();
     Ok(true)
@@ -342,6 +357,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         return Ok(InlineViewportSync::Stable {
             redraw_required: tail_frame_changed,
             frame_projection,
+            redraw_after_successful_frame: false,
         });
     };
     let parallel_history_pending = policy.parallel_mode_enabled
@@ -435,10 +451,11 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
             return Err(error);
         }
     };
-    if acknowledge_transcript_handoff_after_delivery(
+    let handoff_acknowledged = acknowledge_transcript_handoff_after_delivery(
         runtime,
         history_sync.history_committed() && !policy.parallel_mode_enabled,
-    ) {
+    );
+    if handoff_acknowledged {
         inline_terminal.invalidate_back_buffer();
     }
     if !history_sync.stable_geometry() {
@@ -452,47 +469,51 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         defer_resize_redraw(runtime, inline_terminal);
         return Ok(InlineViewportSync::Deferred);
     }
-    let parallel_handoff_sync = if let Some(conversation_lines) =
-        parallel_handoff_conversation_lines.as_deref()
-    {
-        let visible_history_rows_before_handoff =
-            inline_terminal.history_flush.visible_history_rows;
-        let handoff_sync = match inline_terminal
-            .history_flush
-            .append_durable_lines_preserving_baseline(
-                terminal,
-                &parallel_handoff_pending_lines,
-                resize_snapshot,
-                insert_mode,
-            ) {
-            Ok(handoff_sync) => handoff_sync,
-            Err(error) => {
-                inline_terminal.history_flush.visible_history_rows =
-                    visible_history_rows_before_handoff;
-                return Err(error);
-            }
-        };
-        if handoff_sync.history_committed() {
-            inline_terminal
+    let mut redraw_after_successful_frame = false;
+    let parallel_handoff_sync =
+        if let Some(conversation_lines) = parallel_handoff_conversation_lines.as_deref() {
+            let visible_history_rows_before_handoff =
+                inline_terminal.history_flush.visible_history_rows;
+            let handoff_sync = match inline_terminal
                 .history_flush
-                .remember_conversation_projection(conversation_lines);
-        }
-        if acknowledge_transcript_handoff_after_delivery(runtime, handoff_sync.history_committed())
-        {
-            inline_terminal.invalidate_back_buffer();
-        }
-        if !handoff_sync.stable_geometry() {
-            if !handoff_sync.history_committed() {
-                inline_terminal.history_flush.visible_history_rows =
-                    visible_history_rows_before_handoff;
+                .append_durable_lines_preserving_baseline(
+                    terminal,
+                    &parallel_handoff_pending_lines,
+                    resize_snapshot,
+                    insert_mode,
+                ) {
+                Ok(handoff_sync) => handoff_sync,
+                Err(error) => {
+                    inline_terminal.history_flush.visible_history_rows =
+                        visible_history_rows_before_handoff;
+                    return Err(error);
+                }
+            };
+            if handoff_sync.history_committed() {
+                inline_terminal
+                    .history_flush
+                    .remember_conversation_projection(conversation_lines);
             }
-            defer_resize_redraw(runtime, inline_terminal);
-            return Ok(InlineViewportSync::Deferred);
-        }
-        Some(handoff_sync)
-    } else {
-        None
-    };
+            let parallel_handoff_acknowledged = acknowledge_transcript_handoff_after_delivery(
+                runtime,
+                handoff_sync.history_committed(),
+            );
+            if parallel_handoff_acknowledged {
+                inline_terminal.invalidate_back_buffer();
+                redraw_after_successful_frame = true;
+            }
+            if !handoff_sync.stable_geometry() {
+                if !handoff_sync.history_committed() {
+                    inline_terminal.history_flush.visible_history_rows =
+                        visible_history_rows_before_handoff;
+                }
+                defer_resize_redraw(runtime, inline_terminal);
+                return Ok(InlineViewportSync::Deferred);
+            }
+            Some(handoff_sync)
+        } else {
+            None
+        };
     let history_inserted = history_sync.inserted()
         || parallel_handoff_sync.is_some_and(|handoff_sync| handoff_sync.inserted());
     if history_inserted {
@@ -534,6 +555,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     Ok(InlineViewportSync::Stable {
         redraw_required: visible_history_adjusted || history_inserted || tail_frame_changed,
         frame_projection,
+        redraw_after_successful_frame,
     })
 }
 
@@ -900,6 +922,8 @@ impl FrameCacheState {
             prompt_cursor_offset: frame_projection.tail_view.prompt_cursor_offset,
             live_transcript_lines: frame_projection.live_transcript_lines.clone(),
             parallel_supervisor_events: frame_projection.parallel_supervisor_event_lines.clone(),
+            renders_viewport_transcript_handoff: frame_projection
+                .renders_viewport_transcript_handoff,
         };
         let should_draw = !viewport.back_buffer_trustworthy
             || self.last_tail_frame.as_ref() != Some(&next_signature);
@@ -917,6 +941,7 @@ struct InlineTailFrameSignature {
     prompt_cursor_offset: Option<(u16, u16)>,
     live_transcript_lines: Vec<Line<'static>>,
     parallel_supervisor_events: Vec<Line<'static>>,
+    renders_viewport_transcript_handoff: bool,
 }
 
 #[cfg(test)]

@@ -952,6 +952,183 @@ fn assert_conversation_identity_switch_replays_shared_prefix_once(
     assert!(inline_terminal.back_buffer_trustworthy());
 }
 
+fn released_handoff_app(
+    render_mode: InlineHistoryRenderMode,
+    parallel_mode_enabled: bool,
+    shell_overlay: ShellOverlay,
+) -> NativeTuiApp {
+    let mut app = make_test_app();
+    app.show_startup_ascii_art = false;
+    app.inline_history_render_mode = render_mode;
+    app.shell_overlay = shell_overlay;
+    append_user_history_message(&mut app, "released handoff prompt");
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should start in a ready conversation state");
+    };
+    conversation.record_turn_started("turn-handoff-redraw".to_string());
+    conversation.push_live_agent_delta(
+        "agent-handoff-redraw".to_string(),
+        Some("final_answer".to_string()),
+        "released handoff answer".to_string(),
+    );
+    assert!(conversation.complete_live_agent_message(
+        "agent-handoff-redraw".to_string(),
+        Some("final_answer".to_string()),
+        "released handoff answer".to_string(),
+    ));
+    conversation.finish_turn("turn-handoff-redraw", &[]);
+    conversation.begin_post_turn_settlement("turn-handoff-redraw");
+    assert!(conversation.complete_post_turn_settlement("turn-handoff-redraw"));
+    app.set_parallel_mode_enabled_for_test(parallel_mode_enabled);
+    app
+}
+
+#[test]
+fn successful_viewport_handoff_ack_schedules_one_follow_up_frame() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::ViewportReplay, 80, 24);
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::ViewportReplay,
+        true,
+        ShellOverlay::Hidden,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    assert!(
+        runtime.take_redraw_request(),
+        "consume initial frame request"
+    );
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("handoff delivery frame")
+    );
+    let delivered_screen = tui_testkit::screen_text(&terminal);
+    assert!(delivered_screen.contains("released handoff answer"));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("handoff delivery should keep a ready conversation");
+    };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert!(
+        !inline_terminal.back_buffer_trustworthy(),
+        "ACK must invalidate the frame that still contains the handoff"
+    );
+    assert!(
+        runtime.take_redraw_request(),
+        "successful ACK must schedule the post-handoff frame"
+    );
+    assert!(
+        !runtime.take_redraw_request(),
+        "one ACK must schedule only one immediate frame"
+    );
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("post-handoff frame")
+    );
+    assert!(
+        inline_terminal.back_buffer_trustworthy(),
+        "the scheduled frame must reconcile the post-handoff viewport"
+    );
+    assert!(
+        !runtime.take_redraw_request(),
+        "the post-handoff frame must not schedule another ACK draw"
+    );
+}
+
+#[test]
+fn parallel_host_handoff_reprojects_overlay_frame_after_ack() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::HostScrollback, 80, 24);
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::HostScrollback,
+        true,
+        ShellOverlay::Help,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    assert!(
+        runtime.take_redraw_request(),
+        "consume initial frame request"
+    );
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("parallel host handoff frame")
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("parallel host delivery should keep a ready conversation");
+    };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    let delivered_screen = tui_testkit::screen_text(&terminal);
+    assert!(delivered_screen.contains("response held while the dialog is open"));
+    assert!(
+        runtime.take_redraw_request(),
+        "host ACK must schedule the post-handoff parallel frame"
+    );
+    assert!(!runtime.take_redraw_request());
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("parallel post-handoff overlay frame")
+    );
+    let settled_screen = tui_testkit::screen_text(&terminal);
+    assert!(
+        !settled_screen.contains("response held while the dialog is open"),
+        "the scheduled overlay frame must reflect the host ACK: {settled_screen}"
+    );
+    assert!(!runtime.take_redraw_request());
+}
+
+#[test]
+fn parallel_handoff_draw_resize_preserves_retry_backoff() {
+    let mut inner = CursorQueryCountingBackend::new(TestBackend::new(80, 40));
+    inner
+        .set_cursor_position(Position::new(0, 39))
+        .expect("fixture cursor should start at the physical bottom");
+    let backend = InlineTerminalBackend::new(inner);
+    let mut terminal = Terminal::with_options(
+        backend,
+        terminal_options_for_render_mode(InlineHistoryRenderMode::HostScrollback),
+    )
+    .expect("parallel host terminal should initialize");
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::HostScrollback,
+        true,
+        ShellOverlay::Help,
+    );
+    let delivered_conversation = super::parallel_conversation_handoff_projection(&app)
+        .expect("released handoff should have a conversation projection");
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    inline_terminal.history_flush.rendered_lines = delivered_conversation;
+    assert!(
+        runtime.take_redraw_request(),
+        "consume initial frame request"
+    );
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .resize_on_next_flush(48, 10);
+
+    assert!(
+        !draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("draw-time resize should defer the post-handoff frame")
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("parallel host delivery should keep a ready conversation");
+    };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert!(
+        !runtime.take_redraw_request(),
+        "post-ACK redraw must not bypass the resize retry delay"
+    );
+    assert_resize_retry_scheduled(
+        &mut runtime,
+        "draw-time resize must retain the delayed post-ACK retry",
+    );
+}
+
 #[test]
 fn completed_agent_handoff_flushes_at_settlement_and_only_once() {
     const FINAL_MARKER: &str = "FINAL_ANSWER_HANDOFF_MARKER";
@@ -1249,6 +1426,27 @@ fn frame_cache_invalidates_when_only_live_agent_text_changes() {
     );
 
     assert!(frame_cache_should_draw(&mut cache, &app, &viewport, 80, 24));
+}
+
+#[test]
+fn frame_cache_invalidates_when_only_handoff_delivery_phase_changes() {
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::ViewportReplay,
+        false,
+        ShellOverlay::Hidden,
+    );
+    let mut held = frame_projection(&app, 80);
+    let released = frame_projection(&app, 80);
+    assert!(released.renders_viewport_transcript_handoff);
+    held.renders_viewport_transcript_handoff = false;
+    assert_eq!(held.tail_view.lines, released.tail_view.lines);
+    assert_eq!(held.live_transcript_lines, released.live_transcript_lines);
+
+    let mut cache = FrameCacheState::default();
+    let viewport = TerminalViewportState::default();
+    assert!(cache.should_draw_inline_frame(&held, &viewport, 80, 24));
+    assert!(!cache.should_draw_inline_frame(&held, &viewport, 80, 24));
+    assert!(cache.should_draw_inline_frame(&released, &viewport, 80, 24));
 }
 
 #[test]
@@ -4132,7 +4330,8 @@ where
 {
     let width = terminal.size().expect("terminal size").width;
     let projection = frame_projection(runtime.app(), width);
-    draw_inline_frame(terminal, runtime, inline_terminal, projection).expect("draw test frame")
+    draw_inline_frame(terminal, runtime, inline_terminal, projection, false)
+        .expect("draw test frame")
 }
 fn append_history_message(app: &mut NativeTuiApp, text: &str) {
     append_message(app, ConversationMessageKind::Agent, text);
