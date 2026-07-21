@@ -7,6 +7,7 @@ use crate::adapter::inbound::tui::app::conversation_runtime::{
     PostTurnContinuationAction, PostTurnEvaluationOutcome, PostTurnEvaluationProvenance,
     PostTurnQueuedPrompt,
 };
+use crate::adapter::inbound::tui::app::shell_presentation::build_parallel_peek_overlay_view;
 use crate::adapter::inbound::tui::app::{
     ManualPromptDelivery, PendingManualPromptPreparation, TuiLanguage,
 };
@@ -748,6 +749,82 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
             .preview()
             .is_none()
     );
+}
+
+#[test]
+fn parallel_peek_selection_tracks_lease_across_roster_reorder() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    let entry = |agent_id: &str| {
+        let agent_label = format!("agent-{agent_id}");
+        ParallelModeAgentRosterEntry::new(
+            agent_label.clone(),
+            format!("Inspect {agent_label}"),
+            format!("slot-{agent_id}"),
+            format!("akra-agent/{agent_label}"),
+            "running",
+            "active",
+            "agent session is active",
+        )
+        .with_thread_id(Some(format!("thread-{agent_id}")))
+        .with_lease_identity(
+            format!("task-{agent_id}"),
+            format!("session-{agent_id}"),
+            Some(format!("generation-{agent_id}")),
+        )
+    };
+    let snapshot = |entries| {
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory.clone(),
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(entries, "empty"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "empty"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        )
+    };
+
+    runtime.app_mut().shell_overlay = ShellOverlay::ParallelPeek;
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot(vec![
+            entry("a"),
+            entry("b"),
+            entry("c"),
+        ])));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
+
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot(vec![
+            entry("b"),
+            entry("a"),
+            entry("c"),
+        ])));
+    let selected_line = build_parallel_peek_overlay_view(runtime.app())
+        .agent_lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .find(|line| line.starts_with('>'))
+        .expect("the active roster should display one selected agent");
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    assert!(
+        selected_line.contains("agent-b"),
+        "the marker should follow the selected lease after reorder: {selected_line}"
+    );
+    let preview = runtime
+        .app()
+        .parallel_peek_overlay_ui_state
+        .preview()
+        .expect("Enter should open the visibly selected lease");
+    assert_eq!(preview.agent_id, "agent-b");
+    assert_eq!(preview.thread_id.as_deref(), Some("thread-b"));
 }
 
 #[test]

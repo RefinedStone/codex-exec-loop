@@ -1,4 +1,5 @@
 use crate::domain::conversation::ConversationSnapshot;
+use crate::domain::parallel_mode::{ParallelModeAgentLeaseIdentity, ParallelModeAgentRosterEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ParallelPeekOverlayStep {
@@ -17,9 +18,34 @@ pub(super) struct ParallelPeekConversationPreview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ParallelPeekSelectionKey {
+    agent_id: String,
+    slot_id: String,
+    // Thread ids arrive after lease startup, so they are not selection identity.
+    lease_identity: Option<ParallelModeAgentLeaseIdentity>,
+}
+
+impl ParallelPeekSelectionKey {
+    fn from_entry(entry: &ParallelModeAgentRosterEntry) -> Self {
+        Self {
+            agent_id: entry.agent_id.clone(),
+            slot_id: entry.slot_id.clone(),
+            lease_identity: entry.lease_identity.clone(),
+        }
+    }
+
+    fn matches(&self, entry: &ParallelModeAgentRosterEntry) -> bool {
+        self.agent_id == entry.agent_id
+            && self.slot_id == entry.slot_id
+            && self.lease_identity == entry.lease_identity
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ParallelPeekOverlayUiState {
     step: ParallelPeekOverlayStep,
     selected_agent_index: usize,
+    selected_agent_key: Option<ParallelPeekSelectionKey>,
     preview: Option<ParallelPeekConversationPreview>,
     conversation_scroll_from_bottom: usize,
 }
@@ -29,6 +55,7 @@ impl Default for ParallelPeekOverlayUiState {
         Self {
             step: ParallelPeekOverlayStep::AgentList,
             selected_agent_index: 0,
+            selected_agent_key: None,
             preview: None,
             conversation_scroll_from_bottom: 0,
         }
@@ -40,8 +67,14 @@ impl ParallelPeekOverlayUiState {
         self.step
     }
 
-    pub fn selected_agent_index(&self) -> usize {
-        self.selected_agent_index
+    pub fn selected_agent_index(&self, active_agents: &[ParallelModeAgentRosterEntry]) -> usize {
+        self.selected_agent_key
+            .as_ref()
+            .and_then(|key| unique_matching_index(active_agents, key))
+            .unwrap_or_else(|| {
+                self.selected_agent_index
+                    .min(active_agents.len().saturating_sub(1))
+            })
     }
 
     pub fn preview(&self) -> Option<&ParallelPeekConversationPreview> {
@@ -56,25 +89,32 @@ impl ParallelPeekOverlayUiState {
         *self = Self::default();
     }
 
-    pub fn move_selection(&mut self, active_agent_count: usize, delta: isize) {
-        if active_agent_count == 0 {
-            self.selected_agent_index = 0;
+    pub fn move_selection(&mut self, active_agents: &[ParallelModeAgentRosterEntry], delta: isize) {
+        self.sync_selection(active_agents);
+        if active_agents.is_empty() {
             return;
         }
-        let last = active_agent_count - 1;
-        self.selected_agent_index = if delta < 0 {
+        let last = active_agents.len() - 1;
+        let selected_agent_index = if delta < 0 {
             self.selected_agent_index
                 .saturating_sub(delta.unsigned_abs())
         } else {
             self.selected_agent_index.saturating_add(delta as usize)
         }
         .min(last);
+        self.select(active_agents, selected_agent_index);
     }
 
-    pub fn clamp_selection(&mut self, active_agent_count: usize) {
-        self.selected_agent_index = self
-            .selected_agent_index
-            .min(active_agent_count.saturating_sub(1));
+    pub fn sync_selection(&mut self, active_agents: &[ParallelModeAgentRosterEntry]) {
+        let selected_agent_index = self.selected_agent_index(active_agents);
+        self.select(active_agents, selected_agent_index);
+    }
+
+    fn select(&mut self, active_agents: &[ParallelModeAgentRosterEntry], index: usize) {
+        self.selected_agent_index = index;
+        self.selected_agent_key = active_agents
+            .get(index)
+            .map(ParallelPeekSelectionKey::from_entry);
     }
 
     pub fn open_preview(&mut self, preview: ParallelPeekConversationPreview) {
@@ -135,9 +175,42 @@ impl ParallelPeekOverlayUiState {
     }
 }
 
+fn unique_matching_index(
+    active_agents: &[ParallelModeAgentRosterEntry],
+    key: &ParallelPeekSelectionKey,
+) -> Option<usize> {
+    let mut matches = active_agents
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| key.matches(entry).then_some(index));
+    let index = matches.next()?;
+    matches.next().is_none().then_some(index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn agent(agent_id: &str) -> ParallelModeAgentRosterEntry {
+        agent_with_generation(agent_id, agent_id)
+    }
+
+    fn agent_with_generation(agent_id: &str, generation: &str) -> ParallelModeAgentRosterEntry {
+        ParallelModeAgentRosterEntry::new(
+            agent_id,
+            format!("Inspect {agent_id}"),
+            format!("slot-{agent_id}"),
+            format!("branch-{agent_id}"),
+            "running",
+            "active",
+            "working",
+        )
+        .with_lease_identity(
+            format!("task-{agent_id}"),
+            format!("session-{generation}"),
+            Some(format!("generation-{generation}")),
+        )
+    }
 
     fn preview() -> ParallelPeekConversationPreview {
         ParallelPeekConversationPreview {
@@ -158,20 +231,59 @@ mod tests {
          * while the overlay remains open.
          */
         let mut state = ParallelPeekOverlayUiState::default();
+        let three_agents = vec![agent("a"), agent("b"), agent("c")];
+        let two_agents = vec![agent("a"), agent("b")];
 
-        state.move_selection(3, 5);
-        assert_eq!(state.selected_agent_index(), 2);
+        state.move_selection(&three_agents, 5);
+        assert_eq!(state.selected_agent_index(&three_agents), 2);
 
-        state.clamp_selection(2);
-        assert_eq!(state.selected_agent_index(), 1);
+        state.sync_selection(&two_agents);
+        assert_eq!(state.selected_agent_index(&two_agents), 1);
 
-        state.move_selection(2, -5);
-        assert_eq!(state.selected_agent_index(), 0);
+        state.move_selection(&two_agents, -5);
+        assert_eq!(state.selected_agent_index(&two_agents), 0);
 
-        state.move_selection(0, 1);
-        assert_eq!(state.selected_agent_index(), 0);
-        state.clamp_selection(0);
-        assert_eq!(state.selected_agent_index(), 0);
+        state.move_selection(&[], 1);
+        assert_eq!(state.selected_agent_index(&[]), 0);
+        state.sync_selection(&[]);
+        assert_eq!(state.selected_agent_index(&[]), 0);
+    }
+
+    #[test]
+    fn selection_follows_a_lease_across_reorder_and_thread_capture() {
+        let mut state = ParallelPeekOverlayUiState::default();
+        let initial = vec![agent("a"), agent("b")];
+        state.move_selection(&initial, 1);
+
+        let reordered = vec![
+            agent("b").with_thread_id(Some("thread-b".to_string())),
+            agent("a"),
+        ];
+
+        assert_eq!(state.selected_agent_index(&reordered), 0);
+        state.sync_selection(&reordered);
+        assert_eq!(state.selected_agent_index(&reordered), 0);
+    }
+
+    #[test]
+    fn replacement_lease_does_not_inherit_the_previous_selection_identity() {
+        let mut state = ParallelPeekOverlayUiState::default();
+        let initial = vec![agent("a"), agent("b")];
+        state.move_selection(&initial, 1);
+
+        let replacement = vec![agent_with_generation("b", "replacement"), agent("a")];
+
+        assert_eq!(state.selected_agent_index(&replacement), 1);
+    }
+
+    #[test]
+    fn duplicate_keys_preserve_explicit_positional_selection() {
+        let mut state = ParallelPeekOverlayUiState::default();
+        let duplicate_agents = vec![agent("duplicate"), agent("duplicate")];
+
+        state.move_selection(&duplicate_agents, 1);
+
+        assert_eq!(state.selected_agent_index(&duplicate_agents), 1);
     }
 
     #[test]
