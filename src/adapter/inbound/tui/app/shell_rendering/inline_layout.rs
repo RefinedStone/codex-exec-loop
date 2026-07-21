@@ -100,19 +100,15 @@ pub(super) fn render_inline_body_suffix(
         return 0;
     }
 
-    let rendered_rows = count_rendered_inline_rows(&lines, area.width);
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let rendered_rows = paragraph.line_count(area.width);
     let bottom_scroll = rendered_rows.saturating_sub(usize::from(area.height));
     let dropped_rows = focus_row
         .map(usize::from)
         .filter(|focus_row| *focus_row < bottom_scroll)
         .unwrap_or(bottom_scroll);
     let scroll_offset = dropped_rows.min(usize::from(u16::MAX)) as u16;
-    frame.render_widget(
-        Paragraph::new(lines)
-            .scroll((scroll_offset, 0))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+    frame.render_widget(paragraph.scroll((scroll_offset, 0)), area);
     scroll_offset
 }
 
@@ -346,5 +342,29 @@ mod tests {
                 set_cursor_if_visible(frame, Rect::new(0, 8, 80, 1), Some((0, 0)));
             })
             .expect("cursor outside frame should be ignored");
+    }
+
+    #[test]
+    fn render_inline_body_suffix_scrolls_to_the_last_rendered_rows() {
+        let backend = TestBackend::new(5, 2);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| {
+                let dropped_rows = render_inline_body_suffix(
+                    frame,
+                    frame.area(),
+                    vec![
+                        Line::from("alpha"),
+                        Line::from("bravo"),
+                        Line::from("charl"),
+                    ],
+                    None,
+                );
+                assert_eq!(dropped_rows, 1);
+            })
+            .expect("suffix should render");
+
+        terminal.backend().assert_buffer_lines(["bravo", "charl"]);
     }
 }
