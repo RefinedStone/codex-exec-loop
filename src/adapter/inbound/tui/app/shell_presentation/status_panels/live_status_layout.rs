@@ -224,8 +224,8 @@ mod tests {
     };
     use crate::adapter::inbound::tui::app::test_helpers::test_native_tui_app;
     use crate::adapter::inbound::tui::app::{
-        ConversationInputState, ConversationState, MAX_INLINE_TAIL_HEIGHT, NativeTuiApp,
-        ShellActionAvailability, TuiLanguage,
+        ConversationInputState, ConversationState, InlineHistoryRenderMode, MAX_INLINE_TAIL_HEIGHT,
+        NativeTuiApp, ShellActionAvailability, TuiLanguage,
     };
     use crate::application::service::planning::PlanningRuntimeProjection;
     use crate::core::app::{QueueMutationCorrelation, QueueMutationIntent};
@@ -301,6 +301,82 @@ mod tests {
             screen_model.core_revision,
             app.core_runtime.snapshot().revision
         );
+    }
+
+    #[test]
+    fn viewport_replay_handoff_projection_couples_visible_release_to_delivery_ack() {
+        let mut app = test_native_tui_app();
+        app.inline_history_render_mode = InlineHistoryRenderMode::ViewportReplay;
+        app.shell_overlay = ShellOverlay::Hidden;
+        let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+            panic!("test app should keep a ready conversation");
+        };
+        conversation.record_thread_prepared(
+            "thread-live".to_string(),
+            "Live transcript".to_string(),
+            "/tmp/root".to_string(),
+        );
+        conversation.record_turn_started("turn-live".to_string());
+        assert!(conversation.complete_live_agent_message(
+            "agent-live".to_string(),
+            Some("final_answer".to_string()),
+            "HANDOFF_MARKER".to_string(),
+        ));
+        conversation.finish_turn("turn-live", &[]);
+        conversation.begin_post_turn_settlement("turn-live");
+        assert!(conversation.complete_post_turn_settlement("turn-live"));
+        conversation.push_live_agent_delta(
+            "agent-next".to_string(),
+            Some("analysis".to_string()),
+            "LIVE_MARKER".to_string(),
+        );
+
+        {
+            let screen_model = ConversationScreenModel::from_app(&app);
+            let live_transcript = screen_model
+                .live_transcript()
+                .expect("ready conversation should retain a live transcript projection");
+            let rendered = build_inline_live_transcript_lines(&screen_model)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            assert!(live_transcript.handoff_pending);
+            assert!(live_transcript.acknowledge_handoff_after_successful_draw);
+            assert!(screen_model.renders_viewport_transcript_handoff());
+            assert!(!screen_model.renders_parallel_viewport_handoff());
+            assert_eq!(rendered.matches("HANDOFF_MARKER").count(), 1);
+            assert_eq!(rendered.matches("LIVE_MARKER").count(), 1);
+            let handoff_index = rendered
+                .find("HANDOFF_MARKER")
+                .expect("rendered transcript should retain the handoff marker");
+            let live_index = rendered
+                .find("LIVE_MARKER")
+                .expect("rendered transcript should retain the live marker");
+            assert!(handoff_index < live_index);
+        }
+
+        app.shell_overlay = ShellOverlay::Help;
+        {
+            let overlay_screen_model = ConversationScreenModel::from_app(&app);
+            assert!(!overlay_screen_model.renders_viewport_transcript_handoff());
+            assert_eq!(
+                build_inline_live_transcript_lines(&overlay_screen_model)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .matches("HANDOFF_MARKER")
+                    .count(),
+                1
+            );
+        }
+
+        app.conversation_state = ConversationState::Loading;
+        let loading_screen_model = ConversationScreenModel::from_app(&app);
+        assert!(loading_screen_model.live_transcript().is_none());
+        assert!(build_inline_live_transcript_lines(&loading_screen_model).is_empty());
     }
 
     #[test]

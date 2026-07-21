@@ -3,8 +3,9 @@ use ratatui::text::Line;
 use crate::adapter::inbound::tui::supersession_mud::parallel_mode_progress_summary;
 
 use super::super::{
-    ConversationScreenModel, ConversationViewModel, INLINE_TAIL_THREAD_LABEL_LIMIT,
-    INLINE_TAIL_WARNING_DETAIL_LIMIT, compact_inline_detail, format_conversation_lines,
+    ConversationLiveTranscriptScreenModel, ConversationScreenModel, ConversationViewModel,
+    INLINE_TAIL_THREAD_LABEL_LIMIT, INLINE_TAIL_WARNING_DETAIL_LIMIT, compact_inline_detail,
+    format_conversation_lines,
 };
 use super::activity_rail::build_activity_rail_notice_line;
 
@@ -14,22 +15,17 @@ use super::activity_rail::build_activity_rail_notice_line;
  * 우선순위와 축약 규칙이 달라지기 쉽다. 그래서 이 파일이 공통 copy를 만들고, tail_copy는 배치와 스타일에만 집중한다.
  */
 pub(super) fn current_live_agent_lines(
-    conversation: &ConversationViewModel,
-    include_committed_handoff: bool,
+    live_transcript: &ConversationLiveTranscriptScreenModel<'_>,
 ) -> Option<Vec<Line<'static>>> {
     /*
      * Host scrollback으로 아직 넘기지 않은 완료 메시지와 현재 streaming item을 순서대로 그린다.
      * 동일 formatter를 재사용해 임시 viewport와 저장된 transcript의 markdown 규칙을 맞춘다.
      */
     let mut lines = Vec::new();
-    if include_committed_handoff
-        && let Some(messages) = conversation
-            .viewport_transcript_handoff_messages()
-            .or_else(|| conversation.viewport_transcript_handoff_release_messages())
-    {
+    if let Some(messages) = live_transcript.handoff_messages {
         lines.extend(format_conversation_lines(messages));
     }
-    if let Some(message) = conversation.live_agent_message.as_ref() {
+    if let Some(message) = live_transcript.live_agent_message {
         lines.extend(format_conversation_lines(std::slice::from_ref(message)));
     }
     (!lines.is_empty()).then_some(lines)
