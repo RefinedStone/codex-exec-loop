@@ -402,6 +402,14 @@ struct NativeTuiApp {
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
     global_runtime_notice_state: GlobalRuntimeNoticeState,
     conversation_state: ConversationState,
+    // Monotonic semantic boundary for host-scrollback transcript delivery. A
+    // new draft or different loaded session advances it; assigning the first
+    // provider thread id to an existing draft does not.
+    conversation_history_identity_revision: u64,
+    // The last authoritative transcript identity survives Loading/Failed so a
+    // deferred or failed load cannot make the terminal forget which baseline it
+    // has already delivered.
+    conversation_history_thread_id: Option<String>,
     pending_conversation_load: Option<ConversationLoadCorrelation>,
     pending_resumed_session_planning_refresh: Option<PendingResumedSessionPlanningRefresh>,
     selected_session_index: usize,

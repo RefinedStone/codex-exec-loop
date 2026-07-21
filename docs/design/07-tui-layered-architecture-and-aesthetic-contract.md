@@ -61,6 +61,12 @@ the fixed Akra theme.
   session-catalog, or conversation payloads. The pre-history outer flow layout and the final
   tail/live/cache projection consume that same sample. UI-local facts may be reread after a handoff
   acknowledgement.
+- Host-scrollback delivery must bind its conversation diff baseline to the semantic history-identity
+  revision captured in that sample. A new draft or an accepted Ready snapshot for a different
+  session resets only the conversation baseline; selection intent, deferred/failed loads,
+  draft-to-provider promotion, and same-thread reattach preserve it. Transient Loading/Failed
+  projections must not impersonate an authoritative empty transcript, and conversation switches
+  must not reset the parallel event baseline or shared physical-row geometry.
 - Supersession is covered by that consistency guarantee: the sample owns one control-plane
   presentation projection, one event-stream projection, and the narrow owned Core projection,
   while row planning and drawing consume the same owned overlay view. Other overlay-specific
