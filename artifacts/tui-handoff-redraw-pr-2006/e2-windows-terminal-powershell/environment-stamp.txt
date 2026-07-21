@@ -1,0 +1,37 @@
+artifact_id: pr2006-e2-r10-synthetic
+pr_or_work_item: PR 2006
+capture_role: supplemental-unmatched
+environment_class: first-class E2
+check_profile: pr2006-handoff-redraw-viewport-replay-v1
+captured_at_utc: 2026-07-21T08:02:16Z
+operator: Codex /root
+reviewer: Codex /root/handoff_evidence_review
+candidate_commit: f0ca13f87e70ca99132abc219ca3618910f4442a
+candidate_tree: f821a1ce4145926d24fc76a38dc4c9ab2a5aff1c
+candidate_clean_before: true
+candidate_clean_after: true
+binary_sha256: 8644cccac60ac9c274a7c87f265a4f9fd4c2eb62c7b47d470a4d43f33c5ede6a
+binary_target: x86_64-pc-windows-msvc
+source_build: true
+runtime_authority: deterministic native synthetic Codex app-server
+codex_version: codex-cli 0.144.6-handoff-capture
+codex_binary_sha256: bcabb458c8a8ecc58534a153e37d4dc240769553b51f76dbbf5c750994e33c93
+terminal: Windows Terminal 1.24.11911.0
+shell: Windows PowerShell 5.1.26100.8875
+os: Microsoft Windows 11 10.0.26200
+frontend: inline
+tty: ConPTY via Windows Terminal
+multiplexer: none
+term: xterm-256color
+inline_history_render_mode: ViewportReplay
+inline_history_render_mode_source: CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=viewport-replay
+history_insertion_mode: StandardScrollRegion
+history_insertion_mode_source: CODEX_EXEC_LOOP_HISTORY_INSERT_MODE=standard
+wt_session: present
+initial_window: 1249x635 pixels
+narrow_window: 650x460 pixels
+restored_window: 1100x720 pixels
+terminal_cell_geometry: not recorded
+workspace_isolation: protected Windows root with current user, SYSTEM, and Administrators only
+runtime_exit_status: 0
+notes_on_deviations: deterministic native synthetic provider; protected isolated workspace

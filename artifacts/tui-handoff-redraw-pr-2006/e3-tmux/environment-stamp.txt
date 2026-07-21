@@ -1,0 +1,37 @@
+artifact_id: pr2006-e3-r4-synthetic
+pr_or_work_item: PR 2006
+capture_role: supplemental-unmatched
+environment_class: first-class E3
+check_profile: pr2006-handoff-redraw-viewport-replay-v1
+captured_at_utc: 2026-07-21T07:34:33Z
+operator: Codex /root
+reviewer: Codex /root/handoff_evidence_review
+candidate_commit: f0ca13f87e70ca99132abc219ca3618910f4442a
+candidate_tree: f821a1ce4145926d24fc76a38dc4c9ab2a5aff1c
+candidate_clean_before: true
+candidate_clean_after: true
+binary_sha256: c183ec68fb747f70e963f9606eb34653f280da25db1104e5a5695cabb64fa4d9
+source_build: true
+runtime_authority: deterministic synthetic Codex app-server
+codex_version: codex-cli 0.144.6-handoff-capture
+terminal: tmux 3.4
+multiplexer: tmux detached PTY
+shell: bash 5.2.21(1)-release
+os: Ubuntu 24.04.2 LTS / WSL2
+kernel: 6.18.33.2-microsoft-standard-WSL2
+frontend: inline
+term: xterm-256color
+inline_history_render_mode: ViewportReplay
+inline_history_render_mode_source: CODEX_EXEC_LOOP_INLINE_HISTORY_MODE=viewport-replay
+history_insertion_mode: StandardScrollRegion
+history_insertion_mode_source: CODEX_EXEC_LOOP_HISTORY_INSERT_MODE=standard
+wt_session: unset
+initial_geometry: 120x30 cells
+narrow_geometry: 48x18 cells
+restored_geometry: 120x30 cells
+raw_typescript_sha256: f77f27fedab243c7c4c886c0fe04180d12dcb19edcd749d6fa6cf481a753b0d7
+raw_typescript_bytes: 12249
+raw_typescript_checked_in: false
+runtime_exit_status: 0
+pane_process_terminated: true
+notes_on_deviations: deterministic synthetic provider; raw ANSI transcript excluded

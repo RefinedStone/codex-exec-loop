@@ -1,0 +1,19 @@
+pr: 2006
+candidate_commit: f0ca13f87e70ca99132abc219ca3618910f4442a
+candidate_tree: f821a1ce4145926d24fc76a38dc4c9ab2a5aff1c
+candidate_worktree_clean_before_capture: true
+candidate_worktree_clean_after_capture: true
+linux_binary_sha256: c183ec68fb747f70e963f9606eb34653f280da25db1104e5a5695cabb64fa4d9
+linux_binary_bytes: 170986328
+windows_binary_sha256: 8644cccac60ac9c274a7c87f265a4f9fd4c2eb62c7b47d470a4d43f33c5ede6a
+windows_binary_bytes: 34904064
+windows_binary_target: x86_64-pc-windows-msvc
+source_builds: true
+synthetic_provider_version: codex-cli 0.144.6-handoff-capture
+windows_synthetic_provider_sha256: bcabb458c8a8ecc58534a153e37d4dc240769553b51f76dbbf5c750994e33c93
+windows_synthetic_provider_bytes: 214016
+synthetic_provider_contract: initialize, account/read, thread/list, thread/read, thread/start, turn/start, turn/interrupt, thread/archive
+synthetic_completion_contract: one completed command item, one final agent item, one completed turn
+exact_final: HANDOFF_REDRAW_CANARY_F0CA13F8
+network_used_by_fixture: false
+result: pass

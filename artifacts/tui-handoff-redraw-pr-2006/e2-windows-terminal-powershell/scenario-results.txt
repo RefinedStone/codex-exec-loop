@@ -1,0 +1,19 @@
+scenario_set: pr2006-handoff-redraw-viewport-replay-v1
+overall_result: pass
+
+1. candidate_integrity: pass
+   Exact commit/tree and the Windows source-build hash matched the pinned candidate.
+2. trusted_native_startup: pass
+   The candidate resolved the protected native provider and reached an account/app-server-ready shell.
+3. active_turn_and_resize: pass
+   One held synthetic turn stayed visible through wide, narrow, and restored ConPTY windows.
+4. modal_handoff: pass
+   Help remained open when completion arrived; the held frame showed the explicit response-held prompt.
+5. post_ack_semantic_redraw: pass
+   Closing Help produced one visible exact canary, removed the held prompt, and restored session ready.
+6. clean_exit: pass
+   Ctrl+q closed the exact-title Windows Terminal window; the capture runner exited 0.
+7. methodology_addendum: pass
+   Unchanged primitive branches and lifecycle scenarios use the named proofs in ../automated-proof.txt.
+
+deviation: synthetic app-server and protected isolated workspace used for deterministic trusted execution

@@ -1,0 +1,16 @@
+
+
+
+
+
+
+
+Akra  |  thread: Handoff redraw ca...
+runtime: notice: bridge attach...
+◦ Working (1s • waiting for response / interrupt runtime-...)
+planning: stale
+now: HANDOFF_CAPTURE_START_E3R4
+recent you: HANDOFF_CAPTURE_START_E3R4
+notice: activity: active:command | model:gpt-5.6-handoff-capture | task:HANDOFF_CAPTURE_START_E3R4
+>
+prompt: Enter queue | Tab steer | Ctrl+j nl

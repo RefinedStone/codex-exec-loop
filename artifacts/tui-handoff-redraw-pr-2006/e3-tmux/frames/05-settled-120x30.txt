@@ -1,0 +1,16 @@
+
+
+
+
+
+
+
+Akra  |  thread: Handoff redraw ca...
+status: turn completed / auto-follow disabled; us...
+runtime: notice: bridge attach...
+now: HANDOFF_CAPTURE_START_E3R4
+recent you: HANDOFF_CAPTURE_START_E3R4
+recent codex: HANDOFF_REDRAW_CANARY_F0CA13F8
+notice: auto: disabled: explicit opt-in required  |  detail: auto-follow is disabled; use :turns <...
+>
+prompt: session ready  |  Enter send  |  Ctrl+j nl  |  :help
