@@ -309,8 +309,8 @@ fn startup_prompt_command_palette_remains_visible_after_colon_input() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start with a ready draft conversation");
     };
-    conversation.input_buffer = ":".to_string();
-    conversation.sync_inline_shell_command_palette();
+    conversation.composer.input_buffer = ":".to_string();
+    conversation.composer.sync_inline_shell_command_palette();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -342,8 +342,8 @@ fn startup_prompt_command_palette_uses_selected_korean_language() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should start with a ready draft conversation");
     };
-    conversation.input_buffer = ":".to_string();
-    conversation.sync_inline_shell_command_palette();
+    conversation.composer.input_buffer = ":".to_string();
+    conversation.composer.sync_inline_shell_command_palette();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
@@ -357,8 +357,8 @@ fn startup_prompt_command_palette_uses_selected_korean_language() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should keep a ready draft conversation");
     };
-    conversation.input_buffer = ":zzzz".to_string();
-    conversation.sync_inline_shell_command_palette();
+    conversation.composer.input_buffer = ":zzzz".to_string();
+    conversation.composer.sync_inline_shell_command_palette();
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("no-match palette render succeeds");
@@ -457,7 +457,7 @@ fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
         panic!("test app should keep a ready conversation state");
     };
     let before_middle = "word ".repeat(120);
-    conversation.input_buffer = format!(
+    conversation.composer.input_buffer = format!(
         "{before_middle}MIDDLE_CURSOR {}CURSOR_END",
         "word ".repeat(120)
     );
@@ -495,7 +495,9 @@ fn dense_single_line_prompt_keeps_its_end_and_cursor_visible() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("test app should keep a ready conversation state");
     };
-    conversation.set_input_cursor_byte_index(before_middle.len());
+    conversation
+        .composer
+        .set_input_cursor_byte_index(before_middle.len());
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))
         .expect("middle cursor render succeeds");
@@ -1770,7 +1772,7 @@ fn inline_supersession_keeps_buffered_prompt_visible_in_compact_tail() {
     let ConversationState::Ready(conversation) = &mut app.conversation_state else {
         panic!("expected ready conversation state");
     };
-    conversation.input_buffer = "안녕하세요?".to_string();
+    conversation.composer.input_buffer = "안녕하세요?".to_string();
 
     terminal
         .draw(|frame| draw(frame, &mut app, ShellFrontendMode::InlineMainBuffer))

@@ -2593,6 +2593,245 @@ fn conversation_state_model_has_no_presentation_or_planning_projection_cache() {
 }
 
 #[test]
+fn conversation_input_reducer_is_isolated_to_composer_state() {
+    let composer_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/conversation_model/composer_state.rs"),
+    )
+    .expect("conversation composer state source should load");
+    let composer_syntax =
+        syn::parse_file(&composer_source).expect("conversation composer state should parse");
+    let composer_fields = named_struct_fields(&composer_syntax, "ConversationComposerState");
+    let composer_field_types = composer_fields
+        .iter()
+        .map(|field| {
+            (
+                field
+                    .ident
+                    .as_ref()
+                    .expect("composer field should be named")
+                    .to_string(),
+                &field.ty,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let expected_composer_field_names = [
+        "input_buffer",
+        "input_cursor_byte_index",
+        "inline_shell_command_palette_state",
+        "startup_submit_armed",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<HashSet<_>>();
+    assert_eq!(
+        composer_field_types.keys().cloned().collect::<HashSet<_>>(),
+        expected_composer_field_names,
+        "ConversationComposerState must own exactly the mutable composer surface"
+    );
+    assert!(
+        is_named_path_type(composer_field_types["input_buffer"], "String"),
+        "ConversationComposerState.input_buffer must be String"
+    );
+    assert!(
+        is_single_generic_named_type(
+            composer_field_types["input_cursor_byte_index"],
+            "Option",
+            "usize",
+        ),
+        "ConversationComposerState.input_cursor_byte_index must be Option<usize>"
+    );
+    assert!(
+        is_named_path_type(
+            composer_field_types["inline_shell_command_palette_state"],
+            "InlineShellCommandPaletteState",
+        ),
+        "ConversationComposerState.inline_shell_command_palette_state must use the palette state"
+    );
+    assert!(
+        is_named_path_type(composer_field_types["startup_submit_armed"], "bool"),
+        "ConversationComposerState.startup_submit_armed must be bool"
+    );
+
+    let view_model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/conversation_model/view_model.rs"),
+    )
+    .expect("conversation view-model source should load");
+    let view_model_syntax =
+        syn::parse_file(&view_model_source).expect("conversation view model should parse");
+    let view_model_fields = named_struct_fields(&view_model_syntax, "ConversationViewModel");
+    let composer_field = view_model_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "composer")
+        })
+        .expect("ConversationViewModel must own one composer field");
+    assert!(
+        matches!(
+            &composer_field.ty,
+            syn::Type::Path(type_path)
+                if type_path.path.segments.last().is_some_and(|segment| {
+                    segment.ident == "ConversationComposerState"
+                })
+        ),
+        "ConversationViewModel.composer must use ConversationComposerState"
+    );
+    for flat_field_name in &expected_composer_field_names {
+        assert!(
+            view_model_fields.iter().all(|field| {
+                field
+                    .ident
+                    .as_ref()
+                    .is_none_or(|ident| ident != flat_field_name)
+            }),
+            "ConversationViewModel must not retain flat composer field {flat_field_name}"
+        );
+    }
+
+    let input_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/conversation_input.rs"))
+            .expect("conversation input source should load");
+    let input_syntax =
+        syn::parse_file(&input_source).expect("conversation input source should parse");
+    let production_references = rust_semantic_references(&input_source).paths;
+    let references_identifier = |references: &[String], identifier: &str| {
+        references
+            .iter()
+            .any(|path| path.split("::").any(|segment| segment == identifier))
+    };
+    for forbidden_reference in [
+        "ConversationViewModel",
+        "ConversationMessage",
+        "record_manual_preparation_failure",
+        "record_status_message",
+    ] {
+        assert!(
+            !references_identifier(&production_references, forbidden_reference),
+            "production conversation_input.rs must not reference {forbidden_reference}"
+        );
+    }
+    let reduce_source = top_level_function_source(&input_source, "reduce_conversation_input");
+    let reduce_syntax =
+        syn::parse_file(&reduce_source).expect("conversation input reducer should parse");
+    let reduce_function = reduce_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "reduce_conversation_input" => {
+                Some(function)
+            }
+            _ => None,
+        })
+        .expect("conversation input reducer should exist");
+    let reducer_parameter_types = reduce_function
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            syn::FnArg::Typed(argument) => argument.ty.as_ref(),
+            syn::FnArg::Receiver(_) => panic!("conversation input reducer must be a free function"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reducer_parameter_types.len(),
+        2,
+        "conversation input reducer must accept only composer state and one composer event"
+    );
+    assert!(
+        is_named_path_type(reducer_parameter_types[0], "ConversationComposerState"),
+        "conversation input reducer first parameter must be ConversationComposerState"
+    );
+    assert!(
+        is_named_path_type(reducer_parameter_types[1], "ConversationComposerEvent"),
+        "conversation input reducer second parameter must be ConversationComposerEvent"
+    );
+    let syn::ReturnType::Type(_, reducer_return_type) = &reduce_function.sig.output else {
+        panic!("conversation input reducer must return ConversationComposerReduction");
+    };
+    assert!(
+        is_named_path_type(reducer_return_type, "ConversationComposerReduction"),
+        "conversation input reducer must return ConversationComposerReduction"
+    );
+
+    let reduction_fields = named_struct_fields(&input_syntax, "ConversationComposerReduction");
+    let reduction_field_types = reduction_fields
+        .iter()
+        .map(|field| {
+            (
+                field
+                    .ident
+                    .as_ref()
+                    .expect("composer reduction field should be named")
+                    .to_string(),
+                &field.ty,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        reduction_field_types
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>(),
+        ["state", "effects"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>(),
+        "ConversationComposerReduction must expose only state and effects"
+    );
+    assert!(
+        is_named_path_type(reduction_field_types["state"], "ConversationComposerState"),
+        "composer reduction state must remain ConversationComposerState"
+    );
+    assert!(
+        is_single_generic_named_type(
+            reduction_field_types["effects"],
+            "Vec",
+            "ConversationComposerEffect",
+        ),
+        "composer reduction effects must remain Vec<ConversationComposerEffect>"
+    );
+
+    let effect = input_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(item) if item.ident == "ConversationComposerEffect" => Some(item),
+            _ => None,
+        })
+        .expect("conversation input source should define ConversationComposerEffect");
+    assert_eq!(
+        effect.variants.len(),
+        1,
+        "composer effects must not gain semantic conversation mutations"
+    );
+    let replace_status = &effect.variants[0];
+    assert_eq!(replace_status.ident, "ReplaceStatus");
+    let syn::Fields::Named(replace_status_fields) = &replace_status.fields else {
+        panic!("ReplaceStatus must use one named status_text field");
+    };
+    assert_eq!(replace_status_fields.named.len(), 1);
+    let status_text_field = &replace_status_fields.named[0];
+    assert!(
+        status_text_field
+            .ident
+            .as_ref()
+            .is_some_and(|ident| ident == "status_text")
+            && is_named_path_type(&status_text_field.ty, "String"),
+        "ReplaceStatus must carry only status_text: String"
+    );
+
+    let reduce_references = rust_semantic_references(&reduce_source).paths;
+    for forbidden_reference in ["ConversationInputEvent", "ConversationViewModel"] {
+        assert!(
+            !references_identifier(&reduce_references, forbidden_reference),
+            "reduce_conversation_input must not reference {forbidden_reference}"
+        );
+    }
+}
+
+#[test]
 fn tui_planning_worker_state_uses_the_domain_contract_without_round_trip_mappers() {
     assert_no_forbidden_references_in_paths(
         "TUI planning worker diagnostics must store the domain snapshot directly",
@@ -5079,6 +5318,37 @@ fn named_struct_fields<'a>(syntax: &'a syn::File, struct_name: &str) -> Vec<&'a 
         panic!("{struct_name} should use named fields");
     };
     fields.named.iter().collect()
+}
+
+fn is_named_path_type(ty: &syn::Type, expected_name: &str) -> bool {
+    matches!(
+        ty,
+        syn::Type::Path(type_path)
+            if type_path.qself.is_none()
+                && type_path.path.segments.last().is_some_and(|segment| {
+                    segment.ident == expected_name
+                        && matches!(segment.arguments, syn::PathArguments::None)
+                })
+    )
+}
+
+fn is_single_generic_named_type(ty: &syn::Type, outer_name: &str, inner_name: &str) -> bool {
+    let syn::Type::Path(outer) = ty else {
+        return false;
+    };
+    let Some(outer_segment) = outer.path.segments.last() else {
+        return false;
+    };
+    if outer.qself.is_some() || outer_segment.ident != outer_name {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &outer_segment.arguments else {
+        return false;
+    };
+    let Some(syn::GenericArgument::Type(inner)) = arguments.args.first() else {
+        return false;
+    };
+    arguments.args.len() == 1 && is_named_path_type(inner, inner_name)
 }
 
 fn is_option_string_type(ty: &syn::Type) -> bool {

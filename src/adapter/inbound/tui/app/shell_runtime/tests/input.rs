@@ -67,7 +67,7 @@ fn plain_character_input_uses_empty_modifier_check() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "a");
+    assert_eq!(conversation.composer.input_buffer, "a");
     assert!(runtime.take_redraw_request());
 }
 
@@ -82,7 +82,7 @@ fn session_rename_editor_owns_paste_without_mutating_the_prompt() {
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
     };
-    conversation.input_buffer = "keep this prompt".to_string();
+    conversation.composer.input_buffer = "keep this prompt".to_string();
 
     runtime.handle_terminal_event(Event::Paste(" candidate\r\nready".to_string()));
 
@@ -96,7 +96,7 @@ fn session_rename_editor_owns_paste_without_mutating_the_prompt() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "keep this prompt");
+    assert_eq!(conversation.composer.input_buffer, "keep this prompt");
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn tab_opens_exact_turn_steer_confirmation_and_escape_keeps_the_draft() {
     };
     conversation.thread_id = "thread-steer".to_string();
     conversation.record_turn_started("turn-steer".to_string());
-    conversation.input_buffer = "add focused coverage".to_string();
+    conversation.composer.input_buffer = "add focused coverage".to_string();
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
     let request = runtime
@@ -127,14 +127,14 @@ fn tab_opens_exact_turn_steer_confirmation_and_escape_keeps_the_draft() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "add focused coverage");
+    assert_eq!(conversation.composer.input_buffer, "add focused coverage");
 
     runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     assert!(runtime.app().turn_steer_confirmation.is_none());
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "add focused coverage");
+    assert_eq!(conversation.composer.input_buffer, "add focused coverage");
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
     };
     conversation.thread_id = "thread-queue-race".to_string();
     conversation.record_turn_started("turn-queue-race".to_string());
-    conversation.input_buffer = "apply this once".to_string();
+    conversation.composer.input_buffer = "apply this once".to_string();
 
     runtime.app_mut().pending_manual_prompt_preparation = Some(PendingManualPromptPreparation {
         correlation: crate::domain::planning::ManualPromptCorrelation {
@@ -171,7 +171,7 @@ fn tab_cannot_steer_the_same_draft_while_queue_registration_is_pending() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "apply this once");
+    assert_eq!(conversation.composer.input_buffer, "apply this once");
     assert!(conversation.status_text.contains("queue registration"));
 }
 
@@ -205,7 +205,7 @@ fn supersession_overlay_blocks_prompt_input_while_loading() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.composer.input_buffer.is_empty());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }
@@ -240,7 +240,7 @@ fn supersession_overlay_allows_prompt_input_after_loading_finishes() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "a");
+    assert_eq!(conversation.composer.input_buffer, "a");
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }
@@ -291,7 +291,7 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
         let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
             panic!("expected ready conversation state");
         };
-        if conversation.input_buffer.is_empty()
+        if conversation.composer.input_buffer.is_empty()
             && conversation.status_text.contains("parallel task intake")
         {
             break;
@@ -302,7 +302,7 @@ fn supersession_overlay_routes_prompt_to_parallel_task_intake_after_loading_fini
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.composer.input_buffer.is_empty());
     assert!(
         !conversation.status_text.contains("starting turn"),
         "parallel prompt should not enter the single-session turn path"
@@ -569,7 +569,7 @@ fn bare_parallel_enter_opens_parallel_control_tower_without_main_turn() {
     for _ in 0..250 {
         runtime.poll_background_messages();
         if let ConversationState::Ready(conversation) = &runtime.app().conversation_state
-            && conversation.input_buffer.is_empty()
+            && conversation.composer.input_buffer.is_empty()
             && conversation.status_text.contains("parallel mode:")
         {
             break;
@@ -580,7 +580,7 @@ fn bare_parallel_enter_opens_parallel_control_tower_without_main_turn() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.composer.input_buffer.is_empty());
     assert!(conversation.messages.is_empty());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
 }
@@ -1197,7 +1197,7 @@ fn supersession_overlay_blocks_plain_r_prompt_input_while_loading() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.composer.input_buffer.is_empty());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
 }
@@ -1220,7 +1220,7 @@ fn supersession_overlay_ctrl_r_refreshes_readiness() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.composer.input_buffer.is_empty());
     assert!(
         conversation
             .status_text
@@ -1289,7 +1289,7 @@ fn supersession_overlay_blocks_enter_submit_prompt_while_loading() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "run next");
+    assert_eq!(conversation.composer.input_buffer, "run next");
     assert!(!conversation.has_running_turn());
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Supersession);
     assert!(runtime.take_redraw_request());
@@ -1315,7 +1315,7 @@ fn enter_executes_selected_inline_command_palette_item() {
         panic!("expected ready conversation state");
     };
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Startup);
-    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.composer.input_buffer.is_empty());
     assert!(
         conversation
             .status_text
@@ -1341,8 +1341,13 @@ fn down_then_enter_on_palette_item_with_argument_inserts_completion() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, ":reset ");
-    assert!(!conversation.inline_shell_command_palette_state.is_active());
+    assert_eq!(conversation.composer.input_buffer, ":reset ");
+    assert!(
+        !conversation
+            .composer
+            .inline_shell_command_palette_state
+            .is_active()
+    );
     assert_eq!(runtime.app().shell_overlay, ShellOverlay::Hidden);
 }
 
@@ -1362,10 +1367,16 @@ fn enter_on_empty_command_palette_does_not_submit_raw_command_text() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, ":zzzz");
-    assert!(conversation.inline_shell_command_palette_state.is_active());
+    assert_eq!(conversation.composer.input_buffer, ":zzzz");
     assert!(
         conversation
+            .composer
+            .inline_shell_command_palette_state
+            .is_active()
+    );
+    assert!(
+        conversation
+            .composer
             .inline_shell_command_palette_state
             .selected_command()
             .is_none()
@@ -1409,6 +1420,7 @@ fn up_wraps_inline_command_palette_selection() {
     };
     assert_eq!(
         conversation
+            .composer
             .inline_shell_command_palette_state
             .selected_command(),
         Some(InlineShellCommand::Help)
@@ -1427,6 +1439,7 @@ fn tab_and_backtab_navigate_inline_command_palette() {
     };
     assert_eq!(
         conversation
+            .composer
             .inline_shell_command_palette_state
             .selected_command(),
         Some(InlineShellCommand::Parallel)
@@ -1441,11 +1454,12 @@ fn tab_and_backtab_navigate_inline_command_palette() {
     };
     assert_eq!(
         conversation
+            .composer
             .inline_shell_command_palette_state
             .selected_command(),
         Some(InlineShellCommand::Diagnostics)
     );
-    assert_eq!(conversation.input_buffer, ":");
+    assert_eq!(conversation.composer.input_buffer, ":");
     assert!(runtime.take_redraw_request());
 }
 
@@ -1464,8 +1478,13 @@ fn escape_dismisses_inline_command_palette_without_clearing_buffer() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, ":p");
-    assert!(!conversation.inline_shell_command_palette_state.is_active());
+    assert_eq!(conversation.composer.input_buffer, ":p");
+    assert!(
+        !conversation
+            .composer
+            .inline_shell_command_palette_state
+            .is_active()
+    );
 }
 
 #[test]
@@ -1505,7 +1524,7 @@ fn ctrl_u_clears_buffered_input() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert!(conversation.input_buffer.is_empty());
+    assert!(conversation.composer.input_buffer.is_empty());
 }
 
 #[test]
@@ -1526,7 +1545,7 @@ fn ctrl_w_deletes_previous_buffered_word() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "ship this ");
+    assert_eq!(conversation.composer.input_buffer, "ship this ");
 }
 
 #[test]
@@ -1550,8 +1569,8 @@ fn arrow_keys_move_prompt_cursor_before_editing() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "helo");
-    assert_eq!(conversation.input_cursor_byte_index(), "he".len());
+    assert_eq!(conversation.composer.input_buffer, "helo");
+    assert_eq!(conversation.composer.input_cursor_byte_index(), "he".len());
 }
 
 #[test]
@@ -1569,7 +1588,7 @@ fn option_arrow_moves_prompt_cursor_by_word() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "one two Xthree");
+    assert_eq!(conversation.composer.input_buffer, "one two Xthree");
 }
 
 #[test]
@@ -1590,7 +1609,7 @@ fn command_arrow_moves_prompt_cursor_to_line_boundary() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "one\nXtwo");
+    assert_eq!(conversation.composer.input_buffer, "one\nXtwo");
 }
 
 #[test]
@@ -1609,7 +1628,7 @@ fn paste_event_inserts_multiline_text_without_submit() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "first\nsecond");
+    assert_eq!(conversation.composer.input_buffer, "first\nsecond");
     assert!(conversation.messages.is_empty());
     assert!(conversation.can_accept_manual_prompt());
     assert!(runtime.take_redraw_request());
@@ -1621,7 +1640,7 @@ fn approval_overlay_consumes_paste_without_mutating_the_prompt() {
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
     };
-    conversation.input_buffer = "existing prompt".to_string();
+    conversation.composer.input_buffer = "existing prompt".to_string();
     conversation.pending_approval_request = Some(ConversationApprovalRequest {
         approval_id: "approval-paste".to_string(),
         server_request_id: "server-paste".to_string(),
@@ -1637,6 +1656,6 @@ fn approval_overlay_consumes_paste_without_mutating_the_prompt() {
     let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
         panic!("expected ready conversation state");
     };
-    assert_eq!(conversation.input_buffer, "existing prompt");
+    assert_eq!(conversation.composer.input_buffer, "existing prompt");
     assert!(conversation.pending_approval_request.is_some());
 }

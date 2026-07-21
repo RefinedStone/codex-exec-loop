@@ -249,8 +249,10 @@ mod tests {
             "/tmp/root".to_string(),
         );
         conversation.input_state = ConversationInputState::ReadyToContinue;
-        conversation.input_buffer = "우선순위가 보존된 짧은 prompt".to_string();
-        conversation.set_input_cursor_byte_index(conversation.input_buffer.len());
+        conversation.composer.input_buffer = "우선순위가 보존된 짧은 prompt".to_string();
+        conversation
+            .composer
+            .set_input_cursor_byte_index(conversation.composer.input_buffer.len());
         conversation.base_warnings = vec!["긴한글경고상세".repeat(10)];
         conversation.runtime_notices = vec!["긴한글복구상세".repeat(10)];
         app
@@ -278,8 +280,10 @@ mod tests {
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("test app should keep a ready conversation");
         };
-        conversation.input_buffer = "한글 prompt".to_string();
-        conversation.set_input_cursor_byte_index("한글".len());
+        conversation.composer.input_buffer = "한글 prompt".to_string();
+        conversation
+            .composer
+            .set_input_cursor_byte_index("한글".len());
 
         let screen_model = ConversationScreenModel::from_app(&app);
         let first = build_inline_tail_view(&screen_model, 80);
@@ -582,8 +586,10 @@ mod tests {
         let ConversationState::Ready(conversation) = &mut app.conversation_state else {
             panic!("test app should keep a ready conversation");
         };
-        conversation.input_buffer = format!("{}PROMPT_END", "긴 prompt ".repeat(120));
-        conversation.set_input_cursor_byte_index(conversation.input_buffer.len());
+        conversation.composer.input_buffer = format!("{}PROMPT_END", "긴 prompt ".repeat(120));
+        conversation
+            .composer
+            .set_input_cursor_byte_index(conversation.composer.input_buffer.len());
         let mut screen_model = ConversationScreenModel::from_app(&app);
         add_dense_low_priority_details(&mut screen_model);
         let raw_lines = build_inline_tail_content_with_context(&screen_model, None, 40)

@@ -29,9 +29,9 @@ use super::conversation_input::MAX_PROMPT_INPUT_BYTES;
 use super::planning::planning_worker_status_label;
 use super::planning_worker_debug_preview::build_debug_preview_lines;
 use super::{
-    AutoFollowSubmitContext, ConversationInputEvent, ConversationRuntimeEffect,
-    ConversationRuntimeEvent, ConversationState, ConversationViewModel, InlineShellCommandInput,
-    ManualIntakeSubmitContext, ManualPromptDelivery, NativeTuiApp,
+    AutoFollowSubmitContext, ConversationComposerEvent, ConversationInputEvent,
+    ConversationRuntimeEffect, ConversationRuntimeEvent, ConversationState, ConversationViewModel,
+    InlineShellCommandInput, ManualIntakeSubmitContext, ManualPromptDelivery, NativeTuiApp,
     PARALLEL_SUPERVISOR_OPERATOR_ACTOR, PendingManualPromptPreparation, PromptOrigin,
     ShellActionAvailability, ShellChromeEvent,
 };
@@ -45,7 +45,7 @@ impl NativeTuiApp {
         // can accept a manual prompt.
         let inline_command = match &self.conversation_state {
             ConversationState::Ready(conversation) => {
-                InlineShellCommandInput::parse(&conversation.input_buffer)
+                InlineShellCommandInput::parse(&conversation.composer.input_buffer)
             }
             _ => None,
         };
@@ -60,7 +60,7 @@ impl NativeTuiApp {
             return;
         }
         let operator_prompt = match &self.conversation_state {
-            ConversationState::Ready(conversation) => conversation.input_buffer.clone(),
+            ConversationState::Ready(conversation) => conversation.composer.input_buffer.clone(),
             _ => return,
         };
         if operator_prompt.trim().is_empty() {
@@ -220,8 +220,8 @@ impl NativeTuiApp {
     pub(super) fn resolve_startup_submit_queue(&mut self) {
         let (startup_submit_armed, operator_prompt) = match &self.conversation_state {
             ConversationState::Ready(conversation) => (
-                conversation.startup_submit_armed,
-                conversation.input_buffer.clone(),
+                conversation.composer.startup_submit_armed,
+                conversation.composer.input_buffer.clone(),
             ),
             ConversationState::Loading | ConversationState::Failed(_) => return,
         };
@@ -233,21 +233,23 @@ impl NativeTuiApp {
         // action-ready; blocked startup keeps the text in the buffer for the operator.
         match self.shell_action_availability() {
             ShellActionAvailability::Ready if operator_prompt.trim().is_empty() => {
-                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
-                    status_text: None,
-                });
+                self.dispatch_conversation_input(
+                    ConversationComposerEvent::StartupSubmitDisarmed { status_text: None },
+                );
             }
             ShellActionAvailability::Ready => {
                 self.submit_manual_prompt_from_text(operator_prompt);
             }
             ShellActionAvailability::Pending => {}
             ShellActionAvailability::Blocked => {
-                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitDisarmed {
-                    status_text: Some(format!(
-                        "{}; queued prompt kept in buffer",
-                        self.submission_blocked_status(PromptOrigin::Manual)
-                    )),
-                });
+                self.dispatch_conversation_input(
+                    ConversationComposerEvent::StartupSubmitDisarmed {
+                        status_text: Some(format!(
+                            "{}; queued prompt kept in buffer",
+                            self.submission_blocked_status(PromptOrigin::Manual)
+                        )),
+                    },
+                );
             }
         }
     }
@@ -270,7 +272,7 @@ impl NativeTuiApp {
                 ConversationState::Ready(conversation) => {
                     let delivery = manual_prompt_delivery(conversation);
                     (
-                        delivery.is_some() && conversation.input_buffer == operator_prompt,
+                        delivery.is_some() && conversation.composer.input_buffer == operator_prompt,
                         delivery.unwrap_or(ManualPromptDelivery::StartTurn),
                         Some(conversation.thread_id.clone())
                             .filter(|thread_id| !thread_id.trim().is_empty()),
@@ -286,7 +288,7 @@ impl NativeTuiApp {
         }
         match self.shell_action_availability() {
             ShellActionAvailability::Pending => {
-                self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+                self.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
                     status_text: "prompt queued until startup checks finish".to_string(),
                 });
                 return;
@@ -560,7 +562,7 @@ impl NativeTuiApp {
             return;
         }
 
-        self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+        self.dispatch_conversation_input(ConversationComposerEvent::InputCleared);
         let handoff_task = handoff.task;
         let undo_available =
             mutation_kind == PlanningQueueMutationKind::Created && handoff_task.is_some();
@@ -625,7 +627,7 @@ impl NativeTuiApp {
         }
         match &self.conversation_state {
             ConversationState::Ready(conversation) => {
-                conversation.input_buffer == pending.source_input_buffer
+                conversation.composer.input_buffer == pending.source_input_buffer
             }
             ConversationState::Loading | ConversationState::Failed(_) => false,
         }
@@ -665,7 +667,7 @@ impl NativeTuiApp {
             }
             ManualPromptIntakeOutcome::Rejected { reason }
             | ManualPromptIntakeOutcome::Failed { reason } => {
-                self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+                self.dispatch_conversation_input(ConversationComposerEvent::InputCleared);
                 self.record_parallel_supervisor_event(
                     "Task Intake",
                     format!(
@@ -697,7 +699,7 @@ impl NativeTuiApp {
             conversation.record_manual_intake_handoff(handoff.task.as_ref());
             self.conversation_state = ConversationState::ready(conversation);
         }
-        self.dispatch_conversation_input(ConversationInputEvent::InputCleared);
+        self.dispatch_conversation_input(ConversationComposerEvent::InputCleared);
 
         let task_title = handoff
             .task
@@ -753,7 +755,7 @@ impl NativeTuiApp {
             self.shell_action_availability(),
             ShellActionAvailability::Pending
         ) {
-            self.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+            self.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
                 status_text: "prompt queued until startup checks finish".to_string(),
             });
             return false;
@@ -935,10 +937,9 @@ mod tests {
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers;
     use crate::adapter::inbound::tui::app::{
-        AutoFollowSubmitContext, BackgroundMessage, ConversationInputEvent, ConversationInputState,
-        ConversationState, ConversationViewMode, NativeTuiApp, NativeTuiParallelModeBinding,
-        PlanningInitOverlayStep, PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay,
-        StartupState, TuiLanguage,
+        AutoFollowSubmitContext, BackgroundMessage, ConversationInputState, ConversationState,
+        ConversationViewMode, NativeTuiApp, NativeTuiParallelModeBinding, PlanningInitOverlayStep,
+        PlanningWorkerStatus, PlanningWorkerVisibility, ShellOverlay, StartupState, TuiLanguage,
     };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
@@ -1144,7 +1145,7 @@ mod tests {
     }
 
     fn set_input(app: &mut NativeTuiApp, input: &str) {
-        ready_conversation_mut(app).input_buffer = input.to_string();
+        ready_conversation_mut(app).composer.input_buffer = input.to_string();
     }
 
     fn poll_manual_prompt_preparation_completion(app: &mut NativeTuiApp) {
@@ -1315,7 +1316,7 @@ mod tests {
         ));
 
         let pending_conversation = ready_conversation(&pending_app);
-        assert!(pending_conversation.startup_submit_armed);
+        assert!(pending_conversation.composer.startup_submit_armed);
         assert_eq!(
             pending_conversation.status_text,
             "prompt queued until startup checks finish"
@@ -1347,8 +1348,15 @@ mod tests {
         pending_app.submit_manual_prompt_from_text("ship it".to_string());
 
         assert!(pending_app.pending_manual_prompt_preparation.is_none());
-        assert!(ready_conversation(&pending_app).startup_submit_armed);
-        assert_eq!(ready_conversation(&pending_app).input_buffer, "ship it");
+        assert!(
+            ready_conversation(&pending_app)
+                .composer
+                .startup_submit_armed
+        );
+        assert_eq!(
+            ready_conversation(&pending_app).composer.input_buffer,
+            "ship it"
+        );
         assert!(ready_conversation(&pending_app).messages.is_empty());
 
         pending_app.startup_state =
@@ -1356,8 +1364,12 @@ mod tests {
         pending_app.resolve_startup_submit_queue();
         poll_manual_prompt_preparation_completion(&mut pending_app);
 
-        assert!(!ready_conversation(&pending_app).startup_submit_armed);
-        assert_eq!(ready_conversation(&pending_app).input_buffer, "");
+        assert!(
+            !ready_conversation(&pending_app)
+                .composer
+                .startup_submit_armed
+        );
+        assert_eq!(ready_conversation(&pending_app).composer.input_buffer, "");
         assert_eq!(ready_conversation(&pending_app).messages.len(), 1);
     }
 
@@ -1371,7 +1383,7 @@ mod tests {
         poll_manual_prompt_preparation_completion(&mut app);
 
         let conversation = ready_conversation(&app);
-        assert_eq!(conversation.input_buffer, "");
+        assert_eq!(conversation.composer.input_buffer, "");
         assert_eq!(conversation.messages.len(), 1);
         assert_eq!(conversation.messages[0].text, "ship it");
     }
@@ -1387,8 +1399,8 @@ mod tests {
         app.submit_manual_prompt_from_text("ship it".to_string());
 
         assert!(app.pending_manual_prompt_preparation.is_none());
-        assert!(!ready_conversation(&app).startup_submit_armed);
-        assert_eq!(ready_conversation(&app).input_buffer, "ship it");
+        assert!(!ready_conversation(&app).composer.startup_submit_armed);
+        assert_eq!(ready_conversation(&app).composer.input_buffer, "ship it");
         assert!(ready_conversation(&app).messages.is_empty());
         assert!(
             ready_conversation(&app)
@@ -1403,15 +1415,19 @@ mod tests {
         let mut pending_app = make_test_app(&workspace);
         pending_app.startup_state = StartupState::Loading;
         set_input(&mut pending_app, "queued prompt");
-        pending_app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+        pending_app.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
             status_text: "queued".to_string(),
         });
 
         pending_app.resolve_startup_submit_queue();
 
-        assert!(ready_conversation(&pending_app).startup_submit_armed);
+        assert!(
+            ready_conversation(&pending_app)
+                .composer
+                .startup_submit_armed
+        );
         assert_eq!(
-            ready_conversation(&pending_app).input_buffer,
+            ready_conversation(&pending_app).composer.input_buffer,
             "queued prompt"
         );
 
@@ -1419,15 +1435,15 @@ mod tests {
         blocked_app.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), false));
         set_input(&mut blocked_app, "queued prompt");
-        blocked_app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+        blocked_app.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
             status_text: "queued".to_string(),
         });
 
         blocked_app.resolve_startup_submit_queue();
 
         let blocked_conversation = ready_conversation(&blocked_app);
-        assert!(!blocked_conversation.startup_submit_armed);
-        assert_eq!(blocked_conversation.input_buffer, "queued prompt");
+        assert!(!blocked_conversation.composer.startup_submit_armed);
+        assert_eq!(blocked_conversation.composer.input_buffer, "queued prompt");
         assert_eq!(
             blocked_conversation.status_text,
             "startup diagnostics need attention; open diagnostics with Ctrl+d; queued prompt kept in buffer"
@@ -1435,13 +1451,19 @@ mod tests {
 
         let mut ready_empty_app = make_test_app(&workspace);
         set_input(&mut ready_empty_app, "   ");
-        ready_empty_app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
-            status_text: "queued".to_string(),
-        });
+        ready_empty_app.dispatch_conversation_input(
+            ConversationComposerEvent::StartupSubmitArmed {
+                status_text: "queued".to_string(),
+            },
+        );
 
         ready_empty_app.resolve_startup_submit_queue();
 
-        assert!(!ready_conversation(&ready_empty_app).startup_submit_armed);
+        assert!(
+            !ready_conversation(&ready_empty_app)
+                .composer
+                .startup_submit_armed
+        );
     }
 
     #[test]
@@ -1449,7 +1471,7 @@ mod tests {
         let workspace = TempWorkspace::new("turn-submit-startup-replay");
         let mut app = make_test_app(&workspace);
         set_input(&mut app, "  queued prompt  ");
-        app.dispatch_conversation_input(ConversationInputEvent::StartupSubmitArmed {
+        app.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
             status_text: "queued".to_string(),
         });
 
@@ -1458,7 +1480,7 @@ mod tests {
 
         let conversation = ready_conversation(&app);
         assert!(app.pending_manual_prompt_preparation.is_none());
-        assert_eq!(conversation.input_buffer, "");
+        assert_eq!(conversation.composer.input_buffer, "");
         assert_eq!(
             conversation
                 .messages
@@ -1557,7 +1579,7 @@ mod tests {
             conversation.status_text,
             "turn preparation failed / not actionable"
         );
-        assert_eq!(conversation.input_buffer, "");
+        assert_eq!(conversation.composer.input_buffer, "");
         assert_eq!(conversation.messages.last().unwrap().text, "ship it");
 
         let mut stale_app = make_test_app(&workspace);
@@ -1700,7 +1722,7 @@ mod tests {
 
         let conversation = ready_conversation(&app);
         assert!(!admitted);
-        assert_eq!(conversation.input_buffer, "second prompt");
+        assert_eq!(conversation.composer.input_buffer, "second prompt");
         assert_eq!(conversation.messages, previous_messages);
         assert_eq!(conversation.status_text, previous_status);
         assert_eq!(conversation.input_state, ConversationInputState::DraftReady);
@@ -1722,7 +1744,7 @@ mod tests {
         ));
 
         let conversation = ready_conversation(&app);
-        assert!(conversation.input_buffer.is_empty());
+        assert!(conversation.composer.input_buffer.is_empty());
         assert_eq!(conversation.messages.len(), message_count_before_retry + 1);
         assert_eq!(
             conversation
@@ -1744,11 +1766,11 @@ mod tests {
         set_input(&mut app, "A");
         let correlation = arm_manual_prompt_preparation(&mut app, "A");
 
-        app.dispatch_conversation_input(ConversationInputEvent::TextInserted {
+        app.dispatch_conversation_input(ConversationComposerEvent::TextInserted {
             text: "B".to_string(),
         });
-        app.dispatch_conversation_input(ConversationInputEvent::BackspacePressed);
-        assert_eq!(ready_conversation(&app).input_buffer, "A");
+        app.dispatch_conversation_input(ConversationComposerEvent::BackspacePressed);
+        assert_eq!(ready_conversation(&app).composer.input_buffer, "A");
         assert_eq!(
             ready_conversation(&app).status_text,
             "turn preparation in progress; prompt editing is locked until it finishes"
@@ -1766,7 +1788,7 @@ mod tests {
             "turn preparation failed / stale result"
         );
         assert_eq!(ready_conversation(&app).messages.len(), 1);
-        assert!(ready_conversation(&app).input_buffer.is_empty());
+        assert!(ready_conversation(&app).composer.input_buffer.is_empty());
     }
 
     #[test]
@@ -1785,10 +1807,13 @@ mod tests {
         );
         assert!(app.pending_manual_prompt_preparation.is_none());
 
-        app.dispatch_conversation_input(ConversationInputEvent::TextInserted {
+        app.dispatch_conversation_input(ConversationComposerEvent::TextInserted {
             text: " now".to_string(),
         });
-        assert_eq!(ready_conversation(&app).input_buffer, "ship it now");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "ship it now"
+        );
         assert!(
             !ready_conversation(&app)
                 .status_text
@@ -1812,7 +1837,10 @@ mod tests {
         );
         assert_eq!(ready_conversation(&app).status_text, switched_status);
         assert!(ready_conversation(&app).messages.is_empty());
-        assert_eq!(ready_conversation(&app).input_buffer, "ship it now");
+        assert_eq!(
+            ready_conversation(&app).composer.input_buffer,
+            "ship it now"
+        );
     }
 
     #[test]
@@ -2058,7 +2086,7 @@ mod tests {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = "thread-running".to_string();
             conversation.record_turn_started("turn-running".to_string());
-            conversation.input_buffer = "queue this follow-up".to_string();
+            conversation.composer.input_buffer = "queue this follow-up".to_string();
         }
         assert_eq!(
             manual_prompt_delivery(ready_conversation(&app)),
@@ -2089,7 +2117,7 @@ mod tests {
 
         let conversation = ready_conversation(&app);
         assert_eq!(conversation.active_turn_id.as_deref(), Some("turn-running"));
-        assert!(conversation.input_buffer.is_empty());
+        assert!(conversation.composer.input_buffer.is_empty());
         assert_eq!(conversation.last_planning_task_handoff(), None);
         let receipt = conversation
             .latest_queue_mutation_receipt
@@ -2137,7 +2165,7 @@ mod tests {
             let conversation = ready_conversation_mut(&mut app);
             conversation.thread_id = "thread-running".to_string();
             conversation.record_turn_started("turn-running".to_string());
-            conversation.input_buffer = "retry this exact draft".to_string();
+            conversation.composer.input_buffer = "retry this exact draft".to_string();
             app
         };
 
@@ -2170,7 +2198,7 @@ mod tests {
             });
 
             let conversation = ready_conversation(&app);
-            assert_eq!(conversation.input_buffer, "retry this exact draft");
+            assert_eq!(conversation.composer.input_buffer, "retry this exact draft");
             assert_eq!(conversation.messages.len(), original_message_count);
             assert_eq!(
                 conversation.status_text,
@@ -2194,7 +2222,7 @@ mod tests {
         });
 
         let conversation = ready_conversation(&app);
-        assert_eq!(conversation.input_buffer, "retry this exact draft");
+        assert_eq!(conversation.composer.input_buffer, "retry this exact draft");
         assert_eq!(conversation.messages.len(), original_message_count);
         assert_eq!(
             conversation.status_text,
@@ -2287,7 +2315,7 @@ mod tests {
             );
 
             let conversation = ready_conversation(&failure_app);
-            assert_eq!(conversation.input_buffer, "");
+            assert_eq!(conversation.composer.input_buffer, "");
             assert_eq!(
                 conversation.status_text,
                 format!("parallel task intake failed / {expected_reason}")
@@ -2326,7 +2354,7 @@ mod tests {
 
         let committed_conversation = ready_conversation(&committed_app);
         assert!(committed_conversation.messages.is_empty());
-        assert_eq!(committed_conversation.input_buffer, "");
+        assert_eq!(committed_conversation.composer.input_buffer, "");
         assert_eq!(
             committed_conversation.last_planning_task_handoff(),
             Some(&task)

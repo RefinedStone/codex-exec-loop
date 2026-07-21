@@ -1,4 +1,4 @@
-use super::{ConversationViewModel, InlineShellCommand};
+use super::{ConversationComposerState, InlineShellCommand};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(super) const MAX_PROMPT_INPUT_BYTES: usize = 1024 * 1024;
@@ -8,56 +8,33 @@ const PROMPT_INPUT_LIMIT_STATUS: &str =
 /*
  * conversation_input is a pure reducer for composer-facing events. Shell
  * controllers translate keys and overlay actions into ConversationInputEvent;
- * this module updates ConversationViewModel without doing terminal I/O or
- * app-server work, keeping prompt editing testable and replayable.
+ * this module updates only ConversationComposerState without doing terminal I/O
+ * or app-server work, keeping prompt editing testable and replayable.
  */
 #[derive(Debug, Clone)]
-pub(super) enum ConversationInputEvent {
+pub(super) enum ConversationComposerEvent {
     // Direct buffer edits come from the main prompt composer and must keep the
     // inline command palette derived from the latest buffer text.
-    CharacterTyped {
-        character: char,
-    },
-    TextInserted {
-        text: String,
-    },
+    CharacterTyped { character: char },
+    TextInserted { text: String },
     NewlineInserted,
     BackspacePressed,
     DeletePressed,
     PreviousWordDeleted,
     InputCleared,
-    CursorMoved {
-        movement: InputCursorMovement,
-    },
+    CursorMoved { movement: InputCursorMovement },
     // Palette events are navigation/completion state changes layered on top of
     // the same input buffer; they do not represent prompt submission.
-    InlineCommandPaletteSelectionMoved {
-        delta: isize,
-    },
+    InlineCommandPaletteSelectionMoved { delta: isize },
     InlineCommandPaletteDismissed,
-    InlineCommandPaletteCommandInserted {
-        command: InlineShellCommand,
-    },
+    InlineCommandPaletteCommandInserted { command: InlineShellCommand },
     // Startup submit arm/disarm is the gate between "operator pressed Enter" and
     // "startup checks are ready enough to submit". Edits cancel the arm.
-    StartupSubmitArmed {
-        status_text: String,
-    },
-    StartupSubmitDisarmed {
-        status_text: Option<String>,
-    },
-    // Status-only events let planning, parallel-mode, and shell controllers share
-    // the same conversation status field without mutating transcript state.
-    StatusMessageShown {
-        status_text: String,
-    },
-    ManualPromptPreparationFailed {
-        transcript_text: String,
-        status_text: String,
-    },
+    StartupSubmitArmed { status_text: String },
+    StartupSubmitDisarmed { status_text: Option<String> },
 }
 
-impl ConversationInputEvent {
+impl ConversationComposerEvent {
     pub(super) fn mutates_input_buffer(&self) -> bool {
         matches!(
             self,
@@ -70,6 +47,33 @@ impl ConversationInputEvent {
                 | Self::InputCleared
                 | Self::InlineCommandPaletteCommandInserted { .. }
         )
+    }
+}
+
+// Input dispatch also carries semantic conversation updates for existing shell
+// callers. app_runtime routes these around the composer reducer so status,
+// transcript, and viewport state never enter the reducer's mutable surface.
+#[derive(Debug, Clone)]
+pub(super) enum ConversationInputEvent {
+    Composer(ConversationComposerEvent),
+    StatusMessageShown {
+        status_text: String,
+    },
+    ManualPromptPreparationFailed {
+        transcript_text: String,
+        status_text: String,
+    },
+}
+
+impl ConversationInputEvent {
+    pub(super) fn mutates_input_buffer(&self) -> bool {
+        matches!(self, Self::Composer(event) if event.mutates_input_buffer())
+    }
+}
+
+impl From<ConversationComposerEvent> for ConversationInputEvent {
+    fn from(event: ConversationComposerEvent) -> Self {
+        Self::Composer(event)
     }
 }
 
@@ -88,47 +92,58 @@ pub(super) enum InputCursorMovement {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ConversationInputReduction {
-    pub state: ConversationViewModel,
+pub(super) struct ConversationComposerReduction {
+    pub state: ConversationComposerState,
+    pub effects: Vec<ConversationComposerEffect>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ConversationComposerEffect {
+    ReplaceStatus { status_text: String },
 }
 
 pub(super) fn reduce_conversation_input(
-    mut state: ConversationViewModel,
-    event: ConversationInputEvent,
-) -> ConversationInputReduction {
+    mut state: ConversationComposerState,
+    event: ConversationComposerEvent,
+) -> ConversationComposerReduction {
     // Keep this reducer exhaustive and side-effect free. Runtime submission and
     // stream effects live in turn_submission_runtime/conversation_runtime; input
     // events only shape local view-model state.
+    let mut effects = Vec::new();
     match event {
-        ConversationInputEvent::CharacterTyped { character } => {
+        ConversationComposerEvent::CharacterTyped { character } => {
             let mut text = String::new();
             text.push(character);
-            insert_text_into_input_buffer_and_sync(&mut state, &text);
+            insert_text_into_input_buffer_and_sync(&mut state, &text, &mut effects);
         }
-        ConversationInputEvent::TextInserted { text } => {
+        ConversationComposerEvent::TextInserted { text } => {
             let normalized_text = normalize_inserted_text(&text);
-            insert_text_into_input_buffer_and_sync(&mut state, &normalized_text);
+            insert_text_into_input_buffer_and_sync(&mut state, &normalized_text, &mut effects);
         }
-        ConversationInputEvent::NewlineInserted => {
-            insert_text_into_input_buffer_and_sync(&mut state, "\n");
+        ConversationComposerEvent::NewlineInserted => {
+            insert_text_into_input_buffer_and_sync(&mut state, "\n", &mut effects);
         }
-        ConversationInputEvent::BackspacePressed => {
-            modify_input_buffer_and_sync(&mut state, delete_previous_character);
+        ConversationComposerEvent::BackspacePressed => {
+            modify_input_buffer_and_sync(&mut state, delete_previous_character, &mut effects);
         }
-        ConversationInputEvent::DeletePressed => {
-            modify_input_buffer_and_sync(&mut state, delete_next_character);
+        ConversationComposerEvent::DeletePressed => {
+            modify_input_buffer_and_sync(&mut state, delete_next_character, &mut effects);
         }
-        ConversationInputEvent::PreviousWordDeleted => {
-            modify_input_buffer_and_sync(&mut state, delete_previous_word);
+        ConversationComposerEvent::PreviousWordDeleted => {
+            modify_input_buffer_and_sync(&mut state, delete_previous_word, &mut effects);
         }
-        ConversationInputEvent::InputCleared => {
-            modify_input_buffer_and_sync(&mut state, |buffer, _cursor| {
-                buffer.clear();
-                0
-            });
+        ConversationComposerEvent::InputCleared => {
+            modify_input_buffer_and_sync(
+                &mut state,
+                |buffer, _cursor| {
+                    buffer.clear();
+                    0
+                },
+                &mut effects,
+            );
             state.move_input_cursor_to_end();
         }
-        ConversationInputEvent::CursorMoved { movement } => {
+        ConversationComposerEvent::CursorMoved { movement } => {
             let cursor_byte_index = move_input_cursor(
                 &state.input_buffer,
                 state.input_cursor_byte_index(),
@@ -136,68 +151,70 @@ pub(super) fn reduce_conversation_input(
             );
             state.set_input_cursor_byte_index(cursor_byte_index);
         }
-        ConversationInputEvent::InlineCommandPaletteSelectionMoved { delta } => {
+        ConversationComposerEvent::InlineCommandPaletteSelectionMoved { delta } => {
             state.move_inline_shell_command_palette_selection(delta);
         }
-        ConversationInputEvent::InlineCommandPaletteDismissed => {
+        ConversationComposerEvent::InlineCommandPaletteDismissed => {
             state.dismiss_inline_shell_command_palette();
         }
-        ConversationInputEvent::InlineCommandPaletteCommandInserted { command } => {
+        ConversationComposerEvent::InlineCommandPaletteCommandInserted { command } => {
             // Command completion changes the prompt text even though it is not a
             // plain character event, so it must cancel a queued startup submit.
-            clear_startup_submit_after_input_change(&mut state);
+            clear_startup_submit_after_input_change(&mut state, &mut effects);
             state.insert_inline_shell_command_completion(command);
         }
-        ConversationInputEvent::StartupSubmitArmed { status_text } => {
+        ConversationComposerEvent::StartupSubmitArmed { status_text } => {
             state.arm_startup_submit();
-            state.status_text = status_text;
+            effects.push(ConversationComposerEffect::ReplaceStatus { status_text });
         }
-        ConversationInputEvent::StartupSubmitDisarmed { status_text } => {
+        ConversationComposerEvent::StartupSubmitDisarmed { status_text } => {
             // Preserve the caller-supplied status only when an arm actually
             // existed. Otherwise late disarm events cannot overwrite newer copy.
             if state.clear_startup_submit()
                 && let Some(status_text) = status_text
             {
-                state.status_text = status_text;
+                effects.push(ConversationComposerEffect::ReplaceStatus { status_text });
             }
-        }
-        ConversationInputEvent::StatusMessageShown { status_text } => {
-            state.record_status_message(status_text);
-        }
-        ConversationInputEvent::ManualPromptPreparationFailed {
-            transcript_text,
-            status_text,
-        } => {
-            state.record_manual_preparation_failure(transcript_text, status_text);
         }
     }
 
-    ConversationInputReduction { state }
+    ConversationComposerReduction { state, effects }
 }
 
 fn modify_input_buffer_and_sync(
-    state: &mut ConversationViewModel,
+    state: &mut ConversationComposerState,
     modifier: impl FnOnce(&mut String, usize) -> usize,
+    effects: &mut Vec<ConversationComposerEffect>,
 ) {
     // All direct buffer edits pass through this helper so startup-submit safety
     // and inline command palette derivation stay coupled to prompt text changes.
-    clear_startup_submit_after_input_change(state);
+    clear_startup_submit_after_input_change(state, effects);
     let cursor_byte_index = state.input_cursor_byte_index();
     let next_cursor_byte_index = modifier(&mut state.input_buffer, cursor_byte_index);
     state.set_input_cursor_byte_index(next_cursor_byte_index);
     state.sync_inline_shell_command_palette();
 }
 
-fn insert_text_into_input_buffer_and_sync(state: &mut ConversationViewModel, text: &str) {
+fn insert_text_into_input_buffer_and_sync(
+    state: &mut ConversationComposerState,
+    text: &str,
+    effects: &mut Vec<ConversationComposerEffect>,
+) {
     if state.input_buffer.len().saturating_add(text.len()) > MAX_PROMPT_INPUT_BYTES {
-        clear_startup_submit_after_input_change(state);
-        state.status_text = PROMPT_INPUT_LIMIT_STATUS.to_string();
+        clear_startup_submit_after_input_change(state, effects);
+        effects.push(ConversationComposerEffect::ReplaceStatus {
+            status_text: PROMPT_INPUT_LIMIT_STATUS.to_string(),
+        });
         return;
     }
-    modify_input_buffer_and_sync(state, |buffer, cursor_byte_index| {
-        buffer.insert_str(cursor_byte_index, text);
-        cursor_byte_index + text.len()
-    });
+    modify_input_buffer_and_sync(
+        state,
+        |buffer, cursor_byte_index| {
+            buffer.insert_str(cursor_byte_index, text);
+            cursor_byte_index + text.len()
+        },
+        effects,
+    );
 }
 
 fn normalize_inserted_text(text: &str) -> String {
@@ -410,12 +427,17 @@ fn byte_index_at_line_column(
         .unwrap_or(line_end)
 }
 
-fn clear_startup_submit_after_input_change(state: &mut ConversationViewModel) {
+fn clear_startup_submit_after_input_change(
+    state: &mut ConversationComposerState,
+    effects: &mut Vec<ConversationComposerEffect>,
+) {
     // Startup submit is a promise to send the exact prompt that was visible when
     // Enter was pressed. Any subsequent edit invalidates that promise and must
     // leave explicit copy explaining why the queued send disappeared.
     if state.clear_startup_submit() {
-        state.status_text = "queued startup send canceled after input changed".to_string();
+        effects.push(ConversationComposerEffect::ReplaceStatus {
+            status_text: "queued startup send canceled after input changed".to_string(),
+        });
     }
 }
 
@@ -427,10 +449,10 @@ mod tests {
     fn character_typed_appends_to_input_buffer() {
         // Basic character input locks the reducer contract: caller owns key
         // decoding, this module owns appending to the view-model buffer.
-        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let state = ConversationComposerState::default();
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::CharacterTyped { character: 'a' },
+            ConversationComposerEvent::CharacterTyped { character: 'a' },
         );
 
         assert_eq!(reduced.state.input_buffer, "a");
@@ -440,21 +462,21 @@ mod tests {
     fn backspace_pressed_removes_last_character() {
         // Backspace is modeled as a buffer edit so it also travels through the
         // startup-submit cancellation and palette-sync path.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "draft".to_string();
-        let reduced = reduce_conversation_input(state, ConversationInputEvent::BackspacePressed);
+        let reduced = reduce_conversation_input(state, ConversationComposerEvent::BackspacePressed);
 
         assert_eq!(reduced.state.input_buffer, "draf");
     }
 
     #[test]
     fn character_typed_inserts_at_cursor_position() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "ship now".to_string();
         state.set_input_cursor_byte_index("ship ".len());
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::CharacterTyped { character: 'i' },
+            ConversationComposerEvent::CharacterTyped { character: 'i' },
         );
 
         assert_eq!(reduced.state.input_buffer, "ship inow");
@@ -463,11 +485,11 @@ mod tests {
 
     #[test]
     fn text_inserted_preserves_newlines_without_submitting() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "before ".to_string();
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::TextInserted {
+            ConversationComposerEvent::TextInserted {
                 text: "first\r\nsecond".to_string(),
             },
         );
@@ -477,19 +499,24 @@ mod tests {
 
     #[test]
     fn text_inserted_rejects_an_atomic_paste_above_the_prompt_limit() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "a".repeat(MAX_PROMPT_INPUT_BYTES - 1);
         let original = state.input_buffer.clone();
 
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::TextInserted {
+            ConversationComposerEvent::TextInserted {
                 text: "한".to_string(),
             },
         );
 
         assert_eq!(reduced.state.input_buffer, original);
-        assert_eq!(reduced.state.status_text, PROMPT_INPUT_LIMIT_STATUS);
+        assert_eq!(
+            reduced.effects,
+            vec![ConversationComposerEffect::ReplaceStatus {
+                status_text: PROMPT_INPUT_LIMIT_STATUS.to_string(),
+            }]
+        );
         assert_eq!(
             reduced.state.input_cursor_byte_index(),
             MAX_PROMPT_INPUT_BYTES - 1
@@ -500,31 +527,33 @@ mod tests {
     fn newline_inserted_adds_line_break() {
         // Shift/Alt-enter style input adds a literal newline to the prompt; it is
         // not a submit signal at this reducer level.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "draft".to_string();
-        let reduced = reduce_conversation_input(state, ConversationInputEvent::NewlineInserted);
+        let reduced = reduce_conversation_input(state, ConversationComposerEvent::NewlineInserted);
 
         assert_eq!(reduced.state.input_buffer, "draft\n");
     }
 
     #[test]
     fn cursor_movement_controls_backspace_target() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "hello".to_string();
         let moved_left = reduce_conversation_input(
             state,
-            ConversationInputEvent::CursorMoved {
+            ConversationComposerEvent::CursorMoved {
                 movement: InputCursorMovement::PreviousCharacter,
             },
         );
         let moved_left = reduce_conversation_input(
             moved_left.state,
-            ConversationInputEvent::CursorMoved {
+            ConversationComposerEvent::CursorMoved {
                 movement: InputCursorMovement::PreviousCharacter,
             },
         );
-        let reduced =
-            reduce_conversation_input(moved_left.state, ConversationInputEvent::BackspacePressed);
+        let reduced = reduce_conversation_input(
+            moved_left.state,
+            ConversationComposerEvent::BackspacePressed,
+        );
 
         assert_eq!(reduced.state.input_buffer, "helo");
         assert_eq!(reduced.state.input_cursor_byte_index(), "he".len());
@@ -532,26 +561,26 @@ mod tests {
 
     #[test]
     fn cursor_movement_and_deletion_keep_extended_graphemes_intact() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "e\u{301}👩‍💻".to_string();
 
         let moved = reduce_conversation_input(
             state,
-            ConversationInputEvent::CursorMoved {
+            ConversationComposerEvent::CursorMoved {
                 movement: InputCursorMovement::PreviousCharacter,
             },
         );
         assert_eq!(moved.state.input_cursor_byte_index(), "e\u{301}".len());
 
         let reduced =
-            reduce_conversation_input(moved.state, ConversationInputEvent::BackspacePressed);
+            reduce_conversation_input(moved.state, ConversationComposerEvent::BackspacePressed);
         assert_eq!(reduced.state.input_buffer, "👩‍💻");
         assert_eq!(reduced.state.input_cursor_byte_index(), 0);
     }
 
     #[test]
     fn cursor_index_clamps_to_the_start_of_a_combining_grapheme() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "e\u{301}x".to_string();
 
         state.set_input_cursor_byte_index(1);
@@ -561,17 +590,17 @@ mod tests {
 
     #[test]
     fn word_cursor_movement_targets_previous_word_start() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "one two three".to_string();
         let moved = reduce_conversation_input(
             state,
-            ConversationInputEvent::CursorMoved {
+            ConversationComposerEvent::CursorMoved {
                 movement: InputCursorMovement::PreviousWord,
             },
         );
         let reduced = reduce_conversation_input(
             moved.state,
-            ConversationInputEvent::CharacterTyped { character: 'X' },
+            ConversationComposerEvent::CharacterTyped { character: 'X' },
         );
 
         assert_eq!(reduced.state.input_buffer, "one two Xthree");
@@ -579,17 +608,17 @@ mod tests {
 
     #[test]
     fn vertical_cursor_movement_uses_matching_line_column() {
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "ab\ncde".to_string();
         let moved = reduce_conversation_input(
             state,
-            ConversationInputEvent::CursorMoved {
+            ConversationComposerEvent::CursorMoved {
                 movement: InputCursorMovement::PreviousLine,
             },
         );
         let reduced = reduce_conversation_input(
             moved.state,
-            ConversationInputEvent::CharacterTyped { character: 'X' },
+            ConversationComposerEvent::CharacterTyped { character: 'X' },
         );
 
         assert_eq!(reduced.state.input_buffer, "abX\ncde");
@@ -599,9 +628,10 @@ mod tests {
     fn previous_word_deleted_removes_last_word() {
         // Ctrl+W removes only the last word and leaves the separator before it,
         // matching terminal editor expectations for continued typing.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "ship this next".to_string();
-        let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
+        let reduced =
+            reduce_conversation_input(state, ConversationComposerEvent::PreviousWordDeleted);
 
         assert_eq!(reduced.state.input_buffer, "ship this ");
     }
@@ -610,9 +640,10 @@ mod tests {
     fn previous_word_deleted_trims_trailing_space_before_removing_last_word() {
         // Trailing whitespace is not treated as a word, so repeated spaces do not
         // require multiple Ctrl+W presses before useful text is removed.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "ship this   ".to_string();
-        let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
+        let reduced =
+            reduce_conversation_input(state, ConversationComposerEvent::PreviousWordDeleted);
 
         assert_eq!(reduced.state.input_buffer, "ship ");
     }
@@ -621,44 +652,32 @@ mod tests {
     fn previous_word_deleted_respects_newline_boundaries() {
         // Newlines participate in whitespace detection, preserving the previous
         // line prefix when deleting the first word of the current line.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = "first line\nsecond".to_string();
-        let reduced = reduce_conversation_input(state, ConversationInputEvent::PreviousWordDeleted);
+        let reduced =
+            reduce_conversation_input(state, ConversationComposerEvent::PreviousWordDeleted);
 
         assert_eq!(reduced.state.input_buffer, "first line\n");
-    }
-
-    #[test]
-    fn status_message_shown_replaces_status_text() {
-        // Status events let controllers publish operator-facing copy without
-        // touching input, transcript, or runtime lifecycle fields.
-        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
-        let reduced = reduce_conversation_input(
-            state,
-            ConversationInputEvent::StatusMessageShown {
-                status_text: "turn still running".to_string(),
-            },
-        );
-
-        assert_eq!(reduced.state.status_text, "turn still running");
     }
 
     #[test]
     fn startup_submit_armed_sets_queue_status() {
         // Arming records both the boolean gate and the status line the composer
         // uses while startup checks are still blocking immediate send.
-        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let state = ConversationComposerState::default();
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::StartupSubmitArmed {
+            ConversationComposerEvent::StartupSubmitArmed {
                 status_text: "prompt queued until startup checks finish".to_string(),
             },
         );
 
         assert!(reduced.state.startup_submit_armed);
         assert_eq!(
-            reduced.state.status_text,
-            "prompt queued until startup checks finish"
+            reduced.effects,
+            vec![ConversationComposerEffect::ReplaceStatus {
+                status_text: "prompt queued until startup checks finish".to_string(),
+            }]
         );
     }
 
@@ -667,29 +686,70 @@ mod tests {
         // This is the core race-prevention rule: queued startup submit cannot
         // outlive a prompt edit, because it would send text the user no longer
         // sees in the composer.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.arm_startup_submit();
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::CharacterTyped { character: 'a' },
+            ConversationComposerEvent::CharacterTyped { character: 'a' },
         );
 
         assert!(!reduced.state.startup_submit_armed);
         assert_eq!(
-            reduced.state.status_text,
-            "queued startup send canceled after input changed"
+            reduced.effects,
+            vec![ConversationComposerEffect::ReplaceStatus {
+                status_text: "queued startup send canceled after input changed".to_string(),
+            }]
         );
         assert_eq!(reduced.state.input_buffer, "a");
+    }
+
+    #[test]
+    fn disarming_without_an_arm_does_not_replace_newer_status() {
+        let reduced = reduce_conversation_input(
+            ConversationComposerState::default(),
+            ConversationComposerEvent::StartupSubmitDisarmed {
+                status_text: Some("stale startup status".to_string()),
+            },
+        );
+
+        assert!(reduced.effects.is_empty());
+    }
+
+    #[test]
+    fn oversized_paste_cancels_startup_arm_before_reporting_the_limit() {
+        let mut state = ConversationComposerState::default();
+        state.input_buffer = "a".repeat(MAX_PROMPT_INPUT_BYTES - 1);
+        state.arm_startup_submit();
+
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationComposerEvent::TextInserted {
+                text: "한".to_string(),
+            },
+        );
+
+        assert!(!reduced.state.startup_submit_armed);
+        assert_eq!(
+            reduced.effects,
+            vec![
+                ConversationComposerEffect::ReplaceStatus {
+                    status_text: "queued startup send canceled after input changed".to_string(),
+                },
+                ConversationComposerEffect::ReplaceStatus {
+                    status_text: PROMPT_INPUT_LIMIT_STATUS.to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
     fn colon_input_opens_inline_command_palette() {
         // Palette visibility is derived from buffer content, not a separate key
         // mode. A typed colon therefore opens the command palette via sync.
-        let state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let state = ConversationComposerState::default();
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::CharacterTyped { character: ':' },
+            ConversationComposerEvent::CharacterTyped { character: ':' },
         );
 
         assert!(reduced.state.inline_shell_command_palette_state.is_active());
@@ -706,11 +766,13 @@ mod tests {
     fn command_palette_can_be_dismissed_without_clearing_input() {
         // Dismissal hides suggestions while preserving typed command text so the
         // operator can continue editing or submit the literal prompt.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = ":p".to_string();
         state.sync_inline_shell_command_palette();
-        let reduced =
-            reduce_conversation_input(state, ConversationInputEvent::InlineCommandPaletteDismissed);
+        let reduced = reduce_conversation_input(
+            state,
+            ConversationComposerEvent::InlineCommandPaletteDismissed,
+        );
 
         assert_eq!(reduced.state.input_buffer, ":p");
         assert!(!reduced.state.inline_shell_command_palette_state.is_active());
@@ -720,12 +782,12 @@ mod tests {
     fn command_palette_inserted_command_switches_to_argument_entry() {
         // Completion replaces the command prefix with canonical command text and
         // a trailing space, moving the composer into argument entry.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = ":r".to_string();
         state.sync_inline_shell_command_palette();
         let reduced = reduce_conversation_input(
             state,
-            ConversationInputEvent::InlineCommandPaletteCommandInserted {
+            ConversationComposerEvent::InlineCommandPaletteCommandInserted {
                 command: InlineShellCommand::Reset,
             },
         );
@@ -738,9 +800,9 @@ mod tests {
     fn input_cleared_empties_buffer() {
         // Clear follows the same reducer path as other edits, so palette state
         // and startup-submit state cannot linger behind an empty composer.
-        let mut state = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let mut state = ConversationComposerState::default();
         state.input_buffer = ":diag".to_string();
-        let reduced = reduce_conversation_input(state, ConversationInputEvent::InputCleared);
+        let reduced = reduce_conversation_input(state, ConversationComposerEvent::InputCleared);
 
         assert!(reduced.state.input_buffer.is_empty());
     }
