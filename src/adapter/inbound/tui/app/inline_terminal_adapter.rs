@@ -63,6 +63,7 @@ enum InlineViewportSync {
         redraw_required: bool,
         frame_projection: InlineConversationFrameProjection,
         redraw_after_successful_frame: bool,
+        resize_snapshot: InlineResizeSnapshot,
     },
 }
 
@@ -116,6 +117,7 @@ pub(super) fn draw_inline_transaction<B: InlineResizeBackend>(
         redraw_required,
         frame_projection,
         redraw_after_successful_frame,
+        resize_snapshot,
     } = sync_inline_viewport_transaction(terminal, runtime, inline_terminal)?
     else {
         return Ok(false);
@@ -127,6 +129,7 @@ pub(super) fn draw_inline_transaction<B: InlineResizeBackend>(
             inline_terminal,
             frame_projection,
             redraw_after_successful_frame,
+            resize_snapshot,
         )?
     {
         return Ok(false);
@@ -140,6 +143,7 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     inline_terminal: &mut InlineTerminalState,
     frame_projection: InlineConversationFrameProjection,
     redraw_after_successful_frame: bool,
+    resize_snapshot: InlineResizeSnapshot,
 ) -> Result<bool, B::Error> {
     let acknowledge_viewport_handoff_after_draw =
         frame_projection.renders_viewport_transcript_handoff;
@@ -187,15 +191,18 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     let drawn_screen_size = result?;
     let cursor_position = terminal.get_cursor_position()?;
     let terminal_size = terminal.size()?;
-    if inline_terminal.screen_size_changed(drawn_screen_size) || drawn_screen_size != terminal_size
+    if inline_terminal.screen_size_changed(drawn_screen_size)
+        || drawn_screen_size != terminal_size
+        || !terminal
+            .backend()
+            .matches_resize_snapshot(resize_snapshot)?
     {
         /*
          * A resize can land after sync or after Ratatui flushes this frame. Keep the previous
          * screen-size observation so the next transaction reconciles physical scrollback movement
          * instead of treating it as an application-driven history fit.
          */
-        inline_terminal.invalidate_back_buffer();
-        runtime.request_resize_redraw_retry();
+        defer_resize_redraw(runtime, inline_terminal);
         return Ok(false);
     }
     /*
@@ -358,6 +365,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
             redraw_required: tail_frame_changed,
             frame_projection,
             redraw_after_successful_frame: false,
+            resize_snapshot,
         });
     };
     let parallel_history_pending = policy.parallel_mode_enabled
@@ -556,6 +564,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         redraw_required: visible_history_adjusted || history_inserted || tail_frame_changed,
         frame_projection,
         redraw_after_successful_frame,
+        resize_snapshot,
     })
 }
 
