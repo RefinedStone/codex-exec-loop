@@ -1020,6 +1020,58 @@ fn progressive_activity_inspector_matches_wide_narrow_and_vt100_snapshots() {
 }
 
 #[test]
+fn activity_inspector_clamps_selection_before_first_frame_document_projection() {
+    const SURVIVING_DETAIL: &str = "SURVIVING_CARD_DOCUMENT_BODY";
+    let mut app = make_test_app();
+    app.startup_state = StartupState::Ready(sample_startup_diagnostics());
+    app.show_startup_ascii_art = false;
+    let previous_snapshot = tui_testkit::set_progressive_command_activity(
+        &mut app,
+        &format!("surviving card title\n{SURVIVING_DETAIL}"),
+        false,
+    );
+    assert!(app.show_progressive_activity_overlay_all());
+    assert!(
+        app.progressive_activity_overlay_ui_state
+            .move_card_selection(2, 3)
+    );
+    assert_eq!(
+        app.progressive_activity_overlay_ui_state
+            .selected_card_index(),
+        2
+    );
+
+    let mut next_snapshot = previous_snapshot.as_ref().clone();
+    next_snapshot.records.truncate(1);
+    next_snapshot.last_sequence = next_snapshot
+        .records
+        .last()
+        .map(|record| record.last_sequence());
+    next_snapshot.source_observation_count = next_snapshot
+        .records
+        .iter()
+        .map(|record| record.observation_count())
+        .sum();
+    let next_snapshot = std::sync::Arc::new(next_snapshot);
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        panic!("test app should keep a ready conversation state");
+    };
+    conversation.progressive_activity_detail.reset();
+    conversation
+        .progressive_activity_detail
+        .replace_snapshot(&next_snapshot);
+
+    let first_frame = tui_testkit::render_inline_snapshot(&mut app, 80, 24);
+
+    assert_eq!(
+        app.progressive_activity_overlay_ui_state
+            .selected_card_index(),
+        0
+    );
+    assert!(first_frame.contains(SURVIVING_DETAIL), "{first_frame}");
+}
+
+#[test]
 fn narrow_activity_inspector_omits_normal_metadata_and_keeps_exact_keys() {
     let mut app = make_test_app();
     app.startup_state = StartupState::Ready(sample_startup_diagnostics());

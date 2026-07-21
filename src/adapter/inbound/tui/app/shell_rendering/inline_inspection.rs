@@ -108,38 +108,25 @@ pub(super) fn draw_inline_shell_inspection(
 fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
     let selected_kind = app.progressive_activity_overlay_ui_state.selected_kind();
     let card_filter = app.progressive_activity_overlay_ui_state.card_filter();
-    let requested_card_index = app
-        .progressive_activity_overlay_ui_state
-        .selected_card_index();
-    let (lifecycle_epoch, diff_available, output_available, cards, document) =
-        match &app.conversation_state {
-            super::ConversationState::Ready(conversation) => {
-                let detail = &conversation.progressive_activity_detail;
-                let cards = detail.cards();
-                // Never fall back to an unfiltered Diff/Output document when a card
-                // filter is active: empty filter results must stay empty in the detail
-                // pane so `:activity plan` cannot surface unrelated command/diff text.
-                let filtered_indices = super::filter_cards_by_kind(&cards, card_filter);
-                let selected_document = filtered_indices
-                    .get(requested_card_index)
-                    .and_then(|card_index| cards.get(*card_index))
-                    .and_then(|card| detail.card_document(card));
-                (
-                    detail.lifecycle_epoch(),
-                    detail
-                        .document(super::ProgressiveActivityDetailKind::Diff)
-                        .is_some(),
-                    detail
-                        .document(super::ProgressiveActivityDetailKind::Output)
-                        .is_some(),
-                    cards,
-                    selected_document,
-                )
-            }
-            super::ConversationState::Loading | super::ConversationState::Failed(_) => {
-                (0, false, false, Vec::new(), None)
-            }
-        };
+    let (lifecycle_epoch, diff_available, output_available, cards) = match &app.conversation_state {
+        super::ConversationState::Ready(conversation) => {
+            let detail = &conversation.progressive_activity_detail;
+            let cards = detail.cards();
+            (
+                detail.lifecycle_epoch(),
+                detail
+                    .document(super::ProgressiveActivityDetailKind::Diff)
+                    .is_some(),
+                detail
+                    .document(super::ProgressiveActivityDetailKind::Output)
+                    .is_some(),
+                cards,
+            )
+        }
+        super::ConversationState::Loading | super::ConversationState::Failed(_) => {
+            (0, false, false, Vec::new())
+        }
+    };
     let filtered_indices = super::filter_cards_by_kind(&cards, card_filter);
     app.progressive_activity_overlay_ui_state
         .clamp_selected_card(filtered_indices.len());
@@ -150,6 +137,15 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
         .iter()
         .filter_map(|index| cards.get(*index).cloned())
         .collect();
+    // Resolve only the filtered card after clamping against this frame's list. A
+    // new lifecycle can shrink it, and an empty filter must not leak another kind.
+    let document = match &app.conversation_state {
+        super::ConversationState::Ready(conversation) => filtered_indices
+            .get(selected_card_index)
+            .and_then(|card_index| cards.get(*card_index))
+            .and_then(|card| conversation.progressive_activity_detail.card_document(card)),
+        super::ConversationState::Loading | super::ConversationState::Failed(_) => None,
+    };
     app.progressive_activity_overlay_ui_state.select_document(
         lifecycle_epoch,
         document.as_ref().map(|document| document.sequence),
