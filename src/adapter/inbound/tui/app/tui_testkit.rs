@@ -550,6 +550,7 @@ pub(super) struct Vt100Backend {
     width: u16,
     height: u16,
     draw_call_count: usize,
+    fail_next_draw: bool,
 }
 
 impl Vt100Backend {
@@ -566,6 +567,7 @@ impl Vt100Backend {
             width,
             height,
             draw_call_count: 0,
+            fail_next_draw: false,
         }
     }
     pub(super) fn resize(&mut self, width: u16, height: u16) {
@@ -620,6 +622,9 @@ impl Vt100Backend {
     pub(super) fn draw_call_count(&self) -> usize {
         self.draw_call_count
     }
+    pub(super) fn fail_next_draw(&mut self) {
+        self.fail_next_draw = true;
+    }
     pub(super) fn parser_cursor_position(&self) -> Position {
         let (row, column) = self.parser().screen().cursor_position();
         Position::new(column, row)
@@ -651,6 +656,9 @@ impl Backend for Vt100Backend {
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
         self.draw_call_count = self.draw_call_count.saturating_add(1);
+        if std::mem::take(&mut self.fail_next_draw) {
+            return Err(io::Error::other("injected terminal draw failure"));
+        }
         self.backend.draw(content)
     }
     fn hide_cursor(&mut self) -> io::Result<()> {

@@ -41,6 +41,7 @@ impl ConversationViewModel {
         bound_conversation_message(&mut message);
         self.messages.push(message);
         self.enforce_transcript_retention();
+        self.advance_transcript_revision();
     }
 
     /*
@@ -60,6 +61,7 @@ impl ConversationViewModel {
 
         if changed {
             self.enforce_transcript_retention();
+            self.advance_transcript_revision();
         }
     }
 
@@ -348,6 +350,7 @@ impl ConversationViewModel {
             message.phase = phase;
             bound_conversation_message(message);
             self.enforce_transcript_retention();
+            self.advance_transcript_revision();
             return true;
         }
 
@@ -453,17 +456,43 @@ impl ConversationViewModel {
         self.viewport_transcript_handoff_start.is_some()
     }
 
-    pub(super) fn begin_viewport_transcript_handoff_release(&mut self) {
-        self.viewport_transcript_handoff_release_pending =
-            self.viewport_transcript_handoff_start.is_some();
+    pub(super) fn begin_viewport_transcript_handoff_release(&mut self, turn_id: Option<&str>) {
+        if self.viewport_transcript_handoff_start.is_none()
+            || self.viewport_transcript_handoff_release_pending
+        {
+            return;
+        }
+        self.viewport_transcript_handoff_generation = self
+            .viewport_transcript_handoff_generation
+            .checked_add(1)
+            .expect("transcript handoff generation exhausted");
+        self.viewport_transcript_handoff_turn_id = turn_id.map(str::to_string);
+        self.viewport_transcript_handoff_release_pending = true;
     }
 
-    pub(crate) fn acknowledge_viewport_transcript_handoff_flush(&mut self) -> bool {
-        if !self.viewport_transcript_handoff_release_pending {
+    pub(crate) fn viewport_transcript_handoff_correlation(
+        &self,
+    ) -> Option<super::TranscriptHandoffCorrelation> {
+        self.viewport_transcript_handoff_release_pending.then(|| {
+            super::TranscriptHandoffCorrelation {
+                generation: self.viewport_transcript_handoff_generation,
+                transcript_revision: self.transcript_revision,
+                thread_id: self.thread_id.clone(),
+                turn_id: self.viewport_transcript_handoff_turn_id.clone(),
+            }
+        })
+    }
+
+    pub(crate) fn acknowledge_viewport_transcript_handoff_flush(
+        &mut self,
+        correlation: &super::TranscriptHandoffCorrelation,
+    ) -> bool {
+        if self.viewport_transcript_handoff_correlation().as_ref() != Some(correlation) {
             return false;
         }
         self.viewport_transcript_handoff_start = None;
         self.viewport_transcript_handoff_release_pending = false;
+        self.viewport_transcript_handoff_turn_id = None;
         if self
             .status_text
             .starts_with(VIEWPORT_NAVIGATION_BLOCKED_STATUS_PREFIX)
@@ -476,6 +505,13 @@ impl ConversationViewModel {
             self.viewport_transcript_handoff_status_restore = None;
         }
         true
+    }
+
+    fn advance_transcript_revision(&mut self) {
+        self.transcript_revision = self
+            .transcript_revision
+            .checked_add(1)
+            .expect("conversation transcript revision exhausted");
     }
 
     /*

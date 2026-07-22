@@ -2030,6 +2030,52 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
 }
 
 #[test]
+fn tui_transcript_handoff_ack_requires_an_exact_terminal_delivery_receipt() {
+    let model_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs"),
+    )
+    .expect("conversation message mutation source should load");
+    let terminal_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+    )
+    .expect("inline terminal adapter source should load");
+    let flush_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/inline_terminal_adapter/history_flush.rs"),
+    )
+    .expect("history flush source should load");
+
+    for required in [
+        "viewport_transcript_handoff_correlation",
+        "correlation: &super::TranscriptHandoffCorrelation",
+        "self.viewport_transcript_handoff_correlation().as_ref() != Some(correlation)",
+    ] {
+        assert!(
+            model_source.contains(required),
+            "conversation model must reject an uncorrelated transcript ACK: {required}"
+        );
+    }
+    for required in [
+        "committed_handoff: Option<TranscriptHandoffDeliveryToken>",
+        "fn committed_handoff(",
+    ] {
+        assert!(
+            flush_source.contains(required),
+            "history flush receipt must retain the sampled handoff token: {required}"
+        );
+    }
+    for required in [
+        "delivery_token.matches_current(app)",
+        "history_sync.committed_handoff()",
+        "handoff_sync.committed_handoff()",
+    ] {
+        assert!(
+            terminal_source.contains(required),
+            "terminal ACK must consume only an exact committed receipt: {required}"
+        );
+    }
+}
+
+#[test]
 fn tui_turn_steer_confirmation_draws_one_owned_screen_model() {
     let screen_model_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),

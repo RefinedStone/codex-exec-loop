@@ -201,7 +201,7 @@ pub(super) use conversation_model::{
     AutoFollowRuntimePhase, AutoFollowSkipReason, AutoFollowState, ConversationComposerState,
     ConversationInputState, ConversationState, ConversationViewModel, ProgressiveActivityCard,
     ProgressiveActivityCardKind, ProgressiveActivityDetailKind, ProgressiveActivityExpandState,
-    StopKeywordRule, filter_cards_by_kind,
+    StopKeywordRule, TranscriptHandoffCorrelation, filter_cards_by_kind,
 };
 use conversation_runtime::{
     ConversationRuntimeEffect, ConversationRuntimeEvent, reduce_conversation_runtime,

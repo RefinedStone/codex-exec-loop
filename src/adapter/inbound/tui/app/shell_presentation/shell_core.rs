@@ -27,7 +27,8 @@ use super::capability_projection::recent_session_status_label;
 use super::{
     AutoFollowRuntimePhase, ConversationComposerState, ConversationInputState, ConversationState,
     ConversationViewModel, HistoryInsertionMode, InlineHistoryRenderMode, NativeTuiApp,
-    ParallelPanelStateController, ShellActionAvailability, ShellOverlay, StartupState, TuiLanguage,
+    ParallelPanelStateController, ShellActionAvailability, ShellOverlay, StartupState,
+    TranscriptHandoffCorrelation, TuiLanguage,
 };
 
 const MAX_GITHUB_REVIEW_NOTICE_LEN: usize = 160;
@@ -104,6 +105,7 @@ impl ParallelPanelProjectionSample {
 pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
     core_revision: u64,
     conversation_history_identity_revision: u64,
+    transcript_handoff_correlation: Option<TranscriptHandoffCorrelation>,
     planning_runtime_workspace_directory: Option<String>,
     planning_runtime: Box<PlanningRuntimeProjection>,
     parallel_panel: ParallelPanelProjectionSample,
@@ -112,6 +114,46 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationProjectionSample {
     history_insert_mode: HistoryInsertionMode,
     rendered_at: Instant,
     animation_elapsed_millis: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::adapter::inbound::tui::app) struct TranscriptHandoffDeliveryToken {
+    conversation_history_identity_revision: u64,
+    correlation: TranscriptHandoffCorrelation,
+}
+
+impl TranscriptHandoffDeliveryToken {
+    pub(in crate::adapter::inbound::tui::app) fn from_sample(
+        sample: &ConversationProjectionSample,
+    ) -> Option<Self> {
+        Some(Self {
+            conversation_history_identity_revision: sample.conversation_history_identity_revision(),
+            correlation: sample.transcript_handoff_correlation.clone()?,
+        })
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn matches_current(
+        &self,
+        app: &NativeTuiApp,
+    ) -> bool {
+        if self.conversation_history_identity_revision != app.conversation_history_identity_revision
+        {
+            return false;
+        }
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            return false;
+        };
+        conversation
+            .viewport_transcript_handoff_correlation()
+            .as_ref()
+            == Some(&self.correlation)
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn correlation(
+        &self,
+    ) -> &TranscriptHandoffCorrelation {
+        &self.correlation
+    }
 }
 
 impl ConversationProjectionSample {
@@ -129,6 +171,12 @@ impl ConversationProjectionSample {
         Self {
             core_revision,
             conversation_history_identity_revision: app.conversation_history_identity_revision,
+            transcript_handoff_correlation: match &app.conversation_state {
+                ConversationState::Ready(conversation) => {
+                    conversation.viewport_transcript_handoff_correlation()
+                }
+                ConversationState::Loading | ConversationState::Failed(_) => None,
+            },
             planning_runtime_workspace_directory,
             planning_runtime,
             parallel_panel: ParallelPanelProjectionSample::from_parts(
@@ -363,6 +411,7 @@ pub(in crate::adapter::inbound::tui::app) struct TurnSteerConfirmationScreenMode
 
 pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) core_revision: u64,
+    transcript_handoff_delivery_token: Option<TranscriptHandoffDeliveryToken>,
     pub(in crate::adapter::inbound::tui::app) rendered_at: Instant,
     pub(in crate::adapter::inbound::tui::app) animation_elapsed_millis: u128,
     pub(in crate::adapter::inbound::tui::app) startup_state: &'a StartupState,
@@ -496,6 +545,7 @@ impl<'a> ConversationScreenModel<'a> {
 
         Self {
             core_revision,
+            transcript_handoff_delivery_token: TranscriptHandoffDeliveryToken::from_sample(sample),
             rendered_at: sample.rendered_at,
             animation_elapsed_millis: sample.animation_elapsed_millis,
             startup_state: &app.startup_state,
@@ -632,6 +682,15 @@ impl<'a> ConversationScreenModel<'a> {
         })
     }
 
+    pub(in crate::adapter::inbound::tui::app) fn transcript_handoff_delivery_token(
+        &self,
+    ) -> Option<TranscriptHandoffDeliveryToken> {
+        if !self.renders_viewport_transcript_handoff() {
+            return None;
+        }
+        self.transcript_handoff_delivery_token.clone()
+    }
+
     pub(in crate::adapter::inbound::tui::app) fn renders_parallel_viewport_handoff(&self) -> bool {
         self.parallel_mode_enabled && self.renders_viewport_transcript_handoff()
     }
@@ -652,6 +711,7 @@ impl<'a> ConversationScreenModel<'a> {
         );
         Self {
             core_revision: 0,
+            transcript_handoff_delivery_token: None,
             rendered_at: Instant::now(),
             animation_elapsed_millis: 0,
             startup_state,

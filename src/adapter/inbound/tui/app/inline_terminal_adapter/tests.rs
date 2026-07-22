@@ -1097,11 +1097,12 @@ fn parallel_handoff_draw_resize_preserves_retry_backoff() {
         true,
         ShellOverlay::Help,
     );
-    let delivered_conversation = super::parallel_conversation_handoff_projection(&app)
+    let sample = ConversationProjectionSample::capture(&app);
+    let delivered_conversation = super::parallel_conversation_handoff_projection(&app, &sample)
         .expect("released handoff should have a conversation projection");
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
-    inline_terminal.history_flush.rendered_lines = delivered_conversation;
+    inline_terminal.history_flush.rendered_lines = delivered_conversation.lines;
     assert!(
         runtime.take_redraw_request(),
         "consume initial frame request"
@@ -1127,6 +1128,74 @@ fn parallel_handoff_draw_resize_preserves_retry_backoff() {
         &mut runtime,
         "draw-time resize must retain the delayed post-ACK retry",
     );
+}
+
+#[test]
+fn stale_conversation_identity_receipt_cannot_ack_current_handoff() {
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::HostScrollback,
+        false,
+        ShellOverlay::Hidden,
+    );
+    let sample = ConversationProjectionSample::capture(&app);
+    let stale_token = super::TranscriptHandoffDeliveryToken::from_sample(&sample)
+        .expect("released handoff should have a delivery token");
+    let mut runtime = ShellRuntime::new(app);
+
+    runtime.app_mut().conversation_history_identity_revision = runtime
+        .app()
+        .conversation_history_identity_revision
+        .wrapping_add(1)
+        .max(1);
+    assert!(!super::acknowledge_transcript_handoff_after_delivery(
+        &mut runtime,
+        Some(&stale_token),
+    ));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("test app should retain its ready conversation");
+    };
+    assert!(conversation.has_pending_viewport_transcript_handoff());
+
+    let current_sample = ConversationProjectionSample::capture(runtime.app());
+    let current_token = super::TranscriptHandoffDeliveryToken::from_sample(&current_sample)
+        .expect("current handoff should have a refreshed delivery token");
+    assert!(super::acknowledge_transcript_handoff_after_delivery(
+        &mut runtime,
+        Some(&current_token),
+    ));
+}
+
+#[test]
+fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::ViewportReplay, 80, 24);
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::ViewportReplay,
+        false,
+        ShellOverlay::Hidden,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    terminal.backend_mut().inner_mut().fail_next_draw();
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal).is_err(),
+        "an injected terminal draw error must escape the transaction"
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("test app should retain its ready conversation");
+    };
+    assert!(conversation.has_pending_viewport_transcript_handoff());
+    assert!(!inline_terminal.back_buffer_trustworthy());
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("the unchanged handoff should redraw after the transient failure")
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("test app should retain its ready conversation");
+    };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
 }
 
 #[test]

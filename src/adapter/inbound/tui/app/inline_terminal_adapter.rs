@@ -9,7 +9,7 @@ use crate::adapter::inbound::tui::shell_chrome::ShellOverlay;
 
 use super::history_insertion::HistoryInsertionMode;
 use super::shell_presentation::{
-    ConversationProjectionSample, build_startup_banner_lines,
+    ConversationProjectionSample, TranscriptHandoffDeliveryToken, build_startup_banner_lines,
     format_conversation_scrollback_lines_with_expand,
 };
 use super::shell_rendering::{
@@ -65,6 +65,11 @@ enum InlineViewportSync {
         redraw_after_successful_frame: bool,
         resize_snapshot: InlineResizeSnapshot,
     },
+}
+
+struct ParallelConversationHandoffProjection {
+    lines: Vec<Line<'static>>,
+    delivery_token: TranscriptHandoffDeliveryToken,
 }
 
 impl InlineTerminalSyncPolicy {
@@ -145,8 +150,8 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     redraw_after_successful_frame: bool,
     resize_snapshot: InlineResizeSnapshot,
 ) -> Result<bool, B::Error> {
-    let acknowledge_viewport_handoff_after_draw =
-        frame_projection.renders_viewport_transcript_handoff;
+    let viewport_handoff_delivery_token =
+        frame_projection.transcript_handoff_delivery_token.clone();
     if !inline_terminal.viewport.back_buffer_trustworthy {
         /*
          * Inline viewport content is not a full-screen alternate buffer. Once
@@ -188,7 +193,16 @@ fn draw_inline_frame<B: InlineResizeBackend>(
     terminal
         .backend_mut()
         .set_resize_append_lines_suppressed(false);
-    let drawn_screen_size = result?;
+    let drawn_screen_size = match result {
+        Ok(drawn_screen_size) => drawn_screen_size,
+        Err(error) => {
+            // The frame signature was staged before terminal I/O. A failed
+            // flush cannot prove any visible cell, so the next transaction
+            // must redraw even when the semantic projection is unchanged.
+            inline_terminal.invalidate_back_buffer();
+            return Err(error);
+        }
+    };
     let cursor_position = terminal.get_cursor_position()?;
     let terminal_size = terminal.size()?;
     if inline_terminal.screen_size_changed(drawn_screen_size)
@@ -211,8 +225,10 @@ fn draw_inline_frame<B: InlineResizeBackend>(
      * able to decide whether the back buffer is still trustworthy.
      */
     inline_terminal.mark_frame_drawn(terminal_size, drawn_viewport_area, cursor_position);
-    let viewport_handoff_acknowledged = acknowledge_viewport_handoff_after_draw
-        && acknowledge_transcript_handoff_after_delivery(runtime, true);
+    let viewport_handoff_acknowledged = acknowledge_transcript_handoff_after_delivery(
+        runtime,
+        viewport_handoff_delivery_token.as_deref(),
+    );
     if viewport_handoff_acknowledged || redraw_after_successful_frame {
         // ACK changes the semantic viewport from the held transcript to the
         // ordinary shell/parallel frame. Make that state change its own draw.
@@ -292,7 +308,7 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     });
     let parallel_handoff_conversation_lines =
         if policy.parallel_mode_enabled && policy.host_insert_mode().is_some() {
-            parallel_conversation_handoff_projection(runtime.app_mut())
+            parallel_conversation_handoff_projection(runtime.app_mut(), &projection_sample)
         } else {
             None
         };
@@ -304,13 +320,12 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
     );
     let preserves_conversation_baseline = current_history_projection.is_none();
     let current_lines = current_history_projection.unwrap_or_default();
+    let conversation_handoff_delivery_token = (!policy.parallel_mode_enabled)
+        .then(|| TranscriptHandoffDeliveryToken::from_sample(&projection_sample))
+        .flatten();
     let parallel_handoff_pending_lines = parallel_handoff_conversation_lines
-        .as_deref()
-        .map(|conversation_lines| {
-            inline_terminal
-                .history_flush
-                .pending_lines(conversation_lines)
-        })
+        .as_ref()
+        .map(|handoff| inline_terminal.history_flush.pending_lines(&handoff.lines))
         .unwrap_or_default();
     if !terminal
         .backend()
@@ -453,16 +468,14 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
             .sync(terminal, &current_lines, resize_snapshot, insert_mode)
     };
     let history_sync = match history_sync_result {
-        Ok(history_sync) => history_sync,
+        Ok(history_sync) => history_sync.with_handoff(conversation_handoff_delivery_token),
         Err(error) => {
             inline_terminal.history_flush.visible_history_rows = visible_history_rows_before;
             return Err(error);
         }
     };
-    let handoff_acknowledged = acknowledge_transcript_handoff_after_delivery(
-        runtime,
-        history_sync.history_committed() && !policy.parallel_mode_enabled,
-    );
+    let handoff_acknowledged =
+        acknowledge_transcript_handoff_after_delivery(runtime, history_sync.committed_handoff());
     if handoff_acknowledged {
         inline_terminal.invalidate_back_buffer();
     }
@@ -478,50 +491,50 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
         return Ok(InlineViewportSync::Deferred);
     }
     let mut redraw_after_successful_frame = false;
-    let parallel_handoff_sync =
-        if let Some(conversation_lines) = parallel_handoff_conversation_lines.as_deref() {
-            let visible_history_rows_before_handoff =
-                inline_terminal.history_flush.visible_history_rows;
-            let handoff_sync = match inline_terminal
-                .history_flush
-                .append_durable_lines_preserving_baseline(
-                    terminal,
-                    &parallel_handoff_pending_lines,
-                    resize_snapshot,
-                    insert_mode,
-                ) {
-                Ok(handoff_sync) => handoff_sync,
-                Err(error) => {
-                    inline_terminal.history_flush.visible_history_rows =
-                        visible_history_rows_before_handoff;
-                    return Err(error);
-                }
-            };
-            if handoff_sync.history_committed() {
-                inline_terminal
-                    .history_flush
-                    .remember_conversation_projection(conversation_lines);
+    let parallel_handoff_sync = if let Some(handoff) = parallel_handoff_conversation_lines.as_ref()
+    {
+        let visible_history_rows_before_handoff =
+            inline_terminal.history_flush.visible_history_rows;
+        let handoff_sync = match inline_terminal
+            .history_flush
+            .append_durable_lines_preserving_baseline(
+                terminal,
+                &parallel_handoff_pending_lines,
+                resize_snapshot,
+                insert_mode,
+            ) {
+            Ok(handoff_sync) => handoff_sync.with_handoff(Some(handoff.delivery_token.clone())),
+            Err(error) => {
+                inline_terminal.history_flush.visible_history_rows =
+                    visible_history_rows_before_handoff;
+                return Err(error);
             }
-            let parallel_handoff_acknowledged = acknowledge_transcript_handoff_after_delivery(
-                runtime,
-                handoff_sync.history_committed(),
-            );
-            if parallel_handoff_acknowledged {
-                inline_terminal.invalidate_back_buffer();
-                redraw_after_successful_frame = true;
-            }
-            if !handoff_sync.stable_geometry() {
-                if !handoff_sync.history_committed() {
-                    inline_terminal.history_flush.visible_history_rows =
-                        visible_history_rows_before_handoff;
-                }
-                defer_resize_redraw(runtime, inline_terminal);
-                return Ok(InlineViewportSync::Deferred);
-            }
-            Some(handoff_sync)
-        } else {
-            None
         };
+        if handoff_sync.history_committed() {
+            inline_terminal
+                .history_flush
+                .remember_conversation_projection(&handoff.lines);
+        }
+        let parallel_handoff_acknowledged = acknowledge_transcript_handoff_after_delivery(
+            runtime,
+            handoff_sync.committed_handoff(),
+        );
+        if parallel_handoff_acknowledged {
+            inline_terminal.invalidate_back_buffer();
+            redraw_after_successful_frame = true;
+        }
+        if !handoff_sync.stable_geometry() {
+            if !handoff_sync.history_committed() {
+                inline_terminal.history_flush.visible_history_rows =
+                    visible_history_rows_before_handoff;
+            }
+            defer_resize_redraw(runtime, inline_terminal);
+            return Ok(InlineViewportSync::Deferred);
+        }
+        Some(handoff_sync)
+    } else {
+        None
+    };
     let history_inserted = history_sync.inserted()
         || parallel_handoff_sync.is_some_and(|handoff_sync| handoff_sync.inserted());
     if history_inserted {
@@ -570,29 +583,39 @@ fn sync_inline_viewport_transaction<B: InlineResizeBackend>(
 
 fn acknowledge_transcript_handoff_after_delivery(
     runtime: &mut ShellRuntime,
-    delivery_committed: bool,
+    delivery_token: Option<&TranscriptHandoffDeliveryToken>,
 ) -> bool {
-    if !delivery_committed {
-        return false;
-    }
-    let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
+    let Some(delivery_token) = delivery_token else {
         return false;
     };
-    conversation.acknowledge_viewport_transcript_handoff_flush()
+    let app = runtime.app_mut();
+    if !delivery_token.matches_current(app) {
+        return false;
+    }
+    let ConversationState::Ready(conversation) = &mut app.conversation_state else {
+        return false;
+    };
+    conversation.acknowledge_viewport_transcript_handoff_flush(delivery_token.correlation())
 }
 
-fn parallel_conversation_handoff_projection(app: &NativeTuiApp) -> Option<Vec<Line<'static>>> {
+fn parallel_conversation_handoff_projection(
+    app: &NativeTuiApp,
+    sample: &ConversationProjectionSample,
+) -> Option<ParallelConversationHandoffProjection> {
     let ConversationState::Ready(conversation) = &app.conversation_state else {
         return None;
     };
     conversation.viewport_transcript_handoff_release_messages()?;
-    Some(format_conversation_scrollback_lines_with_expand(
-        conversation.host_scrollback_messages(),
-        app.conversation_view_mode,
-        app.conversation_view_mode.shows_debug_details()
-            || app.planning_worker_shows_debug_details(),
-        Some(app.progressive_activity_overlay_ui_state.expand_state()),
-    ))
+    Some(ParallelConversationHandoffProjection {
+        lines: format_conversation_scrollback_lines_with_expand(
+            conversation.host_scrollback_messages(),
+            app.conversation_view_mode,
+            app.conversation_view_mode.shows_debug_details()
+                || app.planning_worker_shows_debug_details(),
+            Some(app.progressive_activity_overlay_ui_state.expand_state()),
+        ),
+        delivery_token: TranscriptHandoffDeliveryToken::from_sample(sample)?,
+    })
 }
 
 fn defer_resize_redraw(runtime: &mut ShellRuntime, inline_terminal: &mut InlineTerminalState) {

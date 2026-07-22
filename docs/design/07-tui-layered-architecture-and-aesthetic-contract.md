@@ -67,6 +67,14 @@ the fixed Akra theme.
   draft-to-provider promotion, and same-thread reattach preserve it. Transient Loading/Failed
   projections must not impersonate an authoritative empty transcript, and conversation switches
   must not reset the parallel event baseline or shared physical-row geometry.
+- A released transcript handoff must carry one typed delivery token sampled with the frame. The
+  token binds conversation history identity, thread and source-turn identity, handoff generation,
+  and the exact transcript revision. Host-scrollback and parallel writes place that token in the
+  successful `HistoryFlushResult`; viewport replay carries it through the successfully drawn frame.
+  Only a token that still matches the current handoff may acknowledge delivery. A stale receipt,
+  unrelated conversation switch, or later transcript append must leave the current handoff pending.
+- A failed terminal draw must not acknowledge its handoff or leave the staged frame signature
+  trusted. The next transaction must repaint the unchanged semantic frame before it can emit an ACK.
 - Supersession is covered by that consistency guarantee: the sample owns one control-plane
   presentation projection, one event-stream projection, and the narrow owned Core projection,
   while row planning and drawing consume the same owned overlay view. Other overlay-specific

@@ -1943,10 +1943,14 @@ mod tests {
                     .viewport_transcript_handoff_release_messages()
                     .is_some()
             );
+            let correlation = reduction
+                .state
+                .viewport_transcript_handoff_correlation()
+                .expect("terminal outcome should release a correlated transcript handoff");
             assert!(
                 reduction
                     .state
-                    .acknowledge_viewport_transcript_handoff_flush()
+                    .acknowledge_viewport_transcript_handoff_flush(&correlation)
             );
             assert!(reduction.state.can_accept_manual_prompt());
             assert_eq!(

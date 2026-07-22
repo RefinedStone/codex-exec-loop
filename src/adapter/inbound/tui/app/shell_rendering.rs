@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use super::shell_presentation::{
     ConversationProjectionSample, ConversationScreenModel, InlineTailView, SupersessionOverlayView,
-    TurnSteerConfirmationScreenModel, build_inline_live_transcript_lines, build_inline_tail_view,
-    build_supersession_overlay_view,
+    TranscriptHandoffDeliveryToken, TurnSteerConfirmationScreenModel,
+    build_inline_live_transcript_lines, build_inline_tail_view, build_supersession_overlay_view,
 };
 use super::*;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -36,6 +36,7 @@ pub(super) struct InlineConversationFrameProjection {
     pub(super) inline_history_render_mode: InlineHistoryRenderMode,
     pub(super) parallel_mode_enabled: bool,
     pub(super) renders_viewport_transcript_handoff: bool,
+    pub(super) transcript_handoff_delivery_token: Option<Box<TranscriptHandoffDeliveryToken>>,
     pub(super) renders_parallel_viewport_handoff: bool,
     pub(super) exit_confirmation_visible: bool,
     pub(super) turn_steer_confirmation: Option<Box<TurnSteerConfirmationScreenModel>>,
@@ -77,6 +78,9 @@ impl InlineConversationFrameProjection {
         let live_transcript_lines = build_inline_live_transcript_lines(&screen_model);
         let renders_viewport_transcript_handoff =
             screen_model.renders_viewport_transcript_handoff();
+        let transcript_handoff_delivery_token = screen_model
+            .transcript_handoff_delivery_token()
+            .map(Box::new);
         let renders_parallel_viewport_handoff = screen_model.renders_parallel_viewport_handoff();
         Self {
             core_revision: screen_model.core_revision,
@@ -86,6 +90,7 @@ impl InlineConversationFrameProjection {
             inline_history_render_mode: screen_model.inline_history_render_mode,
             parallel_mode_enabled: screen_model.parallel_mode_enabled,
             renders_viewport_transcript_handoff,
+            transcript_handoff_delivery_token,
             renders_parallel_viewport_handoff,
             exit_confirmation_visible: screen_model.exit_confirmation_visible,
             turn_steer_confirmation: screen_model.turn_steer_confirmation.map(Box::new),
