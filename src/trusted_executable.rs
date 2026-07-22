@@ -110,13 +110,64 @@ pub(crate) fn resolve_native_from_path(program: &str, path: &OsStr, cwd: &Path) 
 }
 
 pub(crate) fn resolve_codex_command_from_path(path: &OsStr, cwd: &Path) -> Result<TrustedCommand> {
-    let source_executable = resolve_from_path("codex", path, cwd)?;
+    let untrusted_roots = untrusted_roots(cwd);
+    let entries = std::env::split_paths(path).collect::<Vec<_>>();
+    if entries.is_empty() {
+        bail!("PATH contains no executable directories")
+    }
+    let mut unsupported_launcher = None;
+    for directory in entries {
+        if !directory.is_absolute() {
+            bail!(
+                "PATH contains a relative executable directory `{}`",
+                directory.display()
+            )
+        }
+        for name in executable_names("codex") {
+            let candidate = directory.join(name);
+            match fs::symlink_metadata(&candidate) {
+                Ok(_) => {
+                    let source_executable = validate_candidate(&candidate, &untrusted_roots)
+                        .with_context(|| {
+                            format!(
+                                "PATH selected an unsafe `codex` executable at `{}`",
+                                candidate.display()
+                            )
+                        })?;
+                    match resolve_codex_command(source_executable.clone(), path, cwd)? {
+                        Some(command) => return Ok(command),
+                        None => unsupported_launcher = Some(source_executable),
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to inspect `{}` from PATH", candidate.display())
+                    });
+                }
+            }
+        }
+    }
+    if let Some(launcher) = unsupported_launcher {
+        bail!(
+            "no supported Codex launcher was found after `{}` used an unsupported shebang",
+            launcher.display()
+        )
+    }
+    bail!("`codex` was not found on the trusted absolute PATH")
+}
+
+fn resolve_codex_command(
+    source_executable: PathBuf,
+    path: &OsStr,
+    cwd: &Path,
+) -> Result<Option<TrustedCommand>> {
     if validate_native_executable(&source_executable).is_ok() {
-        return Ok(TrustedCommand {
+        return Ok(Some(TrustedCommand {
             program: source_executable.clone(),
             prefix_args: Vec::new(),
             source_executable,
-        });
+        }));
     }
     #[cfg(windows)]
     {
@@ -144,11 +195,11 @@ pub(crate) fn resolve_codex_command_from_path(path: &OsStr, cwd: &Path) -> Resul
             bail!("Windows Codex npm target is outside @openai/codex/bin/codex.js")
         }
         let node = resolve_native_from_path("node", path, cwd)?;
-        return Ok(TrustedCommand {
+        return Ok(Some(TrustedCommand {
             program: node,
             prefix_args: vec![target.as_os_str().to_os_string()],
             source_executable,
-        });
+        }));
     }
     #[cfg(unix)]
     {
@@ -181,13 +232,13 @@ pub(crate) fn resolve_codex_command_from_path(path: &OsStr, cwd: &Path) -> Resul
                 }
                 interpreter
             }
-            _ => bail!("Codex launcher uses an unsupported shebang"),
+            _ => return Ok(None),
         };
-        Ok(TrustedCommand {
+        Ok(Some(TrustedCommand {
             program: node,
             prefix_args: vec![source_executable.as_os_str().to_os_string()],
             source_executable,
-        })
+        }))
     }
 }
 
@@ -1921,6 +1972,46 @@ mod tests {
         assert_eq!(
             plan.prefix_args,
             vec![plan.source_executable.as_os_str().to_os_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_launcher_skips_supported_path_wrappers_with_unsupported_shebangs() {
+        let workspace_root = fixture_root("wrapped-codex-workspace");
+        let install_root = fixture_root("wrapped-codex-install");
+        let workspace = workspace_root.join("workspace");
+        let wrapper_directory = install_root.join("wrapper-bin");
+        let install = install_root.join("user-local");
+        let node_directory = install_root.join("safe-bin");
+        fs::create_dir_all(&workspace).expect("workspace should be created");
+        fs::create_dir_all(&wrapper_directory).expect("wrapper directory should be created");
+        fs::create_dir_all(&install).expect("Codex install should be created");
+        fs::create_dir_all(&node_directory).expect("Node.js fixture directory should be created");
+        make_safe_directory_chain(&workspace_root);
+        make_safe_directory_chain(&install_root);
+        write_executable(
+            &wrapper_directory.join("codex"),
+            "#!/usr/bin/env bash\nexec codex \"$@\"\n",
+        );
+        let launcher = install.join("codex.js");
+        write_executable(&launcher, "#!/usr/bin/env node\nprocess.exit(0);\n");
+        symlink(&launcher, install.join("codex")).expect("Codex shim should be linked");
+        let node = node_directory.join("node");
+        write_native_executable(&node);
+        let path = std::env::join_paths([wrapper_directory, install, node_directory])
+            .expect("wrapped Codex PATH should join");
+
+        let plan = resolve_codex_command_from_path(&path, &workspace)
+            .expect("supported Codex after a shell wrapper should resolve");
+
+        assert_eq!(
+            plan.source_executable,
+            fs::canonicalize(&launcher).expect("launcher should canonicalize")
+        );
+        assert_eq!(
+            plan.program,
+            fs::canonicalize(node).expect("Node.js fixture should canonicalize")
         );
     }
 
