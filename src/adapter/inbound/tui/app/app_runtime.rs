@@ -1810,6 +1810,7 @@ impl NativeTuiApp {
                 self.dispatch_shell_chrome(ShellChromeEvent::SessionsLoaded(Err(message)));
                 self.session_overlay_ui_state.reset();
             }
+            AppEvent::SessionRenameAdmissionResolved(_) => {}
             AppEvent::SessionRenameCompleted {
                 correlation,
                 result,

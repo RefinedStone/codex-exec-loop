@@ -5,8 +5,10 @@ use super::{
     SESSION_PAGE_SIZE, SessionState, ShellChromeEvent, ShellOverlay,
 };
 use crate::core::app::{
-    AppCommand, SessionCatalogSnapshot, SessionRenameAcceptedSnapshot, SessionRenameCorrelation,
+    AppCommand, AppEvent, CoreDispatchOutcome, SessionCatalogSnapshot,
+    SessionRenameAcceptedSnapshot, SessionRenameAdmission, SessionRenameCorrelation,
 };
+use crate::domain::recent_sessions::SessionRenameRequest;
 use crate::domain::session_browser::{
     SessionBrowserPage, SessionBrowserSelection, build_session_browser_page,
 };
@@ -300,12 +302,60 @@ impl NativeTuiApp {
             return;
         };
 
-        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-            status_text: self
-                .tui_language
-                .session_rename_started_status(&request.name),
+        let outcome = self
+            .core_runtime
+            .dispatch_command(AppCommand::RenameSession(request.clone()));
+        self.apply_session_rename_dispatch_outcome(request, outcome);
+    }
+
+    fn apply_session_rename_dispatch_outcome(
+        &mut self,
+        request: SessionRenameRequest,
+        outcome: CoreDispatchOutcome,
+    ) {
+        let admission = outcome.events.iter().find_map(|event| match event {
+            AppEvent::SessionRenameAdmissionResolved(admission) => Some(admission.clone()),
+            _ => None,
         });
-        self.dispatch_core_command(AppCommand::RenameSession(request));
+        let rejection = match admission {
+            Some(SessionRenameAdmission::Accepted { correlation })
+                if correlation.request == request
+                    && self
+                        .session_overlay_ui_state
+                        .record_rename_admission(correlation.clone(), self.tui_language) =>
+            {
+                self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                    status_text: self
+                        .tui_language
+                        .session_rename_started_status(&request.name),
+                });
+                None
+            }
+            Some(SessionRenameAdmission::Accepted { .. }) => {
+                Some("core accepted a different session rename request")
+            }
+            Some(SessionRenameAdmission::RejectedActive { .. }) => {
+                Some("another session rename is already awaiting app-server confirmation")
+            }
+            Some(SessionRenameAdmission::RejectedCatalogLoading { .. }) => {
+                Some("session rename is unavailable while the session catalog is loading")
+            }
+            Some(SessionRenameAdmission::RejectedConversationLoading { .. }) => {
+                Some("session rename is unavailable while that conversation is loading")
+            }
+            None => Some("core did not resolve the session rename admission"),
+        };
+        if let Some(reason) = rejection {
+            self.session_overlay_ui_state
+                .finish_rename_failure(reason, self.tui_language);
+            self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+                status_text: self.tui_language.session_rename_failed_status(reason),
+            });
+        }
+        // CoreRuntime appends an immediate effect completion after the admission event. Record the
+        // accepted correlation above before applying this ordered event list so that completion can
+        // settle the exact pending operation instead of being dropped as an unbound receipt.
+        self.apply_core_dispatch_outcome(outcome);
     }
 
     pub(super) fn apply_session_rename_completion(
@@ -315,7 +365,7 @@ impl NativeTuiApp {
     ) {
         if !self
             .session_overlay_ui_state
-            .pending_rename_matches(&correlation.request)
+            .pending_rename_matches(&correlation)
         {
             return;
         }
@@ -843,9 +893,14 @@ mod tests {
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename request should prepare");
+        let failed_correlation = SessionRenameCorrelation::new(1, failed_request);
+        assert!(
+            app.session_overlay_ui_state
+                .record_rename_admission(failed_correlation.clone(), TuiLanguage::English,)
+        );
 
         app.apply_session_rename_completion(
-            SessionRenameCorrelation::new(1, failed_request),
+            failed_correlation.clone(),
             Err("provider unavailable".to_string()),
         );
 
@@ -859,9 +914,47 @@ mod tests {
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("same-value retry should prepare");
+        let retry_correlation = SessionRenameCorrelation::new(2, retry_request);
+        assert!(
+            app.session_overlay_ui_state
+                .record_rename_admission(retry_correlation.clone(), TuiLanguage::English,)
+        );
         app.apply_session_rename_completion(
-            SessionRenameCorrelation::new(2, retry_request),
+            failed_correlation,
+            Ok(accepted_rename_snapshot(
+                vec![
+                    session("thread-alpha", "Alpha draft", "/tmp/root"),
+                    session("thread-beta", "stale title", "/tmp/root"),
+                ],
+                "thread-beta",
+                "Beta draft",
+                "stale title",
+            )),
+        );
+        assert!(
+            app.session_overlay_ui_state
+                .pending_rename_matches(&retry_correlation),
+            "same-request stale generation must not settle the retry"
+        );
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Beta draft")
+        );
+        app.apply_session_rename_completion(
+            retry_correlation.clone(),
             Err("retry required".to_string()),
+        );
+        app.apply_session_rename_completion(
+            retry_correlation,
+            Ok(accepted_rename_snapshot(
+                vec![
+                    session("thread-alpha", "Alpha draft", "/tmp/root"),
+                    session("thread-beta", "duplicate title", "/tmp/root"),
+                ],
+                "thread-beta",
+                "Beta draft",
+                "duplicate title",
+            )),
         );
 
         app.session_overlay_ui_state.pop_rename_character();
@@ -870,8 +963,13 @@ mod tests {
             .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("retry should prepare");
+        let success_correlation = SessionRenameCorrelation::new(3, success_request);
+        assert!(
+            app.session_overlay_ui_state
+                .record_rename_admission(success_correlation.clone(), TuiLanguage::English,)
+        );
         app.apply_session_rename_completion(
-            SessionRenameCorrelation::new(3, success_request),
+            success_correlation,
             Ok(accepted_rename_snapshot(
                 vec![
                     session("thread-alpha", "Alpha draft", "/tmp/root"),
@@ -897,6 +995,96 @@ mod tests {
         assert_eq!(
             app.current_session().map(SessionSummary::title).as_deref(),
             Some("Alpha draft")
+        );
+    }
+
+    #[test]
+    fn immediate_rename_completion_settles_after_exact_admission_binding() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![session("thread-beta", "Beta draft", "/tmp/root")],
+        );
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.start_session_rename_edit();
+        while !app
+            .session_overlay_ui_state
+            .rename_editor_buffer()
+            .is_empty()
+        {
+            app.session_overlay_ui_state.pop_rename_character();
+        }
+        app.handle_session_rename_paste("Beta renamed");
+        let request = app
+            .session_overlay_ui_state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("rename request should prepare without becoming pending");
+        assert!(!app.session_overlay_ui_state.is_rename_pending());
+        let correlation = SessionRenameCorrelation::new(1, request.clone());
+        let outcome = CoreDispatchOutcome {
+            events: vec![
+                AppEvent::SessionRenameAdmissionResolved(SessionRenameAdmission::Accepted {
+                    correlation: correlation.clone(),
+                }),
+                AppEvent::SessionRenameCompleted {
+                    correlation,
+                    result: Ok(accepted_rename_snapshot(
+                        vec![session("thread-beta", "Beta renamed", "/tmp/root")],
+                        "thread-beta",
+                        "Beta draft",
+                        "Beta renamed",
+                    )),
+                },
+            ],
+            effects: Vec::new(),
+            snapshot: std::sync::Arc::new(app.core_runtime.snapshot()),
+        };
+
+        app.apply_session_rename_dispatch_outcome(request, outcome);
+
+        assert!(!app.session_overlay_ui_state.is_rename_pending());
+        assert!(!app.is_session_rename_editing());
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("Beta renamed")
+        );
+    }
+
+    #[test]
+    fn rejected_rename_admission_preserves_the_editor_draft() {
+        let mut app = test_native_tui_app();
+        seed_sessions(
+            &mut app,
+            vec![session("thread-beta", "Beta draft", "/tmp/root")],
+        );
+        app.shell_overlay = ShellOverlay::Sessions;
+        app.start_session_rename_edit();
+        let request = app
+            .session_overlay_ui_state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("rename request should prepare without becoming pending");
+        let outcome = CoreDispatchOutcome {
+            events: vec![AppEvent::SessionRenameAdmissionResolved(
+                SessionRenameAdmission::RejectedCatalogLoading {
+                    active_correlation: crate::core::app::SessionCatalogLoadCorrelation::new(7),
+                },
+            )],
+            effects: Vec::new(),
+            snapshot: std::sync::Arc::new(app.core_runtime.snapshot()),
+        };
+
+        app.apply_session_rename_dispatch_outcome(request, outcome);
+
+        assert!(app.is_session_rename_editing());
+        assert!(!app.session_overlay_ui_state.is_rename_pending());
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_buffer(),
+            "Beta draft"
+        );
+        assert!(
+            app.session_overlay_ui_state
+                .rename_editor_feedback()
+                .is_some_and(|feedback| feedback.contains("catalog is loading"))
         );
     }
 

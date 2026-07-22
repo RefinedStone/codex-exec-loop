@@ -75,7 +75,8 @@ pub use queue::{
 pub use request::{
     ConversationLoadCorrelation, DirectionsMaintenanceLoadCorrelation, ParallelPeekLoadCorrelation,
     PlanningRuntimeRefreshCorrelation, QueueAuthorityLoadCorrelation, ReviewCenterLoadCorrelation,
-    SessionCatalogLoadCorrelation, SessionRenameCorrelation, StartupCheckCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameAdmission, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 pub use review_center::{
     ReviewCenterHistoryEntrySnapshot, ReviewCenterInboxItemSnapshot, ReviewCenterSnapshot,

@@ -42,6 +42,22 @@ impl SessionRenameCorrelation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionRenameAdmission {
+    Accepted {
+        correlation: SessionRenameCorrelation,
+    },
+    RejectedActive {
+        active_correlation: SessionRenameCorrelation,
+    },
+    RejectedCatalogLoading {
+        active_correlation: SessionCatalogLoadCorrelation,
+    },
+    RejectedConversationLoading {
+        active_correlation: ConversationLoadCorrelation,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationLoadCorrelation {
     pub generation: u64,
     pub requested_thread_id: String,

@@ -15,7 +15,7 @@ use super::{
     PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
     PlanningWorkspaceResetSnapshot, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameCorrelation, StartupCheckCorrelation,
+    SessionRenameAdmission, SessionRenameCorrelation, StartupCheckCorrelation,
 };
 use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
@@ -176,6 +176,7 @@ pub enum AppEvent {
         snapshot: StartupSnapshot,
     },
     SessionCatalogChanged(SessionCatalogSnapshot),
+    SessionRenameAdmissionResolved(SessionRenameAdmission),
     SessionRenameCompleted {
         correlation: SessionRenameCorrelation,
         result: Result<SessionRenameAcceptedSnapshot, String>,

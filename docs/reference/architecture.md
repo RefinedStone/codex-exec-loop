@@ -159,12 +159,15 @@ and requests a fresh load when the current workspace or thread identity changes.
 An accepted post-turn completion updates the core planning-runtime projection in the same
 correlated dispatch. TUI conversation state does not retain a second planning-runtime copy.
 
-Session rename is also core-correlated and single-flight. A successful provider acknowledgement
-updates the matching catalog row, loaded conversation title, and stream identity before the TUI
-receives the accepted catalog and stream projections. Catalog loads and same-thread conversation
-loads requested during that mutation are retained and started after it settles, so an older read
-cannot restore the previous title. The TUI maps those core projections and owns only the rename
-editor draft, pending feedback, and selected row.
+Session rename is also core-correlated and single-flight. The TUI enters pending state only after
+Core returns an accepted admission with the exact correlation; typed active/catalog/conversation
+rejections start no provider effect and preserve the editor draft. A successful provider
+acknowledgement updates the matching catalog row, loaded conversation title, and stream identity
+before the TUI receives the accepted catalog and stream projections. Catalog loads and same-thread
+conversation loads requested during that mutation are retained and started after it settles, so an
+older read cannot restore the previous title. The TUI accepts only a completion matching the full
+admitted correlation and otherwise owns only the rename editor draft, pending feedback, and
+selected row.
 
 ## State Authority
 

@@ -1190,6 +1190,40 @@ fn tui_session_renames_enter_through_core_runtime() {
             "ConversationLifecycleEvent::SessionRenamed",
         ],
     );
+
+    let overlay_state =
+        fs::read_to_string("src/adapter/inbound/tui/app/session_overlay_ui.rs").unwrap();
+    let compact_overlay_state: String = overlay_state
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(
+        compact_overlay_state.contains("pending_correlation:Option<SessionRenameCorrelation>",),
+        "TUI rename pending state must retain the exact Core admission correlation"
+    );
+    assert!(
+        !compact_overlay_state.contains("pending_request:Option<SessionRenameRequest>"),
+        "TUI rename pending state must not fall back to request-only matching"
+    );
+
+    let controller =
+        fs::read_to_string("src/adapter/inbound/tui/app/session_shell_controller.rs").unwrap();
+    let compact_controller: String = controller
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(
+        compact_controller.contains("SessionRenameAdmissionResolved"),
+        "TUI must bind rename pending state from the explicit Core admission event"
+    );
+    assert!(
+        compact_controller.contains("pending_rename_matches(&correlation)"),
+        "TUI rename completion must match the full Core correlation"
+    );
+    assert!(
+        !compact_controller.contains("pending_rename_matches(&correlation.request)"),
+        "TUI rename completion must not match request fields without generation"
+    );
 }
 
 #[test]

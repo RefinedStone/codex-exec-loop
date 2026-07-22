@@ -137,10 +137,11 @@ mod tests {
         PlanningRuntimeRefreshSnapshot, QueueAuthorityLoadCorrelation, QueueAuthoritySnapshot,
         QueueMutationCommitSnapshot, QueueMutationCorrelation, QueueMutationIntent,
         QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterLoadCorrelation,
-        ReviewCenterSnapshot, StartupAttachmentSnapshot, StartupCheckCorrelation,
-        StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot, StopRequestAdmission,
-        StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
-        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+        ReviewCenterSnapshot, SessionRenameAdmission, SessionRenameCorrelation,
+        StartupAttachmentSnapshot, StartupCheckCorrelation, StartupDiagnosticSnapshot,
+        StartupReadySnapshot, StartupSnapshot, StopRequestAdmission, StopRequestAttempt,
+        StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+        TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
     };
     use crate::core::runtime::input_mailbox::{CORE_INPUT_CHANNEL_CAPACITY, core_input_channel};
     use crate::domain::conversation::{
@@ -338,6 +339,23 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
+    struct ImmediateSessionRenameExecutor;
+
+    impl CoreEffectExecutor for ImmediateSessionRenameExecutor {
+        fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
+            let CoreEffect::RenameSession { correlation } = effect else {
+                return None;
+            };
+            Some(CoreInput::EffectCompleted(
+                CoreEffectCompletion::SessionRenamed {
+                    correlation,
+                    result: Ok(()),
+                },
+            ))
+        }
+    }
+
+    #[derive(Clone, Default)]
     struct ImmediateStopRequestExecutor;
 
     impl CoreEffectExecutor for ImmediateStopRequestExecutor {
@@ -451,6 +469,32 @@ mod tests {
             }]
         );
         assert_eq!(runtime.snapshot().startup, StartupSnapshot::Loading);
+    }
+
+    #[test]
+    fn immediate_session_rename_emits_admission_before_completion() {
+        let (_tx, rx) = core_input_channel();
+        let mut runtime = CoreRuntime::new(ImmediateSessionRenameExecutor, rx);
+        let correlation = SessionRenameCorrelation::new(
+            1,
+            crate::domain::recent_sessions::SessionRenameRequest::new("thread-1", "Renamed"),
+        );
+
+        let outcome =
+            runtime.dispatch_command(AppCommand::RenameSession(correlation.request.clone()));
+
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                AppEvent::SessionRenameAdmissionResolved(SessionRenameAdmission::Accepted {
+                    correlation: admitted,
+                }),
+                AppEvent::SessionRenameCompleted {
+                    correlation: completed,
+                    result: Ok(_),
+                },
+            ] if admitted == &correlation && completed == &correlation
+        ));
     }
 
     #[test]
