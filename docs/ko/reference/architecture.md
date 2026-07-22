@@ -142,11 +142,14 @@ correlation으로 묶고 effect runner에서 authority read를 시작하며 stal
 숨기지 않습니다. TUI는 overlay lifecycle과 표시용 thread 문맥만 소유하고 현재 workspace 또는
 thread identity가 바뀌면 새 load를 요청합니다.
 
-Session rename도 core-correlated single-flight 작업입니다. Provider의 성공 응답을 core가 수락하면
-일치하는 catalog row, 불러온 conversation title, stream identity를 함께 갱신합니다. 충돌하는
-catalog load와 같은 thread의 conversation load는 버리지 않고 rename 완료 뒤로 지연하므로 예전
-read가 이전 title을 복원할 수 없습니다. TUI는 core가 수락한 projection과 stream event를 매핑할
-뿐이며 rename editor draft, pending feedback, selected row만 소유합니다.
+Session rename도 core-correlated single-flight 작업입니다. TUI는 Core가 exact correlation과 함께
+accepted admission을 반환한 뒤에만 pending 상태로 진입합니다. Active rename, catalog load,
+conversation load 충돌은 typed rejection으로 반환되어 provider effect를 시작하지 않고 editor draft를
+보존합니다. Provider의 성공 응답을 core가 수락하면 일치하는 catalog row, 불러온 conversation title,
+stream identity를 함께 갱신합니다. 충돌하는 catalog load와 같은 thread의 conversation load는 버리지
+않고 rename 완료 뒤로 지연하므로 예전 read가 이전 title을 복원할 수 없습니다. TUI는 admission의
+full correlation과 정확히 일치하는 completion만 수락하며 rename editor draft, pending feedback,
+selected row만 소유합니다.
 
 ## 상태 권한
 

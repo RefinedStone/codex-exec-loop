@@ -191,9 +191,14 @@ mod tests {
             .push_search_query_character('!');
         app.session_overlay_ui_state
             .start_rename_edit("thread-11", "Renamed task");
-        app.session_overlay_ui_state
+        let rename_request = app
+            .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::Korean)
             .expect("rename should become pending");
+        assert!(app.session_overlay_ui_state.record_rename_admission(
+            crate::core::app::SessionRenameCorrelation::new(1, rename_request),
+            TuiLanguage::Korean,
+        ));
         app.tui_language = TuiLanguage::Korean;
 
         let screen_model = SessionOverlayScreenModel::capture(&app);

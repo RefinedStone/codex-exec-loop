@@ -1,5 +1,6 @@
 use ratatui::widgets::ListState;
 
+use crate::core::app::SessionRenameCorrelation;
 use crate::domain::recent_sessions::SessionRenameRequest;
 use crate::domain::session_browser::{SessionBrowserState, SessionProjectFilter};
 
@@ -18,7 +19,7 @@ struct SessionSearchQueryEditorState {
 struct SessionRenameEditorState {
     thread_id: Option<String>,
     buffer: String,
-    pending_request: Option<SessionRenameRequest>,
+    pending_correlation: Option<SessionRenameCorrelation>,
     feedback: Option<String>,
 }
 
@@ -91,13 +92,13 @@ impl SessionOverlayUiState {
     }
 
     pub fn is_rename_pending(&self) -> bool {
-        self.rename_editor.pending_request.is_some()
+        self.rename_editor.pending_correlation.is_some()
     }
 
     pub fn start_rename_edit(&mut self, thread_id: impl Into<String>, name: impl Into<String>) {
         self.rename_editor.thread_id = Some(thread_id.into());
         self.rename_editor.buffer = name.into();
-        self.rename_editor.pending_request = None;
+        self.rename_editor.pending_correlation = None;
         self.rename_editor.feedback = None;
     }
 
@@ -155,14 +156,27 @@ impl SessionOverlayUiState {
             return None;
         }
         let thread_id = self.rename_editor.thread_id.clone()?;
-        let request = SessionRenameRequest::new(thread_id, name);
-        self.rename_editor.pending_request = Some(request.clone());
-        self.rename_editor.feedback = Some(language.session_rename_working_feedback().to_string());
-        Some(request)
+        Some(SessionRenameRequest::new(thread_id, name))
     }
 
-    pub fn pending_rename_matches(&self, request: &SessionRenameRequest) -> bool {
-        self.rename_editor.pending_request.as_ref() == Some(request)
+    pub fn record_rename_admission(
+        &mut self,
+        correlation: SessionRenameCorrelation,
+        language: TuiLanguage,
+    ) -> bool {
+        let request_matches_editor = self.rename_editor.thread_id.as_deref()
+            == Some(correlation.request.thread_id.as_str())
+            && self.rename_editor.buffer.trim() == correlation.request.name;
+        if self.is_rename_pending() || !request_matches_editor {
+            return false;
+        }
+        self.rename_editor.pending_correlation = Some(correlation);
+        self.rename_editor.feedback = Some(language.session_rename_working_feedback().to_string());
+        true
+    }
+
+    pub fn pending_rename_matches(&self, correlation: &SessionRenameCorrelation) -> bool {
+        self.rename_editor.pending_correlation.as_ref() == Some(correlation)
     }
 
     pub fn finish_rename_success(&mut self) {
@@ -170,7 +184,7 @@ impl SessionOverlayUiState {
     }
 
     pub fn finish_rename_failure(&mut self, reason: &str, language: TuiLanguage) {
-        self.rename_editor.pending_request = None;
+        self.rename_editor.pending_correlation = None;
         self.rename_editor.feedback = Some(language.session_rename_failed_feedback(reason));
     }
 
@@ -445,6 +459,11 @@ mod tests {
             request,
             SessionRenameRequest::new("thread-exact", "Release draft")
         );
+        assert!(!state.is_rename_pending());
+        assert!(state.record_rename_admission(
+            SessionRenameCorrelation::new(1, request),
+            TuiLanguage::English,
+        ));
         assert!(state.is_rename_pending());
 
         state.finish_rename_failure("provider unavailable", TuiLanguage::English);
@@ -472,7 +491,13 @@ mod tests {
         );
 
         state.push_rename_character('x');
-        assert!(state.prepare_rename_request(TuiLanguage::English).is_some());
+        let request = state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("valid rename should prepare");
+        assert!(state.record_rename_admission(
+            SessionRenameCorrelation::new(1, request),
+            TuiLanguage::English,
+        ));
         state.finish_rename_success();
         assert!(!state.is_rename_editing());
     }
@@ -485,7 +510,14 @@ mod tests {
         state.push_rename_text(" candidate\r\nready");
 
         assert_eq!(state.rename_editor_buffer(), "Release candidate ready");
-        assert!(state.prepare_rename_request(TuiLanguage::English).is_some());
+        let request = state
+            .prepare_rename_request(TuiLanguage::English)
+            .expect("valid rename should prepare");
+        assert!(!state.is_rename_pending());
+        assert!(state.record_rename_admission(
+            SessionRenameCorrelation::new(1, request),
+            TuiLanguage::English,
+        ));
 
         state.push_rename_text(" ignored");
 

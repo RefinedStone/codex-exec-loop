@@ -863,9 +863,14 @@ mod tests {
         assert!(lines_text(&detail_lines).contains("id: thread-alpha"));
         assert!(lines_text(&build_session_key_lines(&model)).contains("Enter: rename"));
 
-        app.session_overlay_ui_state
+        let request = app
+            .session_overlay_ui_state
             .prepare_rename_request(TuiLanguage::English)
             .expect("rename should enter pending state");
+        assert!(app.session_overlay_ui_state.record_rename_admission(
+            crate::core::app::SessionRenameCorrelation::new(1, request),
+            TuiLanguage::English,
+        ));
         let model = screen_model(&app);
         let keys = lines_text(&build_session_key_lines(&model));
         assert!(keys.contains("Rename pending"));
