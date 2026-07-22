@@ -228,7 +228,7 @@ fn resolve_codex_command(
                     .and_then(OsStr::to_str)
                     .unwrap_or_default();
                 if !matches!(name, "node" | "nodejs") {
-                    bail!("Codex launcher interpreter is not trusted Node.js")
+                    return Ok(None);
                 }
                 interpreter
             }
@@ -1999,7 +1999,7 @@ mod tests {
         symlink(&launcher, install.join("codex")).expect("Codex shim should be linked");
         let node = node_directory.join("node");
         write_native_executable(&node);
-        let path = std::env::join_paths([wrapper_directory, install, node_directory])
+        let path = std::env::join_paths([&wrapper_directory, &install, &node_directory])
             .expect("wrapped Codex PATH should join");
 
         let plan = resolve_codex_command_from_path(&path, &workspace)
@@ -2009,6 +2009,17 @@ mod tests {
             plan.source_executable,
             fs::canonicalize(&launcher).expect("launcher should canonicalize")
         );
+        assert_eq!(
+            plan.program,
+            fs::canonicalize(&node).expect("Node.js fixture should canonicalize")
+        );
+
+        write_executable(
+            &wrapper_directory.join("codex"),
+            "#!/bin/bash\nexec codex \"$@\"\n",
+        );
+        let plan = resolve_codex_command_from_path(&path, &workspace)
+            .expect("supported Codex after an absolute shell wrapper should resolve");
         assert_eq!(
             plan.program,
             fs::canonicalize(node).expect("Node.js fixture should canonicalize")
