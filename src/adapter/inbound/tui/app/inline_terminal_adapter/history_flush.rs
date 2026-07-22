@@ -7,6 +7,7 @@ use super::super::history_insertion::{
     HistoryInsertionAdapter, HistoryInsertionMode, count_rendered_history_rows,
 };
 use super::backend::{InlineResizeBackend, InlineResizeSnapshot};
+use crate::adapter::inbound::tui::app::shell_presentation::TranscriptHandoffDeliveryToken;
 
 /*
  * Inline terminal rendering has two histories to keep in sync. Ratatui owns the live frame buffer,
@@ -47,11 +48,12 @@ pub(crate) struct HistoryFlushState {
     pub(crate) visible_history_rows_dirty: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HistoryFlushResult {
     inserted_rows: u16,
     stable_geometry: bool,
     history_committed: bool,
+    committed_handoff: Option<TranscriptHandoffDeliveryToken>,
 }
 
 impl HistoryFlushResult {
@@ -60,20 +62,32 @@ impl HistoryFlushResult {
             inserted_rows: 0,
             stable_geometry: true,
             history_committed: false,
+            committed_handoff: None,
         }
     }
 
     // Callers only need to know whether the host scrollback moved so they can invalidate buffers.
-    pub(crate) fn inserted(self) -> bool {
+    pub(crate) fn inserted(&self) -> bool {
         self.inserted_rows > 0
     }
 
-    pub(crate) fn stable_geometry(self) -> bool {
+    pub(crate) fn stable_geometry(&self) -> bool {
         self.stable_geometry
     }
 
-    pub(crate) fn history_committed(self) -> bool {
+    pub(crate) fn history_committed(&self) -> bool {
         self.history_committed
+    }
+
+    pub(crate) fn with_handoff(mut self, handoff: Option<TranscriptHandoffDeliveryToken>) -> Self {
+        if self.history_committed {
+            self.committed_handoff = handoff;
+        }
+        self
+    }
+
+    pub(crate) fn committed_handoff(&self) -> Option<&TranscriptHandoffDeliveryToken> {
+        self.committed_handoff.as_ref()
     }
 }
 
@@ -177,6 +191,7 @@ impl HistoryFlushState {
                 inserted_rows: 0,
                 stable_geometry: true,
                 history_committed: true,
+                committed_handoff: None,
             });
         }
         std::mem::swap(&mut self.rendered_lines, &mut self.parallel_rendered_lines);
@@ -235,6 +250,7 @@ impl HistoryFlushState {
                     inserted_rows,
                     stable_geometry: false,
                     history_committed: true,
+                    committed_handoff: None,
                 });
             }
         }
@@ -256,6 +272,7 @@ impl HistoryFlushState {
             inserted_rows,
             stable_geometry: true,
             history_committed: true,
+            committed_handoff: None,
         })
     }
 
@@ -278,6 +295,7 @@ impl HistoryFlushState {
                 inserted_rows: 0,
                 stable_geometry: true,
                 history_committed: true,
+                committed_handoff: None,
             });
         }
         let insertion = HistoryInsertionAdapter::new(insert_mode)
@@ -298,6 +316,7 @@ impl HistoryFlushState {
             inserted_rows,
             stable_geometry,
             history_committed: true,
+            committed_handoff: None,
         })
     }
 

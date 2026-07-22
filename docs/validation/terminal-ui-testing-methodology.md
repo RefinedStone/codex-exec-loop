@@ -108,6 +108,7 @@ Required cases:
 - insert wide characters and verify stale cells are cleared
 - clear visible screen plus scrollback and redraw a clean header
 - reset pending history and prove stale lines cannot flush after reset
+- retain the sampled transcript handoff token only on a committed history result
 
 ### 4. Frame And Viewport Transaction Tests
 
@@ -134,6 +135,8 @@ Required cases:
 - overlay open/close resets live-tail redraw cache
 - hidden tail skips redundant frames but redraws on width and height changes
 - frame invalidation forces a full repaint after terminal-side scrolling
+- a stale conversation identity or transcript-frontier receipt cannot clear the current handoff
+- an injected terminal draw failure leaves the handoff pending and forces an unchanged-frame retry
 
 ### 5. Event And Scheduler Tests
 
@@ -182,6 +185,7 @@ Every TUI rendering PR should state which rows it touches.
 | Clear/reset | pending history dropped, viewport reset, fresh header redraw |
 | Thread/session switch | old transcript and deferred history cannot leak into new thread |
 | Streaming turn | active cell or live delta stays live, final output becomes committed history |
+| Transcript handoff receipt | exact conversation/turn/generation/revision ACK only; stale identity and later-appended transcript remain pending; terminal draw failure retries without ACK |
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
 | Parallel event stream | frame recorder proves initial status rows survive later runtime-event redraws without panel chrome in host scrollback; split scrollback/live-tail streams render as a titleless live tail |
 | Terminal fallback | standard and fallback insertion modes each update viewport state correctly |

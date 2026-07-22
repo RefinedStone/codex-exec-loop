@@ -99,6 +99,20 @@ struct PostTurnSettlementState {
     started_at: Instant,
 }
 
+/*
+ * Terminal transcript delivery is acknowledged asynchronously from the view
+ * model's perspective: a projection is sampled, terminal I/O happens, and only
+ * then does the adapter return a receipt. This correlation prevents a receipt
+ * for an older transcript frontier from clearing a newer handoff.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptHandoffCorrelation {
+    generation: u64,
+    transcript_revision: u64,
+    thread_id: String,
+    turn_id: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ConversationViewModel {
     pub(crate) thread_id: String,
@@ -139,7 +153,10 @@ pub(crate) struct ConversationViewModel {
     // terminal adapter confirms that the history snapshot was committed.
     viewport_transcript_handoff_start: Option<usize>,
     viewport_transcript_handoff_release_pending: bool,
+    viewport_transcript_handoff_generation: u64,
+    viewport_transcript_handoff_turn_id: Option<String>,
     viewport_transcript_handoff_status_restore: Option<String>,
+    transcript_revision: u64,
     pub(crate) turn_activity: TurnActivityState,
     pub(crate) progressive_activity: ProgressiveActivityState,
     pub(crate) progressive_activity_detail: ProgressiveActivityDetailState,
@@ -189,7 +206,10 @@ impl ConversationViewModel {
             post_turn_settlement: None,
             viewport_transcript_handoff_start: None,
             viewport_transcript_handoff_release_pending: false,
+            viewport_transcript_handoff_generation: 0,
+            viewport_transcript_handoff_turn_id: None,
             viewport_transcript_handoff_status_restore: None,
+            transcript_revision: 0,
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
             progressive_activity_detail: ProgressiveActivityDetailState::default(),
@@ -265,7 +285,10 @@ impl ConversationViewModel {
             post_turn_settlement: None,
             viewport_transcript_handoff_start: None,
             viewport_transcript_handoff_release_pending: false,
+            viewport_transcript_handoff_generation: 0,
+            viewport_transcript_handoff_turn_id: None,
             viewport_transcript_handoff_status_restore: None,
+            transcript_revision: 0,
             turn_activity: TurnActivityState::default(),
             progressive_activity: ProgressiveActivityState::default(),
             progressive_activity_detail: ProgressiveActivityDetailState::default(),
@@ -354,7 +377,7 @@ impl ConversationViewModel {
         self.composer.clear_input_buffer();
         self.status_text = status_text;
         self.hold_latest_transcript_message_in_viewport();
-        self.begin_viewport_transcript_handoff_release();
+        self.begin_viewport_transcript_handoff_release(None);
     }
     pub(crate) fn record_thread_prepared(&mut self, thread_id: String, title: String, cwd: String) {
         // Thread preparation upgrades a draft into an app-server backed conversation.
@@ -378,7 +401,7 @@ impl ConversationViewModel {
         }
         self.progressive_activity.reset();
         self.progressive_activity_detail.reset();
-        self.begin_viewport_transcript_handoff_release();
+        self.begin_viewport_transcript_handoff_release(None);
         self.mark_turn_started(turn_id);
         self.live_agent_message = None;
         // Auto-follow has its own phase text, but still shares the transcript status rail.
@@ -576,6 +599,7 @@ impl ConversationViewModel {
         terminal_state: Option<ActivityRailTerminalState>,
     ) {
         // Preserve whatever stream content arrived before failure, then reopen the input gate.
+        let failed_turn_id = self.active_turn_id.clone();
         self.commit_live_agent_message();
         self.flush_buffered_tool_messages();
         self.auto_follow_state.clear_runtime_phase();
@@ -587,7 +611,7 @@ impl ConversationViewModel {
         if self.append_status_message(message) {
             self.hold_latest_transcript_message_in_viewport();
         }
-        self.begin_viewport_transcript_handoff_release();
+        self.begin_viewport_transcript_handoff_release(failed_turn_id.as_deref());
     }
     pub(crate) fn extend_runtime_notices<I>(&mut self, notices: I)
     where
@@ -729,7 +753,7 @@ impl ConversationViewModel {
             completed_turn_id: completed_turn_id.to_string(),
             started_at: Instant::now(),
         });
-        self.begin_viewport_transcript_handoff_release();
+        self.begin_viewport_transcript_handoff_release(Some(completed_turn_id));
         self.status_text = "turn completed / evaluating post-turn continuation".to_string();
     }
     pub(crate) fn complete_post_turn_settlement(&mut self, completed_turn_id: &str) -> bool {

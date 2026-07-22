@@ -49,6 +49,7 @@ pub(crate) use progressive_activity_detail::ProgressiveActivityDetailKind;
 pub(crate) use view_model::RecordedAutoFollowActivity;
 pub(crate) use view_model::{
     ConversationInputState, ConversationState, ConversationViewModel, PlanningRepairState,
+    TranscriptHandoffCorrelation,
 };
 
 #[cfg(test)]

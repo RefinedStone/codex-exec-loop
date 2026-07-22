@@ -312,7 +312,10 @@ fn completed_settlement_waits_for_history_flush_ack_before_unlocking_navigation(
     );
     assert!(!conversation.can_accept_manual_prompt());
 
-    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    let correlation = conversation
+        .viewport_transcript_handoff_correlation()
+        .expect("released handoff should have a correlation");
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush(&correlation));
     assert!(!conversation.has_pending_viewport_transcript_handoff());
     assert!(conversation.can_accept_manual_prompt());
 }
@@ -334,7 +337,10 @@ fn agentless_failure_waits_for_transcript_delivery_before_unlocking_navigation()
     );
     assert!(!conversation.can_accept_manual_prompt());
 
-    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    let correlation = conversation
+        .viewport_transcript_handoff_correlation()
+        .expect("released handoff should have a correlation");
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush(&correlation));
     assert!(conversation.can_accept_manual_prompt());
 }
 
@@ -363,7 +369,10 @@ fn manual_preparation_failure_waits_for_delivery_and_restores_its_status() {
         conversation.status_text_for_viewport(),
         "turn preparation failed / workspace unavailable"
     );
-    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    let correlation = conversation
+        .viewport_transcript_handoff_correlation()
+        .expect("released handoff should have a correlation");
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush(&correlation));
     assert_eq!(
         conversation.status_text,
         "turn preparation failed / workspace unavailable"
@@ -394,6 +403,35 @@ fn tool_only_turn_waits_for_transcript_delivery_before_unlocking_navigation() {
     );
     assert!(!conversation.can_accept_manual_prompt());
 
-    assert!(conversation.acknowledge_viewport_transcript_handoff_flush());
+    let correlation = conversation
+        .viewport_transcript_handoff_correlation()
+        .expect("released handoff should have a correlation");
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush(&correlation));
     assert!(conversation.can_accept_manual_prompt());
+}
+
+#[test]
+fn stale_handoff_ack_cannot_clear_a_newer_transcript_frontier() {
+    let mut conversation = ready_conversation();
+    conversation.record_turn_started("turn-1".to_string());
+    conversation.push_live_agent_delta(
+        "answer-1".to_string(),
+        Some("final_answer".to_string()),
+        "first terminal answer".to_string(),
+    );
+    conversation.finish_turn("turn-1", &[]);
+    conversation.begin_post_turn_settlement("turn-1");
+
+    let stale = conversation
+        .viewport_transcript_handoff_correlation()
+        .expect("released handoff should have a correlation");
+    assert!(conversation.append_status_message("late terminal notice"));
+
+    assert!(!conversation.acknowledge_viewport_transcript_handoff_flush(&stale));
+    assert!(conversation.has_pending_viewport_transcript_handoff());
+    let current = conversation
+        .viewport_transcript_handoff_correlation()
+        .expect("new transcript frontier should remain correlated");
+    assert_ne!(current, stale);
+    assert!(conversation.acknowledge_viewport_transcript_handoff_flush(&current));
 }
