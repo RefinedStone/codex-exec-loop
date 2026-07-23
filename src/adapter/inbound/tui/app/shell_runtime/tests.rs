@@ -1128,7 +1128,7 @@ fn post_turn_evaluation_start_state_reads_core_projection() {
 }
 
 #[test]
-fn post_turn_evaluation_started_event_applies_running_state_without_waiting_for_completion() {
+fn post_turn_evaluation_started_event_ignores_forged_tui_history_seed() {
     let mut runtime = make_test_runtime();
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
         panic!("expected ready conversation state");
@@ -1166,9 +1166,9 @@ fn post_turn_evaluation_started_event_applies_running_state_without_waiting_for_
         runtime.app().planning_worker_panel_state,
         PlanningWorkerPanelState {
             status: PlanningWorkerStatus::RefreshRunning,
-            last_summary: Some("previous summary".to_string()),
             ..PlanningWorkerPanelState::default()
-        }
+        },
+        "Core must compute the start state without trusting the TUI presentation cache"
     );
 }
 

@@ -106,6 +106,7 @@ pub(in crate::core) struct CoreController {
     active_turn_submission: Option<TurnSubmissionCorrelation>,
     next_post_turn_evaluation_generation: u64,
     in_flight_post_turn_evaluation: Option<ActivePostTurnEvaluation>,
+    planning_worker_panel_history_seed: PlanningWorkerPanelState,
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     next_stop_request_generation: u64,
     active_stop_request: Option<ActiveStopRequest>,
@@ -157,6 +158,7 @@ impl CoreController {
             active_turn_submission: None,
             next_post_turn_evaluation_generation: 1,
             in_flight_post_turn_evaluation: None,
+            planning_worker_panel_history_seed: PlanningWorkerPanelState::default(),
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             next_stop_request_generation: 1,
             active_stop_request: None,
@@ -264,6 +266,7 @@ impl CoreController {
                 fallback_workspace_directory,
             }) => {
                 self.cancel_active_post_turn_evaluation();
+                self.reset_planning_worker_panel_history_seed();
                 let mut stop_effects = Vec::new();
                 self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
                 if self.stop_request_settlement_pending() {
@@ -298,6 +301,7 @@ impl CoreController {
             }
             CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
                 self.cancel_active_post_turn_evaluation();
+                self.reset_planning_worker_panel_history_seed();
                 let cancelled_refresh = self.planning_runtime_refresh.cancel();
                 self.deferred_conversation_load = None;
                 self.in_flight_conversation_load = None;
@@ -778,8 +782,10 @@ impl CoreController {
                     correlation: correlation.clone(),
                     continuation_permit: request.continuation_permit.clone(),
                 });
-                let planning_worker_panel_state =
-                    post_turn_worker_panel_start_state(request.as_ref());
+                let planning_worker_panel_state = post_turn_worker_panel_start_state(
+                    &self.planning_worker_panel_history_seed,
+                    request.as_ref(),
+                );
                 request.planning_worker_panel_state = planning_worker_panel_state.clone();
                 CoreDispatchOutcome {
                     events: vec![AppEvent::PostTurnEvaluationStarted(
@@ -1483,6 +1489,8 @@ impl CoreController {
                 if !accepted {
                     return self.unchanged_outcome();
                 }
+                self.planning_worker_panel_history_seed =
+                    execution.planning_worker_panel_state.clone();
                 let workspace_directory = execution.runtime_projection_workspace_directory.clone();
                 let refresh_matches_workspace = self
                     .planning_runtime_refresh
@@ -1730,6 +1738,7 @@ impl CoreController {
         fallback_workspace_directory: String,
     ) -> CoreDispatchOutcome {
         self.cancel_active_post_turn_evaluation();
+        self.reset_planning_worker_panel_history_seed();
         if self.stop_request_settlement_pending() {
             self.deferred_conversation_load = Some((thread_id, fallback_workspace_directory));
             let mut effects = Vec::new();
@@ -1839,6 +1848,10 @@ impl CoreController {
         if let Some(active) = self.in_flight_post_turn_evaluation.take() {
             active.continuation_permit.invalidate_if_current();
         }
+    }
+
+    fn reset_planning_worker_panel_history_seed(&mut self) {
+        self.planning_worker_panel_history_seed = PlanningWorkerPanelState::default();
     }
 
     fn active_post_turn_evaluation_correlation(&self) -> Option<&PostTurnEvaluationCorrelation> {
@@ -2159,8 +2172,11 @@ fn take_generation(next_generation: &mut u64, operation: &str) -> u64 {
     generation
 }
 
-fn post_turn_worker_panel_start_state(request: &PostTurnRequest) -> PlanningWorkerPanelState {
-    let mut state = request.planning_worker_panel_state.clone();
+fn post_turn_worker_panel_start_state(
+    history_seed: &PlanningWorkerPanelState,
+    request: &PostTurnRequest,
+) -> PlanningWorkerPanelState {
+    let mut state = history_seed.clone();
     if request.context.planning_settlement_paused {
         return state;
     }
@@ -7518,61 +7534,76 @@ mod tests {
         let protected_change = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
         let mut repair = existing.clone();
         repair.status = PlanningWorkerStatus::RepairRunning;
-        let mut refresh = existing.clone();
+        let refresh_seed = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshSucceeded,
+            last_summary: Some("previous summary".to_string()),
+            last_notice_detail: Some("previous detail".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let mut refresh = refresh_seed.clone();
         refresh.status = PlanningWorkerStatus::RefreshRunning;
+        let adapter_supplied_seed = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RepairFailed,
+            last_summary: Some("adapter must not own panel history".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
 
-        for (label, request, expected) in [
+        for (label, history_seed, request, expected) in [
             (
                 "explicit settlement pause",
+                existing.clone(),
                 post_turn_request(
                     ready_empty.clone(),
                     protected_change.clone(),
                     true,
-                    existing.clone(),
+                    adapter_supplied_seed.clone(),
                 ),
                 existing.clone(),
             ),
             (
                 "protected planning file change",
+                existing.clone(),
                 post_turn_request(
                     ready_empty.clone(),
                     protected_change,
                     false,
-                    existing.clone(),
+                    adapter_supplied_seed.clone(),
                 ),
                 repair,
             ),
             (
                 "empty stop-policy queue",
-                post_turn_request(ready_empty, Vec::new(), false, existing.clone()),
+                existing.clone(),
+                post_turn_request(
+                    ready_empty,
+                    Vec::new(),
+                    false,
+                    adapter_supplied_seed.clone(),
+                ),
                 existing,
             ),
             (
                 "remaining refresh path",
+                refresh_seed.clone(),
                 post_turn_request(
                     refresh_empty,
                     Vec::new(),
                     false,
-                    PlanningWorkerPanelState {
-                        status: PlanningWorkerStatus::RefreshSucceeded,
-                        last_summary: Some("previous summary".to_string()),
-                        last_notice_detail: Some("previous detail".to_string()),
-                        ..PlanningWorkerPanelState::default()
-                    },
+                    adapter_supplied_seed.clone(),
                 ),
-                PlanningWorkerPanelState {
-                    status: PlanningWorkerStatus::RefreshRunning,
-                    last_summary: Some("previous summary".to_string()),
-                    last_notice_detail: Some("previous detail".to_string()),
-                    ..PlanningWorkerPanelState::default()
-                },
+                refresh,
             ),
         ] {
             let mut controller = CoreController::new();
+            controller.planning_worker_panel_history_seed = history_seed.clone();
             apply_completed_turn(&mut controller, "thread-1", "turn-1");
             let outcome = controller.handle_input(CoreInput::Command(
                 AppCommand::EvaluatePostTurn(Box::new(request)),
             ));
+            assert_eq!(
+                controller.planning_worker_panel_history_seed, history_seed,
+                "{label} start must not replace exact-accepted panel history"
+            );
             assert_eq!(
                 outcome.events,
                 vec![AppEvent::PostTurnEvaluationStarted(expected.clone())],
@@ -7603,6 +7634,113 @@ mod tests {
                 "{label} event and effect request must carry the same full state"
             );
         }
+    }
+
+    #[test]
+    fn post_turn_panel_history_updates_only_after_exact_accepted_completion() {
+        let mut controller = CoreController::new();
+        let initial_history = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshSucceeded,
+            last_summary: Some("last accepted evaluation".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        controller.planning_worker_panel_history_seed = initial_history.clone();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let started = start_post_turn_evaluation(&mut controller, "turn-1");
+        let correlation = post_turn_effect_correlation(&started);
+        assert_eq!(
+            controller.planning_worker_panel_history_seed, initial_history,
+            "a started effect is not accepted panel history"
+        );
+
+        let mut mismatched = sample_post_turn_execution();
+        mismatched.thread_id = "forged-thread".to_string();
+        mismatched.planning_worker_panel_state = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RepairFailed,
+            last_summary: Some("mismatched completion".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: correlation.clone(),
+                execution: Box::new(mismatched),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(
+            controller.planning_worker_panel_history_seed, initial_history,
+            "a mismatched completion must not replace panel history"
+        );
+
+        let accepted_history = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RepairSucceeded,
+            last_summary: Some("exact accepted evaluation".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let mut accepted = sample_post_turn_execution();
+        accepted.planning_worker_panel_state = accepted_history.clone();
+        let exact = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: correlation.clone(),
+                execution: Box::new(accepted),
+            },
+        ));
+        assert!(matches!(
+            exact.events.as_slice(),
+            [AppEvent::PostTurnEvaluationCompleted(_)]
+        ));
+        assert_eq!(
+            controller.planning_worker_panel_history_seed, accepted_history,
+            "only the exact accepted completion becomes the next history seed"
+        );
+
+        let duplicate_history = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshFailed,
+            last_summary: Some("late duplicate".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let mut duplicate = sample_post_turn_execution();
+        duplicate.planning_worker_panel_state = duplicate_history;
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation,
+                execution: Box::new(duplicate),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert_eq!(
+            controller.planning_worker_panel_history_seed, accepted_history,
+            "a duplicate completion must not replace exact accepted history"
+        );
+    }
+
+    #[test]
+    fn conversation_lifecycle_resets_post_turn_panel_history() {
+        let retained_history = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshSucceeded,
+            last_summary: Some("previous conversation".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let mut controller = CoreController::new();
+        controller.planning_worker_panel_history_seed = retained_history.clone();
+
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+        assert_eq!(
+            controller.planning_worker_panel_history_seed,
+            PlanningWorkerPanelState::default(),
+            "a conversation load intent must clear the previous panel history"
+        );
+
+        controller.planning_worker_panel_history_seed = retained_history;
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        assert_eq!(
+            controller.planning_worker_panel_history_seed,
+            PlanningWorkerPanelState::default(),
+            "opening a new conversation lifecycle must clear panel history"
+        );
     }
 
     #[test]
@@ -7680,6 +7818,12 @@ mod tests {
     #[test]
     fn post_turn_completion_requires_latest_exact_correlation_once_across_aba() {
         let mut controller = CoreController::new();
+        let initial_history = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshSucceeded,
+            last_summary: Some("accepted before ABA".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        controller.planning_worker_panel_history_seed = initial_history.clone();
 
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
         let first = start_post_turn_evaluation_for(
@@ -7719,7 +7863,7 @@ mod tests {
             (1, 2, 3)
         );
 
-        for (label, stale_correlation, execution) in [
+        for (label, stale_correlation, mut execution) in [
             (
                 "old A",
                 first_correlation,
@@ -7731,6 +7875,11 @@ mod tests {
                 sample_post_turn_execution_for("thread-2", "turn-2", "/tmp/turn"),
             ),
         ] {
+            execution.planning_worker_panel_state = PlanningWorkerPanelState {
+                status: PlanningWorkerStatus::RepairFailed,
+                last_summary: Some(format!("forged stale {label} panel")),
+                ..PlanningWorkerPanelState::default()
+            };
             let stale = controller.handle_input(CoreInput::EffectCompleted(
                 CoreEffectCompletion::PostTurnEvaluationCompleted {
                     correlation: stale_correlation,
@@ -7746,16 +7895,24 @@ mod tests {
                 Some(&current_correlation),
                 "{label} completion must not clear the current A lease"
             );
+            assert_eq!(
+                controller.planning_worker_panel_history_seed, initial_history,
+                "{label} completion must not replace the current panel history seed"
+            );
         }
 
+        let accepted_history = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RepairSucceeded,
+            last_summary: Some("current A accepted".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
+        let mut current_execution =
+            sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/planning");
+        current_execution.planning_worker_panel_state = accepted_history.clone();
         let exact = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PostTurnEvaluationCompleted {
                 correlation: current_correlation.clone(),
-                execution: Box::new(sample_post_turn_execution_for(
-                    "thread-1",
-                    "turn-1",
-                    "/tmp/planning",
-                )),
+                execution: Box::new(current_execution),
             },
         ));
         assert!(matches!(
@@ -7763,19 +7920,30 @@ mod tests {
             [AppEvent::PostTurnEvaluationCompleted(_)]
         ));
         assert!(controller.in_flight_post_turn_evaluation.is_none());
+        assert_eq!(
+            controller.planning_worker_panel_history_seed, accepted_history,
+            "the current exact A completion must replace panel history"
+        );
 
+        let mut duplicate_execution =
+            sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/planning");
+        duplicate_execution.planning_worker_panel_state = PlanningWorkerPanelState {
+            status: PlanningWorkerStatus::RefreshFailed,
+            last_summary: Some("duplicate current A".to_string()),
+            ..PlanningWorkerPanelState::default()
+        };
         let duplicate = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::PostTurnEvaluationCompleted {
                 correlation: current_correlation,
-                execution: Box::new(sample_post_turn_execution_for(
-                    "thread-1",
-                    "turn-1",
-                    "/tmp/planning",
-                )),
+                execution: Box::new(duplicate_execution),
             },
         ));
         assert!(duplicate.events.is_empty());
         assert!(duplicate.effects.is_empty());
+        assert_eq!(
+            controller.planning_worker_panel_history_seed, accepted_history,
+            "a duplicate current A completion must preserve exact accepted history"
+        );
     }
 
     #[test]

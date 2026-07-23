@@ -86,13 +86,19 @@ Snapshot pointer identity와 `AppState` revision은 dispatch identity가 아닙�
 Post-turn 평가는 planning-worker panel을 바꾸기 전에 Core로 진입합니다. Command는 explicit
 완료·확정된 최신 terminal이고 active turn, 이미 적용된 평가, 같은 in-flight 평가가 없을 때만
 허용됩니다. 오래되거나 잘못되거나 중복된 start는 event/effect를 내지 않으며 completion은 정확한
-in-flight thread/turn lease와 일치해야 합니다. 허용된 command는
-settlement pause면 기존 전체 상태를 보존하고, 아니면 protected planning file 변경 시
-`RepairRunning`, 빈 queue와 stop policy면 기존 전체 상태 보존, 나머지는 `RefreshRunning`을
-선택합니다. Core는 계산한 정확한 상태를 비동기 effect보다 먼저
-`PostTurnEvaluationStarted`로 내보내며 effect request에도 같은 상태를 넣습니다. TUI는 started
-event를 단순 대입할 뿐 raw application/planning handle을 보관하거나 planning workspace/runtime
-use case를 직접 호출하지 않습니다.
+in-flight thread/turn lease와 일치해야 합니다. Core는 마지막 exact accepted
+`PlanningWorkerPanelState`를 history seed로 보관하고 conversation lifecycle이 무효화되거나
+교체되면 기본값으로 초기화합니다. Adapter request의 동명 field는 contract 호환을 위한 중립
+placeholder일 뿐 history authority가 아닙니다. Core는 admission 뒤 자체 seed를 복제해 settlement
+pause면 전체 상태를 보존하고, 아니면 protected planning file 변경 시 `RepairRunning`, 빈 queue와
+stop policy면 전체 상태 보존, 나머지는 `RefreshRunning`을 선택합니다. Core는 effect request를
+이 accepted 상태로 덮어쓰고 비동기 effect보다 먼저 같은 상태를
+`PostTurnEvaluationStarted`로 내보냅니다. Active correlation, nested execution identity, turn
+authority 검증을 모두 통과한 completion만 다음 history seed를 교체할 수 있으며 stale,
+duplicate, identity-mismatched, lifecycle-pruned completion은 seed를 바꾸지 못합니다. TUI는
+started/completed projection을 단순 대입할 뿐 display copy를 다음 평가의 seed로 쓰거나 raw
+application/planning handle을 보관하거나 planning workspace/runtime use case를 직접 호출하지
+않습니다.
 
 Native TUI의 prompt-log privacy maintenance도 이 effect 경로가 소유합니다. Production composition은
 typed maintenance port를 `StartupService`에 주입하지만 app을 build하는 동안 SQLite purge/clear를

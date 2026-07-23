@@ -948,9 +948,9 @@ mod tests {
                 execution_snapshot_capture: None,
             },
         });
-        let previous = PlanningWorkerPanelState {
+        let forged_adapter_seed = PlanningWorkerPanelState {
             status: PlanningWorkerStatus::RefreshSucceeded,
-            last_summary: Some("previous summary".to_string()),
+            last_summary: Some("adapter-owned history must be ignored".to_string()),
             ..PlanningWorkerPanelState::default()
         };
         let request = PostTurnRequest {
@@ -975,7 +975,7 @@ mod tests {
             completed_turn_id: "turn-1".to_string(),
             changed_planning_file_paths: Vec::new(),
             execution_snapshot_capture: None,
-            planning_worker_panel_state: previous,
+            planning_worker_panel_state: forged_adapter_seed,
             continuation_permit: PostTurnContinuationGate::default().capture(),
         };
 
@@ -987,7 +987,7 @@ mod tests {
                 AppEvent::PostTurnEvaluationStarted(started),
                 AppEvent::PostTurnEvaluationCompleted(completed),
             ] if started.status == PlanningWorkerStatus::RefreshRunning
-                && started.last_summary.as_deref() == Some("previous summary")
+                && started.last_summary.is_none()
                 && completed.planning_worker_panel_state == *started
         ));
     }

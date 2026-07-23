@@ -15,10 +15,7 @@ use super::super::conversation_runtime::{
     PostTurnQueuedPrompt,
 };
 use super::super::post_turn_continuation::PostTurnEvaluationCompletionPayload;
-use super::super::{
-    AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp,
-    PlanningWorkerPanelState,
-};
+use super::super::{AutoFollowSkipReason, ConversationState, ConversationViewModel, NativeTuiApp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostTurnEvaluationRequest {
@@ -36,7 +33,6 @@ impl NativeTuiApp {
         let request = application_post_turn_request(
             request,
             context,
-            self.planning_worker_panel_state.clone(),
             self.post_turn_continuation_gate.capture(),
         );
         self.dispatch_client_event(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
@@ -80,7 +76,6 @@ impl NativeTuiApp {
 fn application_post_turn_request(
     request: PostTurnEvaluationRequest,
     context: PostTurnEvaluationContext,
-    planning_worker_panel_state: PlanningWorkerPanelState,
     continuation_permit: crate::domain::planning::PostTurnContinuationPermit,
 ) -> crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
     crate::application::service::post_turn_evaluation::PostTurnEvaluationRequest {
@@ -89,7 +84,10 @@ fn application_post_turn_request(
         completed_turn_id: request.completed_turn_id,
         changed_planning_file_paths: request.changed_planning_file_paths,
         execution_snapshot_capture: request.execution_snapshot_capture,
-        planning_worker_panel_state,
+        // Historical panel detail is Core-owned. This placeholder only keeps
+        // the application request contract stable until Core admits the exact
+        // lifecycle and replaces it with its accepted history snapshot.
+        planning_worker_panel_state: Default::default(),
         continuation_permit,
     }
 }
