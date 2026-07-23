@@ -424,9 +424,7 @@ fn finish_shell_chrome_reduction(
         (previous_overlay != state.shell_overlay).then_some(ShellOverlayTransition {
             from: previous_overlay,
             to: state.shell_overlay,
-            exit_mode: if previous_overlay == ShellOverlay::DirectionsMaintenance
-                && state.shell_overlay == ShellOverlay::Approval
-            {
+            exit_mode: if state.shell_overlay == ShellOverlay::Approval {
                 ShellOverlayExitMode::Suspend
             } else {
                 ShellOverlayExitMode::Exit
@@ -892,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_overlay_suspends_directions_then_exits_when_restored() {
+    fn approval_overlay_suspends_departed_overlay_and_restores_directions() {
         let mut state = ShellChromeState::new();
         state.shell_overlay = ShellOverlay::DirectionsMaintenance;
 
@@ -922,6 +920,34 @@ mod tests {
             Some(ShellOverlayTransition {
                 from: ShellOverlay::Approval,
                 to: ShellOverlay::DirectionsMaintenance,
+                exit_mode: ShellOverlayExitMode::Exit,
+            })
+        );
+
+        let mut planning_state = ShellChromeState::new();
+        planning_state.shell_overlay = ShellOverlay::PlanningInit;
+        let planning_approval =
+            reduce_shell_chrome(planning_state, ShellChromeEvent::ApprovalOverlayShown);
+        assert_eq!(planning_approval.state.approval_return_overlay, None);
+        assert_eq!(
+            planning_approval.overlay_transition,
+            Some(ShellOverlayTransition {
+                from: ShellOverlay::PlanningInit,
+                to: ShellOverlay::Approval,
+                exit_mode: ShellOverlayExitMode::Suspend,
+            })
+        );
+
+        let planning_closed = reduce_shell_chrome(
+            planning_approval.state,
+            ShellChromeEvent::ApprovalOverlayClosed,
+        );
+        assert_eq!(planning_closed.state.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            planning_closed.overlay_transition,
+            Some(ShellOverlayTransition {
+                from: ShellOverlay::Approval,
+                to: ShellOverlay::Hidden,
                 exit_mode: ShellOverlayExitMode::Exit,
             })
         );

@@ -155,8 +155,9 @@ the fixed Akra theme.
 - Every actual overlay identity change must leave the shell reducer as one typed
   `ShellOverlayTransition { from, to, exit_mode }`. The root coordinator has one exhaustive cleanup
   owner for all overlay variants and both exit modes; explicit close only dispatches
-  `OverlayClosed`. `DirectionsMaintenance -> Approval` is `Suspend` and preserves its editor state,
-  while normal exits clean the departed overlay exactly once.
+  `OverlayClosed`. Entering `Approval` is `Suspend` and preserves the departed overlay's local
+  state; `DirectionsMaintenance` is the one overlay restored after approval closes. Normal exits
+  clean the departed overlay exactly once.
 - Approval decisions must enter through `AppCommand::SubmitApprovalDecision`. Core owns matching
   the current pending approval and the submitting/submitted single-flight state; composition
   performs the provider call. The TUI owns only modal projection and retry status copy.

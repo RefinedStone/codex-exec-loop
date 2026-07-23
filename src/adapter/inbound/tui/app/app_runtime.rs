@@ -1775,9 +1775,9 @@ impl NativeTuiApp {
         match transition.exit_mode {
             ShellOverlayExitMode::Suspend => {
                 assert_eq!(
-                    (transition.from, transition.to),
-                    (ShellOverlay::DirectionsMaintenance, ShellOverlay::Approval),
-                    "only DirectionsMaintenance may be suspended for Approval"
+                    transition.to,
+                    ShellOverlay::Approval,
+                    "only entry into Approval may suspend a departed overlay"
                 );
             }
             ShellOverlayExitMode::Exit => match transition.from {
