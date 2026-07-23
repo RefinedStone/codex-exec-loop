@@ -2,10 +2,12 @@ use crate::domain::conversation::{
     ConversationApprovalRequest, ConversationApprovalResolution, ConversationApprovalReview,
     ConversationToolActivity,
 };
+#[cfg(test)]
+use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleHydrationRejection;
 use crate::domain::conversation_item_lifecycle::{
-    ConversationItemLifecycleConsistency, ConversationItemLifecycleHydrationRejection,
-    ConversationItemLifecycleObservation, ConversationItemLifecycleProjection,
-    ConversationItemLifecycleProjectionSnapshot, ConversationItemLifecycleRejection,
+    ConversationItemLifecycleConsistency, ConversationItemLifecycleObservation,
+    ConversationItemLifecycleProjection, ConversationItemLifecycleProjectionSnapshot,
+    ConversationItemLifecycleRejection,
 };
 use crate::domain::conversation_progressive_activity::{
     ConversationProgressiveActivityBatch, ConversationProgressiveActivityProjection,
@@ -24,7 +26,7 @@ use crate::domain::turn_terminal::{
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnStreamState {
+pub(in crate::core) struct TurnStreamState {
     revision: u64,
     thread_id: Option<String>,
     title: Option<String>,
@@ -57,6 +59,7 @@ impl TurnStreamState {
         }
     }
 
+    #[cfg(test)]
     pub fn seed_loaded_thread_identity(
         &mut self,
         thread_id: impl Into<String>,
@@ -67,6 +70,7 @@ impl TurnStreamState {
         debug_assert!(result.is_ok());
     }
 
+    #[cfg(test)]
     pub fn seed_loaded_thread(
         &mut self,
         thread_id: impl Into<String>,
@@ -498,6 +502,51 @@ impl TurnStreamState {
 impl Default for TurnStreamState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct TurnStreamTestHarness(TurnStreamState);
+
+#[cfg(test)]
+impl TurnStreamTestHarness {
+    pub(crate) fn new() -> Self {
+        Self(TurnStreamState::new())
+    }
+
+    pub(crate) fn seed_loaded_thread_identity(
+        &mut self,
+        thread_id: impl Into<String>,
+        title: impl Into<String>,
+        cwd: impl Into<String>,
+    ) {
+        self.0.seed_loaded_thread_identity(thread_id, title, cwd);
+    }
+
+    pub(crate) fn apply_session_rename(
+        &mut self,
+        thread_id: &str,
+        title: &str,
+    ) -> Option<TurnStreamSnapshot> {
+        self.0.apply_session_rename(thread_id, title)
+    }
+
+    pub(crate) fn apply_stream_event(&mut self, event: TurnStreamEvent) -> TurnStreamSnapshot {
+        self.0.apply_stream_event(event)
+    }
+
+    pub(crate) fn apply_turn_completed(
+        &mut self,
+        turn_id: String,
+        changed_paths: Vec<String>,
+        execution_snapshot_capture: TurnSnapshotCapture,
+    ) -> TurnStreamSnapshot {
+        self.0
+            .apply_turn_completed(turn_id, changed_paths, execution_snapshot_capture)
+    }
+
+    pub(crate) fn apply_runtime_notice(&mut self, notice: String) -> TurnStreamSnapshot {
+        self.0.apply_runtime_notice(notice)
     }
 }
 

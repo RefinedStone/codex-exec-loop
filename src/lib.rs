@@ -18,8 +18,10 @@ pub mod application;
 // composition은 production process wiring root다. concrete outbound adapter는 여기서만 application port에 연결된다.
 pub(crate) mod composition;
 /*
- * core는 UI 없는 app runtime/coordinator가 들어갈 자리다. inbound adapter는 command/event/snapshot
- * 계약으로 core와 대화하고, core는 application service를 조합하되 domain이나 outbound adapter를 대체하지 않는다.
+ * core는 business hexagon 바깥의 inbound client 경계에 있는 UI 없는 runtime/coordinator다.
+ * Inbound adapter는 command/event/snapshot 계약으로 core와 대화하고, composition이 core
+ * effect를 application service로 해석한다. 따라서 core는 application service 구현을
+ * import하거나 domain/outbound adapter를 대체하지 않는다.
  */
 pub mod core;
 // diagnostics는 TUI/app-server stdout을 오염시키지 않는 선택적 tracing JSONL 관측 hook이다.

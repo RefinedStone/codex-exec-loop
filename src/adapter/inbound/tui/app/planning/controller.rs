@@ -1395,7 +1395,7 @@ mod tests {
     use crate::application::service::startup_service::StartupService;
     use crate::core::app::{
         DirectionsMaintenanceDirectionSnapshot, DirectionsMaintenanceSummarySnapshot,
-        DirectionsSupportingFileStatus, TurnStreamEvent, TurnStreamState,
+        DirectionsSupportingFileStatus, TurnStreamEvent, TurnStreamTestHarness,
     };
     use crate::domain::conversation::{
         ConversationControlSupport, ConversationSnapshot, ConversationTurnOptions,
@@ -4232,7 +4232,7 @@ mod tests {
         let (_workspace, mut app, correlation, stage_gate) =
             begin_gated_planning_manual_stage("tui-editor-stage-stream-fact");
         let operation_revision = app.planning_ui_intent_revision;
-        let mut stream_state = TurnStreamState::new();
+        let mut stream_state = TurnStreamTestHarness::new();
 
         app.dispatch_conversation_runtime(ConversationRuntimeEvent::StreamSnapshotApplied(
             Box::new(stream_state.apply_runtime_notice("background runtime fact".to_string())),
@@ -4261,7 +4261,7 @@ mod tests {
         let (workspace, mut app, _correlation, stage_gate) =
             begin_gated_planning_manual_stage("tui-editor-stage-planning-change");
         let operation_revision = app.planning_ui_intent_revision;
-        let mut stream_state = TurnStreamState::new();
+        let mut stream_state = TurnStreamTestHarness::new();
         stream_state.seed_loaded_thread_identity(
             "thread-planning-change",
             "Planning change",

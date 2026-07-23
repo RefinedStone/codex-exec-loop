@@ -153,20 +153,20 @@ impl PlanningRuntimeRefreshSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PlanningRuntimeCoordinator {
+pub(super) struct PlanningRuntimeCoordinator {
     next_generation: u64,
     active: Option<PlanningRuntimeRefreshCorrelation>,
 }
 
 impl PlanningRuntimeCoordinator {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             next_generation: 1,
             active: None,
         }
     }
 
-    pub(crate) fn begin(
+    pub(super) fn begin(
         &mut self,
         workspace_directory: String,
     ) -> (
@@ -179,11 +179,11 @@ impl PlanningRuntimeCoordinator {
         (correlation, superseded)
     }
 
-    pub(crate) fn cancel(&mut self) -> Option<PlanningRuntimeRefreshCorrelation> {
+    pub(super) fn cancel(&mut self) -> Option<PlanningRuntimeRefreshCorrelation> {
         self.active.take()
     }
 
-    pub(crate) fn accept(&mut self, correlation: &PlanningRuntimeRefreshCorrelation) -> bool {
+    pub(super) fn accept(&mut self, correlation: &PlanningRuntimeRefreshCorrelation) -> bool {
         if self.active.as_ref() != Some(correlation) {
             return false;
         }
@@ -191,17 +191,17 @@ impl PlanningRuntimeCoordinator {
         true
     }
 
-    pub(crate) fn has_active(&self) -> bool {
+    pub(super) fn has_active(&self) -> bool {
         self.active.is_some()
     }
 
-    pub(crate) fn matches_workspace(&self, workspace_directory: &str) -> bool {
+    pub(super) fn matches_workspace(&self, workspace_directory: &str) -> bool {
         self.active
             .as_ref()
             .is_some_and(|correlation| correlation.workspace_directory == workspace_directory)
     }
 
-    pub(crate) fn restart_if_matches(
+    pub(super) fn restart_if_matches(
         &mut self,
         workspace_directory: &str,
     ) -> Option<(
@@ -227,7 +227,7 @@ impl PlanningRuntimeCoordinator {
     }
 
     #[cfg(test)]
-    pub(crate) fn exhaust_generation(&mut self) {
+    pub(super) fn exhaust_generation(&mut self) {
         self.next_generation = u64::MAX;
     }
 }
