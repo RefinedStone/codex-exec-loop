@@ -21,7 +21,8 @@ use crate::core::app::TurnStreamEvent;
 use crate::core::app::{
     AppCommand, AppEvent, ConversationLoadCorrelation,
     ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome, CoreInput,
-    SessionCatalogSnapshot, StartupCheckCorrelation, StartupSnapshot,
+    SessionCatalogLoadIntent, SessionCatalogLoadMode, SessionCatalogSnapshot,
+    StartupCheckCorrelation, StartupSnapshot,
 };
 #[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
@@ -2257,6 +2258,7 @@ impl NativeTuiApp {
                 }));
             }
             ShellChromeEffect::LoadSessionCatalog {
+                mode,
                 limit,
                 current_workspace_directory,
             } => {
@@ -2264,10 +2266,17 @@ impl NativeTuiApp {
                 // workspace unless the reducer explicitly supplied another root.
                 let workspace_directory = current_workspace_directory
                     .unwrap_or_else(|| self.current_workspace_directory());
-                self.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog {
-                    limit,
-                    workspace_directory,
-                }));
+                let intent = match mode {
+                    SessionCatalogLoadMode::EnsureLoaded => {
+                        SessionCatalogLoadIntent::ensure_loaded(limit, workspace_directory)
+                    }
+                    SessionCatalogLoadMode::Refresh => {
+                        SessionCatalogLoadIntent::refresh(limit, workspace_directory)
+                    }
+                };
+                self.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog(
+                    intent,
+                )));
             }
         }
     }

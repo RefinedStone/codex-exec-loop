@@ -1,4 +1,4 @@
-use crate::core::app::StartupReadySnapshot;
+use crate::core::app::{SessionCatalogLoadMode, StartupReadySnapshot};
 use crate::domain::recent_sessions::SessionCatalog;
 
 /*
@@ -159,9 +159,10 @@ pub enum ShellChromeEvent {
 pub enum ShellChromeEffect {
     RunStartupChecks,
     LoadSessionCatalog {
+        mode: SessionCatalogLoadMode,
         // caller가 준 page size를 사용해 startup preload와 explicit reload의 paging policy를 맞춘다.
         limit: usize,
-        // startup preload는 방금 validate된 workspace로 catalog를 scope하고, manual load는 None으로 전역 recent list를 요청한다.
+        // startup preload는 validated workspace를 고정하고, 나머지 trigger는 실행 시점의 visible workspace를 사용한다.
         current_workspace_directory: Option<String>,
     },
 }
@@ -218,10 +219,11 @@ pub fn reduce_shell_chrome(
                 let can_continue = ready.can_continue;
                 let workspace_path = ready.workspace_path.clone();
                 state.startup_state = StartupState::Ready(ready);
-                // startup 성공은 session browser를 한 번 prime하지만, 이미 load/ready 상태인 catalog를 강제로 refresh하지 않는다.
-                if can_continue && matches!(state.session_state, SessionState::Idle) {
-                    state.session_state = SessionState::Loading;
+                // startup 성공은 ensure intent를 Core에 전달한다. 기존 catalog와 in-flight
+                // request를 보고 실제 load를 시작할지는 Core admission이 결정한다.
+                if can_continue {
                     effects.push(ShellChromeEffect::LoadSessionCatalog {
+                        mode: SessionCatalogLoadMode::EnsureLoaded,
                         limit: session_page_size,
                         current_workspace_directory: Some(workspace_path),
                     });
@@ -232,7 +234,12 @@ pub fn reduce_shell_chrome(
             }
         },
         ShellChromeEvent::SessionsRequested { limit } => {
-            queue_session_reload_if_allowed(&mut state, limit, &mut effects);
+            queue_session_catalog_intent_if_startup_ready(
+                &state,
+                SessionCatalogLoadMode::Refresh,
+                limit,
+                &mut effects,
+            );
         }
         ShellChromeEvent::SessionsLoaded(result) => {
             state.session_state = match result {
@@ -252,7 +259,12 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::SessionsOverlayShown { limit } => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
             state.shell_overlay = ShellOverlay::Sessions;
-            queue_session_load_if_allowed(&mut state, limit, &mut effects);
+            queue_session_catalog_intent_if_startup_ready(
+                &state,
+                SessionCatalogLoadMode::EnsureLoaded,
+                limit,
+                &mut effects,
+            );
         }
         ShellChromeEvent::ModelSelectionOverlayShown => {
             state.exit_confirmation_state = ExitConfirmationState::Hidden;
@@ -330,7 +342,12 @@ pub fn reduce_shell_chrome(
             } else {
                 state.exit_confirmation_state = ExitConfirmationState::Hidden;
                 state.shell_overlay = ShellOverlay::Sessions;
-                queue_session_load_if_allowed(&mut state, limit, &mut effects);
+                queue_session_catalog_intent_if_startup_ready(
+                    &state,
+                    SessionCatalogLoadMode::EnsureLoaded,
+                    limit,
+                    &mut effects,
+                );
             }
         }
         ShellChromeEvent::SupersessionOverlayToggled => {
@@ -384,36 +401,19 @@ pub fn reduce_shell_chrome(
 }
 
 /*
- * overlay-open load는 idempotent하다.
- * session overlay를 여는 동작이 failed catalog를 자동 retry하면, 사용자가 단순히 화면을 열었을 뿐인데 IO가 반복된다.
- * 그래서 Idle일 때만 initial load effect를 queue한다.
+ * Shell chrome은 startup readiness만 확인하고 typed catalog intent를 Core로 전달한다.
+ * catalog projection을 보고 initial/reload를 억제하거나 Loading을 선반영하면 adapter가
+ * semantic admission authority를 다시 소유하게 되므로 여기서는 SessionState를 읽지 않는다.
  */
-fn queue_session_load_if_allowed(
-    state: &mut ShellChromeState,
+fn queue_session_catalog_intent_if_startup_ready(
+    state: &ShellChromeState,
+    mode: SessionCatalogLoadMode,
     limit: usize,
     effects: &mut Vec<ShellChromeEffect>,
 ) {
-    if state.can_open_session_list() && matches!(state.session_state, SessionState::Idle) {
-        state.session_state = SessionState::Loading;
+    if state.can_open_session_list() {
         effects.push(ShellChromeEffect::LoadSessionCatalog {
-            limit,
-            current_workspace_directory: None,
-        });
-    }
-}
-
-/*
- * explicit reload는 Ready나 Failed 뒤에 허용하지만, Loading 중에는 중복 effect를 만들지 않는다.
- * 사용자가 명시적으로 session reload를 요청한 경우에는 실패 복구 의도가 있으므로 overlay-open load보다 넓게 허용한다.
- */
-fn queue_session_reload_if_allowed(
-    state: &mut ShellChromeState,
-    limit: usize,
-    effects: &mut Vec<ShellChromeEffect>,
-) {
-    if state.can_open_session_list() && !matches!(state.session_state, SessionState::Loading) {
-        state.session_state = SessionState::Loading;
-        effects.push(ShellChromeEffect::LoadSessionCatalog {
+            mode,
             limit,
             current_workspace_directory: None,
         });
@@ -425,7 +425,7 @@ mod tests {
         ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
         ShellOverlay, StartupState, reduce_shell_chrome,
     };
-    use crate::core::app::StartupReadySnapshot;
+    use crate::core::app::{SessionCatalogLoadMode, StartupReadySnapshot};
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
     use crate::domain::session_summary::SessionSummary;
     use crate::domain::startup_diagnostics::StartupDiagnostics;
@@ -446,18 +446,19 @@ mod tests {
             reduced.state.startup_state,
             StartupState::Ready(_)
         ));
-        assert!(matches!(reduced.state.session_state, SessionState::Loading));
+        assert!(matches!(reduced.state.session_state, SessionState::Idle));
         assert_eq!(
             reduced.effects,
             vec![ShellChromeEffect::LoadSessionCatalog {
+                mode: SessionCatalogLoadMode::EnsureLoaded,
                 limit: 10,
                 current_workspace_directory: Some("/tmp/root".to_string()),
             }]
         );
     }
     #[test]
-    fn opening_sessions_overlay_requests_load_only_once() {
-        // session overlay open은 initial load trigger이지만, 이미 loading으로 전이된 catalog에 중복 effect를 더하지 않는다.
+    fn opening_sessions_overlay_forwards_each_ensure_intent_to_core() {
+        // overlay open은 projection을 선반영하거나 자체 coalescing하지 않고 매번 Core에 ensure intent를 전달한다.
         let mut state = ShellChromeState::new();
         state.startup_state = StartupState::Ready(sample_startup_diagnostics());
         let first =
@@ -471,12 +472,64 @@ mod tests {
         assert_eq!(
             first.effects,
             vec![ShellChromeEffect::LoadSessionCatalog {
+                mode: SessionCatalogLoadMode::EnsureLoaded,
                 limit: 10,
                 current_workspace_directory: None
             }]
         );
-        assert!(second.effects.is_empty());
+        assert!(matches!(first.state.session_state, SessionState::Idle));
+        assert_eq!(second.effects, first.effects);
+        assert!(matches!(second.state.session_state, SessionState::Idle));
     }
+
+    #[test]
+    fn opening_sessions_overlay_does_not_admit_from_catalog_projection() {
+        let catalog = RecentSessions {
+            items: Vec::new(),
+            warnings: Vec::new(),
+            next_cursor: None,
+        }
+        .into();
+        for session_state in [
+            SessionState::Idle,
+            SessionState::Loading,
+            SessionState::Ready(catalog),
+            SessionState::Failed("catalog unavailable".to_string()),
+        ] {
+            let mut state = ShellChromeState::new();
+            state.startup_state = StartupState::Ready(sample_startup_diagnostics());
+            let expected_session_state = session_state.clone();
+            state.session_state = session_state;
+
+            let reduced =
+                reduce_shell_chrome(state, ShellChromeEvent::SessionsOverlayShown { limit: 10 });
+
+            assert_eq!(
+                reduced.effects,
+                vec![ShellChromeEffect::LoadSessionCatalog {
+                    mode: SessionCatalogLoadMode::EnsureLoaded,
+                    limit: 10,
+                    current_workspace_directory: None,
+                }]
+            );
+            match (expected_session_state, &reduced.state.session_state) {
+                (SessionState::Idle, SessionState::Idle)
+                | (SessionState::Loading, SessionState::Loading) => {}
+                (SessionState::Ready(expected), SessionState::Ready(actual)) => {
+                    assert_eq!(actual, &expected);
+                }
+                (SessionState::Failed(expected), SessionState::Failed(actual)) => {
+                    assert_eq!(actual, &expected);
+                }
+                (expected, actual) => {
+                    panic!(
+                        "overlay ensure must preserve the catalog projection: expected {expected:?}, got {actual:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn explicit_sessions_request_reloads_after_failure() {
         // explicit request는 실패한 catalog를 복구하려는 사용자 의도이므로 Failed 상태에서도 reload effect를 허용한다.
@@ -485,10 +538,14 @@ mod tests {
         state.session_state = SessionState::Failed("boom".to_string());
         let reduced = reduce_shell_chrome(state, ShellChromeEvent::SessionsRequested { limit: 10 });
 
-        assert!(matches!(reduced.state.session_state, SessionState::Loading));
+        assert!(matches!(
+            reduced.state.session_state,
+            SessionState::Failed(ref message) if message == "boom"
+        ));
         assert_eq!(
             reduced.effects,
             vec![ShellChromeEffect::LoadSessionCatalog {
+                mode: SessionCatalogLoadMode::Refresh,
                 limit: 10,
                 current_workspace_directory: None
             }]
@@ -531,10 +588,11 @@ mod tests {
             opened.state.exit_confirmation_state,
             ExitConfirmationState::Hidden
         );
-        assert!(matches!(opened.state.session_state, SessionState::Loading));
+        assert!(matches!(opened.state.session_state, SessionState::Idle));
         assert_eq!(
             opened.effects,
             vec![ShellChromeEffect::LoadSessionCatalog {
+                mode: SessionCatalogLoadMode::EnsureLoaded,
                 limit: 10,
                 current_workspace_directory: None
             }]
@@ -543,15 +601,23 @@ mod tests {
         assert!(closed.effects.is_empty());
     }
     #[test]
-    fn explicit_sessions_request_while_loading_does_not_duplicate_effect() {
-        // Loading 중 explicit reload는 in-flight request와 경쟁하지 않도록 no-op으로 접는다.
+    fn explicit_sessions_request_while_loading_still_reaches_core_admission() {
+        // Loading은 Core projection일 뿐이다. 동일 target coalescing과 target supersession은
+        // Core가 결정할 수 있도록 explicit refresh intent를 그대로 전달한다.
         let mut state = ShellChromeState::new();
         state.startup_state = StartupState::Ready(sample_startup_diagnostics());
         state.session_state = SessionState::Loading;
         let reduced = reduce_shell_chrome(state, ShellChromeEvent::SessionsRequested { limit: 10 });
 
         assert!(matches!(reduced.state.session_state, SessionState::Loading));
-        assert!(reduced.effects.is_empty());
+        assert_eq!(
+            reduced.effects,
+            vec![ShellChromeEffect::LoadSessionCatalog {
+                mode: SessionCatalogLoadMode::Refresh,
+                limit: 10,
+                current_workspace_directory: None,
+            }]
+        );
     }
     #[test]
     fn moving_selection_clamps_to_available_bounds() {

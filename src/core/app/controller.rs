@@ -14,7 +14,8 @@ use super::{
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationIntent,
     PlanningWorkspaceOperationKind, PostTurnEvaluationCorrelation, QueueAuthorityLoadCorrelation,
     QueueMutationCorrelation, ReviewCenterLoadCorrelation, RevisionedPlanningParallelProjection,
-    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameAdmission,
+    SessionCatalogLoadCorrelation, SessionCatalogLoadIntent, SessionCatalogLoadMode,
+    SessionCatalogSnapshot, SessionRenameAcceptedSnapshot, SessionRenameAdmission,
     SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
     StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
     TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
@@ -84,7 +85,7 @@ pub(in crate::core) struct CoreController {
     next_session_rename_generation: u64,
     in_flight_session_rename: Option<SessionRenameCorrelation>,
     guarded_session_rename_stream: Option<(TurnSubmissionCorrelation, SessionRenameCorrelation)>,
-    deferred_session_catalog_load: Option<(usize, String)>,
+    deferred_session_catalog_load: Option<SessionCatalogLoadIntent>,
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     deferred_conversation_load: Option<(String, String)>,
@@ -216,15 +217,8 @@ impl CoreController {
                     vec![CoreEffect::RunStartupChecks { correlation }],
                 )
             }
-            CoreInput::Command(AppCommand::LoadSessionCatalog {
-                limit,
-                workspace_directory,
-            }) => {
-                if self.in_flight_session_rename.is_some() {
-                    self.deferred_session_catalog_load = Some((limit, workspace_directory));
-                    return self.unchanged_outcome();
-                }
-                self.start_session_catalog_load(limit, workspace_directory)
+            CoreInput::Command(AppCommand::LoadSessionCatalog(intent)) => {
+                self.admit_session_catalog_load(intent)
             }
             CoreInput::Command(AppCommand::RenameSession(request)) => {
                 if let Some(active_correlation) = self.in_flight_session_rename.clone() {
@@ -232,7 +226,7 @@ impl CoreController {
                         SessionRenameAdmission::RejectedActive { active_correlation },
                     );
                 }
-                if let Some(active_correlation) = self.in_flight_session_catalog_load {
+                if let Some(active_correlation) = self.in_flight_session_catalog_load.clone() {
                     return self.session_rename_rejected_outcome(
                         SessionRenameAdmission::RejectedCatalogLoading { active_correlation },
                     );
@@ -813,7 +807,7 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.in_flight_session_catalog_load != Some(correlation) {
+                if self.in_flight_session_catalog_load.as_ref() != Some(&correlation) {
                     return self.unchanged_outcome();
                 }
                 self.in_flight_session_catalog_load = None;
@@ -1619,22 +1613,49 @@ impl CoreController {
         )
     }
 
+    fn admit_session_catalog_load(
+        &mut self,
+        intent: SessionCatalogLoadIntent,
+    ) -> CoreDispatchOutcome {
+        let has_active_load = self.in_flight_session_catalog_load.is_some();
+        if self
+            .in_flight_session_catalog_load
+            .as_ref()
+            .is_some_and(|active| active.matches_target(&intent))
+        {
+            return self.unchanged_outcome();
+        }
+        if intent.mode == SessionCatalogLoadMode::EnsureLoaded
+            && !has_active_load
+            && !matches!(
+                &self.shared_snapshot().session_catalog,
+                SessionCatalogSnapshot::Idle
+            )
+        {
+            return self.unchanged_outcome();
+        }
+        if self.in_flight_session_rename.is_some() {
+            self.deferred_session_catalog_load = Some(intent);
+            return self.unchanged_outcome();
+        }
+        self.start_session_catalog_load(intent)
+    }
+
     fn start_session_catalog_load(
         &mut self,
-        limit: usize,
-        workspace_directory: String,
+        intent: SessionCatalogLoadIntent,
     ) -> CoreDispatchOutcome {
-        let correlation = SessionCatalogLoadCorrelation::new(take_generation(
-            &mut self.next_session_catalog_load_generation,
-            "session catalog load",
-        ));
-        self.in_flight_session_catalog_load = Some(correlation);
+        let correlation = SessionCatalogLoadCorrelation::new(
+            take_generation(
+                &mut self.next_session_catalog_load_generation,
+                "session catalog load",
+            ),
+            intent.limit,
+            intent.workspace_directory,
+        );
+        self.in_flight_session_catalog_load = Some(correlation.clone());
         self.state.mark_session_catalog_loading();
-        self.session_catalog_changed_outcome(vec![CoreEffect::LoadSessionCatalog {
-            correlation,
-            limit,
-            workspace_directory,
-        }])
+        self.session_catalog_changed_outcome(vec![CoreEffect::LoadSessionCatalog { correlation }])
     }
 
     fn begin_planning_workspace_operation(
@@ -1785,8 +1806,8 @@ impl CoreController {
         events: &mut Vec<AppEvent>,
         effects: &mut Vec<CoreEffect>,
     ) {
-        if let Some((limit, workspace_directory)) = self.deferred_session_catalog_load.take() {
-            let outcome = self.start_session_catalog_load(limit, workspace_directory);
+        if let Some(intent) = self.deferred_session_catalog_load.take() {
+            let outcome = self.admit_session_catalog_load(intent);
             events.extend(outcome.events);
             effects.extend(outcome.effects);
         }
@@ -2298,6 +2319,26 @@ mod tests {
         CoreInput::Command(AppCommand::RunStartupChecks {
             workspace_directory: workspace_directory.to_string(),
         })
+    }
+
+    fn ensure_session_catalog_command(limit: usize, workspace_directory: &str) -> CoreInput {
+        CoreInput::Command(AppCommand::LoadSessionCatalog(
+            SessionCatalogLoadIntent::ensure_loaded(limit, workspace_directory),
+        ))
+    }
+
+    fn refresh_session_catalog_command(limit: usize, workspace_directory: &str) -> CoreInput {
+        CoreInput::Command(AppCommand::LoadSessionCatalog(
+            SessionCatalogLoadIntent::refresh(limit, workspace_directory),
+        ))
+    }
+
+    fn session_catalog_correlation(
+        generation: u64,
+        limit: usize,
+        workspace_directory: &str,
+    ) -> SessionCatalogLoadCorrelation {
+        SessionCatalogLoadCorrelation::new(generation, limit, workspace_directory)
     }
 
     fn conversation_load_correlation(
@@ -3652,10 +3693,7 @@ mod tests {
     fn load_session_catalog_marks_session_loading() {
         let mut controller = CoreController::new();
 
-        let outcome = controller.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
-            limit: 10,
-            workspace_directory: "/tmp/workspace".to_string(),
-        }));
+        let outcome = controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
 
         assert_eq!(outcome.snapshot.revision, 1);
         assert_eq!(
@@ -3671,10 +3709,113 @@ mod tests {
         assert_eq!(
             outcome.effects,
             vec![CoreEffect::LoadSessionCatalog {
-                correlation: SessionCatalogLoadCorrelation::new(1),
-                limit: 10,
-                workspace_directory: "/tmp/workspace".to_string(),
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
             }]
+        );
+    }
+
+    #[test]
+    fn ensure_session_catalog_is_idle_only_while_refresh_restarts_settled_states() {
+        let mut controller = CoreController::new();
+        controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
+                result: Err("catalog unavailable".to_string()),
+            },
+        ));
+
+        let ensure_after_failure =
+            controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
+        assert!(ensure_after_failure.events.is_empty());
+        assert!(ensure_after_failure.effects.is_empty());
+        assert_eq!(ensure_after_failure.snapshot, failed.snapshot);
+
+        let refresh_after_failure =
+            controller.handle_input(refresh_session_catalog_command(10, "/tmp/workspace"));
+        assert_eq!(
+            refresh_after_failure.effects,
+            vec![CoreEffect::LoadSessionCatalog {
+                correlation: session_catalog_correlation(2, 10, "/tmp/workspace"),
+            }]
+        );
+        let ready = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(2, 10, "/tmp/workspace"),
+                result: Ok(SessionCatalogReadySnapshot::from_catalog(
+                    RecentSessions {
+                        items: Vec::new(),
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                )),
+            },
+        ));
+
+        let ensure_after_ready =
+            controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
+        assert!(ensure_after_ready.events.is_empty());
+        assert!(ensure_after_ready.effects.is_empty());
+        assert_eq!(ensure_after_ready.snapshot, ready.snapshot);
+
+        let refresh_after_ready =
+            controller.handle_input(refresh_session_catalog_command(10, "/tmp/workspace"));
+        assert_eq!(
+            refresh_after_ready.effects,
+            vec![CoreEffect::LoadSessionCatalog {
+                correlation: session_catalog_correlation(3, 10, "/tmp/workspace"),
+            }]
+        );
+    }
+
+    #[test]
+    fn identical_active_session_catalog_target_coalesces_without_consuming_generation() {
+        let mut controller = CoreController::new();
+        let first = controller.handle_input(refresh_session_catalog_command(10, "/tmp/workspace"));
+        assert_eq!(
+            first.effects,
+            vec![CoreEffect::LoadSessionCatalog {
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
+            }]
+        );
+
+        for duplicate in [
+            ensure_session_catalog_command(10, "/tmp/workspace"),
+            refresh_session_catalog_command(10, "/tmp/workspace"),
+        ] {
+            let outcome = controller.handle_input(duplicate);
+            assert!(outcome.events.is_empty());
+            assert!(outcome.effects.is_empty());
+        }
+
+        let replacement =
+            controller.handle_input(refresh_session_catalog_command(20, "/tmp/workspace"));
+        assert_eq!(
+            replacement.effects,
+            vec![CoreEffect::LoadSessionCatalog {
+                correlation: session_catalog_correlation(2, 20, "/tmp/workspace"),
+            }]
+        );
+    }
+
+    #[test]
+    fn different_active_session_catalog_target_replaces_even_for_ensure() {
+        let mut controller = CoreController::new();
+        controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace-a"));
+
+        let replacement =
+            controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace-b"));
+
+        assert_eq!(
+            replacement.effects,
+            vec![CoreEffect::LoadSessionCatalog {
+                correlation: session_catalog_correlation(2, 10, "/tmp/workspace-b"),
+            }]
+        );
+        assert_eq!(
+            controller.in_flight_session_catalog_load,
+            Some(session_catalog_correlation(2, 10, "/tmp/workspace-b"))
         );
     }
 
@@ -3955,6 +4096,65 @@ mod tests {
     }
 
     #[test]
+    fn same_request_session_rename_aba_is_filtered_before_adapter_events() {
+        let mut controller = CoreController::new();
+        let request = SessionRenameRequest::new("thread-unloaded", "Renamed");
+        let first = session_rename_correlation(1, "thread-unloaded", "Renamed");
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            request.clone(),
+        )));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: first.clone(),
+                result: Err("first attempt failed".to_string()),
+            },
+        ));
+
+        let second = session_rename_correlation(2, "thread-unloaded", "Renamed");
+        let retried =
+            controller.handle_input(CoreInput::Command(AppCommand::RenameSession(request)));
+        assert_eq!(
+            retried.events,
+            vec![AppEvent::SessionRenameAdmissionResolved(
+                SessionRenameAdmission::Accepted {
+                    correlation: second.clone(),
+                },
+            )]
+        );
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: first,
+                result: Ok(()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert_eq!(controller.in_flight_session_rename.as_ref(), Some(&second));
+
+        let accepted = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: second.clone(),
+                result: Ok(()),
+            },
+        ));
+        assert!(matches!(
+            accepted.events.as_slice(),
+            [AppEvent::SessionRenameCompleted {
+                correlation,
+                result: Ok(_),
+            }] if correlation == &second
+        ));
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: second,
+                result: Ok(()),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+    }
+
+    #[test]
     fn session_rename_success_without_a_projected_row_keeps_revision() {
         let mut controller = CoreController::new();
         let correlation = session_rename_correlation(1, "thread-unloaded", "Renamed");
@@ -3985,10 +4185,7 @@ mod tests {
     #[test]
     fn session_rename_rejects_conflicting_loads_but_allows_other_thread_load() {
         let mut catalog_loading = CoreController::new();
-        catalog_loading.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
-            limit: 10,
-            workspace_directory: "/tmp/workspace".to_string(),
-        }));
+        catalog_loading.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
         let rejected = catalog_loading.handle_input(CoreInput::Command(AppCommand::RenameSession(
             SessionRenameRequest::new("thread-1", "Renamed"),
         )));
@@ -3997,7 +4194,7 @@ mod tests {
             rejected.events,
             vec![AppEvent::SessionRenameAdmissionResolved(
                 SessionRenameAdmission::RejectedCatalogLoading {
-                    active_correlation: SessionCatalogLoadCorrelation::new(1),
+                    active_correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
                 },
             )]
         );
@@ -4032,16 +4229,23 @@ mod tests {
     #[test]
     fn active_session_rename_defers_conflicting_reads_and_allows_other_thread_load() {
         let mut catalog = CoreController::new();
+        load_test_session_catalog(&mut catalog);
         let catalog_rename = session_rename_correlation(1, "thread-1", "Renamed");
         catalog.handle_input(CoreInput::Command(AppCommand::RenameSession(
             catalog_rename.request.clone(),
         )));
-        let deferred = catalog.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
-            limit: 10,
-            workspace_directory: "/tmp/workspace".to_string(),
-        }));
+        let skipped_ensure =
+            catalog.handle_input(ensure_session_catalog_command(20, "/tmp/ignored"));
+        assert!(skipped_ensure.events.is_empty());
+        assert!(skipped_ensure.effects.is_empty());
+        assert!(catalog.deferred_session_catalog_load.is_none());
+
+        let deferred = catalog.handle_input(refresh_session_catalog_command(10, "/tmp/first"));
         assert!(deferred.events.is_empty());
         assert!(deferred.effects.is_empty());
+        let replacement = catalog.handle_input(refresh_session_catalog_command(20, "/tmp/latest"));
+        assert!(replacement.events.is_empty());
+        assert!(replacement.effects.is_empty());
         let resumed = catalog.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionRenamed {
                 correlation: catalog_rename,
@@ -4058,10 +4262,12 @@ mod tests {
         assert!(matches!(
             resumed.effects.as_slice(),
             [CoreEffect::LoadSessionCatalog {
-                correlation: SessionCatalogLoadCorrelation { generation: 1 },
-                limit: 10,
-                workspace_directory,
-            }] if workspace_directory == "/tmp/workspace"
+                correlation: SessionCatalogLoadCorrelation {
+                    generation: 2,
+                    limit: 20,
+                    workspace_directory,
+                },
+            }] if workspace_directory == "/tmp/latest"
         ));
 
         let mut conversations = CoreController::new();
@@ -6541,7 +6747,7 @@ mod tests {
     }
 
     #[test]
-    fn session_catalog_completion_marks_ready_and_drops_older_results() {
+    fn session_catalog_full_identity_filters_stale_duplicate_and_aba_completions() {
         let mut controller = CoreController::new();
         let ready = SessionCatalogReadySnapshot {
             catalog: Box::new(
@@ -6557,20 +6763,46 @@ mod tests {
             warnings: vec!["partial row".to_string()],
         };
 
-        for workspace_directory in ["/tmp/older", "/tmp/current"] {
-            controller.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
-                limit: 10,
-                workspace_directory: workspace_directory.to_string(),
-            }));
+        for (limit, workspace_directory) in [
+            (10, "/tmp/workspace-a"),
+            (20, "/tmp/workspace-b"),
+            (10, "/tmp/workspace-a"),
+        ] {
+            controller.handle_input(refresh_session_catalog_command(limit, workspace_directory));
         }
+
+        for correlation in [
+            session_catalog_correlation(1, 10, "/tmp/workspace-a"),
+            session_catalog_correlation(2, 20, "/tmp/workspace-b"),
+            session_catalog_correlation(3, 10, "/tmp/workspace-b"),
+            session_catalog_correlation(3, 20, "/tmp/workspace-a"),
+        ] {
+            let stale = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::SessionCatalogLoaded {
+                    correlation,
+                    result: Err("stale catalog".to_string()),
+                },
+            ));
+            assert!(stale.events.is_empty());
+            assert!(stale.effects.is_empty());
+            assert_eq!(
+                controller.in_flight_session_catalog_load,
+                Some(session_catalog_correlation(3, 10, "/tmp/workspace-a"))
+            );
+            assert_eq!(
+                stale.snapshot.session_catalog,
+                SessionCatalogSnapshot::Loading
+            );
+        }
+
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionCatalogLoaded {
-                correlation: SessionCatalogLoadCorrelation::new(2),
+                correlation: session_catalog_correlation(3, 10, "/tmp/workspace-a"),
                 result: Ok(ready.clone()),
             },
         ));
 
-        assert_eq!(outcome.snapshot.revision, 3);
+        assert_eq!(outcome.snapshot.revision, 4);
         assert_eq!(
             outcome.snapshot.session_catalog,
             SessionCatalogSnapshot::Ready(ready.clone())
@@ -6583,15 +6815,16 @@ mod tests {
         );
         assert!(outcome.effects.is_empty());
 
-        let stale = controller.handle_input(CoreInput::EffectCompleted(
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionCatalogLoaded {
-                correlation: SessionCatalogLoadCorrelation::new(1),
-                result: Err("stale catalog".to_string()),
+                correlation: session_catalog_correlation(3, 10, "/tmp/workspace-a"),
+                result: Err("duplicate catalog".to_string()),
             },
         ));
-        assert!(stale.events.is_empty());
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
         assert_eq!(
-            stale.snapshot.session_catalog,
+            duplicate.snapshot.session_catalog,
             SessionCatalogSnapshot::Ready(ready)
         );
     }
@@ -6599,14 +6832,11 @@ mod tests {
     #[test]
     fn session_catalog_completion_marks_failed() {
         let mut controller = CoreController::new();
-        controller.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
-            limit: 10,
-            workspace_directory: "/tmp/workspace".to_string(),
-        }));
+        controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
 
         let outcome = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionCatalogLoaded {
-                correlation: SessionCatalogLoadCorrelation::new(1),
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
                 result: Err("catalog unavailable".to_string()),
             },
         ));
@@ -8808,13 +9038,10 @@ mod tests {
     }
 
     fn load_test_session_catalog(controller: &mut CoreController) {
-        controller.handle_input(CoreInput::Command(AppCommand::LoadSessionCatalog {
-            limit: 10,
-            workspace_directory: "/tmp/workspace".to_string(),
-        }));
+        controller.handle_input(ensure_session_catalog_command(10, "/tmp/workspace"));
         controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionCatalogLoaded {
-                correlation: SessionCatalogLoadCorrelation::new(1),
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
                 result: Ok(SessionCatalogReadySnapshot::from_catalog(
                     RecentSessions {
                         items: vec![

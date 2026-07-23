@@ -365,20 +365,23 @@ impl NativeTuiApp {
         correlation: SessionRenameCorrelation,
         result: Result<SessionRenameAcceptedSnapshot, String>,
     ) {
-        if !self
+        let exact_pending = self
             .session_overlay_ui_state
-            .pending_rename_matches(&correlation)
-        {
-            return;
-        }
+            .pending_rename_matches(&correlation);
 
         match result {
             Ok(accepted) => {
+                // Core already accepted this completion as semantic authority. Always project its
+                // catalog and loaded turn-stream title, even when the adapter no longer has the
+                // matching editor receipt. Local correlation only controls editor settlement.
                 self.apply_session_catalog_projection(accepted.session_catalog);
                 if let Some(stream_snapshot) = accepted.turn_stream {
                     self.dispatch_conversation_runtime(
                         ConversationRuntimeEvent::StreamSnapshotApplied(stream_snapshot),
                     );
+                }
+                if !exact_pending {
+                    return;
                 }
                 self.session_overlay_ui_state.finish_rename_success();
                 self.session_overlay_ui_state
@@ -390,6 +393,9 @@ impl NativeTuiApp {
                 });
             }
             Err(reason) => {
+                if !exact_pending {
+                    return;
+                }
                 self.session_overlay_ui_state
                     .finish_rename_failure(&reason, self.tui_language);
                 self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
@@ -471,7 +477,7 @@ mod tests {
         test_native_tui_app, test_native_tui_app_with_session_catalog_port,
     };
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
-    use crate::core::app::TurnStreamTestHarness;
+    use crate::core::app::{SessionCatalogLoadIntent, TurnStreamTestHarness};
     use crate::domain::recent_sessions::{
         RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
         SessionRenameRequest,
@@ -644,10 +650,9 @@ mod tests {
     }
 
     fn load_recording_catalog(app: &mut NativeTuiApp) {
-        app.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog {
-            limit: SESSION_PAGE_SIZE,
-            workspace_directory: "/tmp/root".to_string(),
-        }));
+        app.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog(
+            SessionCatalogLoadIntent::refresh(SESSION_PAGE_SIZE, "/tmp/root"),
+        )));
         poll_until(app, |app| {
             matches!(app.session_state, SessionState::Ready(_))
         });
@@ -875,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_completion_updates_exact_row_and_failure_keeps_editor_draft() {
+    fn rename_completion_projects_success_but_only_exact_receipt_settles_editor() {
         let mut app = test_native_tui_app();
         seed_sessions(
             &mut app,
@@ -921,6 +926,24 @@ mod tests {
             app.session_overlay_ui_state
                 .record_rename_admission(retry_correlation.clone(), TuiLanguage::English,)
         );
+        let retry_feedback = app
+            .session_overlay_ui_state
+            .rename_editor_feedback()
+            .map(str::to_string);
+        app.apply_session_rename_completion(
+            failed_correlation.clone(),
+            Err("late provider failure".to_string()),
+        );
+        assert!(
+            app.session_overlay_ui_state
+                .pending_rename_matches(&retry_correlation),
+            "mismatched failure must not settle the newer retry"
+        );
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_feedback(),
+            retry_feedback.as_deref(),
+            "mismatched failure must preserve newer editor feedback"
+        );
         app.apply_session_rename_completion(
             failed_correlation,
             Ok(accepted_rename_snapshot(
@@ -936,11 +959,21 @@ mod tests {
         assert!(
             app.session_overlay_ui_state
                 .pending_rename_matches(&retry_correlation),
-            "same-request stale generation must not settle the retry"
+            "older local receipt must not settle the retry"
         );
         assert_eq!(
             app.current_session().map(SessionSummary::title).as_deref(),
-            Some("Beta draft")
+            Some("stale title"),
+            "Core-accepted catalog projection must not be vetoed by local pending state"
+        );
+        assert!(matches!(
+            &app.conversation_state,
+            ConversationState::Ready(conversation) if conversation.title == "stale title"
+        ));
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_buffer(),
+            "Beta draft",
+            "the newer editor must survive a mismatched success"
         );
         app.apply_session_rename_completion(
             retry_correlation.clone(),
@@ -957,6 +990,17 @@ mod tests {
                 "Beta draft",
                 "duplicate title",
             )),
+        );
+        assert_eq!(
+            app.current_session().map(SessionSummary::title).as_deref(),
+            Some("duplicate title"),
+            "Core-accepted projection must also apply without a local pending receipt"
+        );
+        assert!(app.is_session_rename_editing());
+        assert_eq!(
+            app.session_overlay_ui_state.rename_editor_buffer(),
+            "Beta draft",
+            "an unbound success must not settle the editor reopened by exact failure"
         );
 
         app.session_overlay_ui_state.pop_rename_character();
@@ -1068,7 +1112,11 @@ mod tests {
         let outcome = CoreDispatchOutcome {
             events: vec![AppEvent::SessionRenameAdmissionResolved(
                 SessionRenameAdmission::RejectedCatalogLoading {
-                    active_correlation: crate::core::app::SessionCatalogLoadCorrelation::new(7),
+                    active_correlation: crate::core::app::SessionCatalogLoadCorrelation::new(
+                        7,
+                        SESSION_PAGE_SIZE,
+                        "/tmp/root",
+                    ),
                 },
             )],
             effects: Vec::new(),
@@ -1199,14 +1247,13 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("rename worker should reach the test gate");
 
-        // Shell chrome tests own startup-gated reload admission. Model the accepted
-        // reload effect directly so this test stays focused on rename deferral.
-        app.session_state = SessionState::Loading;
-        app.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog {
-            limit: 10,
-            workspace_directory: "/tmp/root".to_string(),
-        }));
-        assert!(matches!(app.session_state, SessionState::Loading));
+        // Dispatch the typed intent directly so this test stays focused on rename
+        // deferral. Core must keep the accepted Ready projection visible until the
+        // rename settles and the deferred catalog load actually starts.
+        app.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog(
+            SessionCatalogLoadIntent::refresh(10, "/tmp/root"),
+        )));
+        assert!(matches!(app.session_state, SessionState::Ready(_)));
         release_rename_tx
             .send(())
             .expect("rename worker should still be waiting");

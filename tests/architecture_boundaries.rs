@@ -1797,6 +1797,219 @@ fn rust_call_graph_guard_ignores_text_but_follows_indirect_helpers() {
 }
 
 #[test]
+fn session_catalog_load_contract_keeps_admission_and_identity_in_core() {
+    let request_source =
+        fs::read_to_string("src/core/app/request.rs").expect("core request source should load");
+    let request_syntax =
+        syn::parse_file(&request_source).expect("core request source should parse");
+
+    let load_mode = request_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(item) if item.ident == "SessionCatalogLoadMode" => Some(item),
+            _ => None,
+        })
+        .expect("core request contracts must define SessionCatalogLoadMode");
+    assert_eq!(
+        load_mode
+            .variants
+            .iter()
+            .map(|variant| variant.ident.to_string())
+            .collect::<Vec<_>>(),
+        vec!["EnsureLoaded".to_string(), "Refresh".to_string()],
+        "catalog load mode must distinguish idempotent ensure from explicit refresh"
+    );
+    assert!(
+        load_mode
+            .variants
+            .iter()
+            .all(|variant| matches!(variant.fields, syn::Fields::Unit)),
+        "catalog load modes must remain data-free policy markers"
+    );
+
+    let intent_fields = named_struct_fields(&request_syntax, "SessionCatalogLoadIntent");
+    assert_eq!(
+        intent_fields
+            .iter()
+            .map(|field| {
+                field
+                    .ident
+                    .as_ref()
+                    .expect("catalog intent field should be named")
+                    .to_string()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "mode".to_string(),
+            "limit".to_string(),
+            "workspace_directory".to_string(),
+        ],
+        "catalog intent must carry mode and the complete provider target"
+    );
+    assert!(
+        is_named_path_type(&intent_fields[0].ty, "SessionCatalogLoadMode")
+            && is_named_path_type(&intent_fields[1].ty, "usize")
+            && is_named_path_type(&intent_fields[2].ty, "String"),
+        "catalog intent field types must remain mode/usize/String"
+    );
+
+    let correlation_fields = named_struct_fields(&request_syntax, "SessionCatalogLoadCorrelation");
+    assert_eq!(
+        correlation_fields
+            .iter()
+            .map(|field| {
+                field
+                    .ident
+                    .as_ref()
+                    .expect("catalog correlation field should be named")
+                    .to_string()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "generation".to_string(),
+            "limit".to_string(),
+            "workspace_directory".to_string(),
+        ],
+        "catalog correlation must bind generation to the complete provider target"
+    );
+    assert!(
+        is_named_path_type(&correlation_fields[0].ty, "u64")
+            && is_named_path_type(&correlation_fields[1].ty, "usize")
+            && is_named_path_type(&correlation_fields[2].ty, "String"),
+        "catalog correlation field types must remain u64/usize/String"
+    );
+    let correlation = request_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == "SessionCatalogLoadCorrelation" => Some(item),
+            _ => None,
+        })
+        .expect("core request contracts must define SessionCatalogLoadCorrelation");
+    let correlation_derives_copy = correlation
+        .attrs
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("derive"))
+        .any(|attribute| {
+            attribute
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+                )
+                .expect("catalog correlation derive should parse")
+                .iter()
+                .any(|path| path.is_ident("Copy"))
+        });
+    let correlation_implements_copy = request_syntax.items.iter().any(|item| {
+        let syn::Item::Impl(item) = item else {
+            return false;
+        };
+        item.trait_
+            .as_ref()
+            .is_some_and(|(_, path, _)| path.is_ident("Copy"))
+            && is_named_path_type(item.self_ty.as_ref(), "SessionCatalogLoadCorrelation")
+    });
+    assert!(
+        !correlation_derives_copy && !correlation_implements_copy,
+        "catalog correlation owns a String target and must not regain Copy semantics"
+    );
+
+    let command_source =
+        fs::read_to_string("src/core/app/command.rs").expect("core command source should load");
+    let command_syntax =
+        syn::parse_file(&command_source).expect("core command source should parse");
+    let load_command = command_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(item) if item.ident == "AppCommand" => item
+                .variants
+                .iter()
+                .find(|variant| variant.ident == "LoadSessionCatalog"),
+            _ => None,
+        })
+        .expect("AppCommand must retain a catalog-load variant");
+    let syn::Fields::Unnamed(load_command_fields) = &load_command.fields else {
+        panic!("catalog-load command must wrap one typed intent");
+    };
+    assert!(
+        load_command_fields.unnamed.len() == 1
+            && is_named_path_type(
+                &load_command_fields
+                    .unnamed
+                    .first()
+                    .expect("one catalog intent field")
+                    .ty,
+                "SessionCatalogLoadIntent",
+            ),
+        "AppCommand must carry exactly one SessionCatalogLoadIntent"
+    );
+
+    let effect_source =
+        fs::read_to_string("src/core/app/effect.rs").expect("core effect source should load");
+    let effect_syntax = syn::parse_file(&effect_source).expect("core effect source should parse");
+    let load_effect = effect_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(item) if item.ident == "CoreEffect" => item
+                .variants
+                .iter()
+                .find(|variant| variant.ident == "LoadSessionCatalog"),
+            _ => None,
+        })
+        .expect("CoreEffect must retain a catalog-load variant");
+    let syn::Fields::Named(load_effect_fields) = &load_effect.fields else {
+        panic!("catalog-load effect must use one named correlation field");
+    };
+    assert!(
+        load_effect_fields.named.len() == 1
+            && load_effect_fields.named[0]
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "correlation")
+            && is_named_path_type(
+                &load_effect_fields.named[0].ty,
+                "SessionCatalogLoadCorrelation",
+            ),
+        "CoreEffect must derive provider target data from one full catalog correlation"
+    );
+
+    let controller_source = fs::read_to_string("src/core/app/controller.rs")
+        .expect("core controller source should load");
+    let controller_syntax =
+        syn::parse_file(&controller_source).expect("core controller source should parse");
+    let deferred_catalog_load = named_struct_fields(&controller_syntax, "CoreController")
+        .into_iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "deferred_session_catalog_load")
+        })
+        .expect("CoreController must retain deferred catalog intent");
+    assert!(
+        is_single_generic_named_type(
+            &deferred_catalog_load.ty,
+            "Option",
+            "SessionCatalogLoadIntent",
+        ),
+        "deferred catalog work must retain the typed intent, not an uncorrelated tuple"
+    );
+    let deferred_reads =
+        top_level_impl_method_source(&controller_source, "start_deferred_session_reads");
+    let compact_deferred_reads = rust_code_without_comments_and_literals(&deferred_reads)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_deferred_reads.contains("self.admit_session_catalog_load(intent)")
+            && !compact_deferred_reads.contains("self.start_session_catalog_load("),
+        "deferred catalog work must re-enter common Core admission instead of bypassing it"
+    );
+}
+
+#[test]
 fn tui_session_catalog_loads_enter_through_core_runtime() {
     // Static guard for the session migration: TUI owns overlay state and selection, while session
     // catalog loading runs through CoreRuntime/CoreEffectRunner before TUI receives catalog state.
@@ -1804,6 +2017,63 @@ fn tui_session_catalog_loads_enter_through_core_runtime() {
         "TUI session catalog loads must be dispatched through core runtime, not SessionService directly",
         &["src/adapter/inbound/tui/app/app_runtime.rs"],
         &[".load_session_catalog(", "NativeTuiSessionCatalogHandle"],
+    );
+
+    let shell_source = fs::read_to_string("src/adapter/inbound/tui/shell_chrome.rs")
+        .expect("shell source should load");
+    let compact_shell_production = production_lines(&shell_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for forbidden_local_admission in [
+        ".session_state=SessionState::Loading",
+        "session_state:SessionState::Loading",
+        "queue_session_load_if_allowed",
+        "queue_session_reload_if_allowed",
+        "matches!(state.session_state,SessionState::",
+    ] {
+        assert!(
+            !compact_shell_production.contains(forbidden_local_admission),
+            "shell chrome must not regain projection-based catalog admission: {forbidden_local_admission}"
+        );
+    }
+
+    let catalog_intent_helper = top_level_function_source(
+        &shell_source,
+        "queue_session_catalog_intent_if_startup_ready",
+    );
+    let compact_catalog_intent_helper =
+        rust_code_without_comments_and_literals(&catalog_intent_helper)
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+    assert!(
+        compact_catalog_intent_helper.contains("state.can_open_session_list()")
+            && compact_catalog_intent_helper.contains("ShellChromeEffect::LoadSessionCatalog")
+            && !compact_catalog_intent_helper.contains("session_state")
+            && !compact_catalog_intent_helper.contains("SessionState::"),
+        "shell catalog trigger may check startup readiness but must not suppress intent from catalog projection"
+    );
+
+    let app_runtime_source = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs")
+        .expect("TUI app runtime source should load");
+    let execute_effect =
+        top_level_impl_method_source(&app_runtime_source, "execute_shell_chrome_effect");
+    let compact_execute_effect = rust_code_without_comments_and_literals(&execute_effect)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_execute_effect.contains(
+            "SessionCatalogLoadMode::EnsureLoaded=>{SessionCatalogLoadIntent::ensure_loaded(limit,workspace_directory)}",
+        ) && compact_execute_effect.contains(
+            "SessionCatalogLoadMode::Refresh=>{SessionCatalogLoadIntent::refresh(limit,workspace_directory)}",
+        ),
+        "TUI runtime must preserve ensure/refresh policy when mapping shell effects to Core intents"
     );
 }
 
@@ -1852,6 +2122,45 @@ fn tui_session_renames_enter_through_core_runtime() {
     assert!(
         !compact_controller.contains("pending_rename_matches(&correlation.request)"),
         "TUI rename completion must not match request fields without generation"
+    );
+
+    let completion = top_level_impl_method_source(&controller, "apply_session_rename_completion");
+    let compact_completion = rust_code_without_comments_and_literals(&completion)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let catalog_projection = compact_completion
+        .find("self.apply_session_catalog_projection(accepted.session_catalog)")
+        .expect("accepted rename must project the Core catalog");
+    let stream_projection = compact_completion
+        .find("self.dispatch_conversation_runtime(")
+        .expect("accepted rename must project the Core turn stream");
+    let success_pending_gate = compact_completion
+        .find("if!exact_pending{return;}")
+        .expect("rename success presentation must require the exact local receipt");
+    let success_settlement = compact_completion
+        .find("self.session_overlay_ui_state.finish_rename_success()")
+        .expect("exact rename success must settle local editor presentation");
+    let failure_pending_gate = compact_completion
+        .rfind("if!exact_pending{return;}")
+        .expect("rename failure presentation must require the exact local receipt");
+    let failure_settlement = compact_completion
+        .find("self.session_overlay_ui_state.finish_rename_failure(")
+        .expect("exact rename failure must settle local editor presentation");
+    assert!(
+        catalog_projection < stream_projection
+            && stream_projection < success_pending_gate
+            && success_pending_gate < success_settlement,
+        "Core-accepted rename semantics must project before local pending gates presentation settlement"
+    );
+    assert!(
+        success_pending_gate < failure_pending_gate && failure_pending_gate < failure_settlement,
+        "mismatched failure receipts must not settle a newer local rename editor"
+    );
+    assert_eq!(
+        compact_completion.matches("exact_pending").count(),
+        3,
+        "exact local pending may be read once and used only by success/failure presentation gates"
     );
 }
 

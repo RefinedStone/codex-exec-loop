@@ -1,7 +1,7 @@
 use super::{
     GithubReviewPollingSetupRequest, ManualPromptPreparationIntent, PlanningEditorMutationRequest,
     PlanningEditorSessionIdentity, PlanningEditorStageTarget, PlanningWorkspaceResetIntent,
-    QueueMutationIntent, TurnSubmissionRequest,
+    QueueMutationIntent, SessionCatalogLoadIntent, TurnSubmissionRequest,
 };
 use crate::domain::conversation::{ConversationApprovalDecision, ConversationTurnSteerRequest};
 use crate::domain::planning::PostTurnRequest;
@@ -18,10 +18,7 @@ pub enum AppCommand {
     RunStartupChecks {
         workspace_directory: String,
     },
-    LoadSessionCatalog {
-        limit: usize,
-        workspace_directory: String,
-    },
+    LoadSessionCatalog(SessionCatalogLoadIntent),
     RenameSession(SessionRenameRequest),
     LoadConversation {
         thread_id: String,

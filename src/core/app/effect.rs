@@ -20,8 +20,6 @@ pub enum CoreEffect {
     },
     LoadSessionCatalog {
         correlation: SessionCatalogLoadCorrelation,
-        limit: usize,
-        workspace_directory: String,
     },
     RenameSession {
         correlation: SessionRenameCorrelation,
