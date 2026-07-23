@@ -1,12 +1,9 @@
-use std::any::Any;
-use std::thread;
-
 use crate::application::service::conversation_runtime_event::{
     ConversationStreamEvent, ConversationStreamSender, conversation_stream_channel,
 };
 use crate::application::service::conversation_service::ConversationService;
 use crate::application::service::parallel_mode::turn::{
-    ParallelModeTurnService, ParallelTurnStreamLaunchRequest,
+    ParallelModeTurnService, ParallelTurnStreamLaunchRequest, ParallelTurnStreamLifecycle,
 };
 use crate::application::service::planning::{
     PlanningRuntimeUseCases, PlanningTurnExecutionSnapshotCapture,
@@ -18,6 +15,11 @@ use crate::core::app::{
 use crate::core::runtime::CoreInputSender;
 use crate::domain::parallel_mode::ParallelModeSlotLeaseSnapshot;
 use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
+use crate::panic_observation::catch_redacted_worker_unwind;
+
+use super::core_effect_worker::{spawn_joinable_redacted_worker, spawn_worker_with_panic_fallback};
+
+const TURN_SUBMISSION_WORKER_PANIC_MESSAGE: &str = "turn submission worker panicked";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StreamExecutionObservation {
@@ -25,6 +27,14 @@ struct StreamExecutionObservation {
     terminal_failure_message: Option<String>,
     terminal_failure_observed: bool,
     runtime_notice: Option<String>,
+}
+
+#[derive(Default)]
+struct TurnSubmissionWorkerSettlement {
+    stream_lifecycle: Option<ParallelTurnStreamLifecycle>,
+    lifecycle_finalized: bool,
+    terminal_published: bool,
+    supervisor_reconciliation_required: bool,
 }
 
 pub(crate) fn spawn_turn_submission_worker(
@@ -35,20 +45,62 @@ pub(crate) fn spawn_turn_submission_worker(
     parallel_mode_turn_service: ParallelModeTurnService,
     input_sender: CoreInputSender,
 ) {
-    thread::spawn(move || {
+    let panic_input_sender = input_sender.clone();
+    let panic_correlation = correlation;
+    spawn_worker_with_panic_fallback(
+        move || {
+            run_guarded_turn_submission_worker(
+                correlation,
+                request,
+                conversation_service,
+                planning_runtime,
+                parallel_mode_turn_service,
+                input_sender,
+            );
+        },
+        move || {
+            publish_turn_submission_failure(
+                &panic_input_sender,
+                panic_correlation,
+                TURN_SUBMISSION_WORKER_PANIC_MESSAGE,
+            );
+        },
+    );
+}
+
+fn run_guarded_turn_submission_worker(
+    correlation: TurnSubmissionCorrelation,
+    request: TurnSubmissionRequest,
+    conversation_service: ConversationService,
+    planning_runtime: PlanningRuntimeUseCases,
+    parallel_mode_turn_service: ParallelModeTurnService,
+    input_sender: CoreInputSender,
+) {
+    let mut settlement = TurnSubmissionWorkerSettlement {
+        supervisor_reconciliation_required: request.slot_lease_handoff.is_some(),
+        ..TurnSubmissionWorkerSettlement::default()
+    };
+    let result = catch_redacted_worker_unwind(|| {
         let (resolved_request, expected_lease, launch_notice, invalidate_supervisor_snapshot) =
             match resolve_stream_launch_request(&parallel_mode_turn_service, request) {
                 Ok(result) => result,
                 Err(error) => {
-                    let _ = input_sender.send(CoreInput::ConversationStreamUpdated {
+                    settlement.terminal_published = publish_turn_submission_failure(
+                        &input_sender,
                         correlation,
-                        event: TurnStreamEvent::Failed {
-                            message: format!("parallel mode launch blocked: {error}"),
-                        },
-                    });
+                        format!("parallel mode launch blocked: {error}"),
+                    );
                     return;
                 }
             };
+
+        settlement.stream_lifecycle = Some(expected_lease.clone().map_or_else(
+            || {
+                parallel_mode_turn_service
+                    .stream_lifecycle(resolved_request.workspace_directory.clone())
+            },
+            |lease| parallel_mode_turn_service.stream_lifecycle_for_lease(lease),
+        ));
 
         let _ = input_sender.send(CoreInput::ConversationTurnWorkspaceChanged {
             correlation,
@@ -58,7 +110,7 @@ pub(crate) fn spawn_turn_submission_worker(
             &planning_runtime,
             &resolved_request.workspace_directory,
         )
-        .with_parallel_slot_lease(expected_lease.clone());
+        .with_parallel_slot_lease(expected_lease);
 
         if invalidate_supervisor_snapshot {
             let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
@@ -73,40 +125,42 @@ pub(crate) fn spawn_turn_submission_worker(
         run_conversation_stream_worker(
             correlation,
             resolved_request,
-            expected_lease,
             execution_snapshot_capture,
             conversation_service,
-            parallel_mode_turn_service,
-            input_sender,
+            input_sender.clone(),
+            &mut settlement,
         );
     });
+
+    if result.is_err() {
+        settle_turn_submission_panic(&input_sender, correlation, &mut settlement);
+    }
 }
 
 fn run_conversation_stream_worker(
     correlation: TurnSubmissionCorrelation,
     request: TurnSubmissionRequest,
-    expected_lease: Option<ParallelModeSlotLeaseSnapshot>,
     execution_snapshot_capture: PlanningTurnExecutionSnapshotCapture,
     conversation_service: ConversationService,
-    parallel_mode_turn_service: ParallelModeTurnService,
     input_sender: CoreInputSender,
+    settlement: &mut TurnSubmissionWorkerSettlement,
 ) {
     let (event_tx, event_rx) = conversation_stream_channel();
 
     let request_for_service = request.clone();
-    let service_thread = thread::spawn(move || {
+    let service_thread = spawn_joinable_redacted_worker(move || {
         run_stream_request(conversation_service, request_for_service, event_tx)
     });
-    let mut stream_lifecycle = expected_lease.map_or_else(
-        || parallel_mode_turn_service.stream_lifecycle(request.workspace_directory.clone()),
-        |lease| parallel_mode_turn_service.stream_lifecycle_for_lease(lease),
-    );
 
     let mut observed_terminal_receipt = None;
     let mut observed_terminal_failure = None;
 
     while let Ok(event) = event_rx.recv() {
-        let lifecycle_outcome = stream_lifecycle.observe_event(&event);
+        let lifecycle_outcome = settlement
+            .stream_lifecycle
+            .as_mut()
+            .expect("turn submission must create its stream lifecycle before execution")
+            .observe_event(&event);
         if lifecycle_outcome.invalidate_supervisor_snapshot {
             let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
         }
@@ -156,10 +210,9 @@ fn run_conversation_stream_worker(
         Ok(result) => {
             observe_stream_completion(&request, observed_terminal_receipt.as_ref(), result)
         }
-        Err(payload) => observe_stream_panic(
+        Err(_) => observe_stream_panic(
             &request,
             observed_terminal_receipt.is_some() || observed_terminal_failure.is_some(),
-            payload,
         ),
     };
     if let Some(message) = observed_terminal_failure {
@@ -180,8 +233,12 @@ fn run_conversation_stream_worker(
         terminal_failure_observed,
         runtime_notice,
     } = observation;
-    let completion_outcome =
-        stream_lifecycle.finalize_after_stream_completion(terminal_failure_observed);
+    let completion_outcome = settlement
+        .stream_lifecycle
+        .as_ref()
+        .expect("turn submission must retain its stream lifecycle through finalization")
+        .finalize_after_stream_completion(terminal_failure_observed);
+    settlement.lifecycle_finalized = true;
     if completion_outcome.invalidate_supervisor_snapshot {
         let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
     }
@@ -199,20 +256,80 @@ fn run_conversation_stream_worker(
         });
     }
 
-    if let Some(receipt) = projected_terminal_receipt {
-        let _ = input_sender.send(CoreInput::ConversationStreamUpdated {
-            correlation,
-            event: TurnStreamEvent::TurnTerminal {
-                receipt,
-                execution_snapshot_capture: Some(execution_snapshot_capture),
-            },
-        });
+    settlement.terminal_published = if let Some(receipt) = projected_terminal_receipt {
+        input_sender
+            .send(CoreInput::ConversationStreamUpdated {
+                correlation,
+                event: TurnStreamEvent::TurnTerminal {
+                    receipt,
+                    execution_snapshot_capture: Some(execution_snapshot_capture),
+                },
+            })
+            .is_ok()
     } else if let Some(message) = terminal_failure_message {
-        let _ = input_sender.send(CoreInput::ConversationStreamUpdated {
-            correlation,
-            event: TurnStreamEvent::Failed { message },
-        });
+        publish_turn_submission_failure(&input_sender, correlation, message)
+    } else {
+        false
+    };
+}
+
+fn settle_turn_submission_panic(
+    input_sender: &CoreInputSender,
+    correlation: TurnSubmissionCorrelation,
+    settlement: &mut TurnSubmissionWorkerSettlement,
+) {
+    if !settlement.lifecycle_finalized
+        && let Some(stream_lifecycle) = settlement.stream_lifecycle.as_ref()
+    {
+        match catch_redacted_worker_unwind(|| {
+            stream_lifecycle.finalize_after_stream_completion(true)
+        }) {
+            Ok(completion_outcome) => {
+                settlement.lifecycle_finalized = true;
+                if completion_outcome.invalidate_supervisor_snapshot {
+                    let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
+                }
+                if let Some(notice) = completion_outcome.runtime_notice {
+                    let _ = input_sender.send(CoreInput::ConversationTurnRuntimeNotice {
+                        correlation,
+                        notice,
+                    });
+                }
+            }
+            Err(_) => {
+                let _ = input_sender.send(CoreInput::ConversationTurnRuntimeNotice {
+                    correlation,
+                    notice: "parallel turn lifecycle recovery panicked; supervisor reconciliation required"
+                        .to_string(),
+                });
+            }
+        }
     }
+    if settlement.supervisor_reconciliation_required && !settlement.lifecycle_finalized {
+        let _ = input_sender.send(CoreInput::ParallelModeSupervisorSnapshotInvalidated);
+    }
+    if !settlement.terminal_published {
+        settlement.terminal_published = publish_turn_submission_failure(
+            input_sender,
+            correlation,
+            TURN_SUBMISSION_WORKER_PANIC_MESSAGE,
+        );
+    }
+}
+
+fn publish_turn_submission_failure(
+    input_sender: &CoreInputSender,
+    correlation: TurnSubmissionCorrelation,
+    message: impl Into<String>,
+) -> bool {
+    input_sender
+        .send(CoreInput::ConversationStreamUpdated {
+            correlation,
+            event: TurnStreamEvent::Failed {
+                message: message.into(),
+            },
+        })
+        .is_ok()
 }
 
 fn resolve_stream_launch_request(
@@ -470,19 +587,16 @@ fn observe_stream_completion(
 fn observe_stream_panic(
     request: &TurnSubmissionRequest,
     saw_terminal_event: bool,
-    payload: Box<dyn Any + Send>,
 ) -> StreamExecutionObservation {
-    let panic_summary = panic_payload_summary(payload);
-
     if saw_terminal_event {
         StreamExecutionObservation {
             projected_terminal_receipt: None,
             terminal_failure_message: Some(format!(
-                "{} panicked after emitting an unverified terminal receipt: {panic_summary}",
+                "{} panicked after emitting an unverified terminal receipt",
                 request.request_label()
             )),
             runtime_notice: Some(format!(
-                "{} panicked after the terminal event: {panic_summary}",
+                "{} panicked after the terminal event",
                 request.request_label()
             )),
             terminal_failure_observed: true,
@@ -491,27 +605,16 @@ fn observe_stream_panic(
         StreamExecutionObservation {
             projected_terminal_receipt: None,
             terminal_failure_message: Some(format!(
-                "{} panicked before a terminal event: {panic_summary}",
+                "{} panicked before a terminal event",
                 request.request_label()
             )),
             runtime_notice: Some(format!(
-                "{} panicked before a terminal event: {panic_summary}",
+                "{} panicked before a terminal event",
                 request.request_label()
             )),
             terminal_failure_observed: true,
         }
     }
-}
-
-fn panic_payload_summary(payload: Box<dyn Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        return (*message).to_string();
-    }
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-
-    "unknown panic payload".to_string()
 }
 
 #[cfg(test)]
@@ -522,7 +625,16 @@ mod tests {
     use crate::application::service::planning::{
         PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
     };
-    use crate::core::app::CorePromptOrigin;
+    use crate::core::app::{AppEvent, CoreEffect, CorePromptOrigin, TurnStreamUpdate};
+    use crate::core::runtime::{CoreEffectExecutor, CoreRuntime, core_input_channel};
+
+    struct NoopEffectExecutor;
+
+    impl CoreEffectExecutor for NoopEffectExecutor {
+        fn run_effect(&self, _effect: CoreEffect) -> Option<CoreInput> {
+            None
+        }
+    }
 
     fn sample_request() -> TurnSubmissionRequest {
         TurnSubmissionRequest {
@@ -671,34 +783,83 @@ mod tests {
 
     #[test]
     fn panic_before_terminal_event_becomes_failure_and_notice() {
-        let observation =
-            observe_stream_panic(&sample_request(), false, Box::new("worker crashed"));
+        let observation = observe_stream_panic(&sample_request(), false);
 
         assert_eq!(
             observation.terminal_failure_message,
-            Some("turn stream panicked before a terminal event: worker crashed".to_string())
+            Some("turn stream panicked before a terminal event".to_string())
         );
         assert_eq!(
             observation.runtime_notice,
-            Some("turn stream panicked before a terminal event: worker crashed".to_string())
+            Some("turn stream panicked before a terminal event".to_string())
         );
     }
 
     #[test]
     fn panic_after_terminal_event_rejects_the_unverified_terminal() {
-        let observation = observe_stream_panic(&sample_request(), true, Box::new("worker crashed"));
+        let observation = observe_stream_panic(&sample_request(), true);
 
         assert_eq!(
             observation.terminal_failure_message,
-            Some(
-                "turn stream panicked after emitting an unverified terminal receipt: worker crashed"
-                    .to_string()
-            )
+            Some("turn stream panicked after emitting an unverified terminal receipt".to_string())
         );
         assert_eq!(
             observation.runtime_notice,
-            Some("turn stream panicked after the terminal event: worker crashed".to_string())
+            Some("turn stream panicked after the terminal event".to_string())
         );
+    }
+
+    #[test]
+    fn turn_submission_panic_settlement_publishes_one_exact_correlated_terminal() {
+        let (input_sender, input_receiver) = core_input_channel();
+        let mut runtime = CoreRuntime::new(NoopEffectExecutor, input_receiver);
+        let correlation = runtime.begin_test_turn_submission();
+        let mut settlement = TurnSubmissionWorkerSettlement::default();
+
+        settle_turn_submission_panic(&input_sender, correlation, &mut settlement);
+        settle_turn_submission_panic(&input_sender, correlation, &mut settlement);
+
+        let outcomes = runtime.drain_pending_inputs(2);
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(
+            outcomes[0].events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if matches!(
+                    &snapshot.update,
+                    TurnStreamUpdate::Failed { message, .. }
+                        if message == TURN_SUBMISSION_WORKER_PANIC_MESSAGE
+                )
+        ));
+        assert!(settlement.terminal_published);
+    }
+
+    #[test]
+    fn pre_lifecycle_parallel_panic_requests_reconciliation_before_terminal() {
+        let (input_sender, input_receiver) = core_input_channel();
+        let mut runtime = CoreRuntime::new(NoopEffectExecutor, input_receiver);
+        let correlation = runtime.begin_test_turn_submission();
+        let mut settlement = TurnSubmissionWorkerSettlement {
+            supervisor_reconciliation_required: true,
+            ..TurnSubmissionWorkerSettlement::default()
+        };
+
+        settle_turn_submission_panic(&input_sender, correlation, &mut settlement);
+
+        let outcomes = runtime.drain_pending_inputs(3);
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(
+            outcomes[0].events,
+            vec![AppEvent::ParallelModeSupervisorSnapshotInvalidated]
+        );
+        assert!(matches!(
+            outcomes[1].events.as_slice(),
+            [AppEvent::TurnStreamSnapshotChanged(snapshot)]
+                if matches!(
+                    &snapshot.update,
+                    TurnStreamUpdate::Failed { message, .. }
+                        if message == TURN_SUBMISSION_WORKER_PANIC_MESSAGE
+                )
+        ));
     }
 
     #[test]

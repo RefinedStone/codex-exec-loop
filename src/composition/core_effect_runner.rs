@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 
 use anyhow::Result;
 
@@ -32,10 +30,13 @@ use crate::application::service::planning::{
     PlanningWorkspaceUseCases,
 };
 use crate::application::service::post_turn_evaluation::{
-    POST_TURN_EVALUATION_TIMEOUT, PostTurnEvaluationService,
+    POST_TURN_EVALUATION_TIMEOUT, PostTurnEvaluationService, post_turn_evaluation_failure_execution,
 };
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::composition::core_effect_worker::{
+    spawn_effect_completion_worker, spawn_effect_completion_worker_with_recovery,
+};
 use crate::composition::core_turn_submission;
 use crate::composition::production;
 use crate::core::app::github_review_polling_target_is_valid;
@@ -257,15 +258,17 @@ impl CoreEffectRunner {
         self
     }
 
-    pub fn spawn_startup_checks(&self, correlation: StartupCheckCorrelation) {
+    fn spawn_startup_checks(&self, correlation: StartupCheckCorrelation) {
         let startup_service = self.startup_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let completion =
-                guarded_startup_checks_completion(correlation, |workspace_directory| {
-                    startup_service.run_checks(workspace_directory)
-                });
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        let panic_completion = startup_checks_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!("startup checks worker panicked")),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
+            guarded_startup_checks_completion(correlation, |workspace_directory| {
+                startup_service.run_checks(workspace_directory)
+            })
         });
     }
 
@@ -426,7 +429,7 @@ impl CoreEffectRunner {
         }
     }
 
-    pub fn spawn_session_catalog_load(
+    fn spawn_session_catalog_load(
         &self,
         correlation: SessionCatalogLoadCorrelation,
         limit: usize,
@@ -434,131 +437,150 @@ impl CoreEffectRunner {
     ) {
         let session_service = self.session_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = session_catalog_completion(
+            correlation,
+            Err(anyhow::anyhow!("session catalog worker panicked")),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
-            let completion = session_catalog_completion(
-                correlation,
-                session_service.load_session_catalog(request),
-            );
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            session_catalog_completion(correlation, session_service.load_session_catalog(request))
         });
     }
 
-    pub fn spawn_session_rename(&self, correlation: SessionRenameCorrelation) {
+    fn spawn_session_rename(&self, correlation: SessionRenameCorrelation) {
         let session_service = self.session_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = session_rename_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!("session rename worker panicked")),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = session_service.rename_session(correlation.request.clone());
-            let completion = session_rename_completion(correlation, result);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            session_rename_completion(correlation, result)
         });
     }
 
-    pub fn spawn_conversation_load(
+    fn spawn_conversation_load(
         &self,
         correlation: ConversationLoadCorrelation,
         fallback_workspace_directory: String,
     ) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = conversation_snapshot_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!("conversation load worker panicked")),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = conversation_service.load_thread_snapshot(
                 correlation.requested_thread_id.as_str(),
                 fallback_workspace_directory.as_str(),
             );
-            let completion = conversation_snapshot_completion(correlation, result);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            conversation_snapshot_completion(correlation, result)
         });
     }
 
-    pub fn spawn_parallel_peek_conversation_load(&self, correlation: ParallelPeekLoadCorrelation) {
+    fn spawn_parallel_peek_conversation_load(&self, correlation: ParallelPeekLoadCorrelation) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = parallel_peek_conversation_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!(
+                "parallel peek conversation worker panicked"
+            )),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result =
                 conversation_service.load_snapshot(correlation.requested_thread_id.as_str());
-            let completion = parallel_peek_conversation_completion(correlation, result);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            parallel_peek_conversation_completion(correlation, result)
         });
     }
 
-    pub fn spawn_review_center_load(&self, correlation: ReviewCenterLoadCorrelation) {
+    fn spawn_review_center_load(&self, correlation: ReviewCenterLoadCorrelation) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = CoreEffectCompletion::ReviewCenterLoaded {
+            correlation: correlation.clone(),
+            snapshot: failed_review_center_snapshot("review center worker panicked"),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let snapshot = load_review_center_snapshot(&conversation_service, &correlation);
-            let _ = input_sender.send(CoreInput::EffectCompleted(
-                CoreEffectCompletion::ReviewCenterLoaded {
-                    correlation,
-                    snapshot,
-                },
-            ));
+            CoreEffectCompletion::ReviewCenterLoaded {
+                correlation,
+                snapshot,
+            }
         });
     }
 
-    pub fn spawn_queue_authority_load(&self, correlation: QueueAuthorityLoadCorrelation) {
+    fn spawn_queue_authority_load(&self, correlation: QueueAuthorityLoadCorrelation) {
         let planning_queue = self.planning_queue.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = CoreEffectCompletion::QueueAuthorityLoaded {
+            correlation: correlation.clone(),
+            result: Err(QueueAuthorityLoadError::AuthorityUnavailable(
+                "queue authority worker panicked".to_string(),
+            )),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = queue_authority_result(
                 planning_queue.load_coherent_authority(&correlation.workspace_directory),
             );
-            let _ = input_sender.send(CoreInput::EffectCompleted(
-                CoreEffectCompletion::QueueAuthorityLoaded {
-                    correlation,
-                    result: result.map(Box::new),
-                },
-            ));
+            CoreEffectCompletion::QueueAuthorityLoaded {
+                correlation,
+                result: result.map(Box::new),
+            }
         });
     }
 
-    pub fn spawn_directions_maintenance_load(
-        &self,
-        correlation: DirectionsMaintenanceLoadCorrelation,
-    ) {
+    fn spawn_directions_maintenance_load(&self, correlation: DirectionsMaintenanceLoadCorrelation) {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = CoreEffectCompletion::DirectionsMaintenanceLoaded {
+            correlation: correlation.clone(),
+            result: Err("directions maintenance worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = directions_maintenance_result(
                 planning_workspace.load_summary(&correlation.workspace_directory),
             );
-            let _ = input_sender.send(CoreInput::EffectCompleted(
-                CoreEffectCompletion::DirectionsMaintenanceLoaded {
-                    correlation,
-                    result,
-                },
-            ));
+            CoreEffectCompletion::DirectionsMaintenanceLoaded {
+                correlation,
+                result,
+            }
         });
     }
 
-    pub fn spawn_planning_runtime_projection_load(
+    fn spawn_planning_runtime_projection_load(
         &self,
         correlation: PlanningRuntimeRefreshCorrelation,
     ) {
         let planning_runtime = self.planning_runtime.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = CoreEffectCompletion::PlanningRuntimeLoaded {
+            correlation: correlation.clone(),
+            result: Err("planning runtime worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = planning_runtime
                 .inspect_runtime_projection(&correlation.workspace_directory)
                 .map(PlanningRuntimeRefreshSnapshot::new)
                 .map(Box::new)
                 .map_err(|error| error.to_string());
-            let _ = input_sender.send(CoreInput::EffectCompleted(
-                CoreEffectCompletion::PlanningRuntimeLoaded {
-                    correlation,
-                    result,
-                },
-            ));
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation,
+                result,
+            }
         });
     }
 
-    pub fn spawn_planning_workspace_reset(
-        &self,
-        correlation: PlanningWorkspaceOperationCorrelation,
-    ) {
+    fn spawn_planning_workspace_reset(&self, correlation: PlanningWorkspaceOperationCorrelation) {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+            correlation: correlation.clone(),
+            result: Err("planning workspace reset worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = correlation
                 .reset_target()
                 .ok_or_else(|| anyhow::anyhow!("planning workspace reset operation mismatch"))
@@ -588,17 +610,21 @@ impl CoreEffectRunner {
                 correlation,
                 result,
             };
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            completion
         });
     }
 
-    pub fn spawn_simple_planning_draft_stage(
+    fn spawn_simple_planning_draft_stage(
         &self,
         correlation: PlanningWorkspaceOperationCorrelation,
     ) {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = CoreEffectCompletion::PlanningSimpleDraftStaged {
+            correlation: correlation.clone(),
+            result: Err("planning simple draft stage worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = if matches!(
                 &correlation.operation,
                 PlanningWorkspaceOperationKind::StageSimpleDraft
@@ -616,74 +642,81 @@ impl CoreEffectRunner {
                 ))
             }
             .map_err(|error| error.to_string());
-            let _ = input_sender.send(CoreInput::EffectCompleted(
-                CoreEffectCompletion::PlanningSimpleDraftStaged {
-                    correlation,
-                    result,
-                },
-            ));
+            CoreEffectCompletion::PlanningSimpleDraftStaged {
+                correlation,
+                result,
+            }
         });
     }
 
-    pub fn spawn_simple_planning_editor_load(
+    fn spawn_simple_planning_editor_load(
         &self,
         correlation: PlanningWorkspaceOperationCorrelation,
     ) {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let completion =
-                simple_planning_editor_load_completion(&planning_workspace, correlation);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        let panic_completion = CoreEffectCompletion::PlanningSimpleEditorLoaded {
+            correlation: correlation.clone(),
+            result: Err("planning simple editor load worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
+            simple_planning_editor_load_completion(&planning_workspace, correlation)
         });
     }
 
-    pub fn spawn_planning_editor_stage(&self, correlation: PlanningWorkspaceOperationCorrelation) {
+    fn spawn_planning_editor_stage(&self, correlation: PlanningWorkspaceOperationCorrelation) {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let completion = planning_editor_stage_completion(&planning_workspace, correlation);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        let panic_completion = CoreEffectCompletion::PlanningEditorStaged {
+            correlation: correlation.clone(),
+            result: Err("planning editor stage worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
+            planning_editor_stage_completion(&planning_workspace, correlation)
         });
     }
 
-    pub fn spawn_planning_editor_mutation(
+    fn spawn_planning_editor_mutation(
         &self,
         correlation: PlanningWorkspaceOperationCorrelation,
         request: Box<PlanningEditorMutationRequest>,
     ) {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let completion =
-                planning_editor_mutation_completion(&planning_workspace, correlation, *request);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        let panic_completion = CoreEffectCompletion::PlanningEditorMutationCompleted {
+            correlation: correlation.clone(),
+            result: Err("planning editor mutation worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
+            planning_editor_mutation_completion(&planning_workspace, correlation, *request)
         });
     }
 
-    pub fn spawn_simple_planning_draft_promotion(
+    fn spawn_simple_planning_draft_promotion(
         &self,
         correlation: PlanningWorkspaceOperationCorrelation,
     ) {
         let planning_workspace = self.planning_workspace.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let completion =
-                simple_planning_draft_promotion_completion(&planning_workspace, correlation);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        let panic_completion = CoreEffectCompletion::PlanningSimpleDraftPromoted {
+            correlation: correlation.clone(),
+            result: Err("planning simple draft promotion worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
+            simple_planning_draft_promotion_completion(&planning_workspace, correlation)
         });
     }
 
-    pub fn spawn_queue_mutation(&self, correlation: QueueMutationCorrelation) {
+    fn spawn_queue_mutation(&self, correlation: QueueMutationCorrelation) {
         let planning_queue = self.planning_queue.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = queue_mutation_panic_completion(correlation.clone());
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let request = planning_queue_cancellation_request(&correlation.intent);
-            let completion = queue_mutation_completion(
+            queue_mutation_completion(
                 correlation,
                 planning_queue.execute_cancellation_transaction(request),
-            );
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            )
         });
     }
 
@@ -694,10 +727,13 @@ impl CoreEffectRunner {
         previous_state: Option<crate::domain::github_review::GithubPullRequestPollState>,
     ) {
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = github_review_poll_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!("GitHub review polling worker panicked")),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = service.poll(&correlation.target, previous_state.as_ref());
-            let completion = github_review_poll_completion(correlation, result);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            github_review_poll_completion(correlation, result)
         });
     }
 
@@ -709,44 +745,55 @@ impl CoreEffectRunner {
         let loader = self.github_review_polling_setup_loader.clone();
         let services = self.github_review_polling_services.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let loaded = catch_unwind(AssertUnwindSafe(|| loader(&request)))
-                .map_err(|_| anyhow::anyhow!("GitHub review polling setup worker panicked"))
-                .and_then(|result| result);
-            let result = match loaded {
-                Ok(Some((target, _service))) if !github_review_polling_target_is_valid(&target) => {
-                    services.complete(&correlation, None);
-                    Err("GitHub review polling setup returned an invalid target".to_string())
-                }
-                Ok(Some((target, _service)))
-                    if request
-                        .mode
-                        .explicit_target()
-                        .is_some_and(|expected| expected != &target) =>
-                {
-                    services.complete(&correlation, None);
-                    Err("GitHub review polling setup returned a different target".to_string())
-                }
-                Ok(Some((target, service))) => {
-                    services.complete(&correlation, Some(service));
-                    Ok(GithubReviewPollingSetupResult::Active { target })
-                }
-                Ok(None) => {
-                    services.complete(&correlation, None);
-                    Ok(GithubReviewPollingSetupResult::Disabled)
-                }
-                Err(error) => {
-                    services.complete(&correlation, None);
-                    Err(error.to_string())
-                }
-            };
-            let _ = input_sender.send(CoreInput::EffectCompleted(
+        let panic_correlation = correlation.clone();
+        let panic_services = services.clone();
+        let panic_completion = CoreEffectCompletion::GithubReviewPollingSetupCompleted {
+            correlation: panic_correlation.clone(),
+            result: Err("GitHub review polling setup worker panicked".to_string()),
+        };
+        spawn_effect_completion_worker_with_recovery(
+            input_sender,
+            panic_completion,
+            move || {
+                panic_services.complete(&panic_correlation, None);
+            },
+            move || {
+                let loaded = loader(&request);
+                let result = match loaded {
+                    Ok(Some((target, _service)))
+                        if !github_review_polling_target_is_valid(&target) =>
+                    {
+                        services.complete(&correlation, None);
+                        Err("GitHub review polling setup returned an invalid target".to_string())
+                    }
+                    Ok(Some((target, _service)))
+                        if request
+                            .mode
+                            .explicit_target()
+                            .is_some_and(|expected| expected != &target) =>
+                    {
+                        services.complete(&correlation, None);
+                        Err("GitHub review polling setup returned a different target".to_string())
+                    }
+                    Ok(Some((target, service))) => {
+                        services.complete(&correlation, Some(service));
+                        Ok(GithubReviewPollingSetupResult::Active { target })
+                    }
+                    Ok(None) => {
+                        services.complete(&correlation, None);
+                        Ok(GithubReviewPollingSetupResult::Disabled)
+                    }
+                    Err(error) => {
+                        services.complete(&correlation, None);
+                        Err(error.to_string())
+                    }
+                };
                 CoreEffectCompletion::GithubReviewPollingSetupCompleted {
                     correlation,
                     result,
-                },
-            ));
-        });
+                }
+            },
+        );
     }
 
     fn spawn_manual_prompt_preparation(
@@ -757,27 +804,47 @@ impl CoreEffectRunner {
         let service = self.manual_prompt_preparation_service.clone();
         let input_sender = self.input_sender.clone();
         let workers = self.manual_prompt_workers.clone();
-        thread::spawn(move || {
-            let generation = request.correlation.generation;
-            let panic_correlation = request.correlation.clone();
-            let panic_transcript = request.raw_prompt.trim().to_string();
-            let result = catch_redacted_worker_unwind(|| {
-                service.prepare_guarded(request, &|| permit.is_active())
-            })
-            .unwrap_or_else(|_| {
-                crate::domain::planning::ManualPromptOutcome::Rejected {
-                    correlation: panic_correlation,
-                    transcript_text: panic_transcript,
-                    runtime_projection: Box::new(PlanningRuntimeProjection::invalid(
-                        "manual prompt preparation worker panicked",
-                    )),
-                    reason: "manual prompt preparation worker panicked".to_string(),
-                }
-            });
-            workers.finish(generation, &permit);
-            let completion = CoreEffectCompletion::ManualPromptPrepared(Box::new(result));
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
-        });
+        let generation = request.correlation.generation;
+        let panic_correlation = request.correlation.clone();
+        let panic_transcript = request.raw_prompt.trim().to_string();
+        let panic_workers = workers.clone();
+        let panic_permit = permit.clone();
+        let panic_completion = CoreEffectCompletion::ManualPromptPrepared(Box::new(
+            crate::domain::planning::ManualPromptOutcome::Rejected {
+                correlation: panic_correlation,
+                transcript_text: panic_transcript,
+                runtime_projection: Box::new(PlanningRuntimeProjection::invalid(
+                    "manual prompt preparation worker panicked",
+                )),
+                reason: "manual prompt preparation worker panicked".to_string(),
+            },
+        ));
+        spawn_effect_completion_worker_with_recovery(
+            input_sender,
+            panic_completion,
+            move || {
+                panic_workers.finish(generation, &panic_permit);
+            },
+            move || {
+                let panic_correlation = request.correlation.clone();
+                let panic_transcript = request.raw_prompt.trim().to_string();
+                let result = catch_redacted_worker_unwind(|| {
+                    service.prepare_guarded(request, &|| permit.is_active())
+                })
+                .unwrap_or_else(|_| {
+                    crate::domain::planning::ManualPromptOutcome::Rejected {
+                        correlation: panic_correlation,
+                        transcript_text: panic_transcript,
+                        runtime_projection: Box::new(PlanningRuntimeProjection::invalid(
+                            "manual prompt preparation worker panicked",
+                        )),
+                        reason: "manual prompt preparation worker panicked".to_string(),
+                    }
+                });
+                workers.finish(generation, &permit);
+                CoreEffectCompletion::ManualPromptPrepared(Box::new(result))
+            },
+        );
     }
 
     fn spawn_stop_request_attempt(
@@ -789,52 +856,72 @@ impl CoreEffectRunner {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
         let workers = self.stop_request_workers.clone();
-        thread::spawn(move || {
-            let result = catch_redacted_worker_unwind(|| {
-                if !permit.is_active() {
-                    return Err(anyhow::anyhow!(
-                        "stop request was superseded before provider execution"
-                    ));
-                }
-                conversation_service.request_stop_all_sessions()
-            })
-            .map_err(|_| anyhow::anyhow!("stop request worker panicked"))
-            .and_then(|result| result);
-            workers.finish(correlation.generation, &permit);
-            let completion = stop_request_attempt_completion(correlation, attempt, result);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
-        });
+        let panic_correlation = correlation.clone();
+        let panic_attempt = attempt.clone();
+        let panic_workers = workers.clone();
+        let panic_permit = permit.clone();
+        let panic_completion = stop_request_attempt_completion(
+            panic_correlation.clone(),
+            panic_attempt,
+            Err(anyhow::anyhow!("stop request worker panicked")),
+        );
+        spawn_effect_completion_worker_with_recovery(
+            input_sender,
+            panic_completion,
+            move || {
+                panic_workers.finish(panic_correlation.generation, &panic_permit);
+            },
+            move || {
+                let result = catch_redacted_worker_unwind(|| {
+                    if !permit.is_active() {
+                        return Err(anyhow::anyhow!(
+                            "stop request was superseded before provider execution"
+                        ));
+                    }
+                    conversation_service.request_stop_all_sessions()
+                })
+                .map_err(|_| anyhow::anyhow!("stop request worker panicked"))
+                .and_then(|result| result);
+                workers.finish(correlation.generation, &permit);
+                stop_request_attempt_completion(correlation, attempt, result)
+            },
+        );
     }
 
-    pub fn spawn_approval_decision_submission(&self, correlation: ApprovalDecisionCorrelation) {
+    fn spawn_approval_decision_submission(&self, correlation: ApprovalDecisionCorrelation) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = approval_decision_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!("approval decision worker panicked")),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = conversation_service
                 .resolve_approval_request(&correlation.approval_id, correlation.decision);
-            let completion = approval_decision_completion(correlation, result);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            approval_decision_completion(correlation, result)
         });
     }
 
-    pub fn spawn_approval_review_persistence(
-        &self,
-        correlation: ApprovalReviewPersistenceCorrelation,
-    ) {
+    fn spawn_approval_review_persistence(&self, correlation: ApprovalReviewPersistenceCorrelation) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
+        let panic_completion = approval_review_persistence_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!(
+                "approval review persistence worker panicked"
+            )),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
             let result = conversation_service.persist_review_center_approval_review_for_workspace(
                 &correlation.workspace_directory,
                 &correlation.thread_id,
                 &correlation.review,
             );
-            let completion = approval_review_persistence_completion(correlation, result);
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+            approval_review_persistence_completion(correlation, result)
         });
     }
 
-    pub fn spawn_turn_submission(
+    fn spawn_turn_submission(
         &self,
         correlation: crate::core::app::TurnSubmissionCorrelation,
         request: crate::core::app::TurnSubmissionRequest,
@@ -849,29 +936,45 @@ impl CoreEffectRunner {
         );
     }
 
-    pub fn spawn_turn_steer(
+    fn spawn_turn_steer(
         &self,
         correlation: crate::core::app::TurnSteerCorrelation,
         request: crate::domain::conversation::ConversationTurnSteerRequest,
     ) {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let completion =
-                turn_steer_completion(correlation, conversation_service.steer_turn(request));
-            let _ = input_sender.send(CoreInput::EffectCompleted(completion));
+        let panic_completion = turn_steer_completion(
+            correlation.clone(),
+            Err(anyhow::anyhow!("turn steer worker panicked")),
+        );
+        spawn_effect_completion_worker(input_sender, panic_completion, move || {
+            turn_steer_completion(correlation, conversation_service.steer_turn(request))
         });
     }
 
-    pub fn spawn_post_turn_evaluation(&self, request: crate::domain::planning::PostTurnRequest) {
+    fn spawn_post_turn_evaluation(&self, request: crate::domain::planning::PostTurnRequest) {
         let service = self.post_turn_evaluation_service.clone();
         let input_sender = self.input_sender.clone();
-        thread::spawn(move || {
-            let execution = service.evaluate_with_timeout(request, POST_TURN_EVALUATION_TIMEOUT);
-            let _ = input_sender.send(CoreInput::EffectCompleted(
-                CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(execution)),
-            ));
-        });
+        let panic_request = request.clone();
+        let panic_execution = post_turn_evaluation_failure_execution(
+            &panic_request.context,
+            &panic_request,
+            "post-turn evaluation worker panicked".to_string(),
+        );
+        let panic_completion =
+            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(panic_execution));
+        spawn_effect_completion_worker_with_recovery(
+            input_sender,
+            panic_completion,
+            move || {
+                panic_request.continuation_permit.invalidate_if_current();
+            },
+            move || {
+                let execution =
+                    service.evaluate_with_timeout(request, POST_TURN_EVALUATION_TIMEOUT);
+                CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(execution))
+            },
+        );
     }
 }
 
@@ -1371,6 +1474,14 @@ fn review_center_snapshot(
     }
 }
 
+fn failed_review_center_snapshot(message: &str) -> ReviewCenterSnapshot {
+    ReviewCenterSnapshot {
+        current_thread_reviews: Err(message.to_string()),
+        pending_inbox: Err(message.to_string()),
+        recent_history: Err(message.to_string()),
+    }
+}
+
 fn review_center_thread_snapshot(
     review: ReviewCenterThreadProjection,
 ) -> ConversationThreadReviewSnapshot {
@@ -1538,6 +1649,17 @@ fn queue_mutation_completion(
     }
 }
 
+fn queue_mutation_panic_completion(correlation: QueueMutationCorrelation) -> CoreEffectCompletion {
+    let message = "queue mutation worker panicked".to_string();
+    CoreEffectCompletion::QueueMutationCompleted {
+        correlation,
+        result: Box::new(QueueMutationResult {
+            mutation: Err(message.clone()),
+            authority: Err(QueueAuthorityLoadError::AuthorityUnavailable(message)),
+        }),
+    }
+}
+
 fn stop_request_attempt_completion(
     correlation: StopRequestCorrelation,
     attempt: StopRequestAttempt,
@@ -1569,6 +1691,7 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -1602,8 +1725,8 @@ mod tests {
         PlanningEditorMutationIdentity, PlanningEditorMutationTarget,
         PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
         PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, QueueMutationKind,
-        QueueMutationTarget, StartupSnapshot, StopRequestAdmission, TurnStreamEvent,
-        TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+        QueueMutationTarget, SessionCatalogSnapshot, StartupSnapshot, StopRequestAdmission,
+        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
     };
     use crate::core::runtime::{CoreRuntime, core_input_channel};
     use crate::domain::conversation::{
@@ -1816,6 +1939,7 @@ mod tests {
         stop_gate: Option<Arc<OneShotGate>>,
         stop_call_count: AtomicUsize,
         panic_stop_once: AtomicBool,
+        panic_session_catalog_once: AtomicBool,
     }
 
     impl GatedRuntimePort {
@@ -1824,6 +1948,7 @@ mod tests {
                 stop_gate: Some(stop_gate),
                 stop_call_count: AtomicUsize::new(0),
                 panic_stop_once: AtomicBool::new(false),
+                panic_session_catalog_once: AtomicBool::new(false),
             }
         }
 
@@ -1832,6 +1957,16 @@ mod tests {
                 stop_gate: None,
                 stop_call_count: AtomicUsize::new(0),
                 panic_stop_once: AtomicBool::new(true),
+                panic_session_catalog_once: AtomicBool::new(false),
+            }
+        }
+
+        fn panicking_session_catalog_once() -> Self {
+            Self {
+                stop_gate: None,
+                stop_call_count: AtomicUsize::new(0),
+                panic_stop_once: AtomicBool::new(false),
+                panic_session_catalog_once: AtomicBool::new(true),
             }
         }
     }
@@ -1870,6 +2005,12 @@ mod tests {
 
     impl SessionCatalogPort for GatedRuntimePort {
         fn load_session_catalog(&self, _request: SessionCatalogRequest) -> Result<SessionCatalog> {
+            if self
+                .panic_session_catalog_once
+                .swap(false, Ordering::SeqCst)
+            {
+                panic!("SENSITIVE-SESSION-CATALOG-PANIC");
+            }
             Ok(RecentSessions {
                 items: Vec::new(),
                 warnings: Vec::new(),
@@ -1967,6 +2108,24 @@ mod tests {
             PostTurnEvaluationService::new(planning, parallel_turns),
             input_sender,
         )
+    }
+
+    fn test_core_runtime(runtime_port: Arc<GatedRuntimePort>) -> CoreRuntime<CoreEffectRunner> {
+        let (planning_gate, _entered, release) = one_shot_gate();
+        release
+            .send(())
+            .expect("unused planning gate should start open");
+        let planning_workspace = Arc::new(GatedPlanningWorkspacePort {
+            load_gate: planning_gate,
+            simple_authoring_gate: None,
+            stage_call_count: Arc::new(AtomicUsize::new(0)),
+            promote_call_count: Arc::new(AtomicUsize::new(0)),
+            panic_load_once: AtomicBool::new(false),
+            panic_draft_load_once: AtomicBool::new(false),
+        });
+        let (input_sender, input_receiver) = core_input_channel();
+        let runner = test_effect_runner(planning_workspace, runtime_port, input_sender);
+        CoreRuntime::new(runner, input_receiver)
     }
 
     struct LabeledGithubReviewPollerPort {
@@ -4321,6 +4480,52 @@ mod tests {
                 ),
             }
         );
+    }
+
+    #[test]
+    fn session_catalog_worker_panic_returns_one_failure_and_reopens_loading_gate() {
+        let runtime_port = Arc::new(GatedRuntimePort::panicking_session_catalog_once());
+        let mut runtime = test_core_runtime(runtime_port);
+        let command = AppCommand::LoadSessionCatalog {
+            limit: 10,
+            workspace_directory: "/tmp/session-catalog-panic".to_string(),
+        };
+
+        assert!(matches!(
+            runtime.dispatch_command(command.clone()).events.as_slice(),
+            [AppEvent::SessionCatalogChanged(
+                SessionCatalogSnapshot::Loading
+            )]
+        ));
+        let failed = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::SessionCatalogChanged(
+                    SessionCatalogSnapshot::Failed { message }
+                )] if message == "session catalog worker panicked"
+            )
+        });
+        assert_eq!(failed.events.len(), 1);
+        assert!(
+            runtime.poll_pending_input().is_none(),
+            "one panicking catalog worker must emit exactly one completion"
+        );
+
+        assert!(matches!(
+            runtime.dispatch_command(command).events.as_slice(),
+            [AppEvent::SessionCatalogChanged(
+                SessionCatalogSnapshot::Loading
+            )]
+        ));
+        let recovered = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::SessionCatalogChanged(
+                    SessionCatalogSnapshot::Ready(_)
+                )]
+            )
+        });
+        assert_eq!(recovered.events.len(), 1);
     }
 
     #[test]
