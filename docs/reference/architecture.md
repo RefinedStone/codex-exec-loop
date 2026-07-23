@@ -120,13 +120,20 @@ nested provenance, optional queue-mutation receipt, and output workspace. Compos
 malformed worker output into one correlated, redacted failure execution without mutating the shared
 continuation gate before Core admission. The continuation gate keeps shared lifecycle generation
 separate from request-local worker validity, so a stale timeout cannot cancel a newer request that
-captured the same lifecycle generation. After admission, the command
-preserves the complete prior state for an explicit settlement pause, otherwise selects
-`RepairRunning` for a protected planning-file change, preserves the complete state for an empty
-queue with stop policy, and selects `RefreshRunning` for every remaining case. Core emits that
-exact state as `PostTurnEvaluationStarted` before dispatching the asynchronous effect, and the
-effect request carries the same state. The TUI only assigns the started event and no longer retains
-a raw application/planning handle or calls a planning workspace/runtime use case directly.
+captured the same lifecycle generation. Core retains the last exactly accepted
+`PlanningWorkerPanelState` as the history seed and resets it when the conversation lifecycle is
+invalidated or replaced. The adapter's request field is a neutral compatibility placeholder, not
+history authority. After admission, Core clones its own seed, preserves it for an explicit
+settlement pause, otherwise selects `RepairRunning` for a protected planning-file change, preserves
+it for an empty queue with stop policy, and selects `RefreshRunning` for every remaining case. Core
+overwrites the effect request with that accepted state and emits the same state as
+`PostTurnEvaluationStarted` before dispatching the asynchronous effect. Only a completion that
+passes the active correlation, nested execution identity, and turn-authority checks replaces the
+next history seed; stale, duplicate, identity-mismatched, or lifecycle-pruned completions cannot
+change it.
+The TUI only assigns started and completed projections and no longer seeds evaluation from its
+display copy, retains a raw application/planning handle, or calls a planning workspace/runtime use
+case directly.
 
 Native TUI startup also owns prompt-log privacy maintenance through this effect path. Production
 composition injects a typed maintenance port into `StartupService` but performs no SQLite purge or

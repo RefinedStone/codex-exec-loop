@@ -4609,6 +4609,49 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
                 .is_none_or(|ident| ident != "application")),
         "NativeTuiApp must not retain a raw application field"
     );
+
+    let tui_post_turn_source = fs::read_to_string(
+        "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
+    )
+    .expect("TUI post-turn execution source should load");
+    let execute_post_turn_evaluation =
+        top_level_impl_method_source(&tui_post_turn_source, "execute_post_turn_evaluation");
+    let execute_syntax = syn::parse_file(&format!(
+        "impl NativeTuiApp {{\n{execute_post_turn_evaluation}\n}}"
+    ))
+    .expect("TUI post-turn request method should parse");
+    let mut panel_field_reads = NamedFieldAccessVisitor::new("planning_worker_panel_state");
+    panel_field_reads.visit_file(&execute_syntax);
+    assert!(
+        panel_field_reads.lines.is_empty()
+            && !execute_post_turn_evaluation.contains("planning_worker_panel_state"),
+        "TUI post-turn request admission must not seed Core from its projected panel state; field references: {:?}",
+        panel_field_reads.lines
+    );
+    let field_guard_sample = syn::parse_file(
+        "fn sample(app: &NativeTuiApp) { let _ = app.planning_worker_panel_state.clone(); }",
+    )
+    .expect("field guard sample should parse");
+    let mut sample_field_reads = NamedFieldAccessVisitor::new("planning_worker_panel_state");
+    sample_field_reads.visit_file(&field_guard_sample);
+    assert_eq!(
+        sample_field_reads.lines.len(),
+        1,
+        "planning-worker seed guard must detect a direct TUI field read"
+    );
+
+    let application_post_turn_request =
+        top_level_function_source(&tui_post_turn_source, "application_post_turn_request");
+    let compact_application_post_turn_request = application_post_turn_request
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_application_post_turn_request
+            .contains("planning_worker_panel_state:Default::default()"),
+        "the adapter request DTO must carry only a neutral placeholder until Core binds its history seed"
+    );
+
     assert_no_production_callable_reference_named_in_paths(
         "production TUI must not call or retain the old post-turn panel-state helper",
         &["src/adapter/inbound/tui"],
@@ -4633,9 +4676,98 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
     let tui_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs").unwrap();
     let tui_tests =
         fs::read_to_string("src/adapter/inbound/tui/app/shell_runtime/tests.rs").unwrap();
+
+    let core_syntax =
+        syn::parse_file(&core_controller).expect("Core controller source should parse");
+    let controller_fields = named_struct_fields(&core_syntax, "CoreController");
+    let history_seed = controller_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "planning_worker_panel_history_seed")
+        })
+        .expect("CoreController must own the planning-worker panel history seed");
+    assert!(
+        is_named_path_type(&history_seed.ty, "PlanningWorkerPanelState"),
+        "Core planning-worker history seed must retain the complete domain panel state"
+    );
+
+    let start_state =
+        top_level_function_source(&core_controller, "post_turn_worker_panel_start_state");
+    let compact_start_state = start_state
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_start_state.contains("history_seed:&PlanningWorkerPanelState")
+            && compact_start_state.contains("request:&PostTurnRequest")
+            && compact_start_state.contains("letmutstate=history_seed.clone()")
+            && !compact_start_state.contains("request.planning_worker_panel_state"),
+        "Core start-state policy must derive history from its own seed, never the inbound request field"
+    );
+
+    let handle_input = top_level_impl_method_source(&core_controller, "handle_input");
+    let compact_handle_input = handle_input
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_handle_input.contains("post_turn_worker_panel_start_state(")
+            && compact_handle_input.contains("&self.planning_worker_panel_history_seed")
+            && compact_handle_input.contains("request.as_ref()")
+            && compact_handle_input.contains(
+                "request.planning_worker_panel_state=planning_worker_panel_state.clone()"
+            ),
+        "Core admission must overwrite the effect request with the state derived from Core history"
+    );
+    let exact_correlation_guard = compact_handle_input
+        .find("ifself.active_post_turn_evaluation_correlation()!=Some(&correlation)")
+        .expect("Core must reject a completion outside the active post-turn correlation");
+    let exact_execution_guard = compact_handle_input
+        .find("if!correlation.matches_execution(execution.as_ref())")
+        .expect("Core must reject a completion with mismatched execution identity");
+    let accepted_turn_guard = compact_handle_input
+        .find("accept_post_turn_evaluation_completion(execution.as_ref())")
+        .expect("Core must let turn authority accept the exact completion");
+    let history_seed_commit = compact_handle_input
+        .find(
+            "self.planning_worker_panel_history_seed=execution.planning_worker_panel_state.clone()",
+        )
+        .expect("Core must retain the accepted completion as the next history seed");
+    assert!(
+        exact_correlation_guard < exact_execution_guard
+            && exact_execution_guard < accepted_turn_guard
+            && accepted_turn_guard < history_seed_commit,
+        "Core history may change only after correlation, execution identity, and turn acceptance"
+    );
+
+    let reset_history_seed =
+        top_level_impl_method_source(&core_controller, "reset_planning_worker_panel_history_seed");
+    let compact_reset_history_seed = reset_history_seed
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_reset_history_seed.contains(
+            "self.planning_worker_panel_history_seed=PlanningWorkerPanelState::default()"
+        ),
+        "conversation lifecycle reset must discard the prior planning-worker panel history"
+    );
+    let reset_call_lines = production_callable_reference_lines(
+        &core_controller,
+        "reset_planning_worker_panel_history_seed",
+    );
+    assert!(
+        reset_call_lines.len() >= 3,
+        "Core must reset planning-worker history for invalidation and conversation-load lifecycle paths; calls: {reset_call_lines:?}"
+    );
+
     for required in [
-        "fn post_turn_worker_panel_start_state(request: &PostTurnRequest)",
         "fn post_turn_start_state_obeys_priority_and_preserves_panel_detail()",
+        "fn post_turn_panel_history_updates_only_after_exact_accepted_completion()",
+        "fn conversation_lifecycle_resets_post_turn_panel_history()",
     ] {
         assert!(
             core_controller.contains(required),
@@ -4656,10 +4788,9 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         "TUI must apply the Core-started panel state by direct assignment"
     );
     assert!(
-        tui_tests.contains(
-            "fn post_turn_evaluation_started_event_applies_running_state_without_waiting_for_completion()"
-        ),
-        "TUI must prove running state is visible before post-turn completion"
+        tui_tests
+            .contains("fn post_turn_evaluation_started_event_ignores_forged_tui_history_seed()"),
+        "TUI must prove a forged presentation history cannot seed Core admission"
     );
 }
 
@@ -6076,6 +6207,20 @@ struct ComposerFieldAccessVisitor {
     lines: Vec<usize>,
 }
 
+struct NamedFieldAccessVisitor<'a> {
+    field_name: &'a str,
+    lines: Vec<usize>,
+}
+
+impl<'a> NamedFieldAccessVisitor<'a> {
+    fn new(field_name: &'a str) -> Self {
+        Self {
+            field_name,
+            lines: Vec::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct DirectFunctionCallVisitor {
     calls: Vec<(String, usize)>,
@@ -6109,6 +6254,22 @@ impl<'ast> Visit<'ast> for ComposerFieldAccessVisitor {
 
     fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
         if matches!(&field.member, syn::Member::Named(member) if member == "composer") {
+            self.lines.push(field.member.span().start().line);
+        }
+        visit::visit_expr_field(self, field);
+    }
+}
+
+impl<'ast> Visit<'ast> for NamedFieldAccessVisitor<'_> {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if matches!(&field.member, syn::Member::Named(member) if member == self.field_name) {
             self.lines.push(field.member.span().start().line);
         }
         visit::visit_expr_field(self, field);
