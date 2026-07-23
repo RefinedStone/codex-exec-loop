@@ -844,12 +844,70 @@ fn core_runtime_worker_modules_stay_private_to_effect_boundary() {
 }
 
 #[test]
+fn core_effect_workers_share_one_redacted_panic_totality_boundary() {
+    let runner = fs::read_to_string("src/composition/core_effect_runner.rs")
+        .expect("core effect runner source should load");
+    let turn_submission = fs::read_to_string("src/composition/core_turn_submission.rs")
+        .expect("turn submission worker source should load");
+    let worker = fs::read_to_string("src/composition/core_effect_worker.rs")
+        .expect("shared core effect worker source should load");
+
+    let mut raw_spawn_owners = Vec::new();
+    for path in rust_files_under(&repo_root().join("src/composition")) {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        for line in production_callable_reference_lines(&source, "spawn") {
+            raw_spawn_owners.push(format!("{}:{line}", path.display()));
+        }
+    }
+    assert!(
+        raw_spawn_owners.len() == 1
+            && raw_spawn_owners[0].contains("src/composition/core_effect_worker.rs:"),
+        "the shared worker boundary must own the only production thread spawn in composition: {raw_spawn_owners:?}"
+    );
+    assert!(
+        worker.contains("catch_redacted_worker_unwind(work)")
+            && worker.contains("spawn_effect_completion_worker")
+            && worker.contains("spawn_worker_with_panic_fallback")
+            && worker.contains("spawn_joinable_redacted_worker"),
+        "one-shot, outer turn, and joined stream workers must all use the shared redacted boundary"
+    );
+
+    let production_runner = production_source_before_inline_tests(&runner);
+    assert!(
+        !production_runner.contains("pub fn spawn_"),
+        "Core effect worker entrypoints must stay private behind exhaustive CoreEffect dispatch"
+    );
+    assert!(
+        production_runner.contains("failed_review_center_snapshot(")
+            && production_runner.contains("queue_mutation_panic_completion(")
+            && production_runner.contains("post_turn_evaluation_failure_execution("),
+        "non-Result completion shapes must keep explicit typed panic settlements"
+    );
+    assert!(
+        turn_submission.contains("settle_turn_submission_panic(")
+            && turn_submission.contains("finalize_after_stream_completion(true)")
+            && !turn_submission.contains("panic_payload_summary"),
+        "turn panic recovery must settle the slot lifecycle without exposing panic payloads"
+    );
+
+    let post_turn = fs::read_to_string("src/application/service/post_turn_evaluation.rs")
+        .expect("post-turn evaluation source should load");
+    let production_post_turn = production_source_before_inline_tests(&post_turn);
+    assert!(
+        production_post_turn.contains("catch_redacted_worker_unwind(|| service.evaluate(request))")
+            && !production_post_turn.contains("std::panic::catch_unwind"),
+        "the nested post-turn evaluator must preserve the redacted panic boundary"
+    );
+}
+
+#[test]
 fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch() {
     let runner = fs::read_to_string("src/composition/core_effect_runner.rs")
         .expect("core effect runner source should load");
     let run_effect = runner
         .split_once("pub fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {")
-        .and_then(|(_, body)| body.split_once("pub fn spawn_session_catalog_load("))
+        .and_then(|(_, body)| body.split_once("fn spawn_session_catalog_load("))
         .map(|(body, _)| body)
         .expect("core effect dispatch should have a bounded source body");
 
@@ -877,17 +935,17 @@ fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch()
         .expect("manual preparation worker should have a bounded source body");
     let stop_worker = runner
         .split_once("fn spawn_stop_request_attempt(")
-        .and_then(|(_, body)| body.split_once("pub fn spawn_approval_decision_submission("))
+        .and_then(|(_, body)| body.split_once("fn spawn_approval_decision_submission("))
         .map(|(body, _)| body)
         .expect("stop request worker should have a bounded source body");
     assert!(
-        manual_worker.contains("thread::spawn(move ||")
+        manual_worker.contains("spawn_effect_completion_worker_with_recovery(")
             && manual_worker.contains("catch_redacted_worker_unwind(")
             && manual_worker.contains("service.prepare_guarded(request, &|| permit.is_active())"),
         "manual preparation must run behind its cancellation and panic boundary"
     );
     assert!(
-        stop_worker.contains("thread::spawn(move ||")
+        stop_worker.contains("spawn_effect_completion_worker_with_recovery(")
             && stop_worker.contains("catch_redacted_worker_unwind(")
             && stop_worker.contains("if !permit.is_active()")
             && stop_worker.contains("conversation_service.request_stop_all_sessions()"),
@@ -1220,7 +1278,9 @@ fn native_tui_prompt_log_maintenance_runs_only_inside_the_startup_worker() {
     let startup_worker_calls =
         named_function_call_expression_names(&runner, "spawn_startup_checks");
     assert!(
-        startup_worker_calls.iter().any(|call| call == "spawn")
+        startup_worker_calls
+            .iter()
+            .any(|call| call == "spawn_effect_completion_worker")
             && startup_worker_calls
                 .iter()
                 .any(|call| call == "guarded_startup_checks_completion"),
@@ -1622,22 +1682,22 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
 
     let effect_runner = fs::read_to_string("src/composition/core_effect_runner.rs").unwrap();
     let reset_worker = effect_runner
-        .split_once("pub fn spawn_planning_workspace_reset(")
-        .and_then(|(_, body)| body.split_once("pub fn spawn_simple_planning_draft_stage("))
+        .split_once("fn spawn_planning_workspace_reset(")
+        .and_then(|(_, body)| body.split_once("fn spawn_simple_planning_draft_stage("))
         .map(|(body, _)| body)
         .expect("planning reset worker should have a bounded source body");
     assert!(
-        reset_worker.contains("thread::spawn(move ||")
+        reset_worker.contains("spawn_effect_completion_worker(")
             && reset_worker.contains("catch_redacted_worker_unwind")
             && reset_worker.contains("PlanningWorkspaceResetCompleted"),
         "planning reset provider I/O and redacted panic conversion must stay in the Core effect worker"
     );
     for required in [
-        "pub fn spawn_simple_planning_draft_stage(",
-        "pub fn spawn_planning_editor_stage(",
-        "pub fn spawn_planning_editor_mutation(",
-        "pub fn spawn_simple_planning_editor_load(",
-        "pub fn spawn_simple_planning_draft_promotion(",
+        "fn spawn_simple_planning_draft_stage(",
+        "fn spawn_planning_editor_stage(",
+        "fn spawn_planning_editor_mutation(",
+        "fn spawn_simple_planning_editor_load(",
+        "fn spawn_simple_planning_draft_promotion(",
         "PlanningSimpleDraftStaged",
         "PlanningEditorStaged",
         "PlanningEditorMutationCompleted",

@@ -36,6 +36,8 @@ use crate::domain::planning::{
 };
 use serde_json::json;
 
+use crate::panic_observation::catch_redacted_worker_unwind;
+
 pub(crate) const POST_TURN_EVALUATION_TIMEOUT: Duration = Duration::from_secs(600);
 const POST_TURN_CANCELLATION_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(2);
 #[path = "post_turn_evaluation/logging.rs"]
@@ -92,10 +94,8 @@ impl PostTurnEvaluationService {
         let timeout_request = request.clone();
         let service = self.clone();
         let evaluator = std::thread::spawn(move || {
-            let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                service.evaluate(request)
-            }))
-            .map_err(|_| "post-turn evaluation worker panicked".to_string());
+            let execution = catch_redacted_worker_unwind(|| service.evaluate(request))
+                .map_err(|_| "post-turn evaluation worker panicked".to_string());
             let _ = execution_tx.send(execution);
         });
         match execution_rx.recv_timeout(timeout) {
@@ -1117,7 +1117,7 @@ fn post_turn_evaluation_timeout_execution(
     }
 }
 
-fn post_turn_evaluation_failure_execution(
+pub(crate) fn post_turn_evaluation_failure_execution(
     context: &PostTurnEvaluationContext,
     request: &PostTurnEvaluationRequest,
     message: String,
