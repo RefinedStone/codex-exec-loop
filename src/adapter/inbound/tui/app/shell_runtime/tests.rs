@@ -358,10 +358,10 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
 
     assert!(APP_RS.contains("queue_overlay_ui_state: queue_overlay_ui::QueueOverlayUiState"));
     assert!(APP_RS.contains("queue_mutation_ui_state: queue_overlay_ui::QueueMutationUiState"));
-    assert!(APP_RUNTIME_RS.contains(
+    assert!(APP_RUNTIME_RS.contains("ShellOverlay::Queue => self.queue_overlay_ui_state.reset()"));
+    assert!(!APP_RUNTIME_RS.contains(
         "if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue"
     ));
-    assert!(APP_RUNTIME_RS.contains("self.queue_overlay_ui_state.reset()"));
     assert!(!SHELL_CONTROLLER_RS.contains("refresh_queue_overlay_authority_binding"));
 }
 
