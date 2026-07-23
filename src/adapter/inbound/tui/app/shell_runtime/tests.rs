@@ -1360,6 +1360,32 @@ fn idle_background_poll_after_initial_refresh_does_not_request_redraw() {
 #[test]
 fn live_activity_schedules_delayed_draw_without_immediate_redraw() {
     let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().planning_workspace_directory();
+    let initial_refresh_deadline = Instant::now() + Duration::from_secs(2);
+    while runtime
+        .app()
+        .client_runtime
+        .snapshot()
+        .planning_parallel
+        .planning_runtime_workspace_directory
+        .as_deref()
+        != Some(workspace_directory.as_str())
+        && Instant::now() < initial_refresh_deadline
+    {
+        runtime.poll_background_messages();
+        thread::yield_now();
+    }
+    assert_eq!(
+        runtime
+            .app()
+            .client_runtime
+            .snapshot()
+            .planning_parallel
+            .planning_runtime_workspace_directory
+            .as_deref(),
+        Some(workspace_directory.as_str()),
+        "fixture planning refresh must settle before isolating the live pulse scheduler"
+    );
     runtime.take_redraw_request();
     let now = Instant::now();
     let ConversationState::Ready(conversation) = &mut runtime.app_mut().conversation_state else {
