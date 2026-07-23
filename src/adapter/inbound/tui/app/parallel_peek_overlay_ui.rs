@@ -22,29 +22,30 @@ struct ParallelPeekSelectionKey {
     agent_id: String,
     slot_id: String,
     // Thread ids arrive after lease startup, so they are not selection identity.
-    lease_identity: Option<ParallelModeAgentLeaseIdentity>,
+    lease_identity: ParallelModeAgentLeaseIdentity,
 }
 
 impl ParallelPeekSelectionKey {
-    fn from_entry(entry: &ParallelModeAgentRosterEntry) -> Self {
-        Self {
+    fn from_entry(entry: &ParallelModeAgentRosterEntry) -> Option<Self> {
+        Some(Self {
             agent_id: entry.agent_id.clone(),
             slot_id: entry.slot_id.clone(),
-            lease_identity: entry.lease_identity.clone(),
-        }
+            lease_identity: entry.lease_identity.clone()?,
+        })
     }
 
     fn matches(&self, entry: &ParallelModeAgentRosterEntry) -> bool {
         self.agent_id == entry.agent_id
             && self.slot_id == entry.slot_id
-            && self.lease_identity == entry.lease_identity
+            && entry.lease_identity.as_ref() == Some(&self.lease_identity)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ParallelPeekOverlayUiState {
     step: ParallelPeekOverlayStep,
-    selected_agent_index: usize,
+    // This index is only a navigation anchor. Render and Enter require the key below.
+    selected_agent_anchor_index: usize,
     selected_agent_key: Option<ParallelPeekSelectionKey>,
     preview: Option<ParallelPeekConversationPreview>,
     conversation_scroll_from_bottom: usize,
@@ -54,7 +55,7 @@ impl Default for ParallelPeekOverlayUiState {
     fn default() -> Self {
         Self {
             step: ParallelPeekOverlayStep::AgentList,
-            selected_agent_index: 0,
+            selected_agent_anchor_index: 0,
             selected_agent_key: None,
             preview: None,
             conversation_scroll_from_bottom: 0,
@@ -67,14 +68,13 @@ impl ParallelPeekOverlayUiState {
         self.step
     }
 
-    pub fn selected_agent_index(&self, active_agents: &[ParallelModeAgentRosterEntry]) -> usize {
+    pub fn selected_agent_index(
+        &self,
+        active_agents: &[ParallelModeAgentRosterEntry],
+    ) -> Option<usize> {
         self.selected_agent_key
             .as_ref()
             .and_then(|key| unique_matching_index(active_agents, key))
-            .unwrap_or_else(|| {
-                self.selected_agent_index
-                    .min(active_agents.len().saturating_sub(1))
-            })
     }
 
     pub fn preview(&self) -> Option<&ParallelPeekConversationPreview> {
@@ -89,32 +89,38 @@ impl ParallelPeekOverlayUiState {
         *self = Self::default();
     }
 
+    pub fn select_initial_agent(&mut self, active_agents: &[ParallelModeAgentRosterEntry]) {
+        self.select(active_agents, 0);
+    }
+
     pub fn move_selection(&mut self, active_agents: &[ParallelModeAgentRosterEntry], delta: isize) {
-        self.sync_selection(active_agents);
         if active_agents.is_empty() {
             return;
         }
         let last = active_agents.len() - 1;
+        let navigation_index = self
+            .selected_agent_index(active_agents)
+            .unwrap_or_else(|| self.selected_agent_anchor_index.min(last));
         let selected_agent_index = if delta < 0 {
-            self.selected_agent_index
-                .saturating_sub(delta.unsigned_abs())
+            navigation_index.saturating_sub(delta.unsigned_abs())
         } else {
-            self.selected_agent_index.saturating_add(delta as usize)
+            navigation_index.saturating_add(delta as usize)
         }
         .min(last);
         self.select(active_agents, selected_agent_index);
     }
 
     pub fn sync_selection(&mut self, active_agents: &[ParallelModeAgentRosterEntry]) {
-        let selected_agent_index = self.selected_agent_index(active_agents);
-        self.select(active_agents, selected_agent_index);
+        if let Some(selected_agent_index) = self.selected_agent_index(active_agents) {
+            self.selected_agent_anchor_index = selected_agent_index;
+        }
     }
 
     fn select(&mut self, active_agents: &[ParallelModeAgentRosterEntry], index: usize) {
-        self.selected_agent_index = index;
+        self.selected_agent_anchor_index = index.min(active_agents.len().saturating_sub(1));
         self.selected_agent_key = active_agents
-            .get(index)
-            .map(ParallelPeekSelectionKey::from_entry);
+            .get(self.selected_agent_anchor_index)
+            .and_then(ParallelPeekSelectionKey::from_entry);
     }
 
     pub fn open_preview(&mut self, preview: ParallelPeekConversationPreview) {
@@ -224,35 +230,46 @@ mod tests {
     }
 
     #[test]
-    fn selection_clamps_to_active_agents_and_empty_roster() {
+    fn missing_selection_stays_unresolved_until_explicit_navigation() {
         /*
-         * The picker selection is reused by rendering and Enter dispatch. It
-         * must never point past the active roster, even when the roster shrinks
-         * while the overlay remains open.
+         * A passive roster shrink must not turn the old positional index into
+         * authority for a different lease. Up/Down is the explicit action that
+         * may adopt a surviving row.
          */
         let mut state = ParallelPeekOverlayUiState::default();
         let three_agents = vec![agent("a"), agent("b"), agent("c")];
         let two_agents = vec![agent("a"), agent("b")];
 
+        state.select_initial_agent(&three_agents);
         state.move_selection(&three_agents, 5);
-        assert_eq!(state.selected_agent_index(&three_agents), 2);
+        assert_eq!(state.selected_agent_index(&three_agents), Some(2));
 
         state.sync_selection(&two_agents);
-        assert_eq!(state.selected_agent_index(&two_agents), 1);
+        assert_eq!(state.selected_agent_index(&two_agents), None);
 
         state.move_selection(&two_agents, -5);
-        assert_eq!(state.selected_agent_index(&two_agents), 0);
+        assert_eq!(state.selected_agent_index(&two_agents), Some(0));
+    }
 
-        state.move_selection(&[], 1);
-        assert_eq!(state.selected_agent_index(&[]), 0);
+    #[test]
+    fn transient_empty_roster_preserves_the_selected_lease_identity() {
+        let mut state = ParallelPeekOverlayUiState::default();
+        let active_agents = vec![agent("a"), agent("b")];
+        state.select_initial_agent(&active_agents);
+        state.move_selection(&active_agents, 1);
+
         state.sync_selection(&[]);
-        assert_eq!(state.selected_agent_index(&[]), 0);
+        assert_eq!(state.selected_agent_index(&[]), None);
+
+        state.sync_selection(&active_agents);
+        assert_eq!(state.selected_agent_index(&active_agents), Some(1));
     }
 
     #[test]
     fn selection_follows_a_lease_across_reorder_and_thread_capture() {
         let mut state = ParallelPeekOverlayUiState::default();
         let initial = vec![agent("a"), agent("b")];
+        state.select_initial_agent(&initial);
         state.move_selection(&initial, 1);
 
         let reordered = vec![
@@ -260,30 +277,37 @@ mod tests {
             agent("a"),
         ];
 
-        assert_eq!(state.selected_agent_index(&reordered), 0);
+        assert_eq!(state.selected_agent_index(&reordered), Some(0));
         state.sync_selection(&reordered);
-        assert_eq!(state.selected_agent_index(&reordered), 0);
+        assert_eq!(state.selected_agent_index(&reordered), Some(0));
     }
 
     #[test]
     fn replacement_lease_does_not_inherit_the_previous_selection_identity() {
         let mut state = ParallelPeekOverlayUiState::default();
         let initial = vec![agent("a"), agent("b")];
+        state.select_initial_agent(&initial);
         state.move_selection(&initial, 1);
 
-        let replacement = vec![agent_with_generation("b", "replacement"), agent("a")];
+        let replacement = vec![agent("a"), agent_with_generation("b", "replacement")];
 
-        assert_eq!(state.selected_agent_index(&replacement), 1);
+        state.sync_selection(&replacement);
+        assert_eq!(state.selected_agent_index(&replacement), None);
+        assert_eq!(state.selected_agent_index(&initial), Some(1));
+
+        state.move_selection(&replacement, 1);
+        assert_eq!(state.selected_agent_index(&replacement), Some(1));
     }
 
     #[test]
-    fn duplicate_keys_preserve_explicit_positional_selection() {
+    fn duplicate_lease_keys_fail_closed_instead_of_using_position() {
         let mut state = ParallelPeekOverlayUiState::default();
         let duplicate_agents = vec![agent("duplicate"), agent("duplicate")];
 
+        state.select_initial_agent(&duplicate_agents);
         state.move_selection(&duplicate_agents, 1);
 
-        assert_eq!(state.selected_agent_index(&duplicate_agents), 1);
+        assert_eq!(state.selected_agent_index(&duplicate_agents), None);
     }
 
     #[test]

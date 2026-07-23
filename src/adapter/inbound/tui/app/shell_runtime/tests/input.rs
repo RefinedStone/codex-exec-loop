@@ -630,7 +630,12 @@ fn peek_command_opens_active_agent_picker_and_read_only_conversation() {
                         "active",
                         "agent session is active",
                     )
-                    .with_thread_id(Some("thread-1".to_string())),
+                    .with_thread_id(Some("thread-1".to_string()))
+                    .with_lease_identity(
+                        "task-1",
+                        "session-1",
+                        Some("generation-1".to_string()),
+                    ),
                 ],
                 "empty",
             ),
@@ -825,6 +830,106 @@ fn parallel_peek_selection_tracks_lease_across_roster_reorder() {
         .expect("Enter should open the visibly selected lease");
     assert_eq!(preview.agent_id, "agent-b");
     assert_eq!(preview.thread_id.as_deref(), Some("thread-b"));
+}
+
+#[test]
+fn parallel_peek_rejects_same_index_replacement_until_explicit_reselection() {
+    let mut runtime = make_test_runtime();
+    let workspace_directory = runtime.app().current_workspace_directory();
+    let entry = |agent_id: &str, generation: &str| {
+        let agent_label = format!("agent-{agent_id}");
+        ParallelModeAgentRosterEntry::new(
+            agent_label.clone(),
+            format!("Inspect {agent_label}"),
+            format!("slot-{agent_id}"),
+            format!("akra-agent/{agent_label}"),
+            "running",
+            "active",
+            "agent session is active",
+        )
+        .with_thread_id(Some(format!("thread-{agent_id}-{generation}")))
+        .with_lease_identity(
+            format!("task-{agent_id}"),
+            format!("session-{agent_id}"),
+            Some(generation.to_string()),
+        )
+    };
+    let snapshot = |entries| {
+        ParallelModeSupervisorSnapshot::new(
+            ParallelModeSupervisorState::Supervise,
+            workspace_directory.clone(),
+            ParallelModePoolBoardSnapshot::new(3, "/tmp/pool", "running", Vec::new()),
+            ParallelModeAgentRosterSnapshot::new(entries, "empty"),
+            ParallelModeSupervisorDetailSnapshot::new(None, "empty"),
+            ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
+            None,
+        )
+    };
+
+    runtime.app_mut().shell_overlay = ShellOverlay::ParallelPeek;
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot(vec![
+            entry("a", "generation-a"),
+            entry("b", "generation-1"),
+        ])));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
+
+    runtime
+        .app_mut()
+        .set_parallel_mode_supervisor_snapshot_for_test(Some(snapshot(vec![
+            entry("a", "generation-a"),
+            entry("b", "generation-2"),
+        ])));
+    let unresolved_view = build_parallel_peek_overlay_view(runtime.app());
+    assert!(
+        unresolved_view
+            .agent_lines
+            .iter()
+            .all(|line| !line.to_string().starts_with('>')),
+        "a replacement lease must not inherit the visible selection marker"
+    );
+    assert!(
+        unresolved_view
+            .status_lines
+            .iter()
+            .any(|line| line.to_string().contains("Selected lease changed"))
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    assert!(
+        runtime
+            .app()
+            .parallel_peek_overlay_ui_state
+            .preview()
+            .is_none(),
+        "Enter must fail closed when the selected lease identity disappeared"
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("expected ready conversation state");
+    };
+    assert_eq!(
+        conversation.status_text,
+        "parallel peek: selected lease changed; choose an active agent again"
+    );
+
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
+    runtime.handle_terminal_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+
+    let preview = runtime
+        .app()
+        .parallel_peek_overlay_ui_state
+        .preview()
+        .expect("explicit navigation should adopt the replacement lease");
+    assert_eq!(preview.agent_id, "agent-b");
+    assert_eq!(preview.thread_id.as_deref(), Some("thread-b-generation-2"));
 }
 
 #[test]

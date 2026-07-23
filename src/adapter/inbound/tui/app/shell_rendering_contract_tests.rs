@@ -1483,7 +1483,12 @@ fn inline_parallel_peek_picker_keeps_agent_rows_visible_in_compact_main_buffer()
                     "active",
                     "checking compact picker rendering",
                 )
-                .with_thread_id(Some("thread-guardian".to_string())),
+                .with_thread_id(Some("thread-guardian".to_string()))
+                .with_lease_identity(
+                    "task-guardian",
+                    "session-guardian",
+                    Some("generation-guardian".to_string()),
+                ),
                 ParallelModeAgentRosterEntry::new(
                     "agent-builder",
                     "Build peek rows",
@@ -1493,7 +1498,12 @@ fn inline_parallel_peek_picker_keeps_agent_rows_visible_in_compact_main_buffer()
                     "active",
                     "starting the second worker",
                 )
-                .with_thread_id(Some("thread-builder".to_string())),
+                .with_thread_id(Some("thread-builder".to_string()))
+                .with_lease_identity(
+                    "task-builder",
+                    "session-builder",
+                    Some("generation-builder".to_string()),
+                ),
                 ParallelModeAgentRosterEntry::new(
                     "agent-reviewer",
                     "Review peek rows",
@@ -1503,7 +1513,12 @@ fn inline_parallel_peek_picker_keeps_agent_rows_visible_in_compact_main_buffer()
                     "official",
                     "official completion is waiting for delivery",
                 )
-                .with_thread_id(Some("thread-reviewer".to_string())),
+                .with_thread_id(Some("thread-reviewer".to_string()))
+                .with_lease_identity(
+                    "task-reviewer",
+                    "session-reviewer",
+                    Some("generation-reviewer".to_string()),
+                ),
             ],
             "empty",
         ),
@@ -1511,6 +1526,9 @@ fn inline_parallel_peek_picker_keeps_agent_rows_visible_in_compact_main_buffer()
         ParallelModeDistributorSnapshot::new(Vec::new(), Vec::new(), "idle", "queue idle"),
         None,
     )));
+    let active_agents = app.active_parallel_peek_entries();
+    app.parallel_peek_overlay_ui_state
+        .select_initial_agent(&active_agents);
     app.shell_overlay = ShellOverlay::ParallelPeek;
 
     terminal
