@@ -37,7 +37,8 @@ use super::{
     ConversationState, ConversationViewModel, ExitConfirmationState, GithubReviewPollingBootstrap,
     NativeTuiApp, PendingResumedSessionPlanningRefresh, PlanningInitOverlayUiState,
     SESSION_PAGE_SIZE, SessionOverlayUiState, SessionState, ShellChromeEffect, ShellChromeEvent,
-    ShellChromeState, ShellOverlay, StartupState, reduce_auto_follow_controls,
+    ShellChromeReduction, ShellChromeState, ShellOverlay, ShellOverlayExitMode,
+    ShellOverlayTransition, StartupState, reduce_auto_follow_controls,
     reduce_auto_follow_overlay_ui, reduce_conversation_input, reduce_conversation_intents,
     reduce_conversation_lifecycle, reduce_conversation_runtime, reduce_shell_chrome,
     startup_ascii_art_enabled_from_environment,
@@ -1750,41 +1751,69 @@ impl NativeTuiApp {
     }
 
     pub(super) fn dispatch_shell_chrome(&mut self, event: ShellChromeEvent) {
-        let previous_overlay = self.shell_overlay;
-        let directions_suspended_for_approval = previous_overlay
-            == ShellOverlay::DirectionsMaintenance
-            && matches!(&event, ShellChromeEvent::ApprovalOverlayShown);
-        let reduction = reduce_shell_chrome(self.take_shell_chrome_state(), event);
-        self.apply_shell_chrome_state(reduction.state);
-        if previous_overlay != self.shell_overlay {
-            self.advance_planning_ui_intent_revision();
+        let ShellChromeReduction {
+            state,
+            effects,
+            overlay_transition,
+        } = reduce_shell_chrome(self.take_shell_chrome_state(), event);
+        self.apply_shell_chrome_state(state);
+        if let Some(transition) = overlay_transition {
+            self.apply_shell_overlay_transition(transition);
         }
-        if previous_overlay == ShellOverlay::Reviews && self.shell_overlay != ShellOverlay::Reviews
-        {
-            self.reviews_overlay_ui_state.reset();
-        }
-        if previous_overlay == ShellOverlay::Queue && self.shell_overlay != ShellOverlay::Queue {
-            self.queue_overlay_ui_state.reset();
-        }
-        if !directions_suspended_for_approval
-            && previous_overlay == ShellOverlay::DirectionsMaintenance
-            && self.shell_overlay != ShellOverlay::DirectionsMaintenance
-        {
-            self.directions_maintenance_overlay_ui_state.reset();
-            self.planning_draft_editor_ui_state.reset();
-        }
-        if previous_overlay == ShellOverlay::ParallelPeek
-            && self.shell_overlay != ShellOverlay::ParallelPeek
-        {
-            self.parallel_peek_overlay_ui_state.reset();
-        }
-        if previous_overlay == ShellOverlay::PlanningInit
-            && self.shell_overlay != ShellOverlay::PlanningInit
-        {
-            self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
-        }
-        for effect in reduction.effects {
+        for effect in effects {
             self.execute_shell_chrome_effect(effect);
+        }
+    }
+
+    fn apply_shell_overlay_transition(&mut self, transition: ShellOverlayTransition) {
+        assert_eq!(
+            self.shell_overlay, transition.to,
+            "shell overlay transition must be applied after reducer state"
+        );
+        self.advance_planning_ui_intent_revision();
+
+        match transition.exit_mode {
+            ShellOverlayExitMode::Suspend => {
+                assert_eq!(
+                    (transition.from, transition.to),
+                    (ShellOverlay::DirectionsMaintenance, ShellOverlay::Approval),
+                    "only DirectionsMaintenance may be suspended for Approval"
+                );
+            }
+            ShellOverlayExitMode::Exit => match transition.from {
+                ShellOverlay::ModelSelection => {
+                    self.model_selection_overlay_ui_state =
+                        super::ModelSelectionOverlayUiState::default();
+                }
+                ShellOverlay::ViewSelection => {
+                    self.view_selection_overlay_ui_state =
+                        super::ViewSelectionOverlayUiState::default();
+                }
+                ShellOverlay::LanguageSelection => {
+                    self.language_selection_overlay_ui_state =
+                        super::LanguageSelectionOverlayUiState::default();
+                }
+                ShellOverlay::ParallelPeek => self.parallel_peek_overlay_ui_state.reset(),
+                ShellOverlay::Activity => self.progressive_activity_overlay_ui_state.reset(),
+                ShellOverlay::Reviews => self.reviews_overlay_ui_state.reset(),
+                ShellOverlay::Queue => self.queue_overlay_ui_state.reset(),
+                ShellOverlay::DirectionsMaintenance => {
+                    self.directions_maintenance_overlay_ui_state.reset();
+                    self.planning_draft_editor_ui_state.reset();
+                }
+                ShellOverlay::PlanningInit => {
+                    self.planning_runtime_refresh_ui_state.clear_loading();
+                    self.planning_init_overlay_ui_state.reset();
+                    self.planning_draft_editor_ui_state.reset();
+                    self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
+                }
+                ShellOverlay::Hidden
+                | ShellOverlay::Startup
+                | ShellOverlay::Sessions
+                | ShellOverlay::Supersession
+                | ShellOverlay::Help
+                | ShellOverlay::Approval => {}
+            },
         }
     }
 

@@ -26,6 +26,19 @@ pub enum ShellOverlay {
     Approval,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellOverlayExitMode {
+    Exit,
+    Suspend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellOverlayTransition {
+    pub from: ShellOverlay,
+    pub to: ShellOverlay,
+    pub exit_mode: ShellOverlayExitMode,
+}
+
 impl ShellOverlay {
     pub(crate) fn prompt_input_has_focus(
         self,
@@ -171,12 +184,14 @@ pub enum ShellChromeEffect {
 pub struct ShellChromeReduction {
     pub state: ShellChromeState,
     pub effects: Vec<ShellChromeEffect>,
+    pub overlay_transition: Option<ShellOverlayTransition>,
 }
 
 pub fn reduce_shell_chrome(
     mut state: ShellChromeState,
     event: ShellChromeEvent,
 ) -> ShellChromeReduction {
+    let previous_overlay = state.shell_overlay;
     let mut effects = Vec::new();
     if state.shell_overlay == ShellOverlay::Approval
         && matches!(
@@ -202,7 +217,7 @@ pub fn reduce_shell_chrome(
                 | ShellChromeEvent::TransientChromeDismissed
         )
     {
-        return ShellChromeReduction { state, effects };
+        return finish_shell_chrome_reduction(state, effects, previous_overlay);
     }
 
     match event {
@@ -380,10 +395,10 @@ pub fn reduce_shell_chrome(
         ShellChromeEvent::SessionSelectionMoved { delta } => {
             // navigation은 full recent-session catalog가 있을 때만 적용된다. attach-only catalog는 selectable row가 없다.
             let SessionState::Ready(catalog) = &state.session_state else {
-                return ShellChromeReduction { state, effects };
+                return finish_shell_chrome_reduction(state, effects, previous_overlay);
             };
             let Some(recent_sessions) = catalog.recent_sessions() else {
-                return ShellChromeReduction { state, effects };
+                return finish_shell_chrome_reduction(state, effects, previous_overlay);
             };
             if recent_sessions.items.is_empty() {
                 state.selected_session_index = 0;
@@ -397,7 +412,31 @@ pub fn reduce_shell_chrome(
         }
     }
 
-    ShellChromeReduction { state, effects }
+    finish_shell_chrome_reduction(state, effects, previous_overlay)
+}
+
+fn finish_shell_chrome_reduction(
+    state: ShellChromeState,
+    effects: Vec<ShellChromeEffect>,
+    previous_overlay: ShellOverlay,
+) -> ShellChromeReduction {
+    let overlay_transition =
+        (previous_overlay != state.shell_overlay).then_some(ShellOverlayTransition {
+            from: previous_overlay,
+            to: state.shell_overlay,
+            exit_mode: if previous_overlay == ShellOverlay::DirectionsMaintenance
+                && state.shell_overlay == ShellOverlay::Approval
+            {
+                ShellOverlayExitMode::Suspend
+            } else {
+                ShellOverlayExitMode::Exit
+            },
+        });
+    ShellChromeReduction {
+        state,
+        effects,
+        overlay_transition,
+    }
 }
 
 /*
@@ -423,7 +462,8 @@ fn queue_session_catalog_intent_if_startup_ready(
 mod tests {
     use super::{
         ExitConfirmationState, SessionState, ShellChromeEffect, ShellChromeEvent, ShellChromeState,
-        ShellOverlay, StartupState, reduce_shell_chrome,
+        ShellOverlay, ShellOverlayExitMode, ShellOverlayTransition, StartupState,
+        reduce_shell_chrome,
     };
     use crate::core::app::{SessionCatalogLoadMode, StartupReadySnapshot};
     use crate::domain::recent_sessions::{RecentSessions, SessionCatalog, SessionCatalogTier};
@@ -754,6 +794,7 @@ mod tests {
         let blocked = reduce_shell_chrome(approval.state, ShellChromeEvent::ActivityOverlayShown);
         assert_eq!(blocked.state.shell_overlay, ShellOverlay::Approval);
         assert!(blocked.effects.is_empty());
+        assert_eq!(blocked.overlay_transition, None);
     }
     #[test]
     fn toggling_supersession_overlay_hides_exit_confirmation() {
@@ -779,6 +820,7 @@ mod tests {
 
         let generic_close = reduce_shell_chrome(shown.state, ShellChromeEvent::OverlayClosed);
         assert_eq!(generic_close.state.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(generic_close.overlay_transition, None);
 
         let competing_overlay =
             reduce_shell_chrome(generic_close.state, ShellChromeEvent::HelpOverlayShown);
@@ -786,6 +828,7 @@ mod tests {
             competing_overlay.state.shell_overlay,
             ShellOverlay::Approval
         );
+        assert_eq!(competing_overlay.overlay_transition, None);
 
         let closed = reduce_shell_chrome(
             competing_overlay.state,
@@ -793,8 +836,63 @@ mod tests {
         );
         assert_eq!(closed.state.shell_overlay, ShellOverlay::Hidden);
     }
+
     #[test]
-    fn approval_overlay_restores_the_interrupted_overlay() {
+    fn overlay_transition_table_covers_open_replace_and_dismiss_paths() {
+        let cases = [
+            (
+                "open",
+                ShellOverlay::Hidden,
+                ShellChromeEvent::HelpOverlayShown,
+                ShellOverlay::Help,
+            ),
+            (
+                "replace",
+                ShellOverlay::Help,
+                ShellChromeEvent::ReviewsOverlayShown,
+                ShellOverlay::Reviews,
+            ),
+            (
+                "toggle close",
+                ShellOverlay::Startup,
+                ShellChromeEvent::StartupOverlayToggled,
+                ShellOverlay::Hidden,
+            ),
+            (
+                "explicit close",
+                ShellOverlay::Reviews,
+                ShellChromeEvent::OverlayClosed,
+                ShellOverlay::Hidden,
+            ),
+            (
+                "transient dismiss",
+                ShellOverlay::Queue,
+                ShellChromeEvent::TransientChromeDismissed,
+                ShellOverlay::Hidden,
+            ),
+        ];
+
+        for (label, from, event, to) in cases {
+            let mut state = ShellChromeState::new();
+            state.shell_overlay = from;
+
+            let reduced = reduce_shell_chrome(state, event);
+
+            assert_eq!(reduced.state.shell_overlay, to, "{label}");
+            assert_eq!(
+                reduced.overlay_transition,
+                Some(ShellOverlayTransition {
+                    from,
+                    to,
+                    exit_mode: ShellOverlayExitMode::Exit,
+                }),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn approval_overlay_suspends_directions_then_exits_when_restored() {
         let mut state = ShellChromeState::new();
         state.shell_overlay = ShellOverlay::DirectionsMaintenance;
 
@@ -804,6 +902,14 @@ mod tests {
             shown.state.approval_return_overlay,
             Some(ShellOverlay::DirectionsMaintenance)
         );
+        assert_eq!(
+            shown.overlay_transition,
+            Some(ShellOverlayTransition {
+                from: ShellOverlay::DirectionsMaintenance,
+                to: ShellOverlay::Approval,
+                exit_mode: ShellOverlayExitMode::Suspend,
+            })
+        );
 
         let closed = reduce_shell_chrome(shown.state, ShellChromeEvent::ApprovalOverlayClosed);
         assert_eq!(
@@ -811,6 +917,31 @@ mod tests {
             ShellOverlay::DirectionsMaintenance
         );
         assert_eq!(closed.state.approval_return_overlay, None);
+        assert_eq!(
+            closed.overlay_transition,
+            Some(ShellOverlayTransition {
+                from: ShellOverlay::Approval,
+                to: ShellOverlay::DirectionsMaintenance,
+                exit_mode: ShellOverlayExitMode::Exit,
+            })
+        );
+    }
+
+    #[test]
+    fn unchanged_overlay_and_selection_early_returns_do_not_publish_a_transition() {
+        let mut unchanged_state = ShellChromeState::new();
+        unchanged_state.shell_overlay = ShellOverlay::Help;
+        let unchanged = reduce_shell_chrome(unchanged_state, ShellChromeEvent::HelpOverlayShown);
+        assert_eq!(unchanged.overlay_transition, None);
+
+        let mut selection_state = ShellChromeState::new();
+        selection_state.shell_overlay = ShellOverlay::Sessions;
+        let selection = reduce_shell_chrome(
+            selection_state,
+            ShellChromeEvent::SessionSelectionMoved { delta: 1 },
+        );
+        assert_eq!(selection.state.shell_overlay, ShellOverlay::Sessions);
+        assert_eq!(selection.overlay_transition, None);
     }
     #[test]
     fn prompt_focus_policy_covers_dialogs_overlays_and_supersession_loading() {

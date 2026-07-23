@@ -443,6 +443,14 @@ rendering/layout, and terminal-adapter responsibilities separate. Visual tokens 
 `AkraTheme`; append-only rows split across host scrollback and live viewport cannot insert panel
 chrome into the stream.
 
+Every actual shell-overlay identity change is emitted by the reducer as one typed
+`ShellOverlayTransition` containing its `from`, `to`, and exit mode. The root TUI coordinator
+installs the reduced state and then sends that transition to the sole overlay-cleanup owner, whose
+matches enumerate every `ShellOverlay` and both `Suspend`/`Exit` modes without a wildcard.
+`DirectionsMaintenance -> Approval` is the only suspension: it preserves the directions and editor
+state so approval close can restore that overlay. Explicit close only dispatches `OverlayClosed`;
+all exit cleanup is derived once from the returned transition.
+
 The inline conversation tail path combines adapter-local UI state with one owned
 `RevisionedPlanningParallelProjection` from `revisioned_planning_parallel_projection()` into an
 immutable `ConversationScreenModel`. The terminal transaction captures that narrow Core projection
