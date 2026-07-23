@@ -514,7 +514,7 @@ fn parallel_projection_refresh_preserves_supersession_overlay_focus_and_selectio
     assert_eq!(
         runtime
             .app()
-            .core_runtime
+            .client_runtime
             .snapshot()
             .planning_parallel
             .parallel_mode

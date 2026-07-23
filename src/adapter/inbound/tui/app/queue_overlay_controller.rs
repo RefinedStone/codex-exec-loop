@@ -4,7 +4,7 @@ use crate::application::service::planning::{
     PlanningQueueAuthorityProjection, PlanningQueueAuthoritySnapshot,
 };
 use crate::core::app::{
-    AppCommand, AppEvent, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
+    AppCommand, AppEvent, CoreInput, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
     QueueMutationIntent, QueueMutationResult, QueueMutationTarget,
 };
 
@@ -24,11 +24,11 @@ impl NativeTuiApp {
         }
         let context = self.current_queue_mutation_context();
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::LoadQueueAuthority {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::LoadQueueAuthority {
                 workspace_directory: context.workspace_directory,
                 active_thread_id: context.active_thread_id,
-            });
+            }));
         let correlation = outcome.events.iter().find_map(|event| match event {
             AppEvent::QueueAuthorityLoadStarted { correlation } => Some(correlation.clone()),
             _ => None,
@@ -371,8 +371,10 @@ impl NativeTuiApp {
 
     fn submit_queue_mutation(&mut self, intent: QueueMutationIntent) -> bool {
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent)));
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation(
+                Box::new(intent),
+            )));
         let started = outcome
             .events
             .iter()

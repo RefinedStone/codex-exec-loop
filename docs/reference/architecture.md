@@ -23,11 +23,13 @@ The client command loop has a different, intentionally round-trip **runtime flow
 
 ```text
 TUI intent
+  -> composition/NativeClientRuntime::dispatch_client_event(CoreInput)
   -> core reducer
   -> CoreEffect
   -> composition/CoreEffectRunner
   -> application use case / outbound port
-  -> CoreInput completion
+  -> bounded CoreInput mailbox
+  -> composition/NativeClientRuntime::poll_pending_client_event
   -> core reducer
   -> snapshot/event
   -> TUI projection
@@ -66,10 +68,23 @@ application services without adopting this process-local TUI runtime. Its explic
 - `RevisionedPlanningParallelProjection`: revision plus planning/parallel state for the TUI frame
   hot path
 
-Only `CoreRuntime` drives mutable client-runtime state. Adapters dispatch typed inputs and read
-owned snapshots/projections; they must not construct or mutate `CoreController`, `AppState`, or
-`TurnStreamState` directly. Effect executors may perform work and return a completion, but they do
-not own or mutate runtime state.
+Composition owns the opaque `NativeClientRuntime` used by the native shell. It alone assembles the
+bounded mailbox, `CoreEffectRunner`, and `CoreRuntime` driver. The TUI dispatches only
+`CoreInput` through `dispatch_client_event` and reads owned snapshots or projections; it does not
+construct those runtime parts or call the raw driver. UI-originated inputs remain synchronous so an
+adapter can bind an accepted admission before applying an immediate outcome. Worker success,
+failure, and panic completions return through the bounded mailbox and re-enter the same exhaustive
+Core reducer through `poll_pending_client_event`.
+
+Only `CoreRuntime` drives mutable client-runtime state. Adapters must not construct or mutate
+`CoreController`, `AppState`, or `TurnStreamState` directly. Effect executors may perform work and
+return a completion, but they do not own or mutate runtime state.
+
+This establishes one serialized reducer ingress for ClientEvent flow. Retaining the internal
+`AppCommand` / `CoreInput` names and not physically enqueueing synchronous UI-originated events do
+not create another semantic writer. The global parallel-cleanup notice still spans adapter-local
+bookkeeping and the conversation projection; it is explicit critical debt for the ClientState
+single-authority work, not harmless polish.
 
 Startup, session loading, conversation selection, turn submission, stream reduction, completion,
 and post-turn evaluation use this flow. Parallel mutation remains application-owned and enters

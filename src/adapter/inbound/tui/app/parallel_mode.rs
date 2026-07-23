@@ -80,9 +80,7 @@ impl NativeTuiApp {
                 });
             }
             ParallelModePresentationAction::ObserveRuntimeNotice(notice) => {
-                self.dispatch_conversation_runtime(
-                    ConversationRuntimeEvent::RuntimeNoticeObserved { notice },
-                );
+                self.dispatch_client_event(CoreInput::ConversationRuntimeNotice(notice));
             }
             ParallelModePresentationAction::RecordGlobalRuntimeNotice {
                 cleanup_correlation,
@@ -267,7 +265,7 @@ impl NativeTuiApp {
     }
 
     fn core_parallel_mode_readiness_snapshot(&self) -> Option<ParallelModeReadinessSnapshot> {
-        self.core_runtime
+        self.client_runtime
             .snapshot()
             .planning_parallel
             .parallel_mode
@@ -284,7 +282,7 @@ impl NativeTuiApp {
     }
 
     fn core_parallel_mode_supervisor_snapshot(&self) -> Option<ParallelModeSupervisorSnapshot> {
-        self.core_runtime
+        self.client_runtime
             .snapshot()
             .planning_parallel
             .parallel_mode
@@ -630,7 +628,7 @@ impl NativeTuiApp {
         &mut self,
         snapshot: Option<ParallelModeReadinessSnapshot>,
     ) {
-        self.dispatch_core_input(CoreInput::ParallelModeReadinessProjectionChanged(
+        self.dispatch_client_event(CoreInput::ParallelModeReadinessProjectionChanged(
             snapshot.map(Box::new),
         ));
     }
@@ -642,7 +640,7 @@ impl NativeTuiApp {
         if let Some(snapshot) = snapshot.as_ref() {
             self.record_parallel_supervisor_snapshot_for_stream(snapshot);
         }
-        self.dispatch_core_input(CoreInput::ParallelModeSupervisorProjectionChanged(
+        self.dispatch_client_event(CoreInput::ParallelModeSupervisorProjectionChanged(
             snapshot.map(Box::new),
         ));
     }

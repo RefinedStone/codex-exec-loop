@@ -14,7 +14,7 @@ use crate::application::service::planning::{
     ManualPromptIntakeOutcome, QUEUED_TASK_TRANSCRIPT_TEXT,
 };
 use crate::core::app::{
-    AppCommand, AppEvent, CorePromptOrigin, ManualPromptPreparationAdmission,
+    AppCommand, AppEvent, CoreInput, CorePromptOrigin, ManualPromptPreparationAdmission,
     ManualPromptPreparationIntent, TurnSubmissionAdmission, TurnSubmissionRequest,
 };
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
@@ -86,14 +86,16 @@ impl NativeTuiApp {
                 transcript_text,
                 prompt_origin,
             } => {
-                let outcome = self.core_runtime.dispatch_command(AppCommand::SubmitTurn(
-                    self.build_turn_submission_request(
-                        workspace_directory,
-                        thread_id,
-                        prompt,
-                        &prompt_origin,
-                    ),
-                ));
+                let outcome = self
+                    .client_runtime
+                    .dispatch_client_event(CoreInput::Command(AppCommand::SubmitTurn(
+                        self.build_turn_submission_request(
+                            workspace_directory,
+                            thread_id,
+                            prompt,
+                            &prompt_origin,
+                        ),
+                    )));
                 turn_submission_admitted = outcome.events.iter().any(|event| {
                     matches!(
                         event,
@@ -313,14 +315,14 @@ impl NativeTuiApp {
         let workspace_directory = self.planning_workspace_directory();
         let parallel_mode_enabled_at_submission = self.parallel_mode_enabled();
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::PrepareManualPrompt(Box::new(
-                ManualPromptPreparationIntent {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::PrepareManualPrompt(
+                Box::new(ManualPromptPreparationIntent {
                     workspace_directory,
                     raw_prompt: transcript_text.clone(),
                     parent_thread_id,
                     parent_turn_id: parent_turn_id.clone(),
-                },
+                }),
             )));
         let admission = outcome.events.iter().find_map(|event| match event {
             AppEvent::ManualPromptPreparationAdmissionResolved(admission) => {
@@ -604,7 +606,9 @@ impl NativeTuiApp {
         self.pending_manual_prompt_preparation = None;
         self.turn_steer_confirmation = None;
         self.pending_turn_steer = None;
-        self.dispatch_core_command(AppCommand::CancelManualPromptPreparation);
+        self.dispatch_client_event(CoreInput::Command(
+            AppCommand::CancelManualPromptPreparation,
+        ));
     }
 
     fn take_exact_manual_prompt_preparation(
@@ -1712,7 +1716,7 @@ mod tests {
         set_input(&mut app, "second prompt");
         let previous_messages = ready_conversation(&app).messages.clone();
         let previous_status = ready_conversation(&app).status_text.clone();
-        let active_correlation = app.core_runtime.begin_test_turn_submission();
+        let active_correlation = app.client_runtime.begin_test_turn_submission();
 
         let admitted = app.submit_prompt_with_transcript(
             "second prompt".to_string(),
@@ -1728,8 +1732,8 @@ mod tests {
         assert_eq!(conversation.input_state, ConversationInputState::DraftReady);
 
         let _ = app
-            .core_runtime
-            .dispatch_input(CoreInput::ConversationStreamUpdated {
+            .client_runtime
+            .dispatch_client_event(CoreInput::ConversationStreamUpdated {
                 correlation: active_correlation,
                 event: TurnStreamEvent::Failed {
                     message: "first submission released".to_string(),
@@ -2472,8 +2476,8 @@ mod tests {
     fn terminal_before_steer_completion_does_not_drop_auto_follow_submission() {
         let workspace = TempWorkspace::new("turn-submit-steer-auto-race");
         let mut app = make_test_app(&workspace);
-        let turn_submission = app.core_runtime.begin_test_turn_submission();
-        app.dispatch_core_input(CoreInput::ConversationStreamUpdated {
+        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        app.dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: TurnStreamEvent::ThreadPrepared {
                 thread_id: "thread-1".to_string(),
@@ -2482,7 +2486,7 @@ mod tests {
                 runtime_envelope: Box::default(),
             },
         });
-        app.dispatch_core_input(CoreInput::ConversationStreamUpdated {
+        app.dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: TurnStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
@@ -2502,7 +2506,7 @@ mod tests {
         );
         assert!(app.pending_turn_steer.is_some());
 
-        app.dispatch_core_input(CoreInput::ConversationStreamUpdated {
+        app.dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: TurnStreamEvent::TurnTerminal {
                 receipt: crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(

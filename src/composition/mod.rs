@@ -8,4 +8,5 @@
 pub(crate) mod core_effect_runner;
 pub(crate) mod core_effect_worker;
 pub(crate) mod core_turn_submission;
+pub(crate) mod native_client_runtime;
 pub(crate) mod production;

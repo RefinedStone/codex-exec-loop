@@ -42,7 +42,7 @@ pub(in crate::adapter::inbound::tui::app) struct ParallelPanelProjectionSample {
 impl ParallelPanelProjectionSample {
     pub(in crate::adapter::inbound::tui::app) fn capture(app: &NativeTuiApp) -> Self {
         Self::from_parts(
-            app.core_runtime.parallel_mode_projection(),
+            app.client_runtime.parallel_mode_projection(),
             app.parallel_mode_control_plane.presentation_projection(),
         )
     }
@@ -161,7 +161,7 @@ impl ConversationProjectionSample {
         let RevisionedPlanningParallelProjection {
             revision: core_revision,
             planning_parallel,
-        } = app.core_runtime.revisioned_planning_parallel_projection();
+        } = app.client_runtime.revisioned_planning_parallel_projection();
         let PlanningParallelProjection {
             planning_runtime_workspace_directory,
             planning_runtime,

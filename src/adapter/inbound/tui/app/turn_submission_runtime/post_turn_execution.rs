@@ -7,7 +7,7 @@ use crate::application::service::post_turn_evaluation::{
     PostTurnEvaluationExecution, PostTurnEvaluationOutcome as ApplicationPostTurnEvaluationOutcome,
     PostTurnEvaluationProvenance as ApplicationPostTurnEvaluationProvenance,
 };
-use crate::core::app::AppCommand;
+use crate::core::app::{AppCommand, CoreInput};
 
 use super::super::conversation_model::PlanningRepairState;
 use super::super::conversation_runtime::{
@@ -39,7 +39,9 @@ impl NativeTuiApp {
             self.planning_worker_panel_state.clone(),
             self.post_turn_continuation_gate.capture(),
         );
-        self.dispatch_core_command(AppCommand::EvaluatePostTurn(Box::new(request)));
+        self.dispatch_client_event(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
+            request,
+        ))));
     }
 
     fn ready_post_turn_evaluation_context(&self) -> Option<PostTurnEvaluationContext> {

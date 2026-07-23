@@ -64,10 +64,10 @@ impl NativeTuiApp {
             return None;
         }
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::RefreshPlanningRuntime {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
                 workspace_directory: workspace_directory.to_string(),
-            });
+            }));
         let correlation = outcome.events.iter().find_map(|event| match event {
             AppEvent::PlanningRuntimeRefreshStarted { correlation } => Some(correlation.clone()),
             _ => None,
@@ -76,7 +76,7 @@ impl NativeTuiApp {
     }
 
     pub(crate) fn planning_runtime_projection_snapshot(&self) -> PlanningRuntimeProjection {
-        let snapshot = self.core_runtime.snapshot();
+        let snapshot = self.client_runtime.snapshot();
         if snapshot
             .planning_parallel
             .planning_runtime_workspace_directory
@@ -183,7 +183,7 @@ impl NativeTuiApp {
         &mut self,
         projection: PlanningRuntimeProjection,
     ) {
-        self.dispatch_core_input(CoreInput::RuntimeProjectionChanged {
+        self.dispatch_client_event(CoreInput::RuntimeProjectionChanged {
             workspace_directory: self.planning_workspace_directory(),
             projection: Box::new(projection),
         });

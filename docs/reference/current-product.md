@@ -12,7 +12,8 @@ an explicitly proposed document, not here.
   scrollback while the live viewport owns the prompt, stream tail, overlays, and compact notices.
 - Agent text stays raw Markdown in app-server state and is rendered at the TUI projection boundary;
   fenced-code delimiters and language labels are not shown as conversation text.
-- `src/core` coordinates headless app commands, effects, completions, events, and snapshots.
+- `src/core` coordinates headless app commands, effects, completions, events, and snapshots;
+  composition-owned `NativeClientRuntime` gives the TUI one typed `CoreInput` dispatch boundary.
 - CLI, Admin, Telegram, and automation adapters reuse application services instead of owning
   separate planning or parallel policy.
 

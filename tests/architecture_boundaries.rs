@@ -550,6 +550,157 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
 }
 
 #[test]
+fn native_tui_uses_one_composition_owned_client_runtime_ingress() {
+    /*
+     * The native adapter may name CoreInput and immutable projections, but it
+     * must not assemble or drive the raw generic runtime. Keeping the concrete
+     * mailbox/effect-runner graph behind one facade makes a new TUI feature use
+     * the same reducer and completion ordering by construction.
+     */
+    assert_no_forbidden_references(BoundaryRule {
+        name: "native TUI must use the composition-owned typed client-runtime ingress",
+        root: "src/adapter/inbound/tui",
+        forbidden_patterns: &[
+            "crate::core::runtime",
+            "CoreRuntime",
+            "crate::composition::core_effect_runner",
+            "CoreEffectRunner",
+            "core_input_channel",
+            ".dispatch_command(",
+            ".dispatch_input(",
+        ],
+    });
+
+    let composition_module = fs::read_to_string("src/composition/mod.rs")
+        .expect("composition module source should load");
+    assert!(
+        composition_module.contains("pub(crate) mod native_client_runtime;"),
+        "composition must expose the crate-private native client-runtime facade"
+    );
+
+    let facade_path = "src/composition/native_client_runtime.rs";
+    let facade_source =
+        fs::read_to_string(facade_path).expect("native client-runtime facade source should load");
+    let production_facade = production_lines(&facade_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let compact_facade = production_facade
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for required in [
+        "pub(crate)structNativeClientRuntime",
+        "runtime:CoreRuntime<CoreEffectRunner>",
+        "pub(crate)fndispatch_client_event(&mutself,input:CoreInput)->CoreDispatchOutcome",
+        "self.runtime.dispatch_input(input)",
+    ] {
+        assert!(
+            compact_facade.contains(required),
+            "NativeClientRuntime must retain its typed facade contract: {required}"
+        );
+    }
+    assert_eq!(
+        compact_facade.matches("input:CoreInput").count(),
+        1,
+        "NativeClientRuntime must expose exactly one explicit CoreInput ingress"
+    );
+    assert_eq!(
+        compact_facade
+            .matches("self.runtime.dispatch_input(input)")
+            .count(),
+        1,
+        "the explicit client event must enter the raw runtime exactly once"
+    );
+    for forbidden_api in [
+        "pub(crate)fndispatch_command(",
+        "pub(crate)fndispatch_input(",
+        "pub(crate)fnruntime_mut(",
+        "pub(crate)fneffect_runner(",
+        "pub(crate)fninput_sender(",
+    ] {
+        assert!(
+            !compact_facade.contains(forbidden_api),
+            "NativeClientRuntime must not expose a second mutable ingress: {forbidden_api}"
+        );
+    }
+
+    let expected_owner = facade_path.to_string();
+    for assembly_call in [
+        "core_input_channel()",
+        "CoreEffectRunner::new(",
+        "CoreRuntime::new(",
+    ] {
+        let mut owners = Vec::new();
+        for path in rust_files_under(&repo_root().join("src/composition")) {
+            if is_test_only_path(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            let production_source = production_lines(&source)
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            if production_source.contains(assembly_call) {
+                owners.push(relative_path(&repo_root(), &path));
+            }
+        }
+        assert_eq!(
+            owners.as_slice(),
+            std::slice::from_ref(&expected_owner),
+            "raw native client-runtime assembly must have one composition owner: {assembly_call}"
+        );
+    }
+
+    let tui_app_source =
+        fs::read_to_string("src/adapter/inbound/tui/app.rs").expect("TUI app source should load");
+    let compact_tui_app = production_lines(&tui_app_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_tui_app.contains("client_runtime:NativeClientRuntime"),
+        "NativeTuiApp must retain only the opaque composition-owned client runtime"
+    );
+}
+
+#[test]
+fn parallel_runtime_notices_enter_the_typed_client_runtime() {
+    let source = fs::read_to_string("src/adapter/inbound/tui/app/parallel_mode.rs")
+        .expect("parallel TUI adapter source should load");
+    let apply_action =
+        top_level_impl_method_source(&source, "apply_parallel_mode_presentation_action");
+    let compact_apply_action = apply_action
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    assert!(
+        compact_apply_action.contains(
+            "ParallelModePresentationAction::ObserveRuntimeNotice(notice)=>{self.dispatch_client_event(CoreInput::ConversationRuntimeNotice(notice));}"
+        ),
+        "ordinary parallel runtime notices must re-enter the root reducer through CoreInput"
+    );
+    for forbidden_bypass in [
+        "ConversationRuntimeEvent::RuntimeNoticeObserved",
+        "dispatch_conversation_runtime",
+    ] {
+        assert!(
+            !apply_action.contains(forbidden_bypass),
+            "parallel runtime notice must not bypass CoreInput through the TUI reducer: {forbidden_bypass}"
+        );
+    }
+}
+
+#[test]
 fn client_runtime_compile_dependencies_and_runtime_flow_are_documented_separately() {
     let english = fs::read_to_string("docs/reference/architecture.md").unwrap();
     for required in [
@@ -1519,14 +1670,29 @@ fn tui_planning_reset_enters_through_one_core_owned_async_coordinator() {
         fs::read_to_string("src/adapter/inbound/tui/app/planning/controller.rs").unwrap();
     let planning_editor_controller =
         fs::read_to_string("src/adapter/inbound/tui/app/planning/controller/editor.rs").unwrap();
+    let compact_planning_controller = planning_controller
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let compact_planning_editor_controller = planning_editor_controller
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
     assert!(
-        planning_controller.contains("AppCommand::ResetPlanningWorkspace(intent)")
-            && planning_controller.contains("AppCommand::StageSimplePlanningDraft")
-            && planning_editor_controller.contains("AppCommand::StagePlanningEditor")
-            && planning_controller.contains("AppCommand::LoadSimplePlanningEditor")
-            && planning_controller.contains("AppCommand::PromoteSimplePlanningDraft")
+        compact_planning_controller.contains(
+            "dispatch_client_event(CoreInput::Command(AppCommand::ResetPlanningWorkspace("
+        ) && compact_planning_controller.contains(
+            "dispatch_client_event(CoreInput::Command(AppCommand::StageSimplePlanningDraft"
+        ) && compact_planning_editor_controller
+            .contains("dispatch_client_event(CoreInput::Command(AppCommand::StagePlanningEditor")
+            && compact_planning_controller.contains(
+                "dispatch_client_event(CoreInput::Command(AppCommand::LoadSimplePlanningEditor"
+            )
+            && compact_planning_controller.contains(
+                "dispatch_client_event(CoreInput::Command(AppCommand::PromoteSimplePlanningDraft"
+            )
             && planning_controller.contains("PlanningWorkspaceOperationUiSettlement::Applied"),
-        "TUI reset and simple authoring must enter through Core and gate presentation on exact UI settlement"
+        "TUI reset and simple authoring must enter through the typed client event and gate presentation on exact UI settlement"
     );
     assert!(
         planning_controller
@@ -2048,10 +2214,16 @@ fn tui_queue_mutations_enter_through_core_runtime() {
 
     let controller =
         fs::read_to_string("src/adapter/inbound/tui/app/queue_overlay_controller.rs").unwrap();
+    let compact_controller = controller
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
     assert!(
         controller.contains("QueueMutationIntent {")
-            && controller
-                .contains(".dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent)))",),
+            && compact_controller.contains(
+                ".dispatch_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation("
+            )
+            && compact_controller.contains("Box::new(intent)"),
         "TUI Queue mutations must positively enter through AppCommand::SubmitQueueMutation"
     );
 }
@@ -2140,6 +2312,10 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
             ".runtime()",
             "CoreRuntime",
             "core_runtime",
+            "NativeClientRuntime",
+            "client_runtime",
+            "dispatch_client_event",
+            "poll_pending_client_event",
             "std::fs",
             "std::thread",
             "std::sync",
@@ -2167,7 +2343,9 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         "ConversationProjectionSample must read the revisioned planning/parallel projection exactly once"
     );
     assert_eq!(
-        production_source.matches("core_runtime.snapshot()").count(),
+        production_source
+            .matches("client_runtime.snapshot()")
+            .count(),
         0,
         "ConversationProjectionSample must not rebuild the frame from the full core snapshot"
     );
@@ -2392,7 +2570,11 @@ fn tui_session_overlay_reads_one_immutable_screen_model_per_draw() {
         ".application",
         "CoreRuntime",
         "core_runtime",
+        "NativeClientRuntime",
+        "client_runtime",
         "dispatch_core_command",
+        "dispatch_client_event",
+        "poll_pending_client_event",
         "SessionService",
         "SessionCatalogPort",
         "load_session_catalog",
@@ -2423,6 +2605,10 @@ fn tui_session_overlay_reads_one_immutable_screen_model_per_draw() {
         "SessionState",
         "CoreRuntime",
         "core_runtime",
+        "NativeClientRuntime",
+        "client_runtime",
+        "dispatch_client_event",
+        "poll_pending_client_event",
         "build_session_browser_page(",
         ".session_overlay_ui_state",
         ".current_workspace_directory()",
@@ -3783,8 +3969,9 @@ fn tui_stop_requests_enter_through_core_runtime() {
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_controller.rs"))
             .expect("shell controller source should be readable");
     assert!(
-        controller_source
-            .contains("self.dispatch_core_command(AppCommand::RequestStopAllSessions);"),
+        controller_source.contains(
+            "self.dispatch_client_event(CoreInput::Command(AppCommand::RequestStopAllSessions));"
+        ),
         "TUI stop intent must positively enter through AppCommand::RequestStopAllSessions"
     );
 }
@@ -3826,8 +4013,14 @@ fn tui_approval_decisions_enter_through_core_runtime() {
     let controller_source =
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_controller.rs"))
             .expect("shell controller source should be readable");
+    let compact_controller_source = controller_source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
     assert!(
-        controller_source.contains(".dispatch_command(AppCommand::SubmitApprovalDecision"),
+        compact_controller_source.contains(
+            ".dispatch_client_event(CoreInput::Command(AppCommand::SubmitApprovalDecision"
+        ),
         "TUI approval decisions must positively enter through AppCommand::SubmitApprovalDecision"
     );
 }
@@ -3883,7 +4076,6 @@ fn tui_github_review_polling_enters_through_core_runtime() {
         "discover_github_review_poller_service_for_current_branch",
         "build_github_review_poller_service",
         "parallel_mode_integration_branch_for_repo",
-        "Command",
     ];
     let forbidden_paths = ["std::process", "std::thread", "thread::spawn"];
     for path in [

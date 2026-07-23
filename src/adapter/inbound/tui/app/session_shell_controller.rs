@@ -5,7 +5,7 @@ use super::{
     SESSION_PAGE_SIZE, SessionState, ShellChromeEvent, ShellOverlay,
 };
 use crate::core::app::{
-    AppCommand, AppEvent, CoreDispatchOutcome, SessionCatalogSnapshot,
+    AppCommand, AppEvent, CoreDispatchOutcome, CoreInput, SessionCatalogSnapshot,
     SessionRenameAcceptedSnapshot, SessionRenameAdmission, SessionRenameCorrelation,
 };
 use crate::domain::recent_sessions::SessionRenameRequest;
@@ -303,8 +303,10 @@ impl NativeTuiApp {
         };
 
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::RenameSession(request.clone()));
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::RenameSession(
+                request.clone(),
+            )));
         self.apply_session_rename_dispatch_outcome(request, outcome);
     }
 
@@ -352,7 +354,7 @@ impl NativeTuiApp {
                 status_text: self.tui_language.session_rename_failed_status(reason),
             });
         }
-        // CoreRuntime appends an immediate effect completion after the admission event. Record the
+        // Client Runtime appends an immediate effect completion after the admission event. Record the
         // accepted correlation above before applying this ordered event list so that completion can
         // settle the exact pending operation instead of being dropped as an unbound receipt.
         self.apply_core_dispatch_outcome(outcome);
@@ -642,10 +644,10 @@ mod tests {
     }
 
     fn load_recording_catalog(app: &mut NativeTuiApp) {
-        app.dispatch_core_command(AppCommand::LoadSessionCatalog {
+        app.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog {
             limit: SESSION_PAGE_SIZE,
             workspace_directory: "/tmp/root".to_string(),
-        });
+        }));
         poll_until(app, |app| {
             matches!(app.session_state, SessionState::Ready(_))
         });
@@ -1037,7 +1039,7 @@ mod tests {
                 },
             ],
             effects: Vec::new(),
-            snapshot: std::sync::Arc::new(app.core_runtime.snapshot()),
+            snapshot: std::sync::Arc::new(app.client_runtime.snapshot()),
         };
 
         app.apply_session_rename_dispatch_outcome(request, outcome);
@@ -1070,7 +1072,7 @@ mod tests {
                 },
             )],
             effects: Vec::new(),
-            snapshot: std::sync::Arc::new(app.core_runtime.snapshot()),
+            snapshot: std::sync::Arc::new(app.client_runtime.snapshot()),
         };
 
         app.apply_session_rename_dispatch_outcome(request, outcome);
@@ -1093,10 +1095,10 @@ mod tests {
         let port = Arc::new(RecordingSessionCatalogPort::new(None));
         let mut app = test_native_tui_app_with_session_catalog_port(port.clone());
         load_recording_catalog(&mut app);
-        app.dispatch_core_command(AppCommand::LoadConversation {
+        app.dispatch_client_event(CoreInput::Command(AppCommand::LoadConversation {
             thread_id: "thread-beta".to_string(),
             fallback_workspace_directory: "/tmp/root".to_string(),
-        });
+        }));
         poll_until(&mut app, |app| {
             matches!(
                 &app.conversation_state,
@@ -1200,10 +1202,10 @@ mod tests {
         // Shell chrome tests own startup-gated reload admission. Model the accepted
         // reload effect directly so this test stays focused on rename deferral.
         app.session_state = SessionState::Loading;
-        app.dispatch_core_command(AppCommand::LoadSessionCatalog {
+        app.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog {
             limit: 10,
             workspace_directory: "/tmp/root".to_string(),
-        });
+        }));
         assert!(matches!(app.session_state, SessionState::Loading));
         release_rename_tx
             .send(())
