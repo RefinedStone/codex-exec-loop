@@ -278,12 +278,8 @@ impl CoreEffectRunner {
                 self.spawn_startup_checks(correlation);
                 None
             }
-            CoreEffect::LoadSessionCatalog {
-                correlation,
-                limit,
-                workspace_directory,
-            } => {
-                self.spawn_session_catalog_load(correlation, limit, workspace_directory);
+            CoreEffect::LoadSessionCatalog { correlation } => {
+                self.spawn_session_catalog_load(correlation);
                 None
             }
             CoreEffect::RenameSession { correlation } => {
@@ -432,20 +428,18 @@ impl CoreEffectRunner {
         }
     }
 
-    fn spawn_session_catalog_load(
-        &self,
-        correlation: SessionCatalogLoadCorrelation,
-        limit: usize,
-        workspace_directory: String,
-    ) {
+    fn spawn_session_catalog_load(&self, correlation: SessionCatalogLoadCorrelation) {
         let session_service = self.session_service.clone();
         let input_sender = self.input_sender.clone();
         let panic_completion = session_catalog_completion(
-            correlation,
+            correlation.clone(),
             Err(anyhow::anyhow!("session catalog worker panicked")),
         );
         spawn_effect_completion_worker(input_sender, panic_completion, move || {
-            let request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
+            let request = SessionCatalogRequest::for_workspace(
+                correlation.limit,
+                correlation.workspace_directory.clone(),
+            );
             session_catalog_completion(correlation, session_service.load_session_catalog(request))
         });
     }
@@ -1755,8 +1749,9 @@ mod tests {
         PlanningEditorMutationIdentity, PlanningEditorMutationTarget,
         PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
         PlanningWorkspaceResetIntent, PlanningWorkspaceResetTarget, QueueMutationKind,
-        QueueMutationTarget, SessionCatalogSnapshot, StartupSnapshot, StopRequestAdmission,
-        TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,
+        QueueMutationTarget, SessionCatalogLoadIntent, SessionCatalogSnapshot, StartupSnapshot,
+        StopRequestAdmission, TurnStreamEvent, TurnSubmissionAdmission, TurnSubmissionCorrelation,
+        TurnSubmissionRequest,
     };
     use crate::core::runtime::{CoreRuntime, core_input_channel};
     use crate::domain::conversation::{
@@ -1970,6 +1965,7 @@ mod tests {
         stop_call_count: AtomicUsize,
         panic_stop_once: AtomicBool,
         panic_session_catalog_once: AtomicBool,
+        session_catalog_requests: Mutex<Vec<SessionCatalogRequest>>,
     }
 
     impl GatedRuntimePort {
@@ -1979,6 +1975,7 @@ mod tests {
                 stop_call_count: AtomicUsize::new(0),
                 panic_stop_once: AtomicBool::new(false),
                 panic_session_catalog_once: AtomicBool::new(false),
+                session_catalog_requests: Mutex::new(Vec::new()),
             }
         }
 
@@ -1988,6 +1985,7 @@ mod tests {
                 stop_call_count: AtomicUsize::new(0),
                 panic_stop_once: AtomicBool::new(true),
                 panic_session_catalog_once: AtomicBool::new(false),
+                session_catalog_requests: Mutex::new(Vec::new()),
             }
         }
 
@@ -1997,6 +1995,7 @@ mod tests {
                 stop_call_count: AtomicUsize::new(0),
                 panic_stop_once: AtomicBool::new(false),
                 panic_session_catalog_once: AtomicBool::new(true),
+                session_catalog_requests: Mutex::new(Vec::new()),
             }
         }
     }
@@ -2034,7 +2033,11 @@ mod tests {
     }
 
     impl SessionCatalogPort for GatedRuntimePort {
-        fn load_session_catalog(&self, _request: SessionCatalogRequest) -> Result<SessionCatalog> {
+        fn load_session_catalog(&self, request: SessionCatalogRequest) -> Result<SessionCatalog> {
+            self.session_catalog_requests
+                .lock()
+                .expect("session catalog request log should lock")
+                .push(request);
             if self
                 .panic_session_catalog_once
                 .swap(false, Ordering::SeqCst)
@@ -2339,7 +2342,7 @@ mod tests {
     }
 
     fn session_catalog_correlation() -> SessionCatalogLoadCorrelation {
-        SessionCatalogLoadCorrelation::new(8)
+        SessionCatalogLoadCorrelation::new(8, 10, "/tmp/session-catalog")
     }
 
     fn session_rename_correlation() -> SessionRenameCorrelation {
@@ -4516,10 +4519,10 @@ mod tests {
     fn session_catalog_worker_panic_returns_one_failure_and_reopens_loading_gate() {
         let runtime_port = Arc::new(GatedRuntimePort::panicking_session_catalog_once());
         let mut runtime = test_core_runtime(runtime_port);
-        let command = AppCommand::LoadSessionCatalog {
-            limit: 10,
-            workspace_directory: "/tmp/session-catalog-panic".to_string(),
-        };
+        let command = AppCommand::LoadSessionCatalog(SessionCatalogLoadIntent::refresh(
+            10,
+            "/tmp/session-catalog-panic",
+        ));
 
         assert!(matches!(
             runtime.dispatch_command(command.clone()).events.as_slice(),
@@ -4556,6 +4559,44 @@ mod tests {
             )
         });
         assert_eq!(recovered.events.len(), 1);
+    }
+
+    #[test]
+    fn session_catalog_effect_derives_provider_request_from_full_correlation() {
+        let runtime_port = Arc::new(GatedRuntimePort::default());
+        let mut runtime = test_core_runtime(runtime_port.clone());
+        let limit = 23;
+        let workspace_directory = "/tmp/session-catalog-correlation";
+        let expected_request = SessionCatalogRequest::for_workspace(limit, workspace_directory);
+
+        assert!(matches!(
+            runtime
+                .dispatch_command(AppCommand::LoadSessionCatalog(
+                    SessionCatalogLoadIntent::refresh(limit, workspace_directory),
+                ))
+                .events
+                .as_slice(),
+            [AppEvent::SessionCatalogChanged(
+                SessionCatalogSnapshot::Loading
+            )]
+        ));
+        let completed = poll_until(&mut runtime, |outcome| {
+            matches!(
+                outcome.events.as_slice(),
+                [AppEvent::SessionCatalogChanged(
+                    SessionCatalogSnapshot::Ready(_)
+                )]
+            )
+        });
+        assert_eq!(completed.events.len(), 1);
+        assert_eq!(
+            *runtime_port
+                .session_catalog_requests
+                .lock()
+                .expect("session catalog request log should lock"),
+            vec![expected_request],
+            "composition must derive the provider request from the exact Core correlation"
+        );
     }
 
     #[test]

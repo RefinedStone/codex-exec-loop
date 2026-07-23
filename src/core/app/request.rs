@@ -17,13 +17,54 @@ impl StartupCheckCorrelation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCatalogLoadMode {
+    EnsureLoaded,
+    Refresh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCatalogLoadIntent {
+    pub mode: SessionCatalogLoadMode,
+    pub limit: usize,
+    pub workspace_directory: String,
+}
+
+impl SessionCatalogLoadIntent {
+    pub fn ensure_loaded(limit: usize, workspace_directory: impl Into<String>) -> Self {
+        Self {
+            mode: SessionCatalogLoadMode::EnsureLoaded,
+            limit,
+            workspace_directory: workspace_directory.into(),
+        }
+    }
+
+    pub fn refresh(limit: usize, workspace_directory: impl Into<String>) -> Self {
+        Self {
+            mode: SessionCatalogLoadMode::Refresh,
+            limit,
+            workspace_directory: workspace_directory.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionCatalogLoadCorrelation {
     pub generation: u64,
+    pub limit: usize,
+    pub workspace_directory: String,
 }
 
 impl SessionCatalogLoadCorrelation {
-    pub fn new(generation: u64) -> Self {
-        Self { generation }
+    pub fn new(generation: u64, limit: usize, workspace_directory: impl Into<String>) -> Self {
+        Self {
+            generation,
+            limit,
+            workspace_directory: workspace_directory.into(),
+        }
+    }
+
+    pub fn matches_target(&self, intent: &SessionCatalogLoadIntent) -> bool {
+        self.limit == intent.limit && self.workspace_directory == intent.workspace_directory
     }
 }
 

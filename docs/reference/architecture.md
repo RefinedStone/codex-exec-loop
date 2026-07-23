@@ -228,9 +228,10 @@ rejections start no provider effect and preserve the editor draft. A successful 
 acknowledgement updates the matching catalog row, loaded conversation title, and stream identity
 before the TUI receives the accepted catalog and stream projections. Catalog loads and same-thread
 conversation loads requested during that mutation are retained and started after it settles, so an
-older read cannot restore the previous title. The TUI accepts only a completion matching the full
-admitted correlation and otherwise owns only the rename editor draft, pending feedback, and
-selected row.
+older read cannot restore the previous title. Core drops provider completions that do not match its
+full active correlation. The TUI always applies semantic projections from a completion already
+accepted by Core; only settlement of the local editor draft, pending feedback, status, and selected
+row requires the exact locally admitted correlation.
 
 ## State Authority
 
@@ -461,14 +462,20 @@ mutex or sampling another clock. High-frequency prompt, pulse, and scheduler che
 panel-only projection and do not clone transcript or event-stream rows.
 
 Each session-overlay draw captures one owned `SessionOverlayScreenModel` before presentation. The
-model combines the adapter-local catalog state with workspace, committed and edited query, project
-filter, one page projection, stable selected thread identity, page-local selected index, rename
-editor state, warnings, and key availability. Page projection and selection repair run once;
-list/detail/warning/key builders cannot reread `NativeTuiApp` or services. Rendering builds the
-owned overlay view before it mutates Ratatui `ListState`, so repeated redraw and resize do not
-dispatch catalog work or call services. Core remains the semantic session-catalog and correlation
-authority; the adapter-local `SessionState` mirror still provides initial-load and reload admission
-until that coalescing policy moves into Core.
+model combines the Core-published catalog projection with workspace, committed and edited query,
+project filter, one page projection, stable selected thread identity, page-local selected index,
+rename editor state, warnings, and key availability. Page projection and selection repair run
+once; list/detail/warning/key builders cannot reread `NativeTuiApp` or services. Rendering builds
+the owned overlay view before it mutates Ratatui `ListState`, so repeated redraw and resize do not
+dispatch catalog work or call services.
+
+Core is the sole session-catalog admission and correlation authority. The adapter emits typed
+ensure-loaded or explicit-refresh intent without writing `Loading` or suppressing duplicates from
+its display copy. Core applies settled-state policy, coalesces the exact in-flight workspace and
+limit, and publishes every accepted `Loading` transition with a full generation/workspace/limit
+correlation. `SessionState` is only the adapter projection of those Core events. A Core-accepted
+rename always applies its semantic catalog and active-stream projection; an exact local pending
+receipt controls only editor, feedback, selection, and status settlement.
 
 The auto-follow turn-budget overlay keeps only an active, uncommitted edit draft. When the editor
 is closed, status and review presentation read the canonical policy from the conversation model;

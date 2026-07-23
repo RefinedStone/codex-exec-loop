@@ -169,9 +169,13 @@ the fixed Akra theme.
 - Session list rows, selected detail, warnings, and key copy must be built from that same model.
   Rendering must finish the owned `SessionOverlayView` before synchronizing Ratatui `ListState`, and
   resize or repeated redraw must not trigger session-catalog I/O.
-- This presentation boundary does not move load admission: Core remains the semantic catalog and
-  correlation authority, while the adapter-local `SessionState` mirror continues to gate initial
-  load and reload until Core owns equivalent coalescing.
+- Core owns session-catalog admission and correlation. Overlay open/startup sends ensure-loaded
+  intent and explicit reload sends refresh intent; the adapter must not prewrite `Loading`, inspect
+  its `SessionState` projection to suppress either intent, or create a second coalescing rule.
+- Core coalesces one exact in-flight workspace/limit and publishes accepted loading transitions.
+  The adapter-local `SessionState` is presentation-only. A Core-accepted rename projection cannot
+  be vetoed by a missing or newer local editor receipt; that receipt settles only presentation
+  draft, feedback, selection, and status.
 - Async Review Center results may replace the current screen model only when the core correlation
   generation, workspace, and active-thread identity (thread ID) still match; workspace or thread
   identity drift must trigger a correlated reload.

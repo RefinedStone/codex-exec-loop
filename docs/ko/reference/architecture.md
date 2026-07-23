@@ -186,9 +186,10 @@ accepted admission을 반환한 뒤에만 pending 상태로 진입합니다. Act
 conversation load 충돌은 typed rejection으로 반환되어 provider effect를 시작하지 않고 editor draft를
 보존합니다. Provider의 성공 응답을 core가 수락하면 일치하는 catalog row, 불러온 conversation title,
 stream identity를 함께 갱신합니다. 충돌하는 catalog load와 같은 thread의 conversation load는 버리지
-않고 rename 완료 뒤로 지연하므로 예전 read가 이전 title을 복원할 수 없습니다. TUI는 admission의
-full correlation과 정확히 일치하는 completion만 수락하며 rename editor draft, pending feedback,
-selected row만 소유합니다.
+않고 rename 완료 뒤로 지연하므로 예전 read가 이전 title을 복원할 수 없습니다. Core는 자신의 active
+full correlation과 일치하지 않는 provider completion을 버립니다. TUI는 Core가 이미 수락한
+completion의 semantic projection을 항상 적용하고, exact local admission correlation은 editor draft,
+pending feedback, status, selected row의 표시 정산만 제어합니다.
 
 ## 상태 권한
 
@@ -381,6 +382,15 @@ reason, event-stream fact도 각각 한 번만 캡처합니다. Supersession row
 host-scrollback/live-tail 분할, prompt lock, animation, draw는 control-plane mutex나 별도 clock을
 다시 읽지 않고 이 immutable projection을 사용합니다. 자주 실행되는 prompt, pulse, scheduler
 검사는 panel 전용 경량 projection을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
+
+Core는 session catalog의 유일한 admission/correlation authority입니다. Adapter는 startup 또는
+overlay open에서 ensure-loaded intent, 명시적 reload에서 refresh intent만 보내며 display
+`SessionState`를 보고 요청을 억제하거나 `Loading`을 미리 쓰지 않습니다. Core가 settled-state
+정책과 동일 workspace/limit in-flight coalescing을 적용하고 generation/workspace/limit 전체
+correlation과 함께 accepted `Loading`을 발행합니다. Adapter의 `SessionState`는 이 Core event의
+presentation projection일 뿐입니다. Core가 수락한 rename의 catalog/active-stream semantic
+projection은 항상 적용되고, exact local pending receipt는 editor draft, feedback, selection,
+status settlement만 제어합니다.
 
 Planning worker 진단은 Core가 시작한 post-turn event부터 비동기 completion과 screen model까지
 domain `PlanningWorkerPanelState`를 그대로 보관합니다. TUI presentation은 adapter 소유 status
