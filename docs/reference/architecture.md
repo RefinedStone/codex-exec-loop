@@ -4,19 +4,44 @@
 
 This is the canonical architecture and authority reference for the shipped runtime.
 
+The arrows below are **compile-time source dependencies** (`A -> B` means A imports contracts
+owned by B). They are not the order in which a command executes:
+
 ```text
-adapter/inbound -> core or application -> domain
-core -> application -> domain
-application -> outbound ports -> adapter/outbound
-composition -> concrete wiring
+adapter/inbound/tui -> core + application services/contracts/projections + composition wiring + domain
+adapter/inbound/{cli,admin_api,telegram_bot} -> application -> domain
+application -> outbound ports
+adapter/outbound -> application ports + domain
+composition -> core + application + adapter/outbound
 ```
+
+The TUI line records the shipped transitional imports honestly. Removing its remaining application
+service/projection and composition-wiring dependencies belongs to the later state/effect boundary
+work; it does not grant the adapter access to mutable Core internals.
+
+The client command loop has a different, intentionally round-trip **runtime flow**:
+
+```text
+TUI intent
+  -> core reducer
+  -> CoreEffect
+  -> composition/CoreEffectRunner
+  -> application use case / outbound port
+  -> CoreInput completion
+  -> core reducer
+  -> snapshot/event
+  -> TUI projection
+```
+
+That round trip does not invert the source dependency. Core owns the effect/completion contract,
+while composition interprets it with application services.
 
 ## Layer Ownership
 
 | Layer | Owns | Must not own |
 | --- | --- | --- |
 | `adapter/inbound` | input mapping, rendering, local focus/editor/selection state | domain policy, durable task truth, dispatch policy |
-| `core` | app command/event/effect/completion flow, app state, projections, snapshots | TUI/HTTP/Telegram types or concrete DB/Git/filesystem adapters |
+| `core` | framework-free client runtime: command/event/effect/completion flow, process-local client state, projections, snapshots | business/domain authority, TUI/HTTP/Telegram types, application services, or concrete DB/Git/filesystem adapters |
 | `application/service` | use-case orchestration, ordering gates, transactions, control-plane handles | widgets, terminal events, transport DTOs |
 | `application/port` | outbound contracts required by application services | concrete integration details |
 | `domain` | pure invariants, validation, decisions, state transitions | async runtime, IO, logging, UI, database, filesystem, or Git calls |
@@ -28,8 +53,10 @@ real outbound boundary.
 
 ## Core Runtime
 
-`src/core` is a headless app runtime, not a replacement for application or domain layers. Its
-explicit contracts are:
+`src/core` is the framework-free **Client Runtime** outside the business hexagon, at its inbound
+client boundary. It is a long-lived state coordinator for the native client, not another business
+layer and not a replacement for application or domain. CLI, Admin, and Telegram may call the same
+application services without adopting this process-local TUI runtime. Its explicit contracts are:
 
 - `AppCommand` or `CoreInput`: user, lifecycle, tick, or completion intent
 - `Effect`: work core requests outside itself
@@ -38,6 +65,11 @@ explicit contracts are:
 - `AppSnapshot` and projections: adapter-facing read models
 - `RevisionedPlanningParallelProjection`: revision plus planning/parallel state for the TUI frame
   hot path
+
+Only `CoreRuntime` drives mutable client-runtime state. Adapters dispatch typed inputs and read
+owned snapshots/projections; they must not construct or mutate `CoreController`, `AppState`, or
+`TurnStreamState` directly. Effect executors may perform work and return a completion, but they do
+not own or mutate runtime state.
 
 Startup, session loading, conversation selection, turn submission, stream reduction, completion,
 and post-turn evaluation use this flow. Parallel mutation remains application-owned and enters
@@ -178,9 +210,13 @@ selected row.
 | parallel wake/effect ordering and stale-completion guards | application control-plane |
 | task/direction/queue authority, leases, session records, delivery claims | SQLite-backed stores |
 | eligibility, capacity, retry, validation, stale-event decisions | domain |
+| delivered frame, viewport/back-buffer trust, host-scrollback receipt, terminal recovery | terminal transaction/adapter |
 
 State that affects an invariant or must survive restart cannot live only in TUI state. Rendering or
-focus state should not be promoted to domain authority.
+focus state should not be promoted to domain authority. Adapter-local presentation state must not
+duplicate semantic lifecycle or in-flight-operation authority already owned by Core. Terminal
+delivery state describes what the host terminal actually accepted and therefore must not be
+inferred from a successful client-state transition alone.
 
 ## Planning Boundary
 

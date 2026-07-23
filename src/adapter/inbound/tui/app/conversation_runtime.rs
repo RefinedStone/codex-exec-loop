@@ -933,7 +933,7 @@ mod tests {
     use crate::application::service::planning::{
         PlanningExecutionSnapshot, PlanningTurnExecutionSnapshotCapture,
     };
-    use crate::core::app::TurnStreamState;
+    use crate::core::app::TurnStreamTestHarness;
     use crate::diagnostics::trace_event_log::AKRA_EVENT_TARGET;
     use crate::domain::conversation::{
         ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestKind,
@@ -962,7 +962,7 @@ mod tests {
     use tracing_subscriber::prelude::*;
 
     fn stream_snapshot_event(event: ConversationStreamEvent) -> ConversationRuntimeEvent {
-        let mut stream_state = TurnStreamState::new();
+        let mut stream_state = TurnStreamTestHarness::new();
         match &event {
             ConversationStreamEvent::TurnTerminal { receipt } => {
                 stream_state.seed_loaded_thread_identity(
@@ -1579,7 +1579,7 @@ mod tests {
     #[test]
     fn progressive_command_projects_only_counts_and_clears_on_failure() {
         let secret = "AKRA_RAIL_RAW_COMMAND_SECRET";
-        let mut core = TurnStreamState::new();
+        let mut core = TurnStreamTestHarness::new();
         core.seed_loaded_thread_identity("thread-1", "Runtime thread", "/tmp/workspace");
         core.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
             turn_id: "turn-1".to_string(),
@@ -1663,7 +1663,7 @@ mod tests {
 
     #[test]
     fn rejected_progressive_batch_refreshes_detail_incomplete_history_truth() {
-        let mut core = TurnStreamState::new();
+        let mut core = TurnStreamTestHarness::new();
         core.seed_loaded_thread_identity("thread-1", "Runtime thread", "/tmp/workspace");
         core.apply_stream_event(crate::core::app::TurnStreamEvent::TurnStarted {
             turn_id: "turn-1".to_string(),
@@ -1795,7 +1795,7 @@ mod tests {
 
     #[test]
     fn accepted_typed_thread_status_keeps_existing_tui_status_copy() {
-        let mut stream_state = TurnStreamState::new();
+        let mut stream_state = TurnStreamTestHarness::new();
         stream_state.apply_stream_event(crate::core::app::TurnStreamEvent::ThreadPrepared {
             thread_id: "thread-1".to_string(),
             title: "Runtime thread".to_string(),
@@ -2092,7 +2092,7 @@ mod tests {
             reduce_conversation_runtime(
                 state,
                 ConversationRuntimeEvent::StreamSnapshotApplied(Box::new(
-                    TurnStreamState::new().apply_turn_completed(
+                    TurnStreamTestHarness::new().apply_turn_completed(
                         "turn-1".to_string(),
                         vec!["new/docs/plan.md".to_string()],
                         snapshot_capture.clone(),

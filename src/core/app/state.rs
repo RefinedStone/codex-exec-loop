@@ -9,7 +9,7 @@ use crate::domain::recent_sessions::{SessionCatalog, SessionRenameRequest};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppState {
+pub(super) struct AppState {
     // One immutable read-model authority backs explicit reads and dispatch outcomes. Mutations
     // compare before Arc::make_mut so no-op inputs preserve allocation identity and avoid cloning
     // loaded conversation, catalog, or parallel payloads.
@@ -17,38 +17,43 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             current: Arc::new(AppSnapshot::initial()),
         }
     }
 
-    pub fn snapshot(&self) -> AppSnapshot {
+    pub(super) fn snapshot(&self) -> AppSnapshot {
         self.current.as_ref().clone()
     }
 
-    pub(crate) fn shared_snapshot(&self) -> Arc<AppSnapshot> {
+    pub(super) fn shared_snapshot(&self) -> Arc<AppSnapshot> {
         Arc::clone(&self.current)
     }
 
-    pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
+    pub(super) fn revisioned_planning_parallel_projection(
+        &self,
+    ) -> RevisionedPlanningParallelProjection {
         RevisionedPlanningParallelProjection {
             revision: self.current.revision,
             planning_parallel: self.current.planning_parallel.clone(),
         }
     }
 
-    pub fn parallel_mode_projection(&self) -> ParallelModeProjection {
+    pub(super) fn parallel_mode_projection(&self) -> ParallelModeProjection {
         self.current.planning_parallel.parallel_mode.clone()
     }
 
-    pub fn mark_startup_loading(&mut self) {
+    pub(super) fn mark_startup_loading(&mut self) {
         let current = Arc::make_mut(&mut self.current);
         current.startup = StartupSnapshot::Loading;
         current.revision += 1;
     }
 
-    pub fn apply_startup_result(&mut self, result: Result<Box<StartupReadySnapshot>, String>) {
+    pub(super) fn apply_startup_result(
+        &mut self,
+        result: Result<Box<StartupReadySnapshot>, String>,
+    ) {
         let current = Arc::make_mut(&mut self.current);
         current.startup = match result {
             Ok(ready) => StartupSnapshot::Ready(ready),
@@ -57,13 +62,13 @@ impl AppState {
         current.revision += 1;
     }
 
-    pub fn mark_session_catalog_loading(&mut self) {
+    pub(super) fn mark_session_catalog_loading(&mut self) {
         let current = Arc::make_mut(&mut self.current);
         current.session_catalog = SessionCatalogSnapshot::Loading;
         current.revision += 1;
     }
 
-    pub fn apply_session_catalog_result(
+    pub(super) fn apply_session_catalog_result(
         &mut self,
         result: Result<SessionCatalogReadySnapshot, String>,
     ) {
@@ -75,7 +80,7 @@ impl AppState {
         current.revision += 1;
     }
 
-    pub fn apply_session_rename(&mut self, request: &SessionRenameRequest) -> bool {
+    pub(super) fn apply_session_rename(&mut self, request: &SessionRenameRequest) -> bool {
         let catalog_changed = if let SessionCatalogSnapshot::Ready(ready) =
             &self.current.session_catalog
             && let SessionCatalog::Ready {
@@ -124,13 +129,13 @@ impl AppState {
         true
     }
 
-    pub fn mark_conversation_loading(&mut self) {
+    pub(super) fn mark_conversation_loading(&mut self) {
         let current = Arc::make_mut(&mut self.current);
         current.conversation = ConversationSnapshot::Loading;
         current.revision += 1;
     }
 
-    pub fn apply_conversation_result(
+    pub(super) fn apply_conversation_result(
         &mut self,
         result: Result<Box<ConversationReadySnapshot>, String>,
     ) {
@@ -148,7 +153,7 @@ impl AppState {
         current.revision += 1;
     }
 
-    pub fn reset_conversation(&mut self) {
+    pub(super) fn reset_conversation(&mut self) {
         let current = Arc::make_mut(&mut self.current);
         current.conversation = ConversationSnapshot::Idle;
         current
@@ -157,7 +162,7 @@ impl AppState {
         current.revision += 1;
     }
 
-    pub fn apply_planning_runtime_projection(
+    pub(super) fn apply_planning_runtime_projection(
         &mut self,
         workspace_directory: String,
         projection: Box<RuntimeProjection>,
@@ -181,14 +186,14 @@ impl AppState {
         true
     }
 
-    pub fn planning_runtime_workspace_directory(&self) -> Option<&str> {
+    pub(super) fn planning_runtime_workspace_directory(&self) -> Option<&str> {
         self.current
             .planning_parallel
             .planning_runtime_workspace_directory
             .as_deref()
     }
 
-    pub fn apply_parallel_readiness_projection(
+    pub(super) fn apply_parallel_readiness_projection(
         &mut self,
         snapshot: Option<Box<ParallelModeReadinessSnapshot>>,
     ) -> bool {
@@ -201,7 +206,7 @@ impl AppState {
         true
     }
 
-    pub fn apply_parallel_supervisor_projection(
+    pub(super) fn apply_parallel_supervisor_projection(
         &mut self,
         snapshot: Option<Box<ParallelModeSupervisorSnapshot>>,
     ) -> bool {

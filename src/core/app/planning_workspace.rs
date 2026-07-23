@@ -460,20 +460,20 @@ pub struct PlanningSimpleDraftPromotionSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PlanningWorkspaceOperationCoordinator {
+pub(super) struct PlanningWorkspaceOperationCoordinator {
     next_generation: u64,
     active: Option<PlanningWorkspaceOperationCorrelation>,
 }
 
 impl PlanningWorkspaceOperationCoordinator {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             next_generation: 1,
             active: None,
         }
     }
 
-    pub(crate) fn begin(
+    pub(super) fn begin(
         &mut self,
         intent: PlanningWorkspaceOperationIntent,
     ) -> PlanningWorkspaceOperationAdmission {
@@ -496,7 +496,7 @@ impl PlanningWorkspaceOperationCoordinator {
         PlanningWorkspaceOperationAdmission::Started { correlation }
     }
 
-    pub(crate) fn accept(&mut self, correlation: &PlanningWorkspaceOperationCorrelation) -> bool {
+    pub(super) fn accept(&mut self, correlation: &PlanningWorkspaceOperationCorrelation) -> bool {
         if self.active.as_ref() != Some(correlation) {
             return false;
         }

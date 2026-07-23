@@ -5,7 +5,7 @@
  */
 pub mod approval;
 pub mod command;
-pub mod controller;
+mod controller;
 pub mod conversation;
 pub mod directions;
 pub mod effect;
@@ -21,18 +21,18 @@ pub mod review_center;
 pub mod session;
 pub mod snapshot;
 pub mod startup;
-pub mod state;
+mod state;
 pub mod turn_interrupt;
 pub mod turn_steer;
 pub mod turn_stream;
 pub mod turn_submission;
 
-pub(crate) use approval::ApprovalReviewPersistenceCoordinator;
 pub use approval::{
     ApprovalDecisionAdmission, ApprovalDecisionCorrelation, ApprovalReviewPersistenceCorrelation,
 };
 pub use command::AppCommand;
-pub use controller::{CoreController, CoreDispatchOutcome};
+pub(in crate::core) use controller::CoreController;
+pub use controller::CoreDispatchOutcome;
 pub use conversation::{
     ConversationReadySnapshot, ConversationSnapshot, ConversationState,
     ConversationThreadReviewSnapshot,
@@ -49,11 +49,9 @@ pub use github_review_poll::{
     GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
 };
 pub use manual_prompt::{ManualPromptPreparationAdmission, ManualPromptPreparationIntent};
-pub(crate) use planning_runtime::PlanningRuntimeCoordinator;
 pub use planning_runtime::{
     PlanningDoctorSnapshot, PlanningDoctorSnapshotState, PlanningRuntimeRefreshSnapshot,
 };
-pub(crate) use planning_workspace::PlanningWorkspaceOperationCoordinator;
 pub use planning_workspace::{
     PlanningEditorFileSnapshot, PlanningEditorMutationAction, PlanningEditorMutationIdentity,
     PlanningEditorMutationRequest, PlanningEditorMutationResult, PlanningEditorMutationTarget,
@@ -87,12 +85,14 @@ pub use startup::{
     StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
     StartupState,
 };
-pub use state::AppState;
 pub use turn_interrupt::{StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation};
 pub use turn_steer::{TurnSteerAdmission, TurnSteerCorrelation};
+pub(in crate::core) use turn_stream::TurnStreamState;
+#[cfg(test)]
+pub(crate) use turn_stream::TurnStreamTestHarness;
 pub use turn_stream::{
     TurnStreamEvent, TurnStreamProgressiveActivityUpdate, TurnStreamRuntimeEnvelopeRejection,
-    TurnStreamSnapshot, TurnStreamState, TurnStreamTerminalSnapshot, TurnStreamUpdate,
+    TurnStreamSnapshot, TurnStreamTerminalSnapshot, TurnStreamUpdate,
 };
 pub use turn_submission::{
     CorePromptOrigin, TurnSubmissionAdmission, TurnSubmissionCorrelation, TurnSubmissionRequest,

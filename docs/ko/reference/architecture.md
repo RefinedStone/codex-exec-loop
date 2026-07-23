@@ -4,19 +4,44 @@
 
 이 문서는 구현된 런타임의 canonical architecture와 authority reference입니다.
 
+아래 화살표는 **컴파일 시점의 소스 의존성**입니다. `A -> B`는 A가 B 소유 계약을 import한다는
+뜻이며 command의 실행 순서를 뜻하지 않습니다.
+
 ```text
-adapter/inbound -> core or application -> domain
-core -> application -> domain
-application -> outbound ports -> adapter/outbound
-composition -> concrete wiring
+adapter/inbound/tui -> core + application services/contracts/projections + composition wiring + domain
+adapter/inbound/{cli,admin_api,telegram_bot} -> application -> domain
+application -> outbound ports
+adapter/outbound -> application ports + domain
+composition -> core + application + adapter/outbound
 ```
+
+TUI 행은 현재 남아 있는 과도기 의존성을 숨기지 않고 표현합니다. Application service/projection과
+composition wiring 의존성 제거는 뒤의 state/effect 경계 작업이며, 이 의존성이 adapter에 Core 내부
+mutable state 접근 권한을 주지는 않습니다.
+
+Client command loop의 **런타임 실행 흐름**은 의도적으로 왕복합니다.
+
+```text
+TUI intent
+  -> core reducer
+  -> CoreEffect
+  -> composition/CoreEffectRunner
+  -> application use case / outbound port
+  -> CoreInput completion
+  -> core reducer
+  -> snapshot/event
+  -> TUI projection
+```
+
+이 왕복은 소스 의존성을 뒤집지 않습니다. Effect/completion 계약은 Core가 소유하고 composition이
+application service로 해석합니다.
 
 ## 계층 소유권
 
 | 계층 | 소유 | 소유하면 안 되는 것 |
 | --- | --- | --- |
 | `adapter/inbound` | 입력 mapping, rendering, local focus/editor/selection state | domain 정책, durable task truth, dispatch 정책 |
-| `core` | app command/event/effect/completion 흐름, app state, projection, snapshot | TUI/HTTP/Telegram type, 구체 DB/Git/filesystem adapter |
+| `core` | framework와 독립된 client runtime: command/event/effect/completion 흐름, process-local client state, projection, snapshot | business/domain 권한, TUI/HTTP/Telegram type, application service, 구체 DB/Git/filesystem adapter |
 | `application/service` | use-case orchestration, ordering gate, transaction, control-plane handle | widget, terminal event, transport DTO |
 | `application/port` | application service가 요구하는 outbound contract | 구체 integration 상세 |
 | `domain` | 순수 invariant, validation, decision, state transition | async runtime, IO, logging, UI, DB, filesystem, Git 호출 |
@@ -28,13 +53,21 @@ Mapping은 adapter에, policy는 domain 또는 application service에 둡니다.
 
 ## Core runtime
 
-`src/core`는 headless app runtime이며 application/domain layer를 대체하지 않습니다.
+`src/core`는 business hexagon 바깥의 inbound client 경계에 놓인 framework 독립 **Client Runtime**입니다.
+Native client의 장기 수명 상태 coordinator이며 별도의 business layer도 아니고 application/domain
+layer를 대체하지도 않습니다. CLI, Admin, Telegram은 같은 application service를 사용하면서도 이
+process-local TUI runtime을 채택할 필요가 없습니다.
 
 - `AppCommand` 또는 `CoreInput`: 사용자·lifecycle·tick·completion intent
 - `Effect`: core 바깥에서 실행할 작업
 - `Completion`: 같은 input queue로 돌아오는 effect 결과
 - `AppEvent`: 외부에 유용한 전이
 - `AppSnapshot`/projection: adapter가 읽는 view model
+
+Mutable client-runtime state는 `CoreRuntime`만 구동합니다. Adapter는 typed input을 dispatch하고
+owned snapshot/projection만 읽어야 하며 `CoreController`, `AppState`, `TurnStreamState`를 직접
+생성하거나 변경하면 안 됩니다. Effect executor는 작업을 수행하고 completion을 반환할 수 있지만
+runtime state의 소유자도 writer도 아닙니다.
 
 시작, session load, conversation 선택, turn 제출, stream reduction, 완료, post-turn 평가가 이 흐름을
 사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.
@@ -160,9 +193,13 @@ selected row만 소유합니다.
 | parallel wake/effect ordering, stale-completion guard | application control-plane |
 | task/direction/queue authority, lease, session record, delivery claim | SQLite-backed store |
 | eligibility, capacity, retry, validation, stale-event decision | domain |
+| 전달된 frame, viewport/back-buffer 신뢰, host-scrollback receipt, terminal 복구 | terminal transaction/adapter |
 
 Invariant에 영향을 주거나 재시작 후에도 남아야 하는 상태는 TUI에만 둘 수 없습니다. Rendering이나
-focus만을 위한 상태는 domain authority로 올리지 않습니다.
+focus만을 위한 상태는 domain authority로 올리지 않습니다. Adapter-local presentation state는 Core가
+이미 소유한 semantic lifecycle 또는 in-flight operation 권한을 중복해서는 안 됩니다. Terminal
+delivery state는 host terminal이 실제로 수락한 결과이므로 client state transition 성공만으로
+추론하면 안 됩니다.
 
 ## Planning 경계
 

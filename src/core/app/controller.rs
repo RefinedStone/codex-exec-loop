@@ -1,20 +1,23 @@
+use super::approval::ApprovalReviewPersistenceCoordinator;
 use super::github_review_polling_target_is_valid;
+use super::planning_runtime::PlanningRuntimeCoordinator;
+use super::planning_workspace::PlanningWorkspaceOperationCoordinator;
+use super::state::AppState;
 use super::{
-    AppCommand, AppEvent, AppSnapshot, AppState, ApprovalDecisionAdmission,
-    ApprovalDecisionCorrelation, ApprovalReviewPersistenceCoordinator, ConversationLoadCorrelation,
-    CoreEffect, CoreEffectCompletion, CoreInput, DirectionsMaintenanceLoadCorrelation,
-    GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
+    AppCommand, AppEvent, AppSnapshot, ApprovalDecisionAdmission, ApprovalDecisionCorrelation,
+    ConversationLoadCorrelation, CoreEffect, CoreEffectCompletion, CoreInput,
+    DirectionsMaintenanceLoadCorrelation, GithubReviewPollCorrelation,
+    GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
     GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
     ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ParallelModeProjection,
-    ParallelPeekLoadCorrelation, PlanningEditorMutationRequest, PlanningRuntimeCoordinator,
-    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCoordinator,
-    PlanningWorkspaceOperationIntent, PlanningWorkspaceOperationKind,
-    QueueAuthorityLoadCorrelation, QueueMutationCorrelation, ReviewCenterLoadCorrelation,
-    RevisionedPlanningParallelProjection, SessionCatalogLoadCorrelation,
-    SessionRenameAcceptedSnapshot, SessionRenameAdmission, SessionRenameCorrelation,
-    StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt, StopRequestCorrelation,
-    TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent, TurnStreamState, TurnStreamUpdate,
-    TurnSubmissionAdmission, TurnSubmissionCorrelation,
+    ParallelPeekLoadCorrelation, PlanningEditorMutationRequest,
+    PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationIntent,
+    PlanningWorkspaceOperationKind, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
+    ReviewCenterLoadCorrelation, RevisionedPlanningParallelProjection,
+    SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameAdmission,
+    SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
+    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
+    TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
 };
 use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProjection;
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
@@ -64,7 +67,7 @@ struct ActiveManualPromptPreparation {
 }
 
 #[derive(Debug, Clone)]
-pub struct CoreController {
+pub(in crate::core) struct CoreController {
     state: AppState,
     turn_stream_state: TurnStreamState,
     next_startup_check_generation: u64,
@@ -113,7 +116,7 @@ pub struct CoreController {
 }
 
 impl CoreController {
-    pub fn new() -> Self {
+    pub(in crate::core) fn new() -> Self {
         Self {
             state: AppState::new(),
             turn_stream_state: TurnStreamState::new(),
@@ -163,7 +166,7 @@ impl CoreController {
         }
     }
 
-    pub fn snapshot(&self) -> AppSnapshot {
+    pub(in crate::core) fn snapshot(&self) -> AppSnapshot {
         self.state.snapshot()
     }
 
@@ -171,15 +174,17 @@ impl CoreController {
         self.state.shared_snapshot()
     }
 
-    pub fn revisioned_planning_parallel_projection(&self) -> RevisionedPlanningParallelProjection {
+    pub(in crate::core) fn revisioned_planning_parallel_projection(
+        &self,
+    ) -> RevisionedPlanningParallelProjection {
         self.state.revisioned_planning_parallel_projection()
     }
 
-    pub fn parallel_mode_projection(&self) -> ParallelModeProjection {
+    pub(in crate::core) fn parallel_mode_projection(&self) -> ParallelModeProjection {
         self.state.parallel_mode_projection()
     }
 
-    pub fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
+    pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
         match input {
             CoreInput::Command(AppCommand::Noop) => CoreDispatchOutcome {
                 events: Vec::new(),

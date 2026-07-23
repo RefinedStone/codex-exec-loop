@@ -469,7 +469,7 @@ mod tests {
         test_native_tui_app, test_native_tui_app_with_session_catalog_port,
     };
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
-    use crate::core::app::TurnStreamState;
+    use crate::core::app::TurnStreamTestHarness;
     use crate::domain::recent_sessions::{
         RecentSessions, SessionCatalog, SessionCatalogRequest, SessionCatalogTier,
         SessionRenameRequest,
@@ -530,7 +530,7 @@ mod tests {
         previous_title: &str,
         renamed_title: &str,
     ) -> SessionRenameAcceptedSnapshot {
-        let mut stream = TurnStreamState::new();
+        let mut stream = TurnStreamTestHarness::new();
         stream.seed_loaded_thread_identity(thread_id, previous_title, "/tmp/root");
         SessionRenameAcceptedSnapshot {
             session_catalog: catalog_snapshot(sessions),

@@ -438,6 +438,147 @@ fn application_layer_has_no_core_runtime_dependencies() {
 }
 
 #[test]
+fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
+    /*
+     * Core is a client runtime outside the business hexagon. Adapters may dispatch
+     * typed inputs and read snapshots, but direct controller/store mutation would
+     * create a second ingress that bypasses effect ordering and correlation gates.
+     */
+    assert_no_forbidden_references(BoundaryRule {
+        name: "inbound adapters must not construct or mutate client-runtime internals",
+        root: "src/adapter/inbound",
+        forbidden_patterns: &[
+            "crate::core::app::CoreController",
+            "crate::core::app::AppState",
+            "crate::core::app::TurnStreamState",
+            "crate::core::app::turn_stream::TurnStreamState",
+        ],
+    });
+
+    let app_module = fs::read_to_string("src/core/app/mod.rs").unwrap();
+    for forbidden in [
+        "pub use controller::{CoreController",
+        "pub use controller::CoreController",
+        "pub use state::AppState",
+        "pub use turn_stream::TurnStreamState",
+    ] {
+        assert!(
+            !app_module.contains(forbidden),
+            "client-runtime mutation internals must not be publicly re-exported: {forbidden}"
+        );
+    }
+    for required in [
+        "pub(in crate::core) use controller::CoreController;",
+        "pub(in crate::core) use turn_stream::TurnStreamState;",
+    ] {
+        assert!(
+            app_module.contains(required),
+            "client-runtime internal visibility contract is missing: {required}"
+        );
+    }
+
+    let controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    assert!(
+        controller.contains("pub(in crate::core) struct CoreController"),
+        "CoreController must remain private to the client runtime"
+    );
+    assert!(
+        controller.contains("pub(in crate::core) fn handle_input(&mut self, input: CoreInput)"),
+        "only the client runtime driver may enter the root reducer"
+    );
+
+    let state = fs::read_to_string("src/core/app/state.rs").unwrap();
+    assert!(
+        state.contains("pub(super) struct AppState"),
+        "AppState must remain private to core/app"
+    );
+    assert!(
+        controller.contains("use super::state::AppState;"),
+        "the root reducer must import AppState directly from the private state module"
+    );
+
+    let turn_stream = fs::read_to_string("src/core/app/turn_stream.rs").unwrap();
+    assert!(
+        turn_stream.contains("pub(in crate::core) struct TurnStreamState"),
+        "TurnStreamState must be impossible to name outside the client runtime"
+    );
+    assert!(
+        turn_stream.contains("#[cfg(test)]\npub(crate) struct TurnStreamTestHarness"),
+        "cross-module stream fixtures must be exposed only through a test harness"
+    );
+
+    for (path, internal_type) in [
+        (
+            "src/core/app/approval.rs",
+            "ApprovalReviewPersistenceCoordinator",
+        ),
+        (
+            "src/core/app/planning_runtime.rs",
+            "PlanningRuntimeCoordinator",
+        ),
+        (
+            "src/core/app/planning_workspace.rs",
+            "PlanningWorkspaceOperationCoordinator",
+        ),
+    ] {
+        let source = fs::read_to_string(path).unwrap();
+        assert!(
+            source.contains(&format!("pub(super) struct {internal_type}"))
+                && !source.contains(&format!("pub(crate) struct {internal_type}"))
+                && !source.contains(&format!("pub struct {internal_type}")),
+            "{internal_type} must remain private to the root reducer"
+        );
+    }
+    for forbidden_reexport in [
+        "use approval::ApprovalReviewPersistenceCoordinator",
+        "use planning_runtime::PlanningRuntimeCoordinator",
+        "use planning_workspace::PlanningWorkspaceOperationCoordinator",
+    ] {
+        assert!(
+            !app_module.contains(forbidden_reexport),
+            "mutation coordinator must not be re-exported: {forbidden_reexport}"
+        );
+    }
+
+    let driver = fs::read_to_string("src/core/runtime/driver.rs").unwrap();
+    assert!(
+        driver.contains("    fn from_parts(")
+            && !driver.contains("pub(crate) fn from_parts(")
+            && !driver.contains("pub fn from_parts("),
+        "injecting a raw CoreController must not be part of the public runtime API"
+    );
+}
+
+#[test]
+fn client_runtime_compile_dependencies_and_runtime_flow_are_documented_separately() {
+    let english = fs::read_to_string("docs/reference/architecture.md").unwrap();
+    for required in [
+        "**compile-time source dependencies**",
+        "**runtime flow**",
+        "framework-free **Client Runtime**",
+        "terminal transaction/adapter",
+    ] {
+        assert!(
+            english.contains(required),
+            "canonical architecture must document the client-runtime boundary: {required}"
+        );
+    }
+
+    let korean = fs::read_to_string("docs/ko/reference/architecture.md").unwrap();
+    for required in [
+        "**컴파일 시점의 소스 의존성**",
+        "**런타임 실행 흐름**",
+        "framework 독립 **Client Runtime**",
+        "terminal transaction/adapter",
+    ] {
+        assert!(
+            korean.contains(required),
+            "Korean architecture reference must document the client-runtime boundary: {required}"
+        );
+    }
+}
+
+#[test]
 fn application_layer_has_no_ui_framework_dependencies() {
     // Static guard: UI framework imports in application compile cleanly but invert the hexagonal boundary.
     assert_no_forbidden_references(BoundaryRule {
@@ -467,9 +608,8 @@ fn core_layer_only_depends_on_application_domain_and_core_modules() {
 #[test]
 fn future_core_layer_is_application_independent() {
     /*
-     * Disabled target: if core becomes the innermost app/kernel boundary instead
-     * of a headless coordinator, application service types should move behind
-     * core-owned ports/facades and disappear from the core source graph.
+     * Enforced boundary: the client runtime owns its contracts and composition
+     * interprets effects, so application service types stay out of Core.
      */
     assert_no_forbidden_references(BoundaryRule {
         name: "future core layer must not depend directly on application modules",
@@ -481,9 +621,8 @@ fn future_core_layer_is_application_independent() {
 #[test]
 fn future_core_app_contracts_are_application_dto_free() {
     /*
-     * Disabled target: core/app should eventually expose core-owned commands,
-     * effects, events, and snapshots instead of leaking application service DTOs
-     * into the public headless runtime contract.
+     * Enforced boundary: core/app exposes core-owned commands, effects, events,
+     * and snapshots instead of application service DTOs.
      */
     assert_no_forbidden_references(BoundaryRule {
         name: "future core app contracts must not depend on application DTOs",
@@ -495,10 +634,8 @@ fn future_core_app_contracts_are_application_dto_free() {
 #[test]
 fn future_core_app_public_contracts_are_core_owned() {
     /*
-     * Disabled target: this is the strict version of the core/app boundary. Core
-     * commands, effects, inputs, events, stream snapshots, and app snapshots
-     * should be owned by core/domain contracts instead of reusing application
-     * request/result/projection DTOs in their public shape.
+     * Enforced strict boundary: Core commands, effects, inputs, events, stream
+     * snapshots, and app snapshots use core/domain-owned contracts.
      */
     assert_no_forbidden_references_in_paths(
         "future core/app public contracts must be core-owned and application DTO free",
@@ -585,9 +722,8 @@ fn core_app_layer_has_no_effect_execution_dependencies() {
 #[test]
 fn future_core_runtime_does_not_hold_raw_application_services() {
     /*
-     * Disabled target: core/runtime may keep the effect boundary, but the concrete
-     * field set should collapse behind a narrow application-facing facade before
-     * this becomes an always-on architecture gate.
+     * Enforced boundary: core/runtime keeps only the effect contract and never
+     * stores concrete application services.
      */
     assert_no_forbidden_references(BoundaryRule {
         name: "future core runtime must depend on a narrow application facade instead of raw services",
@@ -607,9 +743,8 @@ fn future_core_runtime_does_not_hold_raw_application_services() {
 #[test]
 fn future_core_runtime_uses_application_facade_not_service_modules() {
     /*
-     * Disabled target: core/runtime should eventually execute one narrow
-     * application-facing facade instead of importing service modules, storing raw
-     * services, or calling service methods directly from core worker code.
+     * Enforced boundary: composition implements the effect facade; core/runtime
+     * does not import service modules or call application services directly.
      */
     assert_no_forbidden_references(BoundaryRule {
         name: "future core runtime must call an application facade instead of raw service modules",

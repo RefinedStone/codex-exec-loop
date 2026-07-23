@@ -31,7 +31,7 @@ where
         Self::from_parts(CoreController::new(), effect_executor, input_receiver)
     }
 
-    pub fn from_parts(
+    fn from_parts(
         controller: CoreController,
         effect_executor: E,
         input_receiver: CoreInputReceiver,
