@@ -25,9 +25,14 @@ mod views;
 pub(crate) use base::{build_session_overlay_view, build_startup_overlay_view};
 pub(crate) use language_selection::build_language_selection_overlay_view;
 pub(crate) use model_selection::build_model_selection_overlay_view;
+#[cfg(test)]
 pub(crate) use parallel_peek::build_parallel_peek_overlay_view;
+pub(crate) use parallel_peek::build_parallel_peek_overlay_view_from_snapshot;
+#[cfg(test)]
+pub(crate) use planning::build_planning_init_overlay_view;
 pub(crate) use planning::{
-    build_planning_draft_editor_overlay_view, build_planning_init_overlay_view,
+    build_planning_draft_editor_overlay_view_from_state,
+    build_planning_init_overlay_view_from_projection,
 };
 pub(crate) use queue::build_queue_overlay_view as build_queue_overlay_view_from_screen_model;
 pub(crate) use reviews::build_reviews_overlay_view;

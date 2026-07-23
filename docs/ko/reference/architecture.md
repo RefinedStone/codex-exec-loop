@@ -392,6 +392,29 @@ host-scrollback/live-tail 분할, prompt lock, animation, draw는 control-plane 
 다시 읽지 않고 이 immutable projection을 사용합니다. 자주 실행되는 prompt, pulse, scheduler
 검사는 panel 전용 경량 projection을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
 
+`Terminal::draw` 전에 terminal transaction은 conversation projection과 활성 overlay 하나를
+owned `InlineShellFrameModel`로 합칩니다. 그 안의 `InlineInspectionFrameModel` variant가 view,
+widget-local state, geometry에 따른 scroll 결정, feedback 비교 기준을 소유합니다. Capture
+boundary는 UI-local state만 읽을 수 있고 Core, application service, parallel control plane,
+outbound I/O를 다시 조회할 수 없습니다. Production `shell_rendering.rs`와
+`shell_rendering/**`는 이 owned frame model만 소비하고 Ratatui `Frame`만 변경한 뒤
+`InlineFrameRenderReceipt`를 반환합니다. `NativeTuiApp`, command dispatch, clock, retained
+adapter state는 renderer 경계를 넘지 않습니다.
+
+Terminal transaction은 draw와 draw 이후 terminal size 검증이 성공한 뒤에만 receipt를
+commit합니다. Exact attempt gate가 failed, resize-raced, stale, duplicate receipt를 버립니다.
+Receipt 적용은 capture 당시 baseline과 현재 값을 비교하므로 activity, editor, help, approval,
+session list, queue hit area에 관한 오래된 frame feedback이 더 최신 UI edit를 덮을 수 없습니다.
+
+Session frame capture는 presentation 전에 owned `SessionOverlayScreenModel` 하나를 만듭니다. 이
+model은 Core가 발행한 catalog projection, workspace, committed/edited query, project filter,
+page projection, stable selected thread identity, page-local selected index, rename editor state,
+warning, key availability를 합칩니다. Page projection과 selection repair는 한 번만 수행하며
+list/detail/warning/key builder와 renderer는 `NativeTuiApp`이나 service를 다시 읽지 않습니다.
+Capture가 owned overlay view와 frame-local Ratatui `ListState`를 완성하고, 안정적으로 전달된
+receipt만 그 state를 compare-and-apply합니다. 반복 redraw와 resize는 catalog 작업이나 service
+호출을 일으키지 않습니다.
+
 Core는 session catalog의 유일한 admission/correlation authority입니다. Adapter는 startup 또는
 overlay open에서 ensure-loaded intent, 명시적 reload에서 refresh intent만 보내며 display
 `SessionState`를 보고 요청을 억제하거나 `Loading`을 미리 쓰지 않습니다. Core가 settled-state

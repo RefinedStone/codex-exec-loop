@@ -1,6 +1,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
+use crate::adapter::inbound::tui::app::shell_presentation::build_planning_draft_editor_overlay_view_from_state;
 use crate::application::service::planning::{
     PlanningBootstrapMode, PlanningDraftEditorFile, PlanningDraftEditorSession,
     PlanningInitStageResult,
@@ -145,8 +146,11 @@ fn prepare_render_state_syncs_inline_planning_editor_scroll_before_render() {
         .max(6)
         .saturating_sub(1)
         .max(1);
-    let view = build_planning_draft_editor_overlay_view(&app, editor_content_height)
-        .expect("planning draft editor overlay view should be available");
+    let view = build_planning_draft_editor_overlay_view_from_state(
+        &app.planning_draft_editor_ui_state,
+        editor_content_height,
+    )
+    .expect("planning draft editor overlay view should be available");
 
     assert!(view.editor_scroll > 0);
     assert!(view.editor_cursor_offset.expect("cursor").1 < editor_content_height);
@@ -264,8 +268,9 @@ fn inline_planning_manual_editor_renders_close_confirmation_guidance() {
     // Dirty draft close confirmation is part of the editor's safety contract:
     // status copy must make the pending close explicit and the key hints must
     // keep the non-destructive escape path visible.
-    let view = build_planning_draft_editor_overlay_view(&app, 8)
-        .expect("planning draft editor overlay view should be available");
+    let view =
+        build_planning_draft_editor_overlay_view_from_state(&app.planning_draft_editor_ui_state, 8)
+            .expect("planning draft editor overlay view should be available");
     let status = view
         .status_lines
         .iter()

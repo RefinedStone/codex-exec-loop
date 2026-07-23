@@ -32,6 +32,7 @@ use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::layout::Position;
 use ratatui::style::Color;
+use ratatui::widgets::ListState;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -662,6 +663,8 @@ fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navig
         "session listing is unsupported for this bridge",
         vec!["manual attach only".to_string()],
     ));
+    let existing_list_state = ListState::default().with_offset(4).with_selected(Some(5));
+    app.session_overlay_ui_state.list_state = existing_list_state;
     app.shell_overlay = ShellOverlay::Sessions;
 
     terminal
@@ -673,6 +676,10 @@ fn inline_sessions_inspection_surfaces_attach_only_catalog_without_browser_navig
     assert!(rendered.contains("session listing is unsupported"));
     assert!(rendered.contains("manual attach only"));
     assert!(rendered.contains("Recent-session navigation requires a queryable catalog surface."));
+    assert_eq!(
+        app.session_overlay_ui_state.list_state, existing_list_state,
+        "message-only session catalogs must not rewrite list selection or offset"
+    );
 }
 #[test]
 fn inline_help_inspection_renders_command_help() {

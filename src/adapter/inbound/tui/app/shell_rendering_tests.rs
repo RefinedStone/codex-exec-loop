@@ -170,6 +170,12 @@ fn captured_turn_steer_confirmation_keeps_language_and_exact_identity_after_app_
     assert!(app.show_turn_steer_confirmation());
 
     let projection = InlineConversationFrameProjection::from_app(&app, 80);
+    let model = capture_inline_shell_frame_model(
+        &app,
+        ShellFrontendMode::InlineMainBuffer,
+        Rect::new(0, 0, 80, 24),
+        projection,
+    );
 
     app.tui_language = TuiLanguage::English;
     let intent = app
@@ -185,12 +191,7 @@ fn captured_turn_steer_confirmation_keeps_language_and_exact_identity_after_app_
     let mut terminal = tui_testkit::shell_terminal(80, 24);
     terminal
         .draw(|frame| {
-            draw_projected(
-                frame,
-                &mut app,
-                ShellFrontendMode::InlineMainBuffer,
-                projection,
-            )
+            let _ = draw_projected(frame, ShellFrontendMode::InlineMainBuffer, model);
         })
         .expect("captured turn-steer projection should render");
     let rendered = tui_testkit::screen_text(&terminal);

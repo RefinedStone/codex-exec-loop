@@ -2,31 +2,23 @@ use super::super::parallel_supervisor_events::{
     rendered_parallel_event_line_rows, rendered_parallel_event_tail_start_index,
 };
 use super::super::shell_presentation::{
-    ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceOverlayView,
-    HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
+    ActivityOverlayView, DirectionsMaintenanceOverlayView, HelpOverlayView,
+    LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
     ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
-    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    ViewSelectionOverlayView, build_activity_overlay_list_view,
-    build_directions_maintenance_overlay_view, build_help_overlay_view,
-    build_language_selection_overlay_view, build_model_selection_overlay_view,
-    build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_queue_overlay_view, build_reviews_overlay_view,
-    build_session_overlay_view, build_startup_overlay_view, build_view_selection_overlay_view,
+    QueueOverlayView, ReviewsOverlayView, SessionOverlayView, StartupOverlayView,
+    SupersessionOverlayView, ViewSelectionOverlayView,
 };
-use super::super::{
-    AkraTheme, DirectionsMaintenanceOverlayStep, NativeTuiApp, ParallelPeekOverlayStep,
-    PlanningInitOverlayStep, ProgressiveActivityPageCursor, SessionOverlayScreenModel,
-    ShellOverlay,
-};
+use super::super::{AkraTheme, ParallelPeekOverlayStep, TuiLanguage};
 use super::inline_layout::{
     InlineAppendOnlyStream, InlineAppendOnlyStreamTitle, InlineScrolledPanel, InlineTitledPanel,
     count_rendered_inline_rows, inline_section_height, set_cursor_if_visible, split_inline_section,
     take_panel_body_lines,
 };
+use super::{ApprovalInlineScreenModel, InlineInspectionFrameModel};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 const PARALLEL_EVENT_STREAM_TITLE: &str = "Parallel Event Stream";
 
@@ -59,125 +51,88 @@ fn render_inline_scrolled_panel(
 
 pub(super) fn draw_inline_shell_inspection(
     frame: &mut Frame<'_>,
-    app: &mut NativeTuiApp,
     inspection_area: Rect,
-    parallel_mode_enabled: bool,
-    supersession_overlay_view: Option<Box<SupersessionOverlayView>>,
-) {
-    // The top-level router mirrors ShellOverlay exactly so hidden overlays stay
-    // silent and every visible overlay owns a focused inline composition.
-    match app.shell_overlay {
-        ShellOverlay::Hidden => {}
-        ShellOverlay::Startup => {
-            draw_inline_startup_inspection(frame, inspection_area, app, parallel_mode_enabled)
+    model: InlineInspectionFrameModel,
+) -> Option<ListState> {
+    match model {
+        InlineInspectionFrameModel::Conversation => {}
+        InlineInspectionFrameModel::ParallelSupervisor(view)
+        | InlineInspectionFrameModel::Supersession(view) => {
+            draw_inline_supersession_inspection(frame, inspection_area, view)
         }
-        ShellOverlay::Sessions => draw_inline_session_inspection(frame, inspection_area, app),
-        ShellOverlay::ModelSelection => {
-            draw_inline_model_selection_inspection(frame, inspection_area, app)
+        InlineInspectionFrameModel::Startup(view) => {
+            draw_inline_startup_inspection(frame, inspection_area, view)
         }
-        ShellOverlay::ViewSelection => {
-            draw_inline_view_selection_inspection(frame, inspection_area, app)
+        InlineInspectionFrameModel::Sessions { view, list_state } => {
+            return Some(draw_inline_session_inspection(
+                frame,
+                inspection_area,
+                view,
+                list_state,
+            ));
         }
-        ShellOverlay::LanguageSelection => {
-            draw_inline_language_selection_inspection(frame, inspection_area, app)
+        InlineInspectionFrameModel::ModelSelection(view) => {
+            draw_inline_model_selection_inspection(frame, inspection_area, view)
         }
-        ShellOverlay::Supersession => draw_inline_supersession_inspection(
+        InlineInspectionFrameModel::ViewSelection(view) => {
+            draw_inline_view_selection_inspection(frame, inspection_area, view)
+        }
+        InlineInspectionFrameModel::LanguageSelection(view) => {
+            draw_inline_language_selection_inspection(frame, inspection_area, view)
+        }
+        InlineInspectionFrameModel::ParallelPeek {
+            view,
+            step,
+            scroll_from_bottom,
+        } => draw_inline_parallel_peek_inspection(
             frame,
             inspection_area,
-            supersession_overlay_view
-                .map(|view| *view)
-                .expect("supersession frame projection must own its view"),
+            view,
+            step,
+            scroll_from_bottom,
         ),
-        ShellOverlay::ParallelPeek => {
-            draw_inline_parallel_peek_inspection(frame, inspection_area, app)
+        InlineInspectionFrameModel::Activity(view) => {
+            draw_inline_activity_inspection(frame, inspection_area, view)
         }
-        ShellOverlay::Activity => draw_inline_activity_inspection(frame, inspection_area, app),
-        ShellOverlay::Help => draw_inline_help_inspection(frame, inspection_area, app),
-        ShellOverlay::Reviews => draw_inline_reviews_inspection(frame, inspection_area, app),
-        ShellOverlay::Queue => draw_inline_queue_inspection(frame, inspection_area, app),
-        ShellOverlay::DirectionsMaintenance => {
-            draw_inline_directions_maintenance_inspection(frame, inspection_area, app)
+        InlineInspectionFrameModel::Help {
+            language,
+            view,
+            scroll_offset,
+        } => draw_inline_help_inspection(frame, inspection_area, language, view, scroll_offset),
+        InlineInspectionFrameModel::Reviews(view) => {
+            draw_inline_reviews_inspection(frame, inspection_area, view)
         }
-        ShellOverlay::PlanningInit => {
-            draw_inline_planning_init_inspection(frame, inspection_area, app)
+        InlineInspectionFrameModel::Queue(view) => {
+            draw_inline_queue_inspection(frame, inspection_area, view)
         }
-        ShellOverlay::Approval => draw_inline_approval_inspection(frame, inspection_area, app),
+        InlineInspectionFrameModel::Directions(view) => {
+            draw_inline_directions_maintenance_inspection(frame, inspection_area, view)
+        }
+        InlineInspectionFrameModel::PlanningInit(view) => {
+            draw_inline_planning_init_inspection(frame, inspection_area, view)
+        }
+        InlineInspectionFrameModel::DraftEditor { title, view } => {
+            draw_inline_draft_editor_inspection(frame, inspection_area, title, view)
+        }
+        InlineInspectionFrameModel::Approval(model) => {
+            draw_inline_approval_inspection(frame, inspection_area, model)
+        }
     }
+    None
 }
 
-fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
-    let selected_kind = app.progressive_activity_overlay_ui_state.selected_kind();
-    let card_filter = app.progressive_activity_overlay_ui_state.card_filter();
-    let (lifecycle_epoch, diff_available, output_available, cards) = match &app.conversation_state {
-        super::ConversationState::Ready(conversation) => {
-            let detail = &conversation.progressive_activity_detail;
-            let cards = detail.cards();
-            (
-                detail.lifecycle_epoch(),
-                detail
-                    .document(super::ProgressiveActivityDetailKind::Diff)
-                    .is_some(),
-                detail
-                    .document(super::ProgressiveActivityDetailKind::Output)
-                    .is_some(),
-                cards,
-            )
-        }
-        super::ConversationState::Loading | super::ConversationState::Failed(_) => {
-            (0, false, false, Vec::new())
-        }
-    };
-    let filtered_indices = super::filter_cards_by_kind(&cards, card_filter);
-    app.progressive_activity_overlay_ui_state
-        .clamp_selected_card(filtered_indices.len());
-    let selected_card_index = app
-        .progressive_activity_overlay_ui_state
-        .selected_card_index();
-    let filtered_cards: Vec<_> = filtered_indices
-        .iter()
-        .filter_map(|index| cards.get(*index).cloned())
-        .collect();
-    // Resolve only the filtered card after clamping against this frame's list. A
-    // new lifecycle can shrink it, and an empty filter must not leak another kind.
-    let document = match &app.conversation_state {
-        super::ConversationState::Ready(conversation) => filtered_indices
-            .get(selected_card_index)
-            .and_then(|card_index| cards.get(*card_index))
-            .and_then(|card| conversation.progressive_activity_detail.card_document(card)),
-        super::ConversationState::Loading | super::ConversationState::Failed(_) => None,
-    };
-    app.progressive_activity_overlay_ui_state.select_document(
-        lifecycle_epoch,
-        document.as_ref().map(|document| document.sequence),
-    );
-    let document_view = document.as_ref().map(|document| ActivityOverlayDocument {
-        text: document.text(),
-        source_bytes: document.source_bytes,
-        retained_bytes: document.retained_bytes,
-        truncated_bytes: document.truncated_bytes,
-        history_incomplete: document.history_incomplete,
-    });
-
-    // Header copy is bounded independently of the retained document. Build it
-    // with a zero-row body first so the real document is scanned only once.
-    let header_view = build_activity_overlay_list_view(
-        card_filter,
-        &filtered_cards,
-        selected_card_index,
-        app.progressive_activity_overlay_ui_state.list_focus(),
-        selected_kind,
-        diff_available,
-        output_available,
-        document_view,
-        ProgressiveActivityPageCursor::at(0),
-        area.width,
-        0,
-    );
-    let desired_header_height = count_rendered_inline_rows(&header_view.header_lines, area.width)
+fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, view: ActivityOverlayView) {
+    let ActivityOverlayView {
+        header_lines,
+        detail_title,
+        detail_lines,
+        key_lines,
+        ..
+    } = view;
+    let desired_header_height = count_rendered_inline_rows(&header_lines, area.width)
         .saturating_add(1)
         .min(usize::from(u16::MAX)) as u16;
-    let key_height =
-        inline_section_height(&header_view.key_lines, 4).min(area.height.saturating_sub(4));
+    let key_height = inline_section_height(&key_lines, 4).min(area.height.saturating_sub(4));
     let header_height =
         desired_header_height.min(area.height.saturating_sub(key_height).saturating_sub(2));
     let layout = Layout::default()
@@ -188,34 +143,6 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
             Constraint::Length(key_height),
         ])
         .split(area);
-    let body_height = layout[1].height.saturating_sub(1);
-    app.progressive_activity_overlay_ui_state
-        .sync_viewport(layout[1].width, body_height);
-    let requested_page_cursor = app
-        .progressive_activity_overlay_ui_state
-        .current_page_cursor();
-    let ActivityOverlayView {
-        header_lines,
-        detail_title,
-        detail_lines,
-        key_lines,
-        current_page_cursor,
-        next_page_cursor,
-    } = build_activity_overlay_list_view(
-        card_filter,
-        &filtered_cards,
-        selected_card_index,
-        app.progressive_activity_overlay_ui_state.list_focus(),
-        selected_kind,
-        diff_available,
-        output_available,
-        document_view,
-        requested_page_cursor,
-        layout[1].width,
-        body_height,
-    );
-    app.progressive_activity_overlay_ui_state
-        .set_page_cursor_window(current_page_cursor, next_page_cursor);
 
     render_inline_titled_panel(
         frame,
@@ -228,22 +155,12 @@ fn draw_inline_activity_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
     render_inline_titled_panel(frame, layout[2], Line::from("Keys"), key_lines, true);
 }
 
-fn draw_inline_approval_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
-    let Some((request, requested_scroll_offset, submitted_decision)) =
-        (match &app.conversation_state {
-            super::ConversationState::Ready(conversation) => conversation
-                .pending_approval_request
-                .as_ref()
-                .map(|request| {
-                    (
-                        request.clone(),
-                        conversation.approval_detail_scroll_offset,
-                        conversation.pending_approval_decision(),
-                    )
-                }),
-            super::ConversationState::Loading | super::ConversationState::Failed(_) => None,
-        })
-    else {
+fn draw_inline_approval_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: ApprovalInlineScreenModel,
+) {
+    if !model.available {
         render_inline_titled_panel(
             frame,
             area,
@@ -252,49 +169,17 @@ fn draw_inline_approval_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
             true,
         );
         return;
-    };
-
-    let kind = match request.kind {
-        crate::domain::conversation::ConversationApprovalRequestKind::CommandExecution => {
-            "Command execution"
-        }
-        crate::domain::conversation::ConversationApprovalRequestKind::FileChange => "File change",
-        crate::domain::conversation::ConversationApprovalRequestKind::Permissions => "Permissions",
-    };
-    let mut header_lines = vec![
-        Line::from(format!("Type: {kind}")),
-        Line::from(format!("Request: {}", request.server_request_id)),
-        Line::from(format!("Method: {}", request.method)),
-        Line::from(""),
-        Line::from(request.summary.clone()),
-    ];
-    if let Some(decision) = submitted_decision {
-        header_lines.push(Line::from(format!(
-            "Decision submitted: {} / waiting for runtime resolution",
-            approval_decision_label(decision)
-        )));
     }
-    let detail_lines = request
-        .details
-        .iter()
-        .cloned()
-        .map(Line::from)
-        .collect::<Vec<_>>();
-    let key_lines = match submitted_decision {
-        Some(decision) => vec![
-            AkraTheme::key_line(format!(
-                "Decision locked: {}",
-                approval_decision_label(decision)
-            )),
-            AkraTheme::key_line("Waiting for runtime resolution"),
-            AkraTheme::key_line("Up/Down/Page: scroll    Ctrl-C: stop turn"),
-        ],
-        None => vec![
-            AkraTheme::key_line("Y: approve once"),
-            AkraTheme::key_line("N / Esc: decline"),
-            AkraTheme::key_line("Up/Down/Page: scroll    Ctrl-C: decline + stop"),
-        ],
-    };
+    let ApprovalInlineScreenModel {
+        header_lines,
+        detail_lines,
+        key_lines,
+        scroll_offset,
+        visible_start,
+        visible_end,
+        rendered_detail_rows,
+        ..
+    } = model;
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -303,21 +188,6 @@ fn draw_inline_approval_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
             Constraint::Length(wrapped_approval_panel_height(&key_lines, area.width, 4)),
         ])
         .split(area);
-    let visible_detail_rows = layout[1].height.saturating_sub(1) as usize;
-    let rendered_detail_rows = count_rendered_inline_rows(&detail_lines, layout[1].width);
-    let max_scroll = rendered_detail_rows.saturating_sub(visible_detail_rows.max(1));
-    let scroll_offset = requested_scroll_offset
-        .min(max_scroll)
-        .min(u16::MAX as usize) as u16;
-    if let super::ConversationState::Ready(conversation) = &mut app.conversation_state {
-        conversation.approval_detail_scroll_offset = usize::from(scroll_offset);
-    }
-    let visible_start = if rendered_detail_rows == 0 {
-        0
-    } else {
-        usize::from(scroll_offset) + 1
-    };
-    let visible_end = (usize::from(scroll_offset) + visible_detail_rows).min(rendered_detail_rows);
     render_inline_titled_panel(
         frame,
         layout[0],
@@ -337,15 +207,6 @@ fn draw_inline_approval_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut 
     render_inline_titled_panel(frame, layout[2], Line::from("Decision"), key_lines, true);
 }
 
-fn approval_decision_label(
-    decision: crate::domain::conversation::ConversationApprovalDecision,
-) -> &'static str {
-    match decision {
-        crate::domain::conversation::ConversationApprovalDecision::Accept => "accept",
-        crate::domain::conversation::ConversationApprovalDecision::Decline => "decline",
-    }
-}
-
 fn wrapped_approval_panel_height(lines: &[Line<'_>], width: u16, minimum: u16) -> u16 {
     let width = usize::from(width.max(1));
     let wrapped_rows = lines
@@ -357,17 +218,13 @@ fn wrapped_approval_panel_height(lines: &[Line<'_>], width: u16, minimum: u16) -
         .max(minimum)
 }
 
-pub(super) fn draw_inline_parallel_mode_inspection(
+fn draw_inline_parallel_peek_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
-    overlay_view: SupersessionOverlayView,
+    overlay_view: ParallelPeekOverlayView,
+    step: ParallelPeekOverlayStep,
+    scroll_from_bottom: usize,
 ) {
-    draw_inline_supersession_inspection(frame, area, overlay_view);
-}
-
-fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_parallel_peek_overlay_view(app);
-    let step = app.parallel_peek_overlay_ui_state.step();
     let ParallelPeekOverlayView {
         header_lines,
         agent_lines,
@@ -406,8 +263,7 @@ fn draw_inline_parallel_peek_inspection(frame: &mut Frame<'_>, area: Rect, app: 
             let scroll_offset = inline_preview_scroll_offset(
                 layout[1],
                 conversation_lines.len(),
-                app.parallel_peek_overlay_ui_state
-                    .conversation_scroll_from_bottom(),
+                scroll_from_bottom,
             );
             render_inline_scrolled_panel(
                 frame,
@@ -430,12 +286,18 @@ fn inline_preview_scroll_offset(area: Rect, line_count: usize, scroll_from_botto
         .min(u16::MAX as usize) as u16
 }
 
-fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
+fn draw_inline_help_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    language: TuiLanguage,
+    view: HelpOverlayView,
+    scroll_offset: u16,
+) {
     let HelpOverlayView {
         header_lines,
         command_lines,
         key_lines,
-    } = build_help_overlay_view(app.tui_language);
+    } = view;
     let body_lines = take_panel_body_lines(header_lines);
     let key_height = count_rendered_inline_rows(&key_lines, area.width)
         .saturating_add(1)
@@ -453,27 +315,23 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut Nati
         frame,
         layout[0],
         AkraTheme::title_line(
-            app.tui_language.shell_commands_panel_title(),
-            app.tui_language.shell_command_help_context(),
+            language.shell_commands_panel_title(),
+            language.shell_command_help_context(),
         ),
         body_lines,
         true,
     );
-    let visible_command_rows = usize::from(layout[1].height.saturating_sub(1));
-    let rendered_command_rows = count_rendered_inline_rows(&command_lines, layout[1].width);
-    let max_scroll = rendered_command_rows.saturating_sub(visible_command_rows.max(1));
-    app.help_scroll_offset = app.help_scroll_offset.min(max_scroll);
     render_inline_scrolled_panel(
         frame,
         layout[1],
-        Line::from(app.tui_language.commands_section_title()),
+        Line::from(language.commands_section_title()),
         command_lines,
-        app.help_scroll_offset.min(usize::from(u16::MAX)) as u16,
+        scroll_offset,
     );
     render_inline_titled_panel(
         frame,
         layout[2],
-        Line::from(app.tui_language.keys_section_title()),
+        Line::from(language.keys_section_title()),
         key_lines,
         true,
     );
@@ -481,17 +339,8 @@ fn draw_inline_help_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut Nati
 fn draw_inline_directions_maintenance_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
-    app: &NativeTuiApp,
+    overlay_view: DirectionsMaintenanceOverlayView,
 ) {
-    // Directions and planning setup both switch into the shared draft editor
-    // renderer when their manual editor steps are active.
-    if app.directions_maintenance_overlay_ui_state.step()
-        == DirectionsMaintenanceOverlayStep::ManualEditor
-    {
-        draw_inline_directions_draft_editor_inspection(frame, area, app);
-        return;
-    }
-    let overlay_view = build_directions_maintenance_overlay_view(app);
     let DirectionsMaintenanceOverlayView {
         header_lines,
         summary_lines,
@@ -526,10 +375,8 @@ fn draw_inline_directions_maintenance_inspection(
 fn draw_inline_startup_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
-    app: &NativeTuiApp,
-    parallel_mode_enabled: bool,
+    overlay_view: StartupOverlayView,
 ) {
-    let overlay_view = build_startup_overlay_view(app, parallel_mode_enabled);
     let StartupOverlayView {
         header_lines,
         summary_lines,
@@ -568,9 +415,12 @@ fn draw_inline_startup_inspection(
     );
     render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut NativeTuiApp) {
-    let screen_model = SessionOverlayScreenModel::capture(app);
-    let overlay_view = build_session_overlay_view(&screen_model);
+fn draw_inline_session_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    overlay_view: SessionOverlayView,
+    list_state: ListState,
+) -> ListState {
     let SessionOverlayView {
         header_lines,
         list_view,
@@ -603,7 +453,8 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
         .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
         .split(layout[1]);
 
-    draw_inline_session_list_panel(frame, content_layout[0], app, list_view);
+    let list_state =
+        draw_inline_session_list_panel(frame, content_layout[0], list_state, list_view);
     render_inline_titled_panel(
         frame,
         content_layout[1],
@@ -620,9 +471,13 @@ fn draw_inline_session_inspection(frame: &mut Frame<'_>, area: Rect, app: &mut N
         true,
     );
     render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
+    list_state
 }
-fn draw_inline_model_selection_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_model_selection_overlay_view(app);
+fn draw_inline_model_selection_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    overlay_view: ModelSelectionOverlayView,
+) {
     let ModelSelectionOverlayView {
         header_lines,
         model_lines,
@@ -669,8 +524,11 @@ fn draw_inline_model_selection_inspection(frame: &mut Frame<'_>, area: Rect, app
     render_inline_titled_panel(frame, layout[2], Line::from("Status"), status_lines, true);
     render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_view_selection_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_view_selection_overlay_view(app);
+fn draw_inline_view_selection_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    overlay_view: ViewSelectionOverlayView,
+) {
     let ViewSelectionOverlayView {
         header_lines,
         mode_lines,
@@ -702,9 +560,8 @@ fn draw_inline_view_selection_inspection(frame: &mut Frame<'_>, area: Rect, app:
 fn draw_inline_language_selection_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
-    app: &NativeTuiApp,
+    overlay_view: LanguageSelectionOverlayView,
 ) {
-    let overlay_view = build_language_selection_overlay_view(app);
     let LanguageSelectionOverlayView {
         header_lines,
         language_lines,
@@ -925,8 +782,7 @@ pub(super) fn parallel_event_stream_visible_rows(
         layout[3],
     )
 }
-fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_queue_overlay_view(app);
+fn draw_inline_queue_inspection(frame: &mut Frame<'_>, area: Rect, overlay_view: QueueOverlayView) {
     let QueueOverlayView {
         header_lines,
         summary_lines,
@@ -1019,8 +875,11 @@ fn selected_content_scroll_offset(
         .unwrap_or(0)
 }
 
-fn draw_inline_reviews_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    let overlay_view = build_reviews_overlay_view(app.reviews_overlay_ui_state.screen_model());
+fn draw_inline_reviews_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    overlay_view: ReviewsOverlayView,
+) {
     let current_thread_lines = overlay_view.current_thread_section_lines();
     let inbox_lines = overlay_view.inbox_section_lines();
     let history_lines = overlay_view.history_section_lines();
@@ -1076,14 +935,11 @@ fn draw_inline_reviews_inspection(frame: &mut Frame<'_>, area: Rect, app: &Nativ
     );
     render_inline_titled_panel(frame, layout[3], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: &NativeTuiApp) {
-    // The planning init flow becomes the same file editor used by directions
-    // maintenance once it reaches manual editing.
-    if app.planning_init_overlay_ui_state.step() == PlanningInitOverlayStep::ManualEditor {
-        draw_inline_planning_draft_editor_inspection(frame, area, app);
-        return;
-    }
-    let overlay_view = build_planning_init_overlay_view(app);
+fn draw_inline_planning_init_inspection(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    overlay_view: PlanningInitOverlayView,
+) {
     let PlanningInitOverlayView {
         header_lines,
         summary_lines,
@@ -1115,27 +971,18 @@ fn draw_inline_planning_init_inspection(frame: &mut Frame<'_>, area: Rect, app: 
     render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
     render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_planning_draft_editor_inspection(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    app: &NativeTuiApp,
-) {
-    draw_inline_draft_editor_inspection(frame, area, app, "Planning Draft");
-}
 fn draw_inline_draft_editor_inspection(
     frame: &mut Frame<'_>,
     area: Rect,
-    app: &NativeTuiApp,
     title: &'static str,
+    overlay_view: Option<PlanningDraftEditorOverlayView>,
 ) {
+    let Some(overlay_view) = overlay_view else {
+        return;
+    };
     // The editor height calculation reserves room for files, status, and keys
     // while still guaranteeing at least one visible editor content row.
     let editor_height = area.height.saturating_sub(14).max(6);
-    let editor_content_height = editor_height.saturating_sub(1).max(1);
-    let Some(overlay_view) = build_planning_draft_editor_overlay_view(app, editor_content_height)
-    else {
-        return;
-    };
     let PlanningDraftEditorOverlayView {
         header_lines,
         file_lines,
@@ -1180,19 +1027,12 @@ fn draw_inline_draft_editor_inspection(
     render_inline_titled_panel(frame, layout[3], Line::from("Status"), status_lines, true);
     render_inline_titled_panel(frame, layout[4], Line::from("Keys"), key_lines, true);
 }
-fn draw_inline_directions_draft_editor_inspection(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    app: &NativeTuiApp,
-) {
-    draw_inline_draft_editor_inspection(frame, area, app, "Directions Support Draft");
-}
 fn draw_inline_session_list_panel(
     frame: &mut Frame<'_>,
     area: Rect,
-    app: &mut NativeTuiApp,
+    mut list_state: ListState,
     list_view: OverlayListView,
-) {
+) -> ListState {
     let section_layout = split_inline_section(area);
     frame.render_widget(
         Paragraph::new(vec![Line::from("Threads")]),
@@ -1205,7 +1045,7 @@ fn draw_inline_session_list_panel(
             Paragraph::new(message_lines).wrap(Wrap { trim: true }),
             section_layout[1],
         );
-        return;
+        return list_state;
     }
     let list = List::new(
         list_view
@@ -1216,13 +1056,9 @@ fn draw_inline_session_list_panel(
     .highlight_style(AkraTheme::selected())
     .highlight_symbol(AkraTheme::list_highlight_symbol());
 
-    app.session_overlay_ui_state
-        .sync_selected_session(list_view.selected_index);
-    frame.render_stateful_widget(
-        list,
-        section_layout[1],
-        &mut app.session_overlay_ui_state.list_state,
-    );
+    list_state.select(list_view.selected_index);
+    frame.render_stateful_widget(list, section_layout[1], &mut list_state);
+    list_state
 }
 
 #[cfg(test)]

@@ -28,23 +28,17 @@ mod session;
 #[path = "planning_simple_review_inputs.rs"]
 mod simple_review_inputs;
 
+#[cfg(test)]
 use super::super::super::NativeTuiApp;
-use super::{PlanningDraftEditorOverlayView, PlanningInitOverlayView};
-use editor_surface::build_planning_draft_editor_overlay_view_for_app;
+use super::PlanningInitOverlayView;
+pub(crate) use editor_surface::build_planning_draft_editor_overlay_view_from_state;
+#[cfg(test)]
 use init_router::build_planning_init_overlay_view_for_app;
+pub(crate) use init_router::build_planning_init_overlay_view_from_projection;
 
 // popup/inline renderers는 이 entry만 호출한다. router가 app state를 보고 mode selection, simple review,
 // manual editor handoff, existing workspace variant 중 하나를 고르므로 rendering layer에는 단일 init shape만 보인다.
+#[cfg(test)]
 pub(crate) fn build_planning_init_overlay_view(app: &NativeTuiApp) -> PlanningInitOverlayView {
     build_planning_init_overlay_view_for_app(app)
-}
-
-// draft editor는 staged planning files와 cursor projection이 모두 있어야 그릴 수 있다.
-// `None`은 renderer가 editor surface 대신 아무 것도 그리지 않아야 하는 app-state mismatch를 뜻한다.
-pub(crate) fn build_planning_draft_editor_overlay_view(
-    app: &NativeTuiApp,
-    // layout layer가 계산한 visible body height를 projection boundary에 넘겨 cursor 주변 slice를 고정한다.
-    editor_height: u16,
-) -> Option<PlanningDraftEditorOverlayView> {
-    build_planning_draft_editor_overlay_view_for_app(app, editor_height)
 }

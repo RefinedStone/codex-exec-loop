@@ -55,15 +55,18 @@ pub(super) use overlays::{
     ActivityOverlayDocument, ActivityOverlayView, DirectionsMaintenanceOverlayView,
     HelpOverlayView, LanguageSelectionOverlayView, ModelSelectionOverlayView, OverlayListView,
     ParallelPeekOverlayView, PlanningDraftEditorOverlayView, PlanningInitOverlayView,
-    QueueOverlayView, SessionOverlayView, StartupOverlayView, SupersessionOverlayView,
-    ViewSelectionOverlayView, build_activity_overlay_list_view,
+    QueueOverlayView, ReviewsOverlayView, SessionOverlayView, StartupOverlayView,
+    SupersessionOverlayView, ViewSelectionOverlayView, build_activity_overlay_list_view,
     build_directions_maintenance_overlay_view, build_help_overlay_view,
     build_language_selection_overlay_view, build_model_selection_overlay_view,
-    build_parallel_peek_overlay_view, build_planning_draft_editor_overlay_view,
-    build_planning_init_overlay_view, build_reviews_overlay_view, build_session_overlay_view,
-    build_startup_banner_lines, build_startup_overlay_view, build_supersession_overlay_view,
-    build_view_selection_overlay_view,
+    build_parallel_peek_overlay_view_from_snapshot,
+    build_planning_draft_editor_overlay_view_from_state,
+    build_planning_init_overlay_view_from_projection, build_reviews_overlay_view,
+    build_session_overlay_view, build_startup_banner_lines, build_startup_overlay_view,
+    build_supersession_overlay_view, build_view_selection_overlay_view,
 };
+#[cfg(test)]
+pub(super) use overlays::{build_parallel_peek_overlay_view, build_planning_init_overlay_view};
 use runtime_status_copy::{build_working_line, compact_inline_detail};
 pub(super) use shell_core::{
     ConversationComposerScreenModel, ConversationLiveTranscriptScreenModel,
@@ -107,8 +110,19 @@ pub(super) fn build_inline_live_transcript_lines(
     status_panels::current_live_agent_lines(live_transcript).unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(super) fn build_queue_overlay_view(app: &NativeTuiApp) -> QueueOverlayView {
     build_queue_overlay_view_from_screen_model(app.queue_overlay_screen_model())
+}
+
+pub(super) fn build_queue_overlay_view_from_projection(
+    app: &NativeTuiApp,
+    runtime_projection: &crate::application::service::planning::PlanningRuntimeProjection,
+    parallel_mode_enabled: bool,
+) -> QueueOverlayView {
+    build_queue_overlay_view_from_screen_model(
+        app.queue_overlay_screen_model_from_projection(runtime_projection, parallel_mode_enabled),
+    )
 }
 
 fn build_startup_check_lines(app: &NativeTuiApp) -> Vec<Line<'static>> {

@@ -54,7 +54,10 @@ pub(super) fn build_inline_terminal_flow_layout(
         .split(area)
 }
 
-pub(super) fn inline_section_height(lines: &[Line<'_>], max_height: u16) -> u16 {
+pub(in crate::adapter::inbound::tui::app) fn inline_section_height(
+    lines: &[Line<'_>],
+    max_height: u16,
+) -> u16 {
     // inline inspection panel은 title row 하나와 최소 body row 하나를 예약한 뒤 caller가 준 상한으로 자른다.
     lines
         .len()
@@ -80,7 +83,10 @@ pub(super) fn inline_body_render_area(area: Rect, lines: &[Line<'_>]) -> Rect {
     Rect::new(area.x, y, area.width, body_height)
 }
 
-pub(super) fn count_rendered_inline_rows(lines: &[Line<'_>], width: u16) -> usize {
+pub(in crate::adapter::inbound::tui::app) fn count_rendered_inline_rows(
+    lines: &[Line<'_>],
+    width: u16,
+) -> usize {
     if width == 0 {
         return 0;
     }
