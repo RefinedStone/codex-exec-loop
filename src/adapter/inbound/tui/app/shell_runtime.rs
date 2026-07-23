@@ -197,9 +197,15 @@ impl ShellRuntime {
                         .apply_parallel_mode_control_plane_background_event(*event);
                 }
                 #[cfg(test)]
-                BackgroundMessage::PostTurnEvaluationCompleted(execution) => {
+                BackgroundMessage::PostTurnEvaluationCompleted {
+                    correlation,
+                    execution,
+                } => {
                     self.app.dispatch_core_input(CoreInput::EffectCompleted(
-                        CoreEffectCompletion::PostTurnEvaluationCompleted(execution),
+                        CoreEffectCompletion::PostTurnEvaluationCompleted {
+                            correlation,
+                            execution,
+                        },
                     ));
                 }
             }

@@ -969,15 +969,13 @@ fn post_turn_auto_prompt_opens_parallel_epoch_and_dispatches_workers() {
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
-    arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
+    let correlation = arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
 
     runtime
         .app
         .tx
         .send(post_turn_evaluation_completed_message(
-            "thread-1",
-            "turn-1",
-            workspace_directory.clone(),
+            correlation,
             planning_projection,
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string())
@@ -1052,7 +1050,8 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
     conversation.thread_id = "thread-disable-race".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-disable-race".to_string());
     mark_core_turn_completed(&mut runtime, "thread-disable-race", "turn-disable-race");
-    arm_core_post_turn_evaluation(&mut runtime, "thread-disable-race", "turn-disable-race");
+    let correlation =
+        arm_core_post_turn_evaluation(&mut runtime, "thread-disable-race", "turn-disable-race");
 
     runtime.app_mut().close_parallel_mode_automation_epoch();
     assert!(
@@ -1064,9 +1063,7 @@ fn parallel_off_invalidates_in_flight_evaluation_and_discards_late_parallel_only
         .app
         .tx
         .send(post_turn_evaluation_completed_message(
-            "thread-disable-race",
-            "turn-disable-race",
-            workspace_directory.clone(),
+            correlation,
             planning_projection,
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-disable-race".to_string())
@@ -1126,16 +1123,15 @@ fn parallel_off_preserves_explicit_single_session_auto_follow_for_a_late_result(
     conversation.thread_id = "thread-single-follow".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-single-follow".to_string());
     mark_core_turn_completed(&mut runtime, "thread-single-follow", "turn-single-follow");
-    arm_core_post_turn_evaluation(&mut runtime, "thread-single-follow", "turn-single-follow");
+    let correlation =
+        arm_core_post_turn_evaluation(&mut runtime, "thread-single-follow", "turn-single-follow");
     runtime.app_mut().close_parallel_mode_automation_epoch();
 
     runtime
         .app
         .tx
         .send(post_turn_evaluation_completed_message(
-            "thread-single-follow",
-            "turn-single-follow",
-            workspace_directory.clone(),
+            correlation,
             planning_projection,
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-single-follow".to_string())

@@ -105,9 +105,15 @@ where
         &mut self,
         thread_id: &str,
         completed_turn_id: &str,
-    ) {
-        self.controller
-            .begin_test_post_turn_evaluation(thread_id, completed_turn_id);
+        turn_workspace_directory: &str,
+        planning_workspace_directory: &str,
+    ) -> crate::core::app::PostTurnEvaluationCorrelation {
+        self.controller.begin_test_post_turn_evaluation(
+            thread_id,
+            completed_turn_id,
+            turn_workspace_directory,
+            planning_workspace_directory,
+        )
     }
 
     #[cfg(test)]
@@ -224,26 +230,33 @@ mod tests {
 
     impl CoreEffectExecutor for ImmediatePostTurnExecutor {
         fn run_effect(&self, effect: CoreEffect) -> Option<CoreInput> {
-            let CoreEffect::EvaluatePostTurn(request) = effect else {
+            let CoreEffect::EvaluatePostTurn {
+                correlation,
+                request,
+            } = effect
+            else {
                 return None;
             };
             Some(CoreInput::EffectCompleted(
-                CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(PostTurnExecution {
-                    thread_id: request.context.thread_id.clone(),
-                    completed_turn_id: request.completed_turn_id.clone(),
-                    runtime_projection_workspace_directory: request.workspace_directory.clone(),
-                    evaluation: PostTurnOutcome {
-                        provenance: PostTurnProvenance::new(request.completed_turn_id.clone()),
-                        runtime_projection: request.context.current_runtime_projection.clone(),
-                        planning_repair_state: None,
-                        runtime_notices: Vec::new(),
-                        action: PostTurnContinuationAction::SkipAutoFollow {
-                            reason: PostTurnAutoFollowSkipReason::PlanningQueueDrained,
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation,
+                    execution: Box::new(PostTurnExecution {
+                        thread_id: request.context.thread_id.clone(),
+                        completed_turn_id: request.completed_turn_id.clone(),
+                        runtime_projection_workspace_directory: request.workspace_directory.clone(),
+                        evaluation: PostTurnOutcome {
+                            provenance: PostTurnProvenance::new(request.completed_turn_id.clone()),
+                            runtime_projection: request.context.current_runtime_projection.clone(),
+                            planning_repair_state: None,
+                            runtime_notices: Vec::new(),
+                            action: PostTurnContinuationAction::SkipAutoFollow {
+                                reason: PostTurnAutoFollowSkipReason::PlanningQueueDrained,
+                            },
+                            operator_alerts: Vec::new(),
                         },
-                        operator_alerts: Vec::new(),
-                    },
-                    planning_worker_panel_state: request.planning_worker_panel_state,
-                })),
+                        planning_worker_panel_state: request.planning_worker_panel_state,
+                    }),
+                },
             ))
         }
     }

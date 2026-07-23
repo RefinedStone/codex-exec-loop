@@ -422,8 +422,11 @@ impl CoreEffectRunner {
                 self.spawn_turn_steer(correlation, request);
                 None
             }
-            CoreEffect::EvaluatePostTurn(request) => {
-                self.spawn_post_turn_evaluation(*request);
+            CoreEffect::EvaluatePostTurn {
+                correlation,
+                request,
+            } => {
+                self.spawn_post_turn_evaluation(correlation, *request);
                 None
             }
         }
@@ -951,17 +954,24 @@ impl CoreEffectRunner {
         });
     }
 
-    fn spawn_post_turn_evaluation(&self, request: crate::domain::planning::PostTurnRequest) {
+    fn spawn_post_turn_evaluation(
+        &self,
+        correlation: crate::core::app::PostTurnEvaluationCorrelation,
+        request: crate::domain::planning::PostTurnRequest,
+    ) {
         let service = self.post_turn_evaluation_service.clone();
         let input_sender = self.input_sender.clone();
         let panic_request = request.clone();
+        let fallback_request = request.clone();
         let panic_execution = post_turn_evaluation_failure_execution(
             &panic_request.context,
             &panic_request,
             "post-turn evaluation worker panicked".to_string(),
         );
-        let panic_completion =
-            CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(panic_execution));
+        let panic_completion = CoreEffectCompletion::PostTurnEvaluationCompleted {
+            correlation: correlation.clone(),
+            execution: Box::new(panic_execution),
+        };
         spawn_effect_completion_worker_with_recovery(
             input_sender,
             panic_completion,
@@ -971,9 +981,30 @@ impl CoreEffectRunner {
             move || {
                 let execution =
                     service.evaluate_with_timeout(request, POST_TURN_EVALUATION_TIMEOUT);
-                CoreEffectCompletion::PostTurnEvaluationCompleted(Box::new(execution))
+                post_turn_evaluation_completion(correlation, &fallback_request, execution)
             },
         );
+    }
+}
+
+fn post_turn_evaluation_completion(
+    correlation: crate::core::app::PostTurnEvaluationCorrelation,
+    request: &crate::domain::planning::PostTurnRequest,
+    execution: crate::domain::planning::PostTurnExecution,
+) -> CoreEffectCompletion {
+    let execution = if correlation.matches_execution(&execution) {
+        execution
+    } else {
+        request.continuation_permit.invalidate_if_current();
+        post_turn_evaluation_failure_execution(
+            &request.context,
+            request,
+            "post-turn evaluation worker returned a mismatched target".to_string(),
+        )
+    };
+    CoreEffectCompletion::PostTurnEvaluationCompleted {
+        correlation,
+        execution: Box::new(execution),
     }
 }
 
@@ -5194,6 +5225,75 @@ mod tests {
                 result: Err("runtime unavailable".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn mismatched_post_turn_execution_becomes_one_correlated_safe_failure_with_local_revoke() {
+        let continuation_gate = crate::domain::planning::PostTurnContinuationGate::default();
+        let context = crate::domain::planning::PostTurnContext {
+            thread_id: "thread-1".to_string(),
+            planning_workspace_directory: "/tmp/planning".to_string(),
+            latest_user_message: None,
+            latest_main_reply: None,
+            previous_handoff_task: None,
+            current_runtime_projection: RuntimeProjection::invalid("refresh required"),
+            parallel_mode_enabled: false,
+            parallel_automation_epoch_id: None,
+            planning_settlement_paused: false,
+            continuation_paused: false,
+            can_queue_next: false,
+            stop_keyword: ":stop".to_string(),
+            stop_keyword_matched: false,
+            no_file_changes_stop_matched: false,
+            mode_label: "test".to_string(),
+        };
+        let request = crate::domain::planning::PostTurnRequest {
+            context,
+            workspace_directory: "/tmp/turn".to_string(),
+            completed_turn_id: "turn-1".to_string(),
+            changed_planning_file_paths: Vec::new(),
+            execution_snapshot_capture: None,
+            planning_worker_panel_state: Default::default(),
+            continuation_permit: continuation_gate.capture(),
+        };
+        let captured_permit = request.continuation_permit.clone();
+        let newer_permit = continuation_gate.capture();
+        let correlation = crate::core::app::PostTurnEvaluationCorrelation::new(
+            17,
+            "thread-1",
+            "turn-1",
+            "/tmp/turn",
+            "/tmp/planning",
+        );
+        let mut execution = post_turn_evaluation_failure_execution(
+            &request.context,
+            &request,
+            "synthetic source result".to_string(),
+        );
+        execution.evaluation.provenance.completed_turn_id = "forged-turn".to_string();
+
+        let completion = post_turn_evaluation_completion(correlation.clone(), &request, execution);
+
+        assert!(
+            !captured_permit.is_current(),
+            "malformed output must revoke only the originating request"
+        );
+        assert!(
+            newer_permit.is_current(),
+            "a stale malformed worker must not invalidate another request's shared gate generation"
+        );
+        assert!(matches!(
+            completion,
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: completed_correlation,
+                execution,
+            } if completed_correlation == correlation
+                && correlation.matches_execution(execution.as_ref())
+                && execution.evaluation.runtime_notices
+                    == vec!["post-turn evaluation worker returned a mismatched target"]
+                && execution.planning_worker_panel_state.status
+                    == crate::domain::planning::PlanningWorkerStatus::RefreshFailed
+        ));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::domain::planning::PostTurnExecution;
 use crate::domain::recent_sessions::SessionRenameRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,5 +157,47 @@ impl PlanningRuntimeRefreshCorrelation {
             generation,
             workspace_directory: workspace_directory.into(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostTurnEvaluationCorrelation {
+    pub generation: u64,
+    pub thread_id: String,
+    pub completed_turn_id: String,
+    pub turn_workspace_directory: String,
+    pub planning_workspace_directory: String,
+}
+
+impl PostTurnEvaluationCorrelation {
+    pub fn new(
+        generation: u64,
+        thread_id: impl Into<String>,
+        completed_turn_id: impl Into<String>,
+        turn_workspace_directory: impl Into<String>,
+        planning_workspace_directory: impl Into<String>,
+    ) -> Self {
+        Self {
+            generation,
+            thread_id: thread_id.into(),
+            completed_turn_id: completed_turn_id.into(),
+            turn_workspace_directory: turn_workspace_directory.into(),
+            planning_workspace_directory: planning_workspace_directory.into(),
+        }
+    }
+
+    pub fn matches_execution(&self, execution: &PostTurnExecution) -> bool {
+        execution.thread_id == self.thread_id
+            && execution.completed_turn_id == self.completed_turn_id
+            && execution.evaluation.provenance.completed_turn_id == self.completed_turn_id
+            && execution
+                .evaluation
+                .provenance
+                .queue_mutation_receipt
+                .as_ref()
+                .is_none_or(|receipt| receipt.completed_turn_id == self.completed_turn_id)
+            && (execution.runtime_projection_workspace_directory == self.turn_workspace_directory
+                || execution.runtime_projection_workspace_directory
+                    == self.planning_workspace_directory)
     }
 }
