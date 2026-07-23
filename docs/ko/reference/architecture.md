@@ -377,6 +377,14 @@ TUI 변경은 state/reducer, controller/effect, projection/copy, theme/chrome, r
 terminal-adapter 책임을 분리합니다. 시각 token은 `AkraTheme` 뒤에 두고 host scrollback과 live
 viewport에 나뉘는 append-only row 사이에 panel chrome을 삽입하지 않습니다.
 
+실제 shell overlay identity 변경은 reducer가 `from`, `to`, exit mode를 담은 typed
+`ShellOverlayTransition` 하나로 발행합니다. Root TUI coordinator는 reduced state를 먼저 적용한 뒤
+그 transition을 유일한 overlay cleanup owner에 전달합니다. Cleanup owner는 wildcard 없이 모든
+`ShellOverlay` variant와 `Suspend`/`Exit` mode를 명시합니다. `DirectionsMaintenance ->
+Approval`만 suspension이며 directions/editor state를 보존해 approval close 시 원래 overlay로
+복귀합니다. 명시적 close는 `OverlayClosed`만 dispatch하고, exit cleanup은 반환된 transition에서
+정확히 한 번 파생합니다.
+
 같은 terminal transaction은 parallel mode, 진행 중 effect, supervisor inspection, withheld
 reason, event-stream fact도 각각 한 번만 캡처합니다. Supersession row plan,
 host-scrollback/live-tail 분할, prompt lock, animation, draw는 control-plane mutex나 별도 clock을

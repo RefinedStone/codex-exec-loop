@@ -131,37 +131,6 @@ impl NativeTuiApp {
         });
     }
     pub(super) fn close_shell_overlay(&mut self) {
-        // Closing shell chrome also drops editor-local draft buffers for
-        // overlays that stage multi-step planning changes. Plain list/detail
-        // overlays do not own such scratch state.
-        match self.shell_overlay {
-            ShellOverlay::DirectionsMaintenance => {
-                self.directions_maintenance_overlay_ui_state.reset();
-                self.planning_draft_editor_ui_state.reset();
-            }
-            ShellOverlay::PlanningInit => {
-                self.planning_runtime_refresh_ui_state.clear_loading();
-                self.planning_init_overlay_ui_state.reset();
-                self.planning_draft_editor_ui_state.reset();
-            }
-            ShellOverlay::ModelSelection => {
-                self.model_selection_overlay_ui_state = ModelSelectionOverlayUiState::default();
-            }
-            ShellOverlay::ViewSelection => {
-                self.view_selection_overlay_ui_state = ViewSelectionOverlayUiState::default();
-            }
-            ShellOverlay::LanguageSelection => {
-                self.language_selection_overlay_ui_state =
-                    LanguageSelectionOverlayUiState::default();
-            }
-            ShellOverlay::ParallelPeek => {
-                self.parallel_peek_overlay_ui_state.reset();
-            }
-            ShellOverlay::Activity => {
-                self.progressive_activity_overlay_ui_state.reset();
-            }
-            _ => {}
-        }
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
     }
     pub(super) fn open_new_conversation_shell(&mut self) {
@@ -1831,6 +1800,119 @@ mod tests {
             app.close_shell_overlay();
             assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
         }
+    }
+
+    #[test]
+    fn overlay_replace_and_transient_dismiss_share_exit_cleanup() {
+        let mut app = test_native_tui_app();
+        app.dispatch_shell_chrome(ShellChromeEvent::ActivityOverlayShown);
+        app.progressive_activity_overlay_ui_state
+            .reset_for_kind(ProgressiveActivityDetailKind::Output);
+        app.progressive_activity_overlay_ui_state
+            .select_document(1, Some(8));
+        let revision_before_replace = app.planning_ui_intent_revision;
+
+        app.dispatch_shell_chrome(ShellChromeEvent::HelpOverlayShown);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Help);
+        assert_eq!(
+            app.progressive_activity_overlay_ui_state,
+            ProgressiveActivityOverlayUiState::default()
+        );
+        assert_eq!(
+            app.planning_ui_intent_revision,
+            revision_before_replace.wrapping_add(1).max(1)
+        );
+
+        app.dispatch_shell_chrome(ShellChromeEvent::ReviewsOverlayShown);
+        app.begin_reviews_overlay_load(crate::core::app::ReviewCenterLoadCorrelation::new(
+            1,
+            "/tmp/root",
+            None,
+        ));
+        let revision_before_dismiss = app.planning_ui_intent_revision;
+
+        app.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert!(matches!(
+            app.reviews_overlay_ui_state.screen_model(),
+            crate::adapter::inbound::tui::app::reviews_overlay_ui::ReviewsOverlayScreenModel::Idle
+        ));
+        assert_eq!(
+            app.planning_ui_intent_revision,
+            revision_before_dismiss.wrapping_add(1).max(1)
+        );
+
+        let revision_after_dismiss = app.planning_ui_intent_revision;
+        app.dispatch_shell_chrome(ShellChromeEvent::TransientChromeDismissed);
+        assert_eq!(app.planning_ui_intent_revision, revision_after_dismiss);
+    }
+
+    #[test]
+    fn approval_suspend_and_restore_preserve_directions_editor_until_real_exit() {
+        let mut app = test_native_tui_app();
+        app.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
+        app.directions_maintenance_overlay_ui_state.begin_load(
+            crate::core::app::DirectionsMaintenanceLoadCorrelation::new(3, "/tmp/root"),
+        );
+        app.planning_draft_editor_ui_state.open_correlated_session(
+            crate::core::app::PlanningEditorSessionSnapshot {
+                session_identity: crate::core::app::PlanningEditorSessionIdentity::new(
+                    7,
+                    "/tmp/root",
+                    "directions-draft",
+                ),
+                draft_directory: "/tmp/root/directions-draft".to_string(),
+                editable_files: vec![crate::core::app::PlanningEditorFileSnapshot {
+                    active_path: ".codex-exec-loop/planning/directions.md".to_string(),
+                    staged_path: "/tmp/root/directions-draft/directions.md".to_string(),
+                    body: "preserve this editor body".to_string(),
+                }],
+                validation_report: PlanningValidationReport::default(),
+                source_planning_revision: Some(11),
+            },
+        );
+        let directions_before_suspend = app.directions_maintenance_overlay_ui_state.clone();
+        let editor_before_suspend = app.planning_draft_editor_ui_state.clone();
+        let revision_before_suspend = app.planning_ui_intent_revision;
+
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayShown);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::Approval);
+        assert_eq!(
+            app.approval_return_overlay,
+            Some(ShellOverlay::DirectionsMaintenance)
+        );
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state,
+            directions_before_suspend
+        );
+        assert_eq!(app.planning_draft_editor_ui_state, editor_before_suspend);
+        assert_eq!(
+            app.planning_ui_intent_revision,
+            revision_before_suspend.wrapping_add(1).max(1)
+        );
+
+        app.dispatch_shell_chrome(ShellChromeEvent::ApprovalOverlayClosed);
+
+        assert_eq!(app.shell_overlay, ShellOverlay::DirectionsMaintenance);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state,
+            directions_before_suspend
+        );
+        assert_eq!(app.planning_draft_editor_ui_state, editor_before_suspend);
+
+        app.close_shell_overlay();
+        assert_eq!(app.shell_overlay, ShellOverlay::Hidden);
+        assert_eq!(
+            app.directions_maintenance_overlay_ui_state,
+            DirectionsMaintenanceOverlayUiState::default()
+        );
+        assert_eq!(
+            app.planning_draft_editor_ui_state,
+            PlanningDraftEditorUiState::default()
+        );
     }
 
     #[test]

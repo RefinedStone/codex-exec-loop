@@ -2078,6 +2078,105 @@ fn tui_session_catalog_loads_enter_through_core_runtime() {
 }
 
 #[test]
+fn shell_overlay_cleanup_is_owned_by_the_typed_reducer_transition() {
+    let shell_source = fs::read_to_string("src/adapter/inbound/tui/shell_chrome.rs")
+        .expect("shell chrome source should load");
+    let compact_shell = rust_code_without_comments_and_literals(
+        &production_source_before_inline_tests(&shell_source),
+    )
+    .chars()
+    .filter(|character| !character.is_whitespace())
+    .collect::<String>();
+    assert!(
+        compact_shell.contains("puboverlay_transition:Option<ShellOverlayTransition>"),
+        "ShellChromeReduction must carry the reducer-owned typed overlay transition"
+    );
+
+    let shell_controller = fs::read_to_string("src/adapter/inbound/tui/app/shell_controller.rs")
+        .expect("shell controller source should load");
+    let close_overlay = top_level_impl_method_source(&shell_controller, "close_shell_overlay");
+    let compact_close = rust_code_without_comments_and_literals(&close_overlay)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_close.contains("self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);"),
+        "close_shell_overlay must express only the typed close intent"
+    );
+    for forbidden in ["match", ".reset(", "::default(", "clear_loading("] {
+        assert!(
+            !compact_close.contains(forbidden),
+            "close_shell_overlay must not regain direct overlay cleanup: {forbidden}"
+        );
+    }
+
+    let app_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs")
+        .expect("TUI app runtime source should load");
+    let dispatch = top_level_impl_method_source(&app_runtime, "dispatch_shell_chrome");
+    let compact_dispatch = rust_code_without_comments_and_literals(&dispatch)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_dispatch.contains(
+            "ifletSome(transition)=overlay_transition{self.apply_shell_overlay_transition(transition);}",
+        ),
+        "dispatch_shell_chrome must pass the reducer transition to the single cleanup owner"
+    );
+    for forbidden_cleanup in [
+        "reviews_overlay_ui_state",
+        "queue_overlay_ui_state",
+        "directions_maintenance_overlay_ui_state",
+        "planning_draft_editor_ui_state",
+        "parallel_peek_overlay_ui_state",
+        "planning_init_overlay_ui_state",
+    ] {
+        assert!(
+            !compact_dispatch.contains(forbidden_cleanup),
+            "dispatch_shell_chrome must not restore its old cleanup if-chain: {forbidden_cleanup}"
+        );
+    }
+
+    let cleanup = top_level_impl_method_source(&app_runtime, "apply_shell_overlay_transition");
+    let compact_cleanup = rust_code_without_comments_and_literals(&cleanup)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_cleanup.contains("matchtransition.exit_mode{")
+            && compact_cleanup.contains("ShellOverlayExitMode::Suspend=>")
+            && compact_cleanup.contains("ShellOverlayExitMode::Exit=>matchtransition.from{"),
+        "overlay cleanup owner must exhaustively distinguish suspend from exit"
+    );
+    for overlay in [
+        "Hidden",
+        "Startup",
+        "Sessions",
+        "ModelSelection",
+        "ViewSelection",
+        "LanguageSelection",
+        "Supersession",
+        "ParallelPeek",
+        "Activity",
+        "Help",
+        "Reviews",
+        "Queue",
+        "DirectionsMaintenance",
+        "PlanningInit",
+        "Approval",
+    ] {
+        assert!(
+            compact_cleanup.contains(&format!("ShellOverlay::{overlay}")),
+            "overlay cleanup owner must explicitly classify ShellOverlay::{overlay}"
+        );
+    }
+    assert!(
+        !compact_cleanup.contains("_=>"),
+        "overlay cleanup owner must not hide new overlay or exit-mode variants behind a wildcard"
+    );
+}
+
+#[test]
 fn tui_session_renames_enter_through_core_runtime() {
     assert_no_forbidden_references_in_paths(
         "TUI session renames must be dispatched through core runtime, not a local worker or SessionService handle",
