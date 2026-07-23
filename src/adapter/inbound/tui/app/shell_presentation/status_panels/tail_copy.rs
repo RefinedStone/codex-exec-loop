@@ -182,9 +182,12 @@ pub(super) fn build_inline_tail_content_with_context(
             let warning_summary = compact_inline_summary_label(
                 &conversation.warning_summary(INLINE_TAIL_WARNING_DETAIL_LIMIT),
             );
-            let runtime_notice_summary = conversation
-                .runtime_notice_summary(INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT)
-                .map(|summary| compact_inline_summary_label(&summary));
+            let runtime_notice_summary = combined_runtime_notice_summary(
+                conversation,
+                &screen_model.global_runtime_notices,
+                INLINE_TAIL_RUNTIME_NOTICE_DETAIL_LIMIT,
+            )
+            .map(|summary| compact_inline_summary_label(&summary));
 
             lines.push(InlineTailLine::new(
                 InlineTailPriority::Identity,
@@ -469,6 +472,36 @@ fn build_ready_status_detail_line(
 
 fn warning_summary_has_signal(warning_summary: &str) -> bool {
     !matches!(warning_summary.trim(), "warn: none" | "none")
+}
+
+fn combined_runtime_notice_summary(
+    conversation: &ConversationViewModel,
+    global_runtime_notices: &[String],
+    max_detail_len: usize,
+) -> Option<String> {
+    if global_runtime_notices.is_empty() {
+        return conversation.runtime_notice_summary(max_detail_len);
+    }
+
+    let mut notices =
+        Vec::with_capacity(conversation.runtime_notices.len() + global_runtime_notices.len());
+    for notice in conversation
+        .runtime_notices
+        .iter()
+        .chain(global_runtime_notices)
+    {
+        let notice = notice.as_str();
+        if !notices.contains(&notice) {
+            notices.push(notice);
+        }
+    }
+    let selected_notice = notices.last()?;
+    let summary = compact_inline_detail(selected_notice, max_detail_len);
+    Some(if notices.len() == 1 {
+        format!("runtime: {summary}")
+    } else {
+        format!("runtime notices ({}): {summary}", notices.len())
+    })
 }
 
 fn build_completion_alert_line(conversation: &ConversationViewModel) -> Option<Line<'static>> {
@@ -1158,6 +1191,23 @@ mod coverage_tests {
                 .to_string()
                 .contains("all planning tasks complete")
         );
+    }
+
+    #[test]
+    fn global_cleanup_copy_is_combined_without_mutating_equal_conversation_notice() {
+        let mut conversation = ConversationViewModel::new_draft("/tmp/root".to_string());
+        let notice = "parallel cleanup remains unsettled".to_string();
+        conversation.runtime_notices.push(notice.clone());
+
+        let combined =
+            combined_runtime_notice_summary(&conversation, std::slice::from_ref(&notice), 160)
+                .expect("equal global and conversation notices should remain visible");
+        assert_eq!(combined, format!("runtime: {notice}"));
+
+        let after_cleanup = combined_runtime_notice_summary(&conversation, &[], 160)
+            .expect("settling cleanup must not remove the ordinary conversation notice");
+        assert_eq!(after_cleanup, format!("runtime: {notice}"));
+        assert_eq!(conversation.runtime_notices, vec![notice]);
     }
 
     #[test]

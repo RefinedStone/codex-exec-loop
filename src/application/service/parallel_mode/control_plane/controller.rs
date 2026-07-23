@@ -49,13 +49,7 @@ pub enum ParallelModeControlPlanePresentationEvent {
         workspace_directory: String,
         notice: String,
     },
-    GlobalRuntimeNotice {
-        cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
-        notice: String,
-    },
-    GlobalRuntimeNoticeCleared {
-        cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
-    },
+    GlobalRuntimeNoticesChanged,
     PostTurnAutoFollowPromptConsumed,
     PlanningRuntimeRefreshRequested {
         workspace_directory: String,
@@ -146,6 +140,12 @@ where
 
     pub fn store(&self) -> &ParallelModeControlPlaneRuntimeStore {
         self.runtime.store()
+    }
+
+    pub(super) fn global_runtime_notice_projection(
+        &self,
+    ) -> Vec<super::ParallelModeGlobalRuntimeNoticeProjection> {
+        self.runtime.global_runtime_notice_projection()
     }
 
     pub fn mode_enabled(&self) -> bool {
@@ -1049,18 +1049,9 @@ where
                             },
                         );
                     }
-                    if let Some(cleanup_correlation) = cleanup_correlation {
+                    if cleanup_correlation.is_some() {
                         presentation_events.push(
-                            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-                                cleanup_correlation: cleanup_correlation.clone(),
-                                notice: format!(
-                                    "parallel mode: dispatch cleanup remains unsettled / workspace: {} / epoch: {} / operation: {} / command: {} / {reason} / retry this exact cleanup correlation",
-                                    cleanup_correlation.workspace_directory,
-                                    cleanup_correlation.epoch_id,
-                                    cleanup_correlation.operation_id,
-                                    cleanup_correlation.command_identity,
-                                ),
-                            },
+                            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged,
                         );
                     }
                 }
@@ -1078,9 +1069,7 @@ where
                         })
                     });
                     presentation_events.push(
-                        ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticeCleared {
-                            cleanup_correlation: original_cleanup,
-                        },
+                        ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged,
                     );
                 }
                 ParallelModeControlPlaneEvent::PostTurnAutoFollowPromptConsumed => {

@@ -82,9 +82,9 @@ return a completion, but they do not own or mutate runtime state.
 
 This establishes one serialized reducer ingress for ClientEvent flow. Retaining the internal
 `AppCommand` / `CoreInput` names and not physically enqueueing synchronous UI-originated events do
-not create another semantic writer. The global parallel-cleanup notice still spans adapter-local
-bookkeeping and the conversation projection; it is explicit critical debt for the ClientState
-single-authority work, not harmless polish.
+not create another semantic writer. Global parallel-cleanup state remains owned exclusively by the
+application control-plane; the TUI reads its typed owned presentation projection without retaining
+or reinjecting a second notice ledger.
 
 Startup, session loading, conversation selection, turn submission, stream reduction, completion,
 and post-turn evaluation use this flow. Parallel mutation remains application-owned and enters
@@ -387,10 +387,13 @@ trigger even while its first worker is running. Slot-capacity and task-intake re
 share one durable task-intake mutation. Cancellation runs for the exact closed epoch ahead of
 queued enqueue work. A current cancellation failure is shown in workspace status. Any failed
 cleanup enters a bounded unsettled-cleanup ledger with its original operation, workspace, epoch,
-and command identity. Its matching global runtime notice is retained independently of conversation
-Loading/Failed state, so a later Ready conversation surfaces it without replacing that
-conversation's workspace projection. Retrying the exact correlation schedules the original
-cancellation through the control-plane effect runner. The production TUI control-plane pulse
+command identity, and error. This application-owned ledger is the only authority for unsettled
+cleanup state. Its typed owned presentation projection retains the matching global runtime notice
+independently of conversation Loading/Failed state, so a later Ready conversation surfaces it
+without replacing that conversation's workspace projection. The TUI does not copy the ledger into
+adapter or conversation state; global-notice presentation events only invalidate the current frame
+for redraw. Retrying the exact correlation schedules the original cancellation through the
+control-plane effect runner. The production TUI control-plane pulse
 retries the oldest unsettled exact correlation at its existing bounded interval, independent of
 conversation Loading/Failed state. Active replacement-epoch work keeps refresh, queued wake, then
 pending-poll priority; one bounded deferral gives cleanup the next idle pulse before another normal
@@ -443,10 +446,12 @@ queue, GitHub, transcript, layout, animation, and prompt-focus helpers do not re
 cached Ratatui `Line` values.
 
 The same transaction captures parallel mode, in-flight effect, supervisor inspection, withheld
-reason, and event-stream facts once. Supersession row planning, host-scrollback/live-tail splitting,
-prompt lock, animation, and drawing consume that immutable projection instead of reacquiring the
-control-plane mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks
-share a panel-only projection and do not clone transcript or event-stream rows.
+reason, the typed owned unsettled-cleanup notice projection, and event-stream facts once. The
+`ConversationScreenModel` combines those facts without mutating conversation state, and pure draw
+consumes the result. Supersession row planning, host-scrollback/live-tail splitting, prompt lock,
+animation, and drawing consume that immutable projection instead of reacquiring the control-plane
+mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks share a
+panel-only projection and do not clone transcript or event-stream rows.
 
 Each session-overlay draw captures one owned `SessionOverlayScreenModel` before presentation. The
 model combines the adapter-local catalog state with workspace, committed and edited query, project

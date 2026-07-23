@@ -127,6 +127,12 @@ impl ParallelModeDispatchCleanupCorrelation {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelModeGlobalRuntimeNoticeProjection {
+    pub cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
+    pub notice: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mutation", rename_all = "snake_case")]
 pub enum ParallelModeDispatchMutation {
@@ -592,6 +598,23 @@ struct ParallelModeUnsettledDispatchCleanup {
     error: String,
 }
 
+impl ParallelModeUnsettledDispatchCleanup {
+    fn global_runtime_notice_projection(&self) -> ParallelModeGlobalRuntimeNoticeProjection {
+        let correlation = &self.correlation;
+        ParallelModeGlobalRuntimeNoticeProjection {
+            cleanup_correlation: correlation.clone(),
+            notice: format!(
+                "parallel mode: dispatch cleanup remains unsettled / workspace: {} / epoch: {} / operation: {} / command: {} / {} / retry this exact cleanup correlation",
+                correlation.workspace_directory,
+                correlation.epoch_id,
+                correlation.operation_id,
+                correlation.command_identity,
+                self.error,
+            ),
+        }
+    }
+}
+
 struct ParallelModeEntryCompletion {
     workspace_directory: String,
     epoch_id: u64,
@@ -673,6 +696,14 @@ impl ParallelModeControlPlaneRuntime {
             .unsettled_dispatch_cleanups
             .front()
             .map(|cleanup| cleanup.correlation.clone())
+    }
+
+    fn global_runtime_notice_projection(&self) -> Vec<ParallelModeGlobalRuntimeNoticeProjection> {
+        self.store
+            .unsettled_dispatch_cleanups
+            .iter()
+            .map(ParallelModeUnsettledDispatchCleanup::global_runtime_notice_projection)
+            .collect()
     }
 
     pub fn reset_orchestrator_tick_signature(&mut self) {
