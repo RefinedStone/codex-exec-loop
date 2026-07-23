@@ -3,9 +3,7 @@ use crate::adapter::inbound::tui::shell_chrome::{
     ShellOverlay, StartupState, reduce_shell_chrome,
 };
 use crate::adapter::inbound::tui::supersession_mud::SupersessionMudUiState;
-use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlaneHandle, ParallelModeDispatchCleanupCorrelation,
-};
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneHandle;
 use crate::application::service::planning::PlanningTaskHandoff;
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::core::app::{
@@ -27,7 +25,6 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Clear;
-use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, SyncSender};
 
 /*
@@ -54,7 +51,6 @@ const INLINE_VIEWPORT_HEIGHT: u16 = 16;
 const STARTUP_ASCII_ART_ENV_VAR: &str = "CODEX_EXEC_LOOP_SHOW_STARTUP_ASCII_ART";
 const INLINE_HISTORY_RENDER_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_INLINE_HISTORY_MODE";
 const HISTORY_INSERT_MODE_ENV_VAR: &str = "CODEX_EXEC_LOOP_HISTORY_INSERT_MODE";
-const MAX_GLOBAL_RUNTIME_NOTICES: usize = 64;
 
 /*
  * The #[path] list is deliberately flat: each child file owns one reducer,
@@ -314,17 +310,6 @@ struct PendingTurnSteerUiIntent {
     intent: TurnSteerUiIntent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GlobalRuntimeNoticeEntry {
-    cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
-    notice: String,
-}
-
-#[derive(Debug, Clone, Default)]
-struct GlobalRuntimeNoticeState {
-    entries: VecDeque<GlobalRuntimeNoticeEntry>,
-}
-
 // Prompt origin is captured at submission time so later stream handling can
 // distinguish a manual turn from a reducer-scheduled continuation without
 // inferring intent from prompt text.
@@ -402,7 +387,6 @@ struct NativeTuiApp {
     pending_turn_steer: Option<PendingTurnSteerUiIntent>,
     parallel_mode_control_plane:
         ParallelModeControlPlaneHandle<TuiParallelModeControlPlaneEventSink>,
-    global_runtime_notice_state: GlobalRuntimeNoticeState,
     conversation_state: ConversationState,
     // Monotonic semantic boundary for host-scrollback transcript delivery. A
     // new draft or different loaded session advances it; assigning the first

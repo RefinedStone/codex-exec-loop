@@ -1682,7 +1682,6 @@ impl NativeTuiApp {
             turn_steer_confirmation: None,
             pending_turn_steer: None,
             parallel_mode_control_plane,
-            global_runtime_notice_state: super::GlobalRuntimeNoticeState::default(),
             conversation_state: ConversationState::ready(initial_conversation),
             conversation_history_identity_revision: 0,
             conversation_history_thread_id: None,
@@ -2357,7 +2356,6 @@ impl NativeTuiApp {
             self.conversation_history_thread_id = Some(thread_id);
         }
         self.advance_planning_ui_intent_revision();
-        self.surface_global_runtime_notices_if_ready();
         for effect in reduction.effects {
             self.execute_conversation_lifecycle_effect(effect);
         }

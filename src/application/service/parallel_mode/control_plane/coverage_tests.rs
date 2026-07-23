@@ -2415,6 +2415,16 @@ fn unsettled_dispatch_cleanup_ledger_is_bounded_and_updates_exact_correlation() 
             .operation_id,
         2
     );
+    let bounded_projection = runtime.global_runtime_notice_projection();
+    assert_eq!(bounded_projection.len(), MAX_UNSETTLED_DISPATCH_CLEANUPS);
+    assert_eq!(
+        bounded_projection
+            .first()
+            .expect("owned projection should preserve the bounded ledger order")
+            .cleanup_correlation
+            .operation_id,
+        2
+    );
 
     let exact_correlation = runtime
         .store
@@ -2442,6 +2452,77 @@ fn unsettled_dispatch_cleanup_ledger_is_bounded_and_updates_exact_correlation() 
             .error,
         "retry failed again"
     );
+    let exact_projection = runtime.global_runtime_notice_projection();
+    assert_eq!(
+        exact_projection
+            .iter()
+            .filter(|notice| notice.cleanup_correlation == exact_correlation)
+            .count(),
+        1,
+        "duplicate failure for one exact correlation must not append a projection row"
+    );
+    let exact_notice = exact_projection
+        .iter()
+        .find(|notice| notice.cleanup_correlation == exact_correlation)
+        .expect("exact cleanup retry should update its existing projection row");
+    assert!(exact_notice.notice.contains("retry failed again"));
+    assert!(!exact_notice.notice.contains("failure 2"));
+    assert!(
+        bounded_projection[0].notice.contains("failure 2"),
+        "an already captured projection must remain an owned immutable snapshot"
+    );
+}
+
+#[test]
+fn cleanup_projection_settlement_is_exact_across_operation_aba() {
+    let mut runtime = ParallelModeControlPlaneRuntime::new();
+    let original_cleanup = ParallelModeDispatchCleanupCorrelation {
+        operation_id: 41,
+        workspace_directory: "/cleanup-aba".to_string(),
+        epoch_id: 7,
+        command_identity: CANCEL_DISPATCH_COMMAND_IDENTITY.to_string(),
+    };
+    let replacement_cleanup = ParallelModeDispatchCleanupCorrelation {
+        operation_id: 42,
+        ..original_cleanup.clone()
+    };
+    runtime.record_unsettled_dispatch_cleanup(
+        original_cleanup.clone(),
+        "original cleanup failed".to_string(),
+    );
+    runtime.record_unsettled_dispatch_cleanup(
+        replacement_cleanup.clone(),
+        "replacement cleanup failed".to_string(),
+    );
+
+    let retry_correlation = ParallelModeDispatchMutationCorrelation {
+        operation_id: 43,
+        workspace_directory: original_cleanup.workspace_directory.clone(),
+        epoch_id: original_cleanup.epoch_id,
+    };
+    let retry = ParallelModeDispatchMutation::RetryCancel {
+        original_cleanup: original_cleanup.clone(),
+    };
+    let mut outcome = ParallelModeControlPlaneRuntimeOutcome::new();
+    runtime.record_dispatch_mutation_result(&retry_correlation, &retry, Ok(0), false, &mut outcome);
+
+    let projection = runtime.global_runtime_notice_projection();
+    assert_eq!(projection.len(), 1);
+    assert_eq!(
+        projection[0].cleanup_correlation, replacement_cleanup,
+        "settling the original operation must not clear its ABA replacement"
+    );
+    assert!(projection[0].notice.contains("replacement cleanup failed"));
+    assert!(matches!(
+        outcome.events.as_slice(),
+        [
+            ParallelModeControlPlaneEvent::DispatchCommandsCancelled { .. },
+            ParallelModeControlPlaneEvent::DispatchCleanupSettled {
+                original_cleanup: settled,
+                retry_operation_id: 43,
+            },
+        ] if settled == &original_cleanup
+    ));
 }
 
 #[test]
@@ -2622,30 +2703,34 @@ fn stale_enqueue_cleanup_failure_enters_global_notice_without_replacing_workspac
     );
     assert!(matches!(
         presented.as_slice(),
-        [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-            cleanup_correlation,
-            notice,
-        }]
-            if cleanup_correlation.workspace_directory == workspace_a
-                && cleanup_correlation.epoch_id == 1
-                && cleanup_correlation.operation_id == 2
-                && cleanup_correlation.command_identity == "cancel_runtime_dispatch_commands"
-                && notice.contains(&workspace_a)
-                && notice.contains("epoch: 1")
-                && notice.contains("operation: 2")
-                && notice.contains("dispatch command cancellation failed: sqlite cleanup busy")
-                && notice.contains("cleanup remains unsettled")
-                && notice.contains("retry this exact cleanup correlation")
+        [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged]
     ));
-    let original_cleanup = match presented.as_slice() {
-        [
-            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-                cleanup_correlation,
-                ..
-            },
-        ] => cleanup_correlation.clone(),
-        events => panic!("expected one exact cleanup notice, got {events:?}"),
+    let notice_projection = handle.presentation_projection().global_runtime_notices;
+    let [notice] = notice_projection.as_slice() else {
+        panic!("expected one exact cleanup notice, got {notice_projection:?}");
     };
+    assert_eq!(notice.cleanup_correlation.workspace_directory, workspace_a);
+    assert_eq!(notice.cleanup_correlation.epoch_id, 1);
+    assert_eq!(notice.cleanup_correlation.operation_id, 2);
+    assert_eq!(
+        notice.cleanup_correlation.command_identity,
+        "cancel_runtime_dispatch_commands"
+    );
+    assert!(notice.notice.contains(&workspace_a));
+    assert!(notice.notice.contains("epoch: 1"));
+    assert!(notice.notice.contains("operation: 2"));
+    assert!(
+        notice
+            .notice
+            .contains("dispatch command cancellation failed: sqlite cleanup busy")
+    );
+    assert!(notice.notice.contains("cleanup remains unsettled"));
+    assert!(
+        notice
+            .notice
+            .contains("retry this exact cleanup correlation")
+    );
+    let original_cleanup = notice.cleanup_correlation.clone();
     assert_eq!(
         mutation_count.load(Ordering::SeqCst),
         2,
@@ -2675,10 +2760,15 @@ fn stale_enqueue_cleanup_failure_enters_global_notice_without_replacing_workspac
     let settled = handle.handle_background_event(retried_cleanup);
     assert!(matches!(
         settled.as_slice(),
-        [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticeCleared {
-            cleanup_correlation,
-        }] if cleanup_correlation == &original_cleanup
+        [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged]
     ));
+    assert!(
+        handle
+            .presentation_projection()
+            .global_runtime_notices
+            .is_empty(),
+        "exact cleanup settlement must remove its owned notice projection"
+    );
     assert_eq!(
         mutation_count.load(Ordering::SeqCst),
         3,
@@ -2722,15 +2812,17 @@ fn persistent_cleanup_retry_yields_to_replacement_refresh_and_pending_poll_witho
         .expect("replacement workspace should own an active epoch");
     handle.force_readiness_snapshot_for_test(ready_readiness(&replacement_workspace));
     let initial_notice = handle.handle_background_event(failed_cleanup);
-    let original_cleanup = match initial_notice.as_slice() {
-        [
-            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-                cleanup_correlation,
-                ..
-            },
-        ] => cleanup_correlation.clone(),
-        events => panic!("expected one exact cleanup notice, got {events:?}"),
-    };
+    assert!(matches!(
+        initial_notice.as_slice(),
+        [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged]
+    ));
+    let original_cleanup = handle
+        .presentation_projection()
+        .global_runtime_notices
+        .into_iter()
+        .next()
+        .expect("failed cleanup should enter the owned projection")
+        .cleanup_correlation;
 
     let first_pulse = Instant::now();
     for cycle in 0..2 {
@@ -2778,11 +2870,14 @@ fn persistent_cleanup_retry_yields_to_replacement_refresh_and_pending_poll_witho
         let retry_notice = handle.handle_background_event(retry_failed);
         assert!(matches!(
             retry_notice.as_slice(),
-            [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-                cleanup_correlation,
-                ..
-            }] if cleanup_correlation == &original_cleanup
+            [ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged]
         ));
+        let retry_projection = handle.presentation_projection().global_runtime_notices;
+        assert_eq!(retry_projection.len(), 1);
+        assert_eq!(
+            retry_projection[0].cleanup_correlation, original_cleanup,
+            "duplicate retry failure must update one exact projection row"
+        );
         assert_eq!(
             handle.epoch_snapshot(),
             ParallelModeControlPlaneEpochSnapshot {

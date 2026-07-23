@@ -701,6 +701,302 @@ fn parallel_runtime_notices_enter_the_typed_client_runtime() {
 }
 
 #[test]
+fn global_parallel_cleanup_notices_are_owned_by_application_projection_and_pure_tail() {
+    /*
+     * A cleanup warning is semantic application state, not a TUI ledger. The
+     * control plane publishes an owned projection; its event is only an
+     * invalidation marker. Frame sampling then carries the projection into an
+     * owned screen-model field before pure tail copy consumes it.
+     */
+    assert_no_semantic_references_in_paths(
+        "production TUI must not regain a mutable global cleanup-notice ledger",
+        &["src/adapter/inbound/tui"],
+        &[],
+        &[
+            "GlobalRuntimeNoticeEntry",
+            "GlobalRuntimeNoticeState",
+            "record_global_runtime_notice",
+            "clear_global_runtime_notice",
+            "surface_global_runtime_notices_if_ready",
+            "remove_ready_conversation_runtime_notice",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "production TUI must not declare or access the retired global cleanup-notice ledger",
+        &["src/adapter/inbound/tui"],
+        &[
+            "global_runtime_notice_state",
+            "fn record_global_runtime_notice(",
+            "fn clear_global_runtime_notice(",
+            "fn surface_global_runtime_notices_if_ready(",
+            "fn remove_ready_conversation_runtime_notice(",
+        ],
+    );
+
+    let host_source = fs::read_to_string(
+        repo_root().join("src/application/service/parallel_mode/control_plane/host.rs"),
+    )
+    .expect("parallel control-plane host source should load");
+    let host_syntax =
+        syn::parse_file(&host_source).expect("parallel control-plane host should parse");
+    let presentation_fields = named_struct_fields(
+        &host_syntax,
+        "ParallelModeControlPlanePresentationProjection",
+    );
+    let global_runtime_notices = presentation_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "global_runtime_notices")
+        })
+        .expect("application presentation projection must own global runtime notices");
+    assert!(
+        is_single_generic_named_type(
+            &global_runtime_notices.ty,
+            "Vec",
+            "ParallelModeGlobalRuntimeNoticeProjection",
+        ),
+        "application presentation projection must own Vec<ParallelModeGlobalRuntimeNoticeProjection>"
+    );
+
+    let control_plane_source = fs::read_to_string(
+        repo_root().join("src/application/service/parallel_mode/control_plane/mod.rs"),
+    )
+    .expect("parallel control-plane runtime source should load");
+    let control_plane_syntax = syn::parse_file(&control_plane_source)
+        .expect("parallel control-plane runtime should parse");
+    let notice_projection_fields = named_struct_fields(
+        &control_plane_syntax,
+        "ParallelModeGlobalRuntimeNoticeProjection",
+    );
+    assert!(
+        !notice_projection_fields.is_empty()
+            && notice_projection_fields
+                .iter()
+                .all(|field| !matches!(&field.ty, syn::Type::Reference(_))),
+        "global runtime notice projection must contain owned fields without borrowed state"
+    );
+    assert!(
+        notice_projection_fields
+            .iter()
+            .any(|field| is_named_path_type(&field.ty, "String")),
+        "global runtime notice projection must own its rendered notice copy"
+    );
+
+    let presentation_projection =
+        top_level_impl_method_source(&host_source, "presentation_projection");
+    let compact_presentation_projection = presentation_projection
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_presentation_projection.contains("global_runtime_notices:service."),
+        "one control-plane mutex snapshot must derive global notices from application authority"
+    );
+
+    let controller_source = fs::read_to_string(
+        repo_root().join("src/application/service/parallel_mode/control_plane/controller.rs"),
+    )
+    .expect("parallel control-plane controller source should load");
+    let controller_syntax = syn::parse_file(&controller_source)
+        .expect("parallel control-plane controller should parse");
+    let presentation_event = controller_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(item) if item.ident == "ParallelModeControlPlanePresentationEvent" => {
+                Some(item)
+            }
+            _ => None,
+        })
+        .expect("parallel control-plane presentation event must exist");
+    let marker = presentation_event
+        .variants
+        .iter()
+        .find(|variant| variant.ident == "GlobalRuntimeNoticesChanged")
+        .expect("control-plane presentation event must expose the invalidation marker");
+    assert!(
+        matches!(&marker.fields, syn::Fields::Unit),
+        "GlobalRuntimeNoticesChanged must be a payload-free invalidation marker"
+    );
+    for retired_payload_variant in ["GlobalRuntimeNotice", "GlobalRuntimeNoticeCleared"] {
+        assert!(
+            presentation_event
+                .variants
+                .iter()
+                .all(|variant| variant.ident != retired_payload_variant),
+            "control-plane event must not publish retired payload writer {retired_payload_variant}"
+        );
+    }
+    assert!(
+        controller_source
+            .matches("ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged")
+            .count()
+            >= 2,
+        "cleanup failure and settlement must emit the payload-free presentation invalidation marker"
+    );
+
+    let bridge_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/parallel_mode/presentation_bridge.rs"),
+    )
+    .expect("parallel presentation bridge source should load");
+    let bridge_syntax =
+        syn::parse_file(&bridge_source).expect("parallel presentation bridge should parse");
+    let presentation_action = bridge_syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(item) if item.ident == "ParallelModePresentationAction" => Some(item),
+            _ => None,
+        })
+        .expect("parallel presentation action must exist");
+    let marker = presentation_action
+        .variants
+        .iter()
+        .find(|variant| variant.ident == "GlobalRuntimeNoticesChanged")
+        .expect("presentation bridge must retain the invalidation marker");
+    assert!(
+        matches!(&marker.fields, syn::Fields::Unit),
+        "bridge invalidation marker must not regain cleanup payload authority"
+    );
+    for retired_payload_action in ["RecordGlobalRuntimeNotice", "ClearGlobalRuntimeNotice"] {
+        assert!(
+            presentation_action
+                .variants
+                .iter()
+                .all(|variant| variant.ident != retired_payload_action),
+            "presentation bridge must not retain payload writer {retired_payload_action}"
+        );
+    }
+    let bridge_mapping = top_level_function_source(
+        &bridge_source,
+        "parallel_mode_presentation_actions_for_event",
+    );
+    for required_marker in [
+        "ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged",
+        "ParallelModePresentationAction::GlobalRuntimeNoticesChanged",
+    ] {
+        assert!(
+            bridge_mapping.contains(required_marker),
+            "presentation bridge must map the invalidation marker exhaustively: {required_marker}"
+        );
+    }
+
+    let parallel_adapter_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/parallel_mode.rs"))
+            .expect("parallel TUI adapter source should load");
+    let apply_action = top_level_impl_method_source(
+        &parallel_adapter_source,
+        "apply_parallel_mode_presentation_action",
+    );
+    assert!(
+        rust_semantic_references(&apply_action)
+            .paths
+            .iter()
+            .any(|path| path
+                .ends_with("ParallelModePresentationAction::GlobalRuntimeNoticesChanged")),
+        "TUI action application must exhaustively accept the invalidation marker"
+    );
+
+    let shell_core_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
+    )
+    .expect("conversation shell-core source should load");
+    let shell_core_syntax =
+        syn::parse_file(&shell_core_source).expect("conversation shell-core should parse");
+    let screen_model_fields = named_struct_fields(&shell_core_syntax, "ConversationScreenModel");
+    let global_runtime_notices = screen_model_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "global_runtime_notices")
+        })
+        .expect("ConversationScreenModel must own projected global runtime notices");
+    assert!(
+        is_single_generic_named_type(&global_runtime_notices.ty, "Vec", "String"),
+        "ConversationScreenModel.global_runtime_notices must be owned Vec<String>"
+    );
+    let sample_accessor = shell_core_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(item) => Some(item),
+            _ => None,
+        })
+        .filter(|item| {
+            matches!(
+                item.self_ty.as_ref(),
+                syn::Type::Path(type_path)
+                    if type_path.path.segments.last().is_some_and(|segment| {
+                        segment.ident == "ConversationProjectionSample"
+                    })
+            )
+        })
+        .flat_map(|item| item.items.iter())
+        .find_map(|item| match item {
+            syn::ImplItem::Fn(method) if method.sig.ident == "global_runtime_notices" => {
+                Some(method)
+            }
+            _ => None,
+        })
+        .expect("ConversationProjectionSample must expose global_runtime_notices");
+    let mut sample_accessor_references = RustSemanticReferenceVisitor::default();
+    sample_accessor_references.visit_block(&sample_accessor.block);
+    assert!(
+        sample_accessor_references
+            .references
+            .paths
+            .iter()
+            .any(|path| path == "global_runtime_notices"),
+        "ConversationProjectionSample accessor must read the sampled application projection"
+    );
+    let screen_model_builder =
+        top_level_impl_method_source(&shell_core_source, "from_app_with_sample");
+    let screen_model_builder_references = rust_semantic_references(&screen_model_builder).paths;
+    assert!(
+        screen_model_builder_references
+            .iter()
+            .any(|path| path == "global_runtime_notices"),
+        "ConversationScreenModel must derive owned notice copy through the sample accessor"
+    );
+    assert!(
+        !screen_model_builder.contains("parallel_mode_control_plane")
+            && !screen_model_builder.contains("presentation_projection"),
+        "ConversationScreenModel construction must not reread application authority after sampling"
+    );
+
+    let tail_path = "src/adapter/inbound/tui/app/shell_presentation/status_panels/tail_copy.rs";
+    assert_no_semantic_references_in_paths(
+        "pure tail copy must consume only screen-model notice data",
+        &[tail_path],
+        &[],
+        &[
+            "NativeTuiApp",
+            "ParallelModeControlPlaneHandle",
+            "ParallelModeControlPlanePresentationProjection",
+            "ParallelModeGlobalRuntimeNoticeProjection",
+        ],
+    );
+    assert_no_forbidden_references_in_paths(
+        "pure tail copy must not pull global notices from application authority",
+        &[tail_path],
+        &["parallel_mode_control_plane", "presentation_projection"],
+    );
+    let tail_source = fs::read_to_string(repo_root().join(tail_path))
+        .expect("inline tail copy source should load");
+    let tail_content =
+        top_level_function_source(&tail_source, "build_inline_tail_content_with_context");
+    assert!(
+        tail_content.contains("screen_model.global_runtime_notices"),
+        "pure tail copy must read global cleanup notices only from ConversationScreenModel"
+    );
+}
+
+#[test]
 fn client_runtime_compile_dependencies_and_runtime_flow_are_documented_separately() {
     let english = fs::read_to_string("docs/reference/architecture.md").unwrap();
     for required in [
@@ -1283,19 +1579,6 @@ fn parallel_dispatch_mutations_never_run_inline_under_the_control_plane_mutex() 
         assert!(
             runtime.contains(required),
             "dispatch mutation ordering must retain {required}"
-        );
-    }
-
-    let tui = fs::read_to_string("src/adapter/inbound/tui/app/parallel_mode.rs")
-        .expect("TUI parallel adapter source should load");
-    for required in [
-        "record_global_runtime_notice",
-        "clear_global_runtime_notice",
-        "surface_global_runtime_notices_if_ready",
-    ] {
-        assert!(
-            tui.contains(required),
-            "global cleanup notice lifecycle must retain {required}"
         );
     }
 

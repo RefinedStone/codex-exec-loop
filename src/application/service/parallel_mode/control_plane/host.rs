@@ -11,7 +11,8 @@ use super::controller::ParallelModeControlPlaneService;
 use super::{
     ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneCommand,
     ParallelModeControlPlaneEventSink, ParallelModeControlPlanePresentationEvent,
-    ParallelModePostTurnQueueContinuationOutcome, ParallelModeSupervisorInspectionState,
+    ParallelModeGlobalRuntimeNoticeProjection, ParallelModePostTurnQueueContinuationOutcome,
+    ParallelModeSupervisorInspectionState,
 };
 
 struct ParallelModeControlPlaneHost<S>
@@ -49,6 +50,7 @@ pub struct ParallelModeControlPlanePresentationProjection {
     pub control_effect_in_flight: bool,
     pub supervisor_inspection_state: ParallelModeSupervisorInspectionState,
     pub last_dispatch_withheld_reason: Option<String>,
+    pub global_runtime_notices: Vec<ParallelModeGlobalRuntimeNoticeProjection>,
 }
 
 impl<S> ParallelModeControlPlaneHandle<S>
@@ -122,6 +124,7 @@ where
             last_dispatch_withheld_reason: service
                 .last_dispatch_withheld_reason()
                 .map(str::to_string),
+            global_runtime_notices: service.global_runtime_notice_projection(),
         }
     }
 

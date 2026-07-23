@@ -82,17 +82,10 @@ impl NativeTuiApp {
             ParallelModePresentationAction::ObserveRuntimeNotice(notice) => {
                 self.dispatch_client_event(CoreInput::ConversationRuntimeNotice(notice));
             }
-            ParallelModePresentationAction::RecordGlobalRuntimeNotice {
-                cleanup_correlation,
-                notice,
-            } => {
-                self.record_global_runtime_notice(cleanup_correlation, notice);
-            }
-            ParallelModePresentationAction::ClearGlobalRuntimeNotice {
-                cleanup_correlation,
-            } => {
-                self.clear_global_runtime_notice(&cleanup_correlation);
-            }
+            // The control-plane ledger already changed before this invalidation
+            // reaches the adapter. Keeping a marker action preserves redraw
+            // scheduling without creating a second TUI writer.
+            ParallelModePresentationAction::GlobalRuntimeNoticesChanged => {}
             ParallelModePresentationAction::RefreshPlanningRuntimeProjection {
                 workspace_directory,
             } => {
@@ -100,73 +93,6 @@ impl NativeTuiApp {
                     &workspace_directory,
                 );
             }
-        }
-    }
-
-    fn record_global_runtime_notice(
-        &mut self,
-        cleanup_correlation: super::ParallelModeDispatchCleanupCorrelation,
-        notice: String,
-    ) {
-        if let Some(index) = self
-            .global_runtime_notice_state
-            .entries
-            .iter()
-            .position(|entry| entry.cleanup_correlation == cleanup_correlation)
-        {
-            let previous_notice = std::mem::replace(
-                &mut self.global_runtime_notice_state.entries[index].notice,
-                notice,
-            );
-            self.remove_ready_conversation_runtime_notice(&previous_notice);
-        } else {
-            if self.global_runtime_notice_state.entries.len() == super::MAX_GLOBAL_RUNTIME_NOTICES
-                && let Some(evicted) = self.global_runtime_notice_state.entries.pop_front()
-            {
-                self.remove_ready_conversation_runtime_notice(&evicted.notice);
-            }
-            self.global_runtime_notice_state
-                .entries
-                .push_back(super::GlobalRuntimeNoticeEntry {
-                    cleanup_correlation,
-                    notice,
-                });
-        }
-        self.surface_global_runtime_notices_if_ready();
-    }
-
-    fn clear_global_runtime_notice(
-        &mut self,
-        cleanup_correlation: &super::ParallelModeDispatchCleanupCorrelation,
-    ) {
-        let Some(index) = self
-            .global_runtime_notice_state
-            .entries
-            .iter()
-            .position(|entry| &entry.cleanup_correlation == cleanup_correlation)
-        else {
-            return;
-        };
-        if let Some(entry) = self.global_runtime_notice_state.entries.remove(index) {
-            self.remove_ready_conversation_runtime_notice(&entry.notice);
-        }
-    }
-
-    pub(super) fn surface_global_runtime_notices_if_ready(&mut self) {
-        let ConversationState::Ready(conversation) = &mut self.conversation_state else {
-            return;
-        };
-        conversation.extend_runtime_notices(
-            self.global_runtime_notice_state
-                .entries
-                .iter()
-                .map(|entry| entry.notice.clone()),
-        );
-    }
-
-    fn remove_ready_conversation_runtime_notice(&mut self, notice: &str) {
-        if let ConversationState::Ready(conversation) = &mut self.conversation_state {
-            conversation.remove_runtime_notice(notice);
         }
     }
 }
@@ -729,12 +655,14 @@ mod global_runtime_notice_tests {
     use crate::adapter::inbound::tui::app::test_helpers::{
         self, test_native_tui_app, test_native_tui_app_with_parallel_mode_composition,
     };
+    use crate::adapter::inbound::tui::app::{
+        ConversationViewModel, shell_presentation::ConversationScreenModel,
+    };
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
     use crate::application::port::outbound::planning_authority_port::NoopPlanningAuthorityPort;
     use crate::application::port::outbound::planning_task_repository_port::NoopPlanningTaskRepositoryPort;
     use crate::application::port::outbound::planning_worker_port::NoopPlanningWorkerPort;
-    use crate::application::service::parallel_mode::control_plane::ParallelModeDispatchCleanupCorrelation;
     use crate::application::service::planning::PlanningServices;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -772,121 +700,34 @@ mod global_runtime_notice_tests {
     }
 
     #[test]
-    fn cleanup_notice_arriving_while_loading_or_failed_surfaces_and_clears_when_ready() {
-        for (operation_id, initial_state) in [
-            (7, ConversationState::Loading),
-            (
-                8,
-                ConversationState::Failed("conversation load failed".to_string()),
-            ),
-        ] {
-            let mut app = test_native_tui_app();
-            let workspace_directory = app.planning_workspace_directory();
-            app.conversation_state = initial_state;
-            let cleanup_correlation =
-                cleanup_correlation(operation_id, format!("{workspace_directory}/stale-cleanup"));
-            let notice = format!("cleanup {operation_id} remains unsettled");
-
-            app.apply_parallel_mode_control_plane_presentation_events(vec![
-                ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-                    cleanup_correlation: cleanup_correlation.clone(),
-                    notice: notice.clone(),
-                },
-            ]);
-
-            assert_eq!(app.global_runtime_notice_state.entries.len(), 1);
-            assert!(!matches!(
-                app.conversation_state,
-                ConversationState::Ready(_)
-            ));
-
-            app.dispatch_conversation_lifecycle(
-                super::super::ConversationLifecycleEvent::NewDraftOpened {
-                    workspace_directory: workspace_directory.clone(),
-                },
-            );
-
-            let ConversationState::Ready(conversation) = &app.conversation_state else {
-                panic!("opening a draft should restore a ready conversation");
-            };
-            assert_eq!(conversation.cwd, workspace_directory);
-            assert!(conversation.runtime_notices.contains(&notice));
-
-            app.apply_parallel_mode_control_plane_presentation_events(vec![
-                ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticeCleared {
-                    cleanup_correlation,
-                },
-            ]);
-
-            assert!(app.global_runtime_notice_state.entries.is_empty());
-            let ConversationState::Ready(conversation) = &app.conversation_state else {
-                panic!("cleanup settlement must not replace the ready conversation");
-            };
-            assert!(!conversation.runtime_notices.contains(&notice));
-        }
-    }
-
-    #[test]
-    fn cleanup_notice_ledger_is_bounded_while_conversation_is_loading() {
+    fn global_runtime_notice_marker_requests_redraw_without_tui_state_mutation() {
         let mut app = test_native_tui_app();
-        let workspace_directory = app.planning_workspace_directory();
-        app.conversation_state = ConversationState::Loading;
-        let notice_count = super::super::MAX_GLOBAL_RUNTIME_NOTICES + 1;
-        let events = (1..=notice_count)
-            .map(
-                |operation_id| ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-                    cleanup_correlation: cleanup_correlation(
-                        operation_id as u64,
-                        workspace_directory.clone(),
-                    ),
-                    notice: format!("cleanup {operation_id} remains unsettled"),
-                },
-            )
-            .collect();
+        let before = match &app.conversation_state {
+            ConversationState::Ready(conversation) => conversation.runtime_notices.clone(),
+            _ => panic!("test app must start ready"),
+        };
 
-        app.apply_parallel_mode_control_plane_presentation_events(events);
-
-        assert_eq!(
-            app.global_runtime_notice_state.entries.len(),
-            super::super::MAX_GLOBAL_RUNTIME_NOTICES
-        );
-        assert_eq!(
-            app.global_runtime_notice_state
-                .entries
-                .front()
-                .expect("oldest retained notice")
-                .cleanup_correlation
-                .operation_id,
-            2
-        );
-
-        app.dispatch_conversation_lifecycle(
-            super::super::ConversationLifecycleEvent::NewDraftOpened {
-                workspace_directory,
-            },
+        assert!(
+            app.apply_parallel_mode_control_plane_presentation_events(vec![
+                ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged,
+            ]),
+            "projection invalidation must preserve the redraw signal"
         );
 
         let ConversationState::Ready(conversation) = &app.conversation_state else {
-            panic!("opening a draft should restore a ready conversation");
+            panic!("redraw invalidation must preserve conversation state");
         };
-        assert_eq!(
-            conversation.runtime_notices.len(),
-            super::super::MAX_GLOBAL_RUNTIME_NOTICES
-        );
+        assert_eq!(conversation.runtime_notices, before);
         assert!(
-            !conversation
-                .runtime_notices
-                .contains(&"cleanup 1 remains unsettled".to_string())
-        );
-        assert!(
-            conversation
-                .runtime_notices
-                .contains(&format!("cleanup {notice_count} remains unsettled"))
+            ConversationScreenModel::from_app(&app)
+                .global_runtime_notices
+                .is_empty(),
+            "the marker must not fabricate projection state in the TUI"
         );
     }
 
     #[test]
-    fn production_tui_pulse_retries_cleanup_during_loading_or_failed_without_duplicates() {
+    fn owned_cleanup_projection_survives_non_ready_state_and_settles_without_dual_writes() {
         for (operation_id, initial_state) in [
             (11, ConversationState::Loading),
             (
@@ -926,14 +767,23 @@ mod global_runtime_notice_tests {
             let replacement_workspace = format!("/tmp/pulse-cleanup-replacement-{operation_id}");
             app.parallel_mode_control_plane
                 .force_epoch_for_test(&replacement_workspace, 2);
+            assert!(
+                app.parallel_mode_control_plane
+                    .presentation_projection()
+                    .global_runtime_notices
+                    .is_empty(),
+                "the worker must not mutate authority before its background event is reduced"
+            );
             app.apply_parallel_mode_control_plane_background_event(failed_cleanup);
-            assert_eq!(app.global_runtime_notice_state.entries.len(), 1);
-            let original_cleanup = &app
-                .global_runtime_notice_state
-                .entries
-                .front()
-                .expect("failed cancellation should retain its exact correlation")
-                .cleanup_correlation;
+            let projection = app
+                .parallel_mode_control_plane
+                .presentation_projection()
+                .global_runtime_notices;
+            let [projected_notice] = projection.as_slice() else {
+                panic!("failed cancellation should project one exact notice: {projection:?}");
+            };
+            let original_cleanup = projected_notice.cleanup_correlation.clone();
+            let notice_copy = projected_notice.notice.clone();
             assert_eq!(original_cleanup.workspace_directory, workspace_directory);
             assert_eq!(original_cleanup.epoch_id, 1);
             assert_eq!(
@@ -944,6 +794,11 @@ mod global_runtime_notice_tests {
                 app.conversation_state,
                 ConversationState::Ready(_)
             ));
+            assert_eq!(
+                ConversationScreenModel::from_app(&app).global_runtime_notices,
+                vec![notice_copy.clone()],
+                "a non-ready conversation must still capture the application-owned projection"
+            );
 
             let gate_guard = mutation_gate
                 .lock()
@@ -963,6 +818,16 @@ mod global_runtime_notice_tests {
                 "duplicate pulses must share the one exact cleanup retry worker"
             );
 
+            app.conversation_state = ConversationState::ready(ConversationViewModel::new_draft(
+                workspace_directory.clone(),
+            ));
+            assert_eq!(
+                ConversationScreenModel::from_app(&app).global_runtime_notices,
+                vec![notice_copy.clone()],
+                "becoming ready must surface the same projection without a lifecycle write"
+            );
+            app.dispatch_client_event(CoreInput::ConversationRuntimeNotice(notice_copy.clone()));
+
             drop(gate_guard);
             let settled_cleanup = recv_control_plane_background_event(&app);
             assert!(matches!(
@@ -972,6 +837,14 @@ mod global_runtime_notice_tests {
                     ..
                 }
             ));
+            assert_eq!(
+                app.parallel_mode_control_plane
+                    .presentation_projection()
+                    .global_runtime_notices
+                    .len(),
+                1,
+                "the background worker must not settle authority until its event is reduced"
+            );
             app.apply_parallel_mode_control_plane_background_event(settled_cleanup);
 
             assert_eq!(
@@ -979,7 +852,25 @@ mod global_runtime_notice_tests {
                 2,
                 "the production pulse must execute one additional cancellation"
             );
-            assert!(app.global_runtime_notice_state.entries.is_empty());
+            assert!(
+                app.parallel_mode_control_plane
+                    .presentation_projection()
+                    .global_runtime_notices
+                    .is_empty()
+            );
+            assert!(
+                ConversationScreenModel::from_app(&app)
+                    .global_runtime_notices
+                    .is_empty(),
+                "the next frame must own the settled projection without a TUI clear writer"
+            );
+            let ConversationState::Ready(conversation) = &app.conversation_state else {
+                panic!("cleanup settlement must preserve the ready conversation");
+            };
+            assert!(
+                conversation.runtime_notices.contains(&notice_copy),
+                "settling cleanup must not delete an ordinary notice with identical copy"
+            );
             assert_eq!(
                 app.parallel_mode_control_plane.epoch_snapshot(),
                 crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneEpochSnapshot {
@@ -988,10 +879,6 @@ mod global_runtime_notice_tests {
                 },
                 "exact stale cleanup retry must not replace the newer workspace projection"
             );
-            assert!(!matches!(
-                app.conversation_state,
-                ConversationState::Ready(_)
-            ));
         }
     }
 
@@ -1037,7 +924,10 @@ mod global_runtime_notice_tests {
         let failed_retry = recv_control_plane_background_event(&app);
         app.apply_parallel_mode_control_plane_background_event(failed_retry);
         assert_eq!(
-            app.global_runtime_notice_state.entries.len(),
+            app.parallel_mode_control_plane
+                .presentation_projection()
+                .global_runtime_notices
+                .len(),
             1,
             "the exact cleanup must remain one unsettled row across periodic retries"
         );
@@ -1079,18 +969,6 @@ mod global_runtime_notice_tests {
             std::thread::yield_now();
         }
         assert_eq!(count.load(Ordering::SeqCst), expected);
-    }
-
-    fn cleanup_correlation(
-        operation_id: u64,
-        workspace_directory: String,
-    ) -> ParallelModeDispatchCleanupCorrelation {
-        ParallelModeDispatchCleanupCorrelation {
-            operation_id,
-            workspace_directory,
-            epoch_id: 3,
-            command_identity: "cancel_runtime_dispatch_commands".to_string(),
-        }
     }
 }
 

@@ -1,6 +1,5 @@
 use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneLoadingStage, ParallelModeControlPlanePresentationEvent,
-    ParallelModeDispatchCleanupCorrelation,
 };
 use crate::domain::parallel_mode::{
     ParallelModeAgentRosterSnapshot, ParallelModeDistributorSnapshot,
@@ -109,16 +108,8 @@ pub(super) enum ParallelModePresentationAction {
     SyncSupervisorProjection(Box<ParallelModeSupervisorSnapshot>),
     ShowStatus(String),
     ObserveRuntimeNotice(String),
-    RecordGlobalRuntimeNotice {
-        cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
-        notice: String,
-    },
-    ClearGlobalRuntimeNotice {
-        cleanup_correlation: ParallelModeDispatchCleanupCorrelation,
-    },
-    RefreshPlanningRuntimeProjection {
-        workspace_directory: String,
-    },
+    GlobalRuntimeNoticesChanged,
+    RefreshPlanningRuntimeProjection { workspace_directory: String },
 }
 
 pub(super) fn parallel_mode_presentation_actions(
@@ -206,18 +197,9 @@ fn parallel_mode_presentation_actions_for_event(
             .then_some(ParallelModePresentationAction::ObserveRuntimeNotice(notice))
             .into_iter()
             .collect(),
-        ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-            cleanup_correlation,
-            notice,
-        } => vec![ParallelModePresentationAction::RecordGlobalRuntimeNotice {
-            cleanup_correlation,
-            notice,
-        }],
-        ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticeCleared {
-            cleanup_correlation,
-        } => vec![ParallelModePresentationAction::ClearGlobalRuntimeNotice {
-            cleanup_correlation,
-        }],
+        ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged => {
+            vec![ParallelModePresentationAction::GlobalRuntimeNoticesChanged]
+        }
         ParallelModeControlPlanePresentationEvent::PostTurnAutoFollowPromptConsumed => Vec::new(),
         ParallelModeControlPlanePresentationEvent::PlanningRuntimeRefreshRequested {
             workspace_directory,
@@ -380,29 +362,17 @@ mod tests {
     }
 
     #[test]
-    fn stale_workspace_cleanup_failure_reaches_the_global_runtime_notice_ledger() {
+    fn global_runtime_notice_change_preserves_redraw_invalidation() {
         let context = ParallelModePresentationBridgeContext::new("/current".to_string(), true);
-        let cleanup_correlation = ParallelModeDispatchCleanupCorrelation {
-            operation_id: 7,
-            workspace_directory: "/stale".to_string(),
-            epoch_id: 3,
-            command_identity: "cancel_runtime_dispatch_commands".to_string(),
-        };
 
         let actions = parallel_mode_presentation_actions_for_event(
             &context,
-            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNotice {
-                cleanup_correlation: cleanup_correlation.clone(),
-                notice: "cleanup failed for /stale at operation 7".to_string(),
-            },
+            ParallelModeControlPlanePresentationEvent::GlobalRuntimeNoticesChanged,
         );
 
         assert_eq!(
             actions,
-            vec![ParallelModePresentationAction::RecordGlobalRuntimeNotice {
-                cleanup_correlation,
-                notice: "cleanup failed for /stale at operation 7".to_string(),
-            }]
+            vec![ParallelModePresentationAction::GlobalRuntimeNoticesChanged]
         );
     }
 }

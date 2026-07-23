@@ -8,7 +8,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::text::Line;
 
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlanePresentationProjection;
+use crate::application::service::parallel_mode::control_plane::{
+    ParallelModeControlPlanePresentationProjection, ParallelModeGlobalRuntimeNoticeProjection,
+};
 use crate::application::service::planning::PlanningRuntimeProjection;
 use crate::core::app::{
     ParallelModeProjection, PlanningParallelProjection, RevisionedPlanningParallelProjection,
@@ -73,6 +75,12 @@ impl ParallelPanelProjectionSample {
         self.parallel_control_plane
             .last_dispatch_withheld_reason
             .as_deref()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn global_runtime_notices(
+        &self,
+    ) -> &[ParallelModeGlobalRuntimeNoticeProjection] {
+        &self.parallel_control_plane.global_runtime_notices
     }
 
     pub(in crate::adapter::inbound::tui::app) fn parallel_mode_readiness_for_workspace(
@@ -214,6 +222,12 @@ impl ConversationProjectionSample {
     ) -> Option<&str> {
         self.parallel_panel
             .last_parallel_mode_dispatch_withheld_reason()
+    }
+
+    pub(in crate::adapter::inbound::tui::app) fn global_runtime_notices(
+        &self,
+    ) -> &[ParallelModeGlobalRuntimeNoticeProjection] {
+        self.parallel_panel.global_runtime_notices()
     }
 
     #[cfg(test)]
@@ -424,6 +438,7 @@ pub(in crate::adapter::inbound::tui::app) struct ConversationScreenModel<'a> {
     pub(in crate::adapter::inbound::tui::app) parallel_mode_control_effect_in_flight: bool,
     pub(in crate::adapter::inbound::tui::app) last_parallel_mode_dispatch_withheld_reason:
         Option<String>,
+    pub(in crate::adapter::inbound::tui::app) global_runtime_notices: Vec<String>,
     pub(in crate::adapter::inbound::tui::app) parallel_mode_loading_prompt_indicator_visible: bool,
     pub(in crate::adapter::inbound::tui::app) parallel_mode_readiness:
         Option<ParallelModeReadinessSnapshot>,
@@ -560,6 +575,11 @@ impl<'a> ConversationScreenModel<'a> {
             last_parallel_mode_dispatch_withheld_reason: sample
                 .last_parallel_mode_dispatch_withheld_reason()
                 .map(str::to_string),
+            global_runtime_notices: sample
+                .global_runtime_notices()
+                .iter()
+                .map(|notice| notice.notice.clone())
+                .collect(),
             parallel_mode_loading_prompt_indicator_visible,
             parallel_mode_readiness,
             parallel_mode_supervisor,
@@ -723,6 +743,7 @@ impl<'a> ConversationScreenModel<'a> {
             parallel_mode_enabled: false,
             parallel_mode_control_effect_in_flight: false,
             last_parallel_mode_dispatch_withheld_reason: None,
+            global_runtime_notices: Vec::new(),
             parallel_mode_loading_prompt_indicator_visible: false,
             parallel_mode_readiness: None,
             parallel_mode_supervisor: pending_parallel_mode_supervisor_snapshot(

@@ -113,6 +113,11 @@ Git common directory so linked worktrees share one authority and independent clo
   for guarded recovery. Closing the board does not disable parallel mode.
 - Pool, lease, task, session, and distributor mutations are serialized through application and
   durable cross-process gates. TUI state never decides capacity, retry, or dispatch policy.
+- The application control-plane's bounded unsettled-cleanup ledger is the sole cleanup-notice
+  authority. The TUI captures its typed owned projection into the conversation screen model and
+  renders it without a separate adapter or conversation ledger.
+- Global cleanup-notice events invalidate the current frame for redraw only; exact retry settlement
+  changes the control-plane projection.
 - Workers run unattended with `workspace-write`, leave edits uncommitted, and decline approvals.
   The host validates the exact lease, worktree, branch, frozen base, changed-file bounds, and final
   cleanliness before creating a source commit.

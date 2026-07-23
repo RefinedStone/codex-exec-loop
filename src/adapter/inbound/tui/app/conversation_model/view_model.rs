@@ -631,16 +631,6 @@ impl ConversationViewModel {
         }
         retain_bounded_string_history(&mut self.runtime_notices, MAX_RUNTIME_NOTICES);
     }
-    pub(crate) fn remove_runtime_notice(&mut self, notice: &str) {
-        let mut notice = notice.to_string();
-        messages::truncate_text_to_limits(
-            &mut notice,
-            MAX_AUXILIARY_ITEM_BYTES,
-            MAX_AUXILIARY_ITEM_LINES,
-        );
-        self.runtime_notices
-            .retain(|candidate| candidate != &notice);
-    }
     pub(crate) fn record_auto_follow_skip(&mut self, reason: AutoFollowSkipReason) {
         let detail = reason.detail(&self.auto_follow_state, &self.turn_activity);
         // A skip ends post-turn evaluation but keeps a readable activity record for the footer.
