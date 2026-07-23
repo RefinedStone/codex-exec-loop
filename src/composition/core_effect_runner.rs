@@ -606,11 +606,10 @@ impl CoreEffectRunner {
                     .map(Box::new)
                 })
                 .map_err(|error| error.to_string());
-            let completion = CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+            CoreEffectCompletion::PlanningWorkspaceResetCompleted {
                 correlation,
                 result,
-            };
-            completion
+            }
         });
     }
 
@@ -856,12 +855,12 @@ impl CoreEffectRunner {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
         let workers = self.stop_request_workers.clone();
-        let panic_correlation = correlation.clone();
-        let panic_attempt = attempt.clone();
+        let panic_correlation = correlation;
+        let panic_attempt = attempt;
         let panic_workers = workers.clone();
         let panic_permit = permit.clone();
         let panic_completion = stop_request_attempt_completion(
-            panic_correlation.clone(),
+            panic_correlation,
             panic_attempt,
             Err(anyhow::anyhow!("stop request worker panicked")),
         );
@@ -944,7 +943,7 @@ impl CoreEffectRunner {
         let conversation_service = self.conversation_service.clone();
         let input_sender = self.input_sender.clone();
         let panic_completion = turn_steer_completion(
-            correlation.clone(),
+            correlation,
             Err(anyhow::anyhow!("turn steer worker panicked")),
         );
         spawn_effect_completion_worker(input_sender, panic_completion, move || {
