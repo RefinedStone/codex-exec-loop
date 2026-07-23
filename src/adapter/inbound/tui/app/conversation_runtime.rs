@@ -59,9 +59,6 @@ pub(super) enum ConversationRuntimeEvent {
         approval_id: String,
         error: String,
     },
-    RuntimeNoticeObserved {
-        notice: String,
-    },
     PostTurnEvaluationCompleted {
         evaluation: Box<PostTurnEvaluationOutcome>,
     },
@@ -83,7 +80,6 @@ impl ConversationRuntimeEvent {
             },
             Self::SubmitPrompt { .. }
             | Self::ApprovalDecisionSubmissionFailed { .. }
-            | Self::RuntimeNoticeObserved { .. }
             | Self::PostTurnEvaluationCompleted { .. } => false,
         }
     }
@@ -663,9 +659,6 @@ pub(super) fn reduce_conversation_runtime(
                 state.status_text =
                     format!("approval decision failed: {error} / retry accept or decline");
             }
-        }
-        ConversationRuntimeEvent::RuntimeNoticeObserved { notice } => {
-            state.extend_runtime_notices([notice]);
         }
         ConversationRuntimeEvent::PostTurnEvaluationCompleted { evaluation } => {
             let PostTurnEvaluationOutcome {

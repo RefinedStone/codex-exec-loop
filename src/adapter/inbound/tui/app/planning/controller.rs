@@ -10,7 +10,7 @@ use super::super::{
 };
 use crate::application::service::planning::PlanningResetTarget;
 use crate::core::app::{
-    AppCommand, AppEvent, PlanningDoctorSnapshot, PlanningDoctorSnapshotState,
+    AppCommand, AppEvent, CoreInput, PlanningDoctorSnapshot, PlanningDoctorSnapshotState,
     PlanningEditorMutationAction, PlanningEditorMutationIdentity, PlanningEditorMutationRequest,
     PlanningEditorMutationResult, PlanningEditorMutationTarget, PlanningEditorSessionSnapshot,
     PlanningEditorStageSnapshot, PlanningEditorStageTarget, PlanningSimpleDraftPromotionSnapshot,
@@ -127,10 +127,10 @@ impl NativeTuiApp {
         self.planning_draft_editor_ui_state.reset();
         self.dispatch_shell_chrome(ShellChromeEvent::DirectionsMaintenanceOverlayShown);
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::LoadDirectionsMaintenance {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::LoadDirectionsMaintenance {
                 workspace_directory,
-            });
+            }));
         let correlation = outcome.events.iter().find_map(|event| match event {
             AppEvent::DirectionsMaintenanceLoadStarted { correlation } => Some(correlation.clone()),
             _ => None,
@@ -408,8 +408,10 @@ impl NativeTuiApp {
             core_planning_reset_target(parsed.target),
         );
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::ResetPlanningWorkspace(intent));
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::ResetPlanningWorkspace(
+                intent,
+            )));
         self.apply_core_dispatch_outcome(outcome);
     }
 
@@ -600,10 +602,10 @@ impl NativeTuiApp {
     pub(super) fn stage_simple_mode_planning_init_draft(&mut self) {
         let workspace_directory = self.planning_workspace_directory();
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::StageSimplePlanningDraft {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::StageSimplePlanningDraft {
                 workspace_directory,
-            });
+            }));
         self.apply_core_dispatch_outcome(outcome);
     }
     pub(super) fn open_simple_mode_planning_editor(&mut self) {
@@ -626,12 +628,12 @@ impl NativeTuiApp {
             return;
         }
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::LoadSimplePlanningEditor {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::LoadSimplePlanningEditor {
                 workspace_directory,
                 draft_name,
                 source_session,
-            });
+            }));
         self.apply_core_dispatch_outcome(outcome);
     }
     pub(super) fn promote_simple_mode_planning_draft(&mut self) {
@@ -654,12 +656,12 @@ impl NativeTuiApp {
             return;
         }
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::PromoteSimplePlanningDraft {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::PromoteSimplePlanningDraft {
                 workspace_directory,
                 draft_name,
                 source_session,
-            });
+            }));
         self.apply_core_dispatch_outcome(outcome);
     }
 

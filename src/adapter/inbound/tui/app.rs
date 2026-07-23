@@ -7,12 +7,11 @@ use crate::application::service::parallel_mode::control_plane::{
     ParallelModeControlPlaneHandle, ParallelModeDispatchCleanupCorrelation,
 };
 use crate::application::service::planning::PlanningTaskHandoff;
-use crate::composition::core_effect_runner::CoreEffectRunner;
+use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::core::app::{
     ConversationLoadCorrelation, PlanningRuntimeRefreshCorrelation, StartupCheckCorrelation,
     TurnSteerCorrelation,
 };
-use crate::core::runtime::CoreRuntime;
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationReasoningEffort,
     ConversationRuntimeControlTruth, ConversationTurnOptions, ConversationTurnSteerRequest,
@@ -427,7 +426,7 @@ struct NativeTuiApp {
     planning_runtime_refresh_ui_state: PlanningRuntimeRefreshUiState,
     planning_workspace_operation_ui_state: PlanningWorkspaceOperationUiState,
     planning_draft_editor_ui_state: PlanningDraftEditorUiState,
-    core_runtime: CoreRuntime<CoreEffectRunner>,
+    client_runtime: NativeClientRuntime,
     turn_control_truth: ConversationRuntimeControlTruth,
     turn_options: ConversationTurnOptions,
     conversation_view_mode: ConversationViewMode,

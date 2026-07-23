@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(first_live, second_live);
         assert_eq!(
             screen_model.core_revision,
-            app.core_runtime.snapshot().revision
+            app.client_runtime.snapshot().revision
         );
     }
 

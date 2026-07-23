@@ -308,7 +308,7 @@ fn queue_mutation_settlement_stays_correlated_and_off_the_input_path() {
     assert!(!SHELL_RUNTIME_RS.contains("BackgroundMessage::QueueMutationCompleted"));
     assert!(
         QUEUE_CONTROLLER_RS
-            .contains(".dispatch_command(AppCommand::SubmitQueueMutation(Box::new(intent)))")
+            .contains(".dispatch_client_event(CoreInput::Command(AppCommand::SubmitQueueMutation(")
     );
     assert!(APP_RUNTIME_RS.contains("AppEvent::QueueMutationStarted { correlation }"));
     assert!(APP_RUNTIME_RS.contains("self.apply_queue_mutation_started(correlation)"));
@@ -515,7 +515,7 @@ fn tui_projection_rendering_reads_core_snapshot_without_legacy_cache() {
 
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_readiness_snapshot"));
     assert!(PARALLEL_MODE_RS.contains("core_parallel_mode_supervisor_snapshot"));
-    assert!(PARALLEL_MODE_RS.contains("self.core_runtime"));
+    assert!(PARALLEL_MODE_RS.contains("self.client_runtime"));
     assert!(PARALLEL_MODE_RS.contains(".planning_parallel"));
     assert!(!APP_RS.contains("parallel_mode_readiness_snapshot:"));
     assert!(!APP_RS.contains("parallel_mode_supervisor_snapshot:"));
@@ -724,11 +724,12 @@ fn post_turn_evaluation_completed_message(
 }
 
 fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id: &str) {
-    let correlation = runtime.app_mut().core_runtime.begin_test_turn_submission();
-    runtime
+    let correlation = runtime
         .app_mut()
-        .core_runtime
-        .dispatch_input(CoreInput::ConversationStreamUpdated {
+        .client_runtime
+        .begin_test_turn_submission();
+    let _ = runtime.app_mut().client_runtime.dispatch_client_event(
+        CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::ThreadPrepared {
                 thread_id: thread_id.to_string(),
@@ -736,21 +737,22 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
                 cwd: "/tmp/workspace".to_string(),
                 runtime_envelope: Box::default(),
             },
-        });
-    runtime
-        .app_mut()
-        .core_runtime
-        .dispatch_input(CoreInput::ConversationStreamUpdated {
+        },
+    );
+    let _ = runtime.app_mut().client_runtime.dispatch_client_event(
+        CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::TurnStarted {
                 turn_id: turn_id.to_string(),
                 runtime_request: Box::default(),
             },
-        });
-    runtime
-        .app_mut()
-        .core_runtime
-        .dispatch_input(CoreInput::ConversationStreamUpdated {
+        },
+    );
+    let _ =
+        runtime
+            .app_mut()
+            .client_runtime
+            .dispatch_client_event(CoreInput::ConversationStreamUpdated {
             correlation,
             event: TurnStreamEvent::TurnTerminal {
                 receipt: crate::domain::turn_terminal::ConversationTurnTerminalReceipt::completed(
@@ -779,7 +781,7 @@ fn arm_core_post_turn_evaluation(
     let workspace_directory = runtime.app().planning_workspace_directory();
     runtime
         .app_mut()
-        .core_runtime
+        .client_runtime
         .begin_test_post_turn_evaluation(
             thread_id,
             turn_id,
@@ -1115,7 +1117,7 @@ fn post_turn_evaluation_start_state_reads_core_projection() {
     assert!(
         runtime
             .app()
-            .core_runtime
+            .client_runtime
             .test_post_turn_evaluation_is_in_flight("thread-1", "turn-1")
     );
     assert_eq!(
@@ -1157,7 +1159,7 @@ fn post_turn_evaluation_started_event_applies_running_state_without_waiting_for_
     assert!(
         runtime
             .app()
-            .core_runtime
+            .client_runtime
             .test_post_turn_evaluation_is_in_flight("thread-1", "turn-1")
     );
     assert_eq!(
@@ -1268,7 +1270,7 @@ fn conversation_stream_background_message_is_routed_through_runtime_reducer() {
      */
     let mut runtime = make_test_runtime();
     runtime.take_redraw_request();
-    let correlation = runtime.app.core_runtime.begin_test_turn_submission();
+    let correlation = runtime.app.client_runtime.begin_test_turn_submission();
 
     runtime
         .app
@@ -1324,7 +1326,7 @@ fn idle_background_poll_after_initial_refresh_does_not_request_redraw() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while runtime
         .app()
-        .core_runtime
+        .client_runtime
         .snapshot()
         .planning_parallel
         .planning_runtime_workspace_directory
@@ -1338,7 +1340,7 @@ fn idle_background_poll_after_initial_refresh_does_not_request_redraw() {
     assert_eq!(
         runtime
             .app()
-            .core_runtime
+            .client_runtime
             .snapshot()
             .planning_parallel
             .planning_runtime_workspace_directory
@@ -1388,7 +1390,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     let initial_refresh_deadline = Instant::now() + Duration::from_secs(2);
     while runtime
         .app()
-        .core_runtime
+        .client_runtime
         .snapshot()
         .planning_parallel
         .planning_runtime_workspace_directory
@@ -1402,7 +1404,7 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     assert_eq!(
         runtime
             .app()
-            .core_runtime
+            .client_runtime
             .snapshot()
             .planning_parallel
             .planning_runtime_workspace_directory
@@ -1537,7 +1539,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     let initial_refresh_deadline = Instant::now() + Duration::from_secs(2);
     while runtime
         .app()
-        .core_runtime
+        .client_runtime
         .snapshot()
         .planning_parallel
         .planning_runtime_workspace_directory
@@ -1551,7 +1553,7 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     assert_eq!(
         runtime
             .app()
-            .core_runtime
+            .client_runtime
             .snapshot()
             .planning_parallel
             .planning_runtime_workspace_directory

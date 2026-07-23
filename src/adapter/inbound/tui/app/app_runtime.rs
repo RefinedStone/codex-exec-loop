@@ -11,10 +11,9 @@ use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningServices;
 #[cfg(test)]
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
-use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
-use crate::composition::core_effect_runner::CoreEffectRunner;
+use crate::composition::native_client_runtime::NativeClientRuntime;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
 #[cfg(test)]
@@ -24,7 +23,6 @@ use crate::core::app::{
     ConversationSnapshot as CoreConversationSnapshot, CoreDispatchOutcome, CoreInput,
     SessionCatalogSnapshot, StartupCheckCorrelation, StartupSnapshot,
 };
-use crate::core::runtime::{CoreRuntime, core_input_channel};
 #[cfg(test)]
 use crate::domain::conversation::ConversationSnapshot;
 use crate::domain::operator_alert::OperatorAlert;
@@ -443,15 +441,15 @@ mod tests {
     fn shared_core_snapshot_identity_does_not_suppress_tui_events() {
         let mut app = test_helpers::test_native_tui_app();
         let first = app
-            .core_runtime
-            .dispatch_input(CoreInput::ConversationRuntimeNotice(
+            .client_runtime
+            .dispatch_client_event(CoreInput::ConversationRuntimeNotice(
                 "first notice".to_string(),
             ));
-        let second = app
-            .core_runtime
-            .dispatch_input(CoreInput::ConversationRuntimeNotice(
-                "second notice".to_string(),
-            ));
+        let second =
+            app.client_runtime
+                .dispatch_client_event(CoreInput::ConversationRuntimeNotice(
+                    "second notice".to_string(),
+                ));
 
         assert!(Arc::ptr_eq(&first.snapshot, &second.snapshot));
         app.apply_core_dispatch_outcome(first);
@@ -683,7 +681,7 @@ mod tests {
     fn prepare_review_persistence_turn(
         app: &mut NativeTuiApp,
     ) -> crate::core::app::TurnSubmissionCorrelation {
-        let correlation = app.core_runtime.begin_test_turn_submission();
+        let correlation = app.client_runtime.begin_test_turn_submission();
         for event in [
             TurnStreamEvent::ThreadPrepared {
                 thread_id: "thread-1".to_string(),
@@ -707,8 +705,8 @@ mod tests {
         event: TurnStreamEvent,
     ) {
         let outcome = app
-            .core_runtime
-            .dispatch_input(CoreInput::ConversationStreamUpdated { correlation, event });
+            .client_runtime
+            .dispatch_client_event(CoreInput::ConversationStreamUpdated { correlation, event });
         app.apply_core_dispatch_outcome(outcome);
     }
 
@@ -1128,9 +1126,9 @@ mod tests {
             "Thread A".to_string(),
             "/tmp/root".to_string(),
         );
-        app.dispatch_core_command(AppCommand::RenameSession(
+        app.dispatch_client_event(CoreInput::Command(AppCommand::RenameSession(
             crate::domain::recent_sessions::SessionRenameRequest::new("thread-b", "Thread B"),
-        ));
+        )));
         let history_identity_revision = app.conversation_history_identity_revision;
 
         app.dispatch_conversation_lifecycle(ConversationLifecycleEvent::SessionChosen {
@@ -1570,13 +1568,13 @@ impl NativeTuiApp {
         parallel_mode_binding: NativeTuiParallelModeBinding,
         github_review_polling: GithubReviewPollingBootstrap,
     ) -> Self {
-        Self::new_with_github_review_polling_and_effect_runner(
+        Self::new_with_github_review_polling_and_client_runtime(
             startup_service,
             session_service,
             conversation_service,
             parallel_mode_binding,
             github_review_polling,
-            |runner| runner,
+            NativeClientRuntime::new,
         )
     }
 
@@ -1598,23 +1596,42 @@ impl NativeTuiApp {
             + Sync
             + 'static,
     ) -> Self {
-        Self::new_with_github_review_polling_and_effect_runner(
+        Self::new_with_github_review_polling_and_client_runtime(
             startup_service,
             session_service,
             conversation_service,
             parallel_mode_binding,
             github_review_polling,
-            |runner| runner.with_github_review_polling_setup_loader(loader),
+            |startup_service,
+             session_service,
+             conversation_service,
+             planning_feature,
+             parallel_turns| {
+                NativeClientRuntime::new_with_github_review_polling_setup_loader(
+                    startup_service,
+                    session_service,
+                    conversation_service,
+                    planning_feature,
+                    parallel_turns,
+                    loader,
+                )
+            },
         )
     }
 
-    fn new_with_github_review_polling_and_effect_runner(
+    fn new_with_github_review_polling_and_client_runtime(
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
         parallel_mode_binding: NativeTuiParallelModeBinding,
         github_review_polling: GithubReviewPollingBootstrap,
-        configure_effect_runner: impl FnOnce(CoreEffectRunner) -> CoreEffectRunner,
+        build_client_runtime: impl FnOnce(
+            StartupService,
+            SessionService,
+            ConversationService,
+            PlanningServices,
+            ParallelModeTurnService,
+        ) -> NativeClientRuntime,
     ) -> Self {
         let GithubReviewPollingBootstrap {
             state: github_review_polling_state,
@@ -1625,17 +1642,13 @@ impl NativeTuiApp {
             parallel_mode_control_plane,
             runtime_channels,
         } = parallel_mode_binding;
-        let (core_input_sender, core_input_receiver) = core_input_channel();
-        let core_effect_runner = configure_effect_runner(CoreEffectRunner::new(
+        let client_runtime = build_client_runtime(
             startup_service.clone(),
             session_service.clone(),
             conversation_service.clone(),
             planning_feature.clone(),
             parallel_turns.clone(),
-            PostTurnEvaluationService::new(planning_feature.clone(), parallel_turns.clone()),
-            core_input_sender,
-        ));
-        let core_runtime = CoreRuntime::new(core_effect_runner, core_input_receiver);
+        );
         let turn_control_truth = conversation_service.runtime_control_truth();
 
         // The first draft is tied to the process working directory so startup can
@@ -1689,7 +1702,7 @@ impl NativeTuiApp {
             planning_workspace_operation_ui_state:
                 super::PlanningWorkspaceOperationUiState::default(),
             planning_draft_editor_ui_state: super::PlanningDraftEditorUiState::default(),
-            core_runtime,
+            client_runtime,
             turn_control_truth,
             turn_options: Default::default(),
             conversation_view_mode: super::ConversationViewMode::default(),
@@ -1778,7 +1791,7 @@ impl NativeTuiApp {
     pub(super) fn poll_core_runtime_inputs(&mut self, max_inputs: usize) -> bool {
         let mut changed = false;
         for _ in 0..max_inputs {
-            let Some(outcome) = self.core_runtime.poll_pending_input() else {
+            let Some(outcome) = self.client_runtime.poll_pending_client_event() else {
                 break;
             };
             changed = true;
@@ -2179,13 +2192,8 @@ impl NativeTuiApp {
         self.apply_core_conversation_snapshot(snapshot);
     }
 
-    pub(super) fn dispatch_core_command(&mut self, command: AppCommand) {
-        let outcome = self.core_runtime.dispatch_command(command);
-        self.apply_core_dispatch_outcome(outcome);
-    }
-
-    pub(super) fn dispatch_core_input(&mut self, input: CoreInput) {
-        let outcome = self.core_runtime.dispatch_input(input);
+    pub(super) fn dispatch_client_event(&mut self, input: CoreInput) {
+        let outcome = self.client_runtime.dispatch_client_event(input);
         self.apply_core_dispatch_outcome(outcome);
     }
 
@@ -2245,9 +2253,9 @@ impl NativeTuiApp {
     fn execute_shell_chrome_effect(&mut self, effect: ShellChromeEffect) {
         match effect {
             ShellChromeEffect::RunStartupChecks => {
-                self.dispatch_core_command(AppCommand::RunStartupChecks {
+                self.dispatch_client_event(CoreInput::Command(AppCommand::RunStartupChecks {
                     workspace_directory: self.planning_workspace_directory(),
-                });
+                }));
             }
             ShellChromeEffect::LoadSessionCatalog {
                 limit,
@@ -2257,10 +2265,10 @@ impl NativeTuiApp {
                 // workspace unless the reducer explicitly supplied another root.
                 let workspace_directory = current_workspace_directory
                     .unwrap_or_else(|| self.current_workspace_directory());
-                self.dispatch_core_command(AppCommand::LoadSessionCatalog {
+                self.dispatch_client_event(CoreInput::Command(AppCommand::LoadSessionCatalog {
                     limit,
                     workspace_directory,
-                });
+                }));
             }
         }
     }
@@ -2334,7 +2342,7 @@ impl NativeTuiApp {
             self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
         }
         if matches!(&event, ConversationLifecycleEvent::NewDraftOpened { .. }) {
-            self.dispatch_core_command(AppCommand::InvalidateConversationLoad);
+            self.dispatch_client_event(CoreInput::Command(AppCommand::InvalidateConversationLoad));
         }
         let reduction =
             reduce_conversation_lifecycle(self.take_conversation_lifecycle_state(), event);
@@ -2395,10 +2403,10 @@ impl NativeTuiApp {
                 thread_id,
                 fallback_workspace_directory,
             } => {
-                self.dispatch_core_command(AppCommand::LoadConversation {
+                self.dispatch_client_event(CoreInput::Command(AppCommand::LoadConversation {
                     thread_id,
                     fallback_workspace_directory,
-                });
+                }));
             }
         }
     }

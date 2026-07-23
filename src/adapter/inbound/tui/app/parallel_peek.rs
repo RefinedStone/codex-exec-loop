@@ -1,4 +1,6 @@
-use crate::core::app::{AppCommand, ConversationReadySnapshot, ParallelPeekLoadCorrelation};
+use crate::core::app::{
+    AppCommand, ConversationReadySnapshot, CoreInput, ParallelPeekLoadCorrelation,
+};
 use crate::domain::parallel_mode::ParallelModeAgentRosterEntry;
 
 use super::parallel_peek_overlay_ui::ParallelPeekConversationPreview;
@@ -160,7 +162,9 @@ impl NativeTuiApp {
         );
         if let Some(thread_id) = thread_id {
             self.parallel_peek_overlay_ui_state.open_preview(preview);
-            self.dispatch_core_command(AppCommand::LoadParallelPeekConversation { thread_id });
+            self.dispatch_client_event(CoreInput::Command(
+                AppCommand::LoadParallelPeekConversation { thread_id },
+            ));
         } else {
             self.parallel_peek_overlay_ui_state.open_preview(preview);
         }

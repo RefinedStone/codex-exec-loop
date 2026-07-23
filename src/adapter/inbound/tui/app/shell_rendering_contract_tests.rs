@@ -1152,7 +1152,10 @@ fn ready_reviews_identity_drift_reloads_latest_context_during_runtime_poll() {
     complete_reviews_overlay_load(&mut runtime);
     assert_eq!(repository.load_counts(), (0, 1, 1));
 
-    let correlation = runtime.app_mut().core_runtime.begin_test_turn_submission();
+    let correlation = runtime
+        .app_mut()
+        .client_runtime
+        .begin_test_turn_submission();
     runtime
         .app()
         .tx

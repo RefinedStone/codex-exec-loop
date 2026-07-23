@@ -1,7 +1,8 @@
 use super::NativeTuiApp;
 use crate::core::app::{
-    AppCommand, AppEvent, GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation,
-    GithubReviewPollingSetupMode, GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
+    AppCommand, AppEvent, CoreInput, GithubReviewPollCorrelation,
+    GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
+    GithubReviewPollingSetupRequest, GithubReviewPollingSetupResult,
 };
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
@@ -449,8 +450,10 @@ impl NativeTuiApp {
             return false;
         };
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::SetupGithubReviewPolling(request));
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::SetupGithubReviewPolling(
+                request,
+            )));
         let started = outcome
             .events
             .iter()
@@ -482,8 +485,8 @@ impl NativeTuiApp {
             return false;
         }
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::PollGithubReview);
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::PollGithubReview));
         let started = outcome
             .events
             .iter()

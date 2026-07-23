@@ -177,14 +177,14 @@ impl ShellRuntime {
                 #[cfg(test)]
                 BackgroundMessage::ConversationStream { correlation, event } => {
                     self.app
-                        .dispatch_core_input(CoreInput::ConversationStreamUpdated {
+                        .dispatch_client_event(CoreInput::ConversationStreamUpdated {
                             correlation,
                             event: core_turn_stream_event_from_application(event),
                         });
                 }
                 BackgroundMessage::ConversationRuntimeNotice(notice) => {
                     self.app
-                        .dispatch_core_input(CoreInput::ConversationRuntimeNotice(notice));
+                        .dispatch_client_event(CoreInput::ConversationRuntimeNotice(notice));
                 }
                 BackgroundMessage::OperatorAlert(alert) => {
                     self.emit_operator_alert(&alert);
@@ -201,7 +201,7 @@ impl ShellRuntime {
                     correlation,
                     execution,
                 } => {
-                    self.app.dispatch_core_input(CoreInput::EffectCompleted(
+                    self.app.dispatch_client_event(CoreInput::EffectCompleted(
                         CoreEffectCompletion::PostTurnEvaluationCompleted {
                             correlation,
                             execution,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::app::{
-    AppCommand, AppEvent, ApprovalDecisionAdmission, StopRequestAdmission, StopRequestAttempt,
-    StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
+    AppCommand, AppEvent, ApprovalDecisionAdmission, CoreInput, StopRequestAdmission,
+    StopRequestAttempt, StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation,
 };
 // Startup diagnostics gate user actions differently from rendering. The
 // controller keeps the three user-facing states here so prompt submission,
@@ -92,11 +92,11 @@ impl NativeTuiApp {
         }
         let context = self.current_reviews_overlay_context();
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::LoadReviewCenter {
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::LoadReviewCenter {
                 workspace_directory: context.workspace_directory,
                 active_thread_id: context.active_thread.map(|thread| thread.thread_id),
-            });
+            }));
         let correlation = outcome.events.iter().find_map(|event| match event {
             AppEvent::ReviewCenterLoadStarted { correlation } => Some(correlation.clone()),
             _ => None,
@@ -384,7 +384,7 @@ impl NativeTuiApp {
         // Stop is both a local mode transition and an app-server control request:
         // disable future automation immediately, then let Core correlate the
         // global runtime signal with the active turn generation.
-        self.dispatch_core_command(AppCommand::RequestStopAllSessions);
+        self.dispatch_client_event(CoreInput::Command(AppCommand::RequestStopAllSessions));
     }
     pub(super) fn apply_stop_request_admission(&mut self, admission: StopRequestAdmission) {
         let status_text = match admission {
@@ -653,8 +653,8 @@ impl NativeTuiApp {
 
         let request = intent.request.clone();
         let outcome = self
-            .core_runtime
-            .dispatch_command(AppCommand::SteerTurn(request));
+            .client_runtime
+            .dispatch_client_event(CoreInput::Command(AppCommand::SteerTurn(request)));
         let admission = outcome.events.iter().find_map(|event| match event {
             AppEvent::TurnSteerAdmissionResolved(admission) => Some(*admission),
             _ => None,
@@ -1008,11 +1008,11 @@ impl NativeTuiApp {
         };
         if let Some(approval_id) = approval_id {
             let outcome = self
-                .core_runtime
-                .dispatch_command(AppCommand::SubmitApprovalDecision {
+                .client_runtime
+                .dispatch_client_event(CoreInput::Command(AppCommand::SubmitApprovalDecision {
                     approval_id: approval_id.clone(),
                     decision,
-                });
+                }));
             let admitted = outcome.events.iter().any(|event| {
                 matches!(
                     event,
@@ -1251,8 +1251,8 @@ mod tests {
         app: &mut NativeTuiApp,
         request: ConversationApprovalRequest,
     ) -> crate::core::app::TurnSubmissionCorrelation {
-        let turn_submission = app.core_runtime.begin_test_turn_submission();
-        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::ThreadPrepared {
                 thread_id: "thread-approval".to_string(),
@@ -1261,14 +1261,14 @@ mod tests {
                 runtime_envelope: Box::default(),
             },
         });
-        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+        app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::TurnStarted {
                 turn_id: "turn-approval".to_string(),
                 runtime_request: Box::default(),
             },
         });
-        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+        app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::ApprovalRequested { request },
         });
@@ -1572,7 +1572,7 @@ mod tests {
     ) -> (QueueMutationCorrelation, QueueMutationResult) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if let Some(outcome) = app.core_runtime.poll_pending_input() {
+            if let Some(outcome) = app.client_runtime.poll_pending_client_event() {
                 for event in outcome.events {
                     match event {
                         AppEvent::QueueMutationCompleted {
@@ -2136,8 +2136,8 @@ mod tests {
         );
 
         let mut app = test_native_tui_app();
-        let turn_submission = app.core_runtime.begin_test_turn_submission();
-        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::TurnStarted {
                 turn_id: "turn-1".to_string(),
@@ -2157,12 +2157,12 @@ mod tests {
     #[test]
     fn ctrl_c_interrupts_a_running_turn_once_and_keeps_idle_navigation_semantics() {
         let mut app = test_native_tui_app();
-        let turn_submission = app.core_runtime.begin_test_turn_submission();
+        let turn_submission = app.client_runtime.begin_test_turn_submission();
         ready_conversation_mut(&mut app).mark_turn_submitting("/tmp/root".to_string());
 
         app.handle_ctrl_c();
         assert!(status_text(&app).contains("stop requested"));
-        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+        app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::TurnStarted {
                 turn_id: "turn-ctrl-c".to_string(),
@@ -2175,7 +2175,7 @@ mod tests {
         app.handle_ctrl_c();
         assert!(status_text(&app).contains("stop already requested"));
 
-        let _ = app.core_runtime.dispatch_input(
+        let _ = app.client_runtime.dispatch_client_event(
             crate::core::app::CoreInput::ConversationStreamUpdated {
                 correlation: turn_submission,
                 event: crate::core::app::TurnStreamEvent::Failed {
@@ -3209,7 +3209,7 @@ mod tests {
 
         assert_eq!(app.pending_queue_mutation_operation_id(), None);
         assert_eq!(repository.mutation_count(), 1);
-        assert!(app.core_runtime.poll_pending_input().is_none());
+        assert!(app.client_runtime.poll_pending_client_event().is_none());
         assert_eq!(
             app.planning_runtime_projection_snapshot()
                 .planning_revision(),
@@ -4074,8 +4074,8 @@ mod tests {
     #[test]
     fn confirmed_steer_runs_through_core_and_preserves_the_draft_on_worker_failure() {
         let mut app = test_native_tui_app();
-        let turn_submission = app.core_runtime.begin_test_turn_submission();
-        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+        let turn_submission = app.client_runtime.begin_test_turn_submission();
+        app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::ThreadPrepared {
                 thread_id: "thread-steer".to_string(),
@@ -4084,7 +4084,7 @@ mod tests {
                 runtime_envelope: Box::default(),
             },
         });
-        app.dispatch_core_input(crate::core::app::CoreInput::ConversationStreamUpdated {
+        app.dispatch_client_event(crate::core::app::CoreInput::ConversationStreamUpdated {
             correlation: turn_submission,
             event: crate::core::app::TurnStreamEvent::TurnStarted {
                 turn_id: "turn-steer".to_string(),
