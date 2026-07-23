@@ -21,11 +21,9 @@ use crate::domain::planning::{
     ManualPromptCorrelation, PlanningWorkerPanelState, PostTurnContinuationGate,
 };
 use crossterm::event::{self, KeyCode, KeyModifiers};
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Clear;
 use std::sync::mpsc::{Receiver, SyncSender};
 
 /*
@@ -85,6 +83,8 @@ mod directions_maintenance_ui;
 mod github_polling;
 #[path = "app/history_insertion.rs"]
 mod history_insertion;
+#[path = "app/inline_frame_model.rs"]
+mod inline_frame_model;
 #[path = "app/inline_shell_commands.rs"]
 mod inline_shell_commands;
 #[path = "app/inline_terminal_adapter.rs"]

@@ -538,7 +538,9 @@ impl<'a> ConversationScreenModel<'a> {
                 QueueMutationTailState::Pending(operation_id)
             } else if app.queue_mutation_requires_authority_refresh() {
                 QueueMutationTailState::RefreshRequired
-            } else if let Some(task_count) = app.queue_receipt_undo_task_count() {
+            } else if let Some(task_count) =
+                app.queue_receipt_undo_task_count_for_parallel_mode(parallel_mode_enabled)
+            {
                 QueueMutationTailState::UndoAvailable(task_count)
             } else {
                 QueueMutationTailState::Idle

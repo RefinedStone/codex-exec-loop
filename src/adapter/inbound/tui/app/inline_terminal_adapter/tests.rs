@@ -38,7 +38,7 @@ use crate::domain::session_summary::SessionSummary;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
-use ratatui::layout::{Position, Size};
+use ratatui::layout::{Position, Rect, Size};
 use ratatui::{Terminal, Viewport};
 use std::cell::Cell as StdCell;
 use std::collections::VecDeque;
@@ -1176,6 +1176,10 @@ fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
     );
     let mut runtime = ShellRuntime::new(app);
     let mut inline_terminal = InlineTerminalState::default();
+    runtime
+        .app_mut()
+        .queue_overlay_ui_state
+        .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
     terminal.backend_mut().inner_mut().fail_next_draw();
 
     assert!(
@@ -1187,6 +1191,13 @@ fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
     assert!(!inline_terminal.back_buffer_trustworthy());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
+    assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
+    assert_eq!(
+        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        None,
+        "a failed draw must fail closed instead of retaining clickable geometry"
+    );
 
     assert!(
         draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
@@ -1196,6 +1207,204 @@ fn failed_terminal_draw_keeps_handoff_pending_and_forces_retry() {
         panic!("test app should retain its ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 2);
+    assert_eq!(
+        inline_terminal.last_committed_frame_render_attempt(),
+        Some(2),
+        "the stable retry must commit only its own render receipt"
+    );
+}
+
+#[test]
+fn failed_terminal_flush_discards_render_receipt_and_stable_retry_commits_once() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::ViewportReplay, 80, 24);
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::ViewportReplay,
+        false,
+        ShellOverlay::Hidden,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+    runtime
+        .app_mut()
+        .queue_overlay_ui_state
+        .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
+    terminal.backend_mut().inner_mut().fail_next_flush();
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal).is_err(),
+        "an injected terminal flush error must escape the transaction"
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("test app should retain its ready conversation");
+    };
+    assert!(conversation.has_pending_viewport_transcript_handoff());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
+    assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
+    assert_eq!(
+        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        None,
+        "a failed flush cannot authorize a hit target from an unproven frame"
+    );
+    assert!(!inline_terminal.back_buffer_trustworthy());
+
+    assert!(
+        draw_inline_transaction(&mut terminal, &mut runtime, &mut inline_terminal)
+            .expect("the unchanged frame should redraw after the transient flush failure")
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("stable retry should retain its ready conversation");
+    };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 2);
+    assert_eq!(
+        inline_terminal.last_committed_frame_render_attempt(),
+        Some(2)
+    );
+}
+
+#[test]
+fn frame_attempt_gate_rejects_stale_and_duplicate_receipts() {
+    let mut app = make_test_app();
+    app.shell_overlay = ShellOverlay::Help;
+    app.help_scroll_offset = usize::MAX;
+    let area = Rect::new(0, 0, 80, 24);
+    let capture_receipt = |app: &NativeTuiApp| {
+        let projection = frame_projection(app, area.width);
+        let model = super::capture_inline_shell_frame_model(
+            app,
+            super::ShellFrontendMode::InlineMainBuffer,
+            area,
+            projection,
+        );
+        let (_, _, receipt) = model.into_parts();
+        receipt
+    };
+    let mut inline_terminal = InlineTerminalState::default();
+
+    let receipt_a = capture_receipt(&app);
+    let attempt_a = inline_terminal.begin_frame_render_attempt();
+    let receipt_b = capture_receipt(&app);
+    let duplicate_receipt_b = capture_receipt(&app);
+    let attempt_b = inline_terminal.begin_frame_render_attempt();
+    let initial_help_scroll = app.help_scroll_offset;
+
+    assert!(!inline_terminal.commit_frame_render_receipt(
+        &mut app,
+        super::PendingInlineFrameRenderReceipt {
+            attempt: attempt_a,
+            receipt: receipt_a,
+        },
+    ));
+    assert_eq!(app.help_scroll_offset, initial_help_scroll);
+    assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
+
+    assert!(inline_terminal.commit_frame_render_receipt(
+        &mut app,
+        super::PendingInlineFrameRenderReceipt {
+            attempt: attempt_b,
+            receipt: receipt_b,
+        },
+    ));
+    let committed_help_scroll = app.help_scroll_offset;
+    assert!(committed_help_scroll < initial_help_scroll);
+    assert_eq!(
+        inline_terminal.last_committed_frame_render_attempt(),
+        Some(2)
+    );
+
+    assert!(!inline_terminal.commit_frame_render_receipt(
+        &mut app,
+        super::PendingInlineFrameRenderReceipt {
+            attempt: attempt_b,
+            receipt: duplicate_receipt_b,
+        },
+    ));
+    assert_eq!(app.help_scroll_offset, committed_help_scroll);
+    assert_eq!(
+        inline_terminal.last_committed_frame_render_attempt(),
+        Some(2)
+    );
+}
+
+#[test]
+fn post_draw_size_failure_discards_render_receipt_and_hit_target() {
+    let mut terminal =
+        tui_testkit::inline_history_vt100_terminal(InlineHistoryRenderMode::ViewportReplay, 80, 24);
+    let app = released_handoff_app(
+        InlineHistoryRenderMode::ViewportReplay,
+        false,
+        ShellOverlay::Hidden,
+    );
+    let mut runtime = ShellRuntime::new(app);
+    let mut inline_terminal = InlineTerminalState::default();
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    let width = terminal.size().expect("terminal size").width;
+    let projection = frame_projection(runtime.app(), width);
+    let resize_snapshot = terminal
+        .backend()
+        .resize_snapshot()
+        .expect("stable pre-draw resize snapshot");
+    runtime
+        .app_mut()
+        .queue_overlay_ui_state
+        .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
+    let draw_calls_before = terminal.backend().inner().draw_call_count();
+    // Arm the first size proof after backend draw. Terminal::draw must finish
+    // its cell write and flush before the adapter can accept the receipt.
+    terminal
+        .backend_mut()
+        .inner_mut()
+        .fail_size_after_next_draw();
+
+    assert!(
+        draw_inline_frame(
+            &mut terminal,
+            &mut runtime,
+            &mut inline_terminal,
+            projection,
+            false,
+            resize_snapshot,
+        )
+        .is_err(),
+        "a post-draw size error must escape without applying its receipt"
+    );
+    assert_eq!(
+        terminal.backend().inner().draw_call_count(),
+        draw_calls_before + 1,
+        "the injected size error must happen after backend draw"
+    );
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("test app should retain its ready conversation");
+    };
+    assert!(conversation.has_pending_viewport_transcript_handoff());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
+    assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
+    assert_eq!(
+        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        None,
+        "a failed post-draw geometry proof must clear clickable geometry"
+    );
+    assert!(!inline_terminal.back_buffer_trustworthy());
+
+    assert!(sync_inline_viewport(&mut terminal, &mut runtime, &mut inline_terminal).unwrap());
+    assert!(draw_test_frame(
+        &mut terminal,
+        &mut runtime,
+        &mut inline_terminal
+    ));
+    let ConversationState::Ready(conversation) = &runtime.app().conversation_state else {
+        panic!("stable retry should retain its ready conversation");
+    };
+    assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 2);
+    assert_eq!(
+        inline_terminal.last_committed_frame_render_attempt(),
+        Some(2),
+        "the stable retry must be the first committed receipt"
+    );
 }
 
 #[test]
@@ -2123,6 +2332,10 @@ fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
         .backend_mut()
         .inner_mut()
         .report_resize_then_restore(2, Size::new(48, 10), 3, Size::new(80, 40));
+    runtime
+        .app_mut()
+        .queue_overlay_ui_state
+        .bind_receipt_undo_hit_area(Some(Rect::new(4, 7, 14, 1)));
 
     assert!(
         !draw_inline_frame(
@@ -2147,6 +2360,13 @@ fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
     };
     assert!(conversation.has_pending_viewport_transcript_handoff());
     assert!(!inline_terminal.back_buffer_trustworthy());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 1);
+    assert_eq!(inline_terminal.last_committed_frame_render_attempt(), None);
+    assert_eq!(
+        runtime.app().queue_overlay_ui_state.receipt_undo_hit_area(),
+        None,
+        "a same-size resize ABA must discard stale interaction geometry"
+    );
     assert_resize_retry_scheduled(
         &mut runtime,
         "same-size ABA geometry must schedule a stable rebuild",
@@ -2162,6 +2382,12 @@ fn draw_time_resize_aba_keeps_handoff_pending_until_stable_retry() {
         panic!("stable retry should keep a ready conversation");
     };
     assert!(!conversation.has_pending_viewport_transcript_handoff());
+    assert_eq!(inline_terminal.latest_frame_render_attempt(), 2);
+    assert_eq!(
+        inline_terminal.last_committed_frame_render_attempt(),
+        Some(2),
+        "only the stable retry may commit its render receipt"
+    );
     let screen = tui_testkit::buffer_text(terminal.backend().inner().inner.buffer());
     assert_eq!(screen.matches(FINAL_MARKER).count(), 1, "{screen}");
 }

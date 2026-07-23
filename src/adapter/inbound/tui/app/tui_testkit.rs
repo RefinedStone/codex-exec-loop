@@ -12,6 +12,7 @@ use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, Window
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, Write};
@@ -551,6 +552,9 @@ pub(super) struct Vt100Backend {
     height: u16,
     draw_call_count: usize,
     fail_next_draw: bool,
+    fail_next_flush: bool,
+    fail_size_after_next_draw: bool,
+    fail_next_size: Cell<bool>,
 }
 
 impl Vt100Backend {
@@ -568,6 +572,9 @@ impl Vt100Backend {
             height,
             draw_call_count: 0,
             fail_next_draw: false,
+            fail_next_flush: false,
+            fail_size_after_next_draw: false,
+            fail_next_size: Cell::new(false),
         }
     }
     pub(super) fn resize(&mut self, width: u16, height: u16) {
@@ -625,6 +632,12 @@ impl Vt100Backend {
     pub(super) fn fail_next_draw(&mut self) {
         self.fail_next_draw = true;
     }
+    pub(super) fn fail_next_flush(&mut self) {
+        self.fail_next_flush = true;
+    }
+    pub(super) fn fail_size_after_next_draw(&mut self) {
+        self.fail_size_after_next_draw = true;
+    }
     pub(super) fn parser_cursor_position(&self) -> Position {
         let (row, column) = self.parser().screen().cursor_position();
         Position::new(column, row)
@@ -659,7 +672,11 @@ impl Backend for Vt100Backend {
         if std::mem::take(&mut self.fail_next_draw) {
             return Err(io::Error::other("injected terminal draw failure"));
         }
-        self.backend.draw(content)
+        let result = self.backend.draw(content);
+        if result.is_ok() && std::mem::take(&mut self.fail_size_after_next_draw) {
+            self.fail_next_size.set(true);
+        }
+        result
     }
     fn hide_cursor(&mut self) -> io::Result<()> {
         self.backend.hide_cursor()
@@ -683,6 +700,9 @@ impl Backend for Vt100Backend {
         self.backend.append_lines(line_count)
     }
     fn size(&self) -> io::Result<Size> {
+        if self.fail_next_size.replace(false) {
+            return Err(io::Error::other("injected terminal size failure"));
+        }
         Ok(Size::new(self.width, self.height))
     }
     fn window_size(&mut self) -> io::Result<WindowSize> {
@@ -692,6 +712,9 @@ impl Backend for Vt100Backend {
         })
     }
     fn flush(&mut self) -> io::Result<()> {
+        if std::mem::take(&mut self.fail_next_flush) {
+            return Err(io::Error::other("injected terminal flush failure"));
+        }
         self.backend.writer_mut().flush()
     }
     fn scroll_region_up(

@@ -4,18 +4,38 @@ use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot,
 };
 use crate::domain::parallel_mode::ParallelModeAgentRosterEntry;
+use crate::domain::parallel_mode::ParallelModeSupervisorSnapshot;
 
-use super::super::super::super::parallel_peek_overlay_ui::ParallelPeekConversationPreview;
-use super::super::super::super::{AkraTheme, NativeTuiApp, ParallelPeekOverlayStep};
+#[cfg(test)]
+use super::super::super::super::NativeTuiApp;
+use super::super::super::super::parallel_peek_overlay_ui::{
+    ParallelPeekConversationPreview, ParallelPeekOverlayUiState,
+};
+use super::super::super::super::{AkraTheme, ParallelPeekOverlayStep};
 use super::ParallelPeekOverlayView;
 
+#[cfg(test)]
 pub(crate) fn build_parallel_peek_overlay_view(app: &NativeTuiApp) -> ParallelPeekOverlayView {
-    let active_agents = app.active_parallel_peek_entries();
-    let selected_index = app
-        .parallel_peek_overlay_ui_state
-        .selected_agent_index(&active_agents);
-    let step = app.parallel_peek_overlay_ui_state.step();
-    let preview = app.parallel_peek_overlay_ui_state.preview();
+    build_parallel_peek_overlay_view_from_snapshot(
+        &app.parallel_mode_supervisor_snapshot(),
+        &app.parallel_peek_overlay_ui_state,
+    )
+}
+
+pub(crate) fn build_parallel_peek_overlay_view_from_snapshot(
+    supervisor: &ParallelModeSupervisorSnapshot,
+    ui_state: &ParallelPeekOverlayUiState,
+) -> ParallelPeekOverlayView {
+    let active_agents = supervisor
+        .roster
+        .entries
+        .iter()
+        .filter(|entry| entry.counts_as_active())
+        .cloned()
+        .collect::<Vec<_>>();
+    let selected_index = ui_state.selected_agent_index(&active_agents);
+    let step = ui_state.step();
+    let preview = ui_state.preview();
 
     let header_lines = build_header_lines(step, active_agents.len(), preview);
     let agent_lines = build_agent_lines(&active_agents, selected_index);

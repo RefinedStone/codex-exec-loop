@@ -18,8 +18,9 @@ the fixed Akra theme.
 | State and reducers | User intent, mode transitions, selected indices, editing state | `shell_chrome.rs`, `conversation_*`, `*_ui_state.rs`, planning state modules | Ratatui widgets, operator-facing visual hierarchy, raw styles |
 | Controllers and effects | Service calls, command dispatch, runtime side effects | `shell_controller.rs`, `queue_overlay_controller.rs`, `app_runtime.rs`, planning controllers | Status copy, panel titles, layout dimensions |
 | Projection and copy | View models, `Line` content, labels, status wording, key footer text | `shell_presentation.rs`, `shell_presentation/**`, `planning/presentation.rs` | `Frame`, `Layout`, terminal side effects, raw color decisions |
+| Frame capture and delivery receipt | One owned `InlineShellFrameModel`, active `InlineInspectionFrameModel`, and compare-and-apply render feedback | `inline_frame_model.rs`, `inline_terminal_adapter.rs` | Service calls, provider I/O, draw-time authority reads, optimistic state mutation |
 | Theme and chrome | Semantic styles, Akra brand tokens, panel frame helpers, selection markers | `theme.rs` | Feature state, controller behavior, surface-specific wording |
-| Rendering and layout | `Rect`, `Layout`, `Frame`, `Paragraph`, `List`, popup and inline section placement | `shell_rendering/**`, `inline_layout.rs`, `popup_frame.rs`, `popup_helpers.rs` | New keybinding claims, new product copy, raw color or border policy |
+| Rendering and layout | Owned frame models, `Rect`, `Layout`, `Frame`, `Paragraph`, `List`, popup and inline section placement | `shell_rendering/**`, `inline_layout.rs`, `popup_frame.rs`, `popup_helpers.rs` | `NativeTuiApp`, Core/application/control-plane authority, state mutation, new keybinding claims, product copy, raw color or border policy |
 | Terminal adapters | Crossterm/Ratatui lifecycle, scrollback, viewport replay, host terminal side effects | `ratatui_frontend.rs`, `inline_terminal_adapter.rs`, `history_insertion.rs` | Planning semantics, Akra copy, overlay policy |
 | Tests and captures | Rendering contracts, snapshot deltas, terminal validation evidence | `shell_rendering_tests.rs`, `shell_rendering_contract_tests.rs`, `snapshots/**`, `scripts/capture_native_validation.*` | Unreviewed visual contract drift |
 
@@ -77,14 +78,26 @@ the fixed Akra theme.
   trusted. The next transaction must repaint the unchanged semantic frame before it can emit an ACK.
 - Supersession is covered by that consistency guarantee: the sample owns one control-plane
   presentation projection, one event-stream projection, and the narrow owned Core projection,
-  while row planning and drawing consume the same owned overlay view. Other overlay-specific
-  documents remain separate projection boundaries until they receive an owned screen model.
-  High-frequency prompt, pulse, and scheduler checks share a panel-only sample so they do not clone
-  transcript or event-stream rows.
+  while row planning and drawing consume the same owned overlay view. High-frequency prompt,
+  pulse, and scheduler checks share a panel-only sample so they do not clone transcript or
+  event-stream rows.
 - One `ConversationScreenModel` derived from that sample must own the local UI facts for a frame.
   Tail copy, live transcript copy, cursor layout, and frame-cache comparison consume that same
   immutable projection; presentation helpers must not reread `NativeTuiApp`, call services, or
   sample their own clocks.
+- Before `Terminal::draw`, the terminal transaction must materialize one owned
+  `InlineShellFrameModel`. Its `InlineInspectionFrameModel` variant owns every active overlay's
+  view, local widget state, geometry-dependent scroll decision, and expected feedback baseline.
+  Frame capture may sample UI-local state but must not reacquire Core, application services, the
+  parallel control plane, or provider I/O.
+- Production `shell_rendering.rs` and `shell_rendering/**` functions consume that owned model.
+  They may mutate only Ratatui's `Frame`; they must not accept or reread `NativeTuiApp`, dispatch
+  commands, access services or clocks, or retain mutable adapter state. The pure draw returns one
+  `InlineFrameRenderReceipt` instead.
+- The terminal transaction may apply that receipt only after draw, cursor and terminal-size reads,
+  and the post-draw resize snapshot all succeed. An exact render-attempt gate rejects failed,
+  resize-raced, stale, and duplicate receipts; applying a receipt uses compare-and-apply baselines
+  so a newer UI edit cannot be overwritten by an older frame.
 - Prompt focus has one policy shared by input and presentation. Exit and turn-steer dialogs remove
   prompt focus and hide the terminal cursor; closing either dialog restores the unchanged draft and
   its exact cursor position. Supersession may retain prompt focus only while its loading lock is
@@ -167,13 +180,14 @@ the fixed Akra theme.
 - Review Center projection and rendering must read only that screen model; displaying its loading
   state, resizing, or repeatedly redrawing it must not perform service, repository, filesystem, or
   database I/O.
-- One session-overlay draw must capture an owned `SessionOverlayScreenModel` containing catalog
+- One pre-draw frame capture must create an owned `SessionOverlayScreenModel` containing catalog
   status, workspace context, committed and edited query state, filter/page projection, stable
   selected thread identity, page-local selected index, rename state, and warning/key availability.
-  Filtering, paging, and selection repair run exactly once while capturing that model; presentation
-  helpers must not reread `NativeTuiApp` or call services.
+  Filtering, paging, and selection repair run exactly once while capturing that model;
+  presentation helpers and renderers must not reread `NativeTuiApp` or call services.
 - Session list rows, selected detail, warnings, and key copy must be built from that same model.
-  Rendering must finish the owned `SessionOverlayView` before synchronizing Ratatui `ListState`, and
+  Capture must finish the owned `SessionOverlayView` and a frame-local Ratatui `ListState` before
+  drawing. Only the stable `InlineFrameRenderReceipt` may compare-and-apply that list state, and
   resize or repeated redraw must not trigger session-catalog I/O.
 - Core owns session-catalog admission and correlation. Overlay open/startup sends ensure-loaded
   intent and explicit reload sends refresh intent; the adapter must not prewrite `Loading`, inspect

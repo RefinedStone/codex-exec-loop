@@ -470,13 +470,29 @@ animation, and drawing consume that immutable projection instead of reacquiring 
 mutex or sampling another clock. High-frequency prompt, pulse, and scheduler checks share a
 panel-only projection and do not clone transcript or event-stream rows.
 
-Each session-overlay draw captures one owned `SessionOverlayScreenModel` before presentation. The
-model combines the Core-published catalog projection with workspace, committed and edited query,
-project filter, one page projection, stable selected thread identity, page-local selected index,
-rename editor state, warnings, and key availability. Page projection and selection repair run
-once; list/detail/warning/key builders cannot reread `NativeTuiApp` or services. Rendering builds
-the owned overlay view before it mutates Ratatui `ListState`, so repeated redraw and resize do not
-dispatch catalog work or call services.
+Before `Terminal::draw`, the transaction combines the conversation projection and exactly one
+active overlay into an owned `InlineShellFrameModel`. Its `InlineInspectionFrameModel` variant owns
+the view, widget-local state, geometry-dependent scroll decisions, and expected feedback baseline.
+The capture boundary may read UI-local state but cannot reacquire Core, application services, the
+parallel control plane, or outbound I/O. Production `shell_rendering.rs` and
+`shell_rendering/**` consume only this owned frame model, mutate only Ratatui's `Frame`, and return
+an `InlineFrameRenderReceipt`; they cannot receive `NativeTuiApp`, dispatch commands, sample
+clocks, or retain adapter state.
+
+The terminal transaction commits a render receipt only after the draw and post-draw terminal-size
+checks succeed. Its exact attempt gate discards failed, resize-raced, stale, and duplicate
+receipts. Receipt application compares the captured baseline before applying activity, editor,
+help, approval, session-list, or queue-hit-area feedback, so an older frame cannot overwrite a
+newer UI edit.
+
+Session frame capture creates one owned `SessionOverlayScreenModel` before presentation. The model
+combines the Core-published catalog projection with workspace, committed and edited query, project
+filter, one page projection, stable selected thread identity, page-local selected index, rename
+editor state, warnings, and key availability. Page projection and selection repair run once;
+list/detail/warning/key builders and renderers cannot reread `NativeTuiApp` or services. Capture
+builds the owned overlay view and frame-local Ratatui `ListState`; only a stable render receipt may
+compare-and-apply the resulting state. Repeated redraw and resize do not dispatch catalog work or
+call services.
 
 Core is the sole session-catalog admission and correlation authority. The adapter emits typed
 ensure-loaded or explicit-refresh intent without writing `Loading` or suppressing duplicates from

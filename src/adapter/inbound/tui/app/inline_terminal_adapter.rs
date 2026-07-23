@@ -13,8 +13,8 @@ use super::shell_presentation::{
     format_conversation_scrollback_lines_with_expand,
 };
 use super::shell_rendering::{
-    InlineConversationFrameProjection, draw_projected, inline_parallel_event_stream_visible_rows,
-    prepare_projected_render_state,
+    InlineConversationFrameProjection, InlineFrameRenderReceipt, apply_inline_frame_render_receipt,
+    capture_inline_shell_frame_model, draw_projected, inline_parallel_event_stream_visible_rows,
 };
 use super::shell_runtime::ShellRuntime;
 use super::{
@@ -70,6 +70,14 @@ enum InlineViewportSync {
 struct ParallelConversationHandoffProjection {
     lines: Vec<Line<'static>>,
     delivery_token: TranscriptHandoffDeliveryToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct FrameRenderAttempt(u64);
+
+struct PendingInlineFrameRenderReceipt {
+    attempt: FrameRenderAttempt,
+    receipt: InlineFrameRenderReceipt,
 }
 
 impl InlineTerminalSyncPolicy {
@@ -158,8 +166,19 @@ fn draw_inline_frame<B: InlineResizeBackend>(
          * scrollback insertion or resize may have shifted visible rows, clearing
          * before draw prevents stale glyphs from surviving under shorter frames.
          */
-        clear_inline_viewport(terminal)?;
+        if let Err(error) = clear_inline_viewport(terminal) {
+            fail_closed_frame_delivery(runtime, inline_terminal);
+            return Err(error);
+        }
     }
+
+    let frame_model = capture_inline_shell_frame_model(
+        runtime.app_mut(),
+        ShellFrontendMode::InlineMainBuffer,
+        current_viewport_area(terminal),
+        frame_projection,
+    );
+    let render_attempt = inline_terminal.begin_frame_render_attempt();
 
     // ratatui resize can append lines while drawing; suppressing backend append
     // noise keeps the host scrollback from gaining duplicate tail frames.
@@ -167,27 +186,18 @@ fn draw_inline_frame<B: InlineResizeBackend>(
         .backend_mut()
         .set_resize_append_lines_suppressed(true);
     let mut drawn_viewport_area = Rect::default();
-    let mut frame_projection = Some(frame_projection);
+    let mut frame_model = Some(frame_model);
+    let mut pending_render_receipt = None;
     let result = terminal
         .draw(|frame| {
-            let frame_area = frame.area();
-            drawn_viewport_area = frame_area;
-            let app = runtime.app_mut();
-            let frame_projection = frame_projection
+            drawn_viewport_area = frame.area();
+            let frame_model = frame_model
                 .take()
-                .expect("inline frame projection is consumed by one draw");
-            prepare_projected_render_state(
-                app,
-                ShellFrontendMode::InlineMainBuffer,
-                frame_area,
-                &frame_projection,
-            );
-            draw_projected(
-                frame,
-                app,
-                ShellFrontendMode::InlineMainBuffer,
-                frame_projection,
-            );
+                .expect("inline frame model is consumed by one draw");
+            pending_render_receipt = Some(PendingInlineFrameRenderReceipt {
+                attempt: render_attempt,
+                receipt: draw_projected(frame, ShellFrontendMode::InlineMainBuffer, frame_model),
+            });
         })
         .map(|completed_frame| completed_frame.area.as_size());
     terminal
@@ -199,17 +209,35 @@ fn draw_inline_frame<B: InlineResizeBackend>(
             // The frame signature was staged before terminal I/O. A failed
             // flush cannot prove any visible cell, so the next transaction
             // must redraw even when the semantic projection is unchanged.
-            inline_terminal.invalidate_back_buffer();
+            fail_closed_frame_delivery(runtime, inline_terminal);
             return Err(error);
         }
     };
-    let cursor_position = terminal.get_cursor_position()?;
-    let terminal_size = terminal.size()?;
+    let cursor_position = match terminal.get_cursor_position() {
+        Ok(cursor_position) => cursor_position,
+        Err(error) => {
+            fail_closed_frame_delivery(runtime, inline_terminal);
+            return Err(error);
+        }
+    };
+    let terminal_size = match terminal.size() {
+        Ok(terminal_size) => terminal_size,
+        Err(error) => {
+            fail_closed_frame_delivery(runtime, inline_terminal);
+            return Err(error);
+        }
+    };
+    let matches_resize_snapshot = match terminal.backend().matches_resize_snapshot(resize_snapshot)
+    {
+        Ok(matches_resize_snapshot) => matches_resize_snapshot,
+        Err(error) => {
+            fail_closed_frame_delivery(runtime, inline_terminal);
+            return Err(error);
+        }
+    };
     if inline_terminal.screen_size_changed(drawn_screen_size)
         || drawn_screen_size != terminal_size
-        || !terminal
-            .backend()
-            .matches_resize_snapshot(resize_snapshot)?
+        || !matches_resize_snapshot
     {
         /*
          * A resize can land after sync or after Ratatui flushes this frame. Keep the previous
@@ -217,6 +245,13 @@ fn draw_inline_frame<B: InlineResizeBackend>(
          * instead of treating it as an application-driven history fit.
          */
         defer_resize_redraw(runtime, inline_terminal);
+        return Ok(false);
+    }
+    let pending_render_receipt =
+        pending_render_receipt.expect("successful terminal draw must produce one render receipt");
+    if !inline_terminal.commit_frame_render_receipt(runtime.app_mut(), pending_render_receipt) {
+        fail_closed_frame_delivery(runtime, inline_terminal);
+        runtime.request_delivery_redraw();
         return Ok(false);
     }
     /*
@@ -619,8 +654,16 @@ fn parallel_conversation_handoff_projection(
 }
 
 fn defer_resize_redraw(runtime: &mut ShellRuntime, inline_terminal: &mut InlineTerminalState) {
-    inline_terminal.invalidate_back_buffer();
+    fail_closed_frame_delivery(runtime, inline_terminal);
     runtime.request_resize_redraw_retry();
+}
+
+fn fail_closed_frame_delivery(
+    runtime: &mut ShellRuntime,
+    inline_terminal: &mut InlineTerminalState,
+) {
+    inline_terminal.invalidate_back_buffer();
+    runtime.app_mut().clear_queue_receipt_undo_hit_area();
 }
 
 fn current_viewport_area<B: Backend>(terminal: &mut Terminal<B>) -> Rect {
@@ -752,9 +795,39 @@ pub(super) struct InlineTerminalState {
     history_flush: HistoryFlushState,
     frame_cache: FrameCacheState,
     last_conversation_history_identity_revision: u64,
+    latest_frame_render_attempt: u64,
+    last_committed_frame_render_attempt: Option<FrameRenderAttempt>,
 }
 
 impl InlineTerminalState {
+    fn begin_frame_render_attempt(&mut self) -> FrameRenderAttempt {
+        self.latest_frame_render_attempt = self
+            .latest_frame_render_attempt
+            .checked_add(1)
+            .expect("frame render attempt generation exhausted");
+        FrameRenderAttempt(self.latest_frame_render_attempt)
+    }
+
+    fn commit_frame_render_receipt(
+        &mut self,
+        app: &mut NativeTuiApp,
+        pending: PendingInlineFrameRenderReceipt,
+    ) -> bool {
+        let current_attempt = FrameRenderAttempt(self.latest_frame_render_attempt);
+        if pending.attempt != current_attempt
+            || self
+                .last_committed_frame_render_attempt
+                .is_some_and(|last_committed| pending.attempt <= last_committed)
+        {
+            return false;
+        }
+        if !apply_inline_frame_render_receipt(app, pending.receipt) {
+            return false;
+        }
+        self.last_committed_frame_render_attempt = Some(pending.attempt);
+        true
+    }
+
     fn observe_conversation_history_identity_revision(&mut self, revision: u64) {
         if self.last_conversation_history_identity_revision == revision {
             return;
@@ -854,6 +927,15 @@ impl InlineTerminalState {
     #[cfg(test)]
     fn insert_mode(&self) -> HistoryInsertionMode {
         self.viewport.insert_mode
+    }
+    #[cfg(test)]
+    fn latest_frame_render_attempt(&self) -> u64 {
+        self.latest_frame_render_attempt
+    }
+    #[cfg(test)]
+    fn last_committed_frame_render_attempt(&self) -> Option<u64> {
+        self.last_committed_frame_render_attempt
+            .map(|attempt| attempt.0)
     }
 }
 

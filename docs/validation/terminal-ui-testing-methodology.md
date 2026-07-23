@@ -50,9 +50,10 @@ The smaller-representative-set rule below can reduce the number of supplemental 
 
 | Surface | Keep owning | Candidate extraction / clarification |
 | --- | --- | --- |
-| `NativeTuiApp` | authoritative conversation/session/planning/runtime state, operator mode state, env-derived mode values | must not grow new terminal-primitive orchestration beyond current state/config ownership |
-| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, cursor-sensitive effects | may be named more explicitly only if Option B later activates |
-| Render/layout boundary | typed render surfaces, append-only stream continuity, titleless live-tail behavior, panel chrome exclusion from host scrollback | must stay distinct from terminal primitive emission and from application/core state authority |
+| `NativeTuiApp` | authoritative conversation/session/planning/runtime state, operator mode state, env-derived mode values | must not cross into production renderer inputs or be read inside `Terminal::draw` |
+| Thin terminal layer | terminal lifecycle, scrollback writes, viewport sync, clear/reset, pre-draw owned-frame capture, stable-delivery receipt commit, cursor-sensitive effects | may be named more explicitly only if Option B later activates |
+| Owned frame boundary | `InlineShellFrameModel`, active `InlineInspectionFrameModel`, expected feedback baselines, `InlineFrameRenderReceipt` compare-and-apply | must not reacquire Core/application/control-plane authority or perform provider I/O |
+| Render/layout boundary | pure consumption of owned frame models, typed render surfaces, append-only stream continuity, titleless live-tail behavior, panel chrome exclusion from host scrollback | may mutate only Ratatui `Frame`; must stay distinct from terminal primitive emission and application/core state authority |
 | Shared render transaction model | reconcile history delta, geometry state, back-buffer trust, redraw decision, terminal-side flush ordering | remains a conditional extraction candidate only when the Decision Record proves Round 6 trigger evidence |
 
 
@@ -73,6 +74,8 @@ Use for line builders, status copy, overlays, prompt composition, and transcript
 
 - no real terminal backend
 - deterministic input structs and rendered `Line` output
+- owned `InlineShellFrameModel`/`InlineInspectionFrameModel` fixtures with no live app handle
+- deterministic `InlineFrameRenderReceipt` output and compare-and-apply assertions for UI feedback
 - assertions for presence, absence, order, truncation, and visible key copy
 - snapshots only when layout density is the contract
 
@@ -137,6 +140,10 @@ Required cases:
 - frame invalidation forces a full repaint after terminal-side scrolling
 - a stale conversation identity or transcript-frontier receipt cannot clear the current handoff
 - an injected terminal draw failure leaves the handoff pending and forces an unchanged-frame retry
+- failed draw and draw-internal resize discard the whole `InlineFrameRenderReceipt`
+- one stable delivery commits the exact render-attempt receipt once; stale and duplicate attempts
+  cannot change activity, editor, help, approval, session-list, or queue-hit-area state
+- a UI edit made after frame capture wins over an older receipt through compare-and-apply
 
 ### 5. Event And Scheduler Tests
 
@@ -186,6 +193,7 @@ Every TUI rendering PR should state which rows it touches.
 | Thread/session switch | old transcript and deferred history cannot leak into new thread |
 | Streaming turn | active cell or live delta stays live, final output becomes committed history |
 | Transcript handoff receipt | exact conversation/turn/generation/revision ACK only; stale identity and later-appended transcript remain pending; terminal draw failure retries without ACK |
+| Frame render receipt | owned model captured before draw; failed/resize-raced/stale/duplicate delivery applies nothing; exact stable attempt compare-and-applies feedback once |
 | Overlay | opening overlay clears stale live-tail rows and closing redraws normal tail |
 | Parallel event stream | frame recorder proves initial status rows survive later runtime-event redraws without panel chrome in host scrollback; split scrollback/live-tail streams render as a titleless live tail |
 | Terminal fallback | standard and fallback insertion modes each update viewport state correctly |
@@ -199,6 +207,13 @@ Every TUI rendering PR should state which rows it touches.
   for append-only stream rows.
 - Parallel event stream rendering must use the dedicated stream renderer and
   `InlineAppendOnlyStream`, not a generic titled scrolled section with new ad hoc copy.
+- Production `shell_rendering.rs` and `shell_rendering/**` must accept one owned
+  `InlineShellFrameModel` and return `InlineFrameRenderReceipt`. Architecture guards reject
+  `NativeTuiApp`, Core/application/outbound/control-plane/service or I/O dependencies, production
+  glob imports, and mutable-reference inputs other than Ratatui `Frame`; `#[cfg(test)]` fixtures
+  are excluded from that scan.
+- `inline_frame_model.rs` is the sole pre-draw app-sampling boundary. It may capture UI-local
+  values, but architecture guards reject direct Core/application/control-plane reacquisition.
 - A TUI PR that changes stream row retention, scroll offset, title visibility, host scrollback, or
   live-tail chrome must include `tui_testkit::InlineFrameRecorder` coverage for the exact failing
   redraw sequence.

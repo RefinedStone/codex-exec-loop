@@ -509,7 +509,20 @@ impl NativeTuiApp {
             )
     }
 
+    #[cfg(test)]
     pub(super) fn queue_overlay_screen_model(&self) -> QueueOverlayScreenModel {
+        let runtime_projection = self.planning_runtime_projection_snapshot();
+        self.queue_overlay_screen_model_from_projection(
+            &runtime_projection,
+            self.parallel_mode_enabled(),
+        )
+    }
+
+    pub(super) fn queue_overlay_screen_model_from_projection(
+        &self,
+        runtime_projection: &PlanningRuntimeProjection,
+        parallel_mode_enabled: bool,
+    ) -> QueueOverlayScreenModel {
         let pending_operation_id = self.pending_queue_mutation_operation_id();
         let authority_refresh_required = self.queue_mutation_requires_authority_refresh();
         let authority = self.queue_overlay_ui_state.authority_screen_model();
@@ -517,12 +530,11 @@ impl NativeTuiApp {
             matches!(&authority, QueueOverlayAuthorityScreenModel::Ready { .. })
                 && self.queue_overlay_ui_state.requires_authority_load_for(
                     &self.current_queue_mutation_context(),
-                    self.planning_runtime_projection_snapshot()
-                        .planning_revision(),
+                    runtime_projection.planning_revision(),
                 );
         let remove_block_reason = authority_snapshot_changed
             .then_some(QueueActionBlockReason::AuthoritySnapshotChanged)
-            .or_else(|| self.queue_mutation_block_reason())
+            .or_else(|| self.queue_mutation_block_reason_for_parallel_mode(parallel_mode_enabled))
             .or_else(|| {
                 (matches!(&authority, QueueOverlayAuthorityScreenModel::Ready { .. })
                     && self
@@ -533,7 +545,9 @@ impl NativeTuiApp {
             });
         let undo_block_reason = authority_snapshot_changed
             .then_some(QueueActionBlockReason::AuthoritySnapshotChanged)
-            .or_else(|| self.queue_receipt_undo_block_reason());
+            .or_else(|| {
+                self.queue_receipt_undo_block_reason_for_parallel_mode(parallel_mode_enabled)
+            });
         let latest_registration_undo_available = matches!(
             (&self.conversation_state, &authority),
             (
@@ -560,7 +574,7 @@ impl NativeTuiApp {
                     self.queue_overlay_ui_state
                         .ready_runtime_projection()
                         .cloned()
-                        .unwrap_or_else(|| self.planning_runtime_projection_snapshot()),
+                        .unwrap_or_else(|| runtime_projection.clone()),
                 ),
                 planning_notice: conversation
                     .planning_notice_summary(QUEUE_OVERLAY_SCREEN_DETAIL_LIMIT),
@@ -621,7 +635,14 @@ impl NativeTuiApp {
     }
 
     pub(super) fn queue_mutation_block_reason(&self) -> Option<QueueActionBlockReason> {
-        if self.parallel_mode_enabled() {
+        self.queue_mutation_block_reason_for_parallel_mode(self.parallel_mode_enabled())
+    }
+
+    fn queue_mutation_block_reason_for_parallel_mode(
+        &self,
+        parallel_mode_enabled: bool,
+    ) -> Option<QueueActionBlockReason> {
+        if parallel_mode_enabled {
             return Some(QueueActionBlockReason::ParallelModeOwnsTaskLeases);
         }
         match &self.conversation_state {
@@ -651,7 +672,14 @@ impl NativeTuiApp {
     }
 
     pub(super) fn queue_receipt_undo_block_reason(&self) -> Option<QueueActionBlockReason> {
-        if self.parallel_mode_enabled() {
+        self.queue_receipt_undo_block_reason_for_parallel_mode(self.parallel_mode_enabled())
+    }
+
+    fn queue_receipt_undo_block_reason_for_parallel_mode(
+        &self,
+        parallel_mode_enabled: bool,
+    ) -> Option<QueueActionBlockReason> {
+        if parallel_mode_enabled {
             return Some(QueueActionBlockReason::ParallelModeOwnsTaskLeases);
         }
         match &self.conversation_state {
@@ -669,12 +697,21 @@ impl NativeTuiApp {
     }
 
     pub(super) fn queue_receipt_undo_task_count(&self) -> Option<usize> {
+        self.queue_receipt_undo_task_count_for_parallel_mode(self.parallel_mode_enabled())
+    }
+
+    pub(super) fn queue_receipt_undo_task_count_for_parallel_mode(
+        &self,
+        parallel_mode_enabled: bool,
+    ) -> Option<usize> {
         if self.pending_queue_mutation_operation_id().is_some()
             || self.queue_mutation_requires_authority_refresh()
             || self.shell_overlay != ShellOverlay::Hidden
             || self.is_exit_confirmation_visible()
             || self.is_turn_steer_confirmation_visible()
-            || self.queue_receipt_undo_block_reason().is_some()
+            || self
+                .queue_receipt_undo_block_reason_for_parallel_mode(parallel_mode_enabled)
+                .is_some()
         {
             return None;
         }

@@ -13,8 +13,9 @@ Ratatui primitive를 흩뜨리지 않게 합니다.
 | State/reducer | intent, mode transition, selection, editing state | widget, 시각 hierarchy, raw style |
 | Controller/effect | service call, command dispatch, runtime side effect | status 문구, title, geometry |
 | Projection/copy | view model, `Line`, label, status/key 문구 | `Frame`, `Layout`, terminal side effect, raw color |
+| Frame capture/delivery receipt | owned `InlineShellFrameModel`, 활성 `InlineInspectionFrameModel`, compare-and-apply rendering feedback | service call, provider I/O, draw 중 authority 재조회, optimistic state 변경 |
 | Theme/chrome | semantic style, brand token, panel frame, selection marker | feature state, controller behavior, 화면별 문구 |
-| Rendering/layout | `Rect`, `Layout`, widget 배치 | 새로운 keybinding 주장, product copy, raw color/border policy |
+| Rendering/layout | owned frame model, `Rect`, `Layout`, widget 배치 | `NativeTuiApp`, Core/application/control-plane authority, state 변경, 새로운 keybinding 주장, product copy, raw color/border policy |
 | Terminal adapter | lifecycle, scrollback, viewport replay, host terminal effect | planning 의미, Akra 문구, overlay policy |
 | Test/capture | rendering contract, snapshot delta, terminal evidence | 검토하지 않은 시각 계약 변경 |
 
@@ -47,12 +48,22 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
   state는 다시 읽을 수 있습니다.
 - Supersession은 이 일관성 보장에 포함됩니다. Sample이 control-plane presentation projection,
   event-stream projection, 좁은 owned Core projection을 각각 한 번 소유하고, row plan과 draw는
-  같은 owned overlay view를 사용합니다. 다른 overlay document는 owned screen model을 받을
-  때까지 별도 projection 경계로 유지합니다. 자주 실행되는 prompt, pulse, scheduler 검사는
-  panel 전용 경량 sample을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
+  같은 owned overlay view를 사용합니다. 자주 실행되는 prompt, pulse, scheduler 검사는 panel
+  전용 경량 sample을 공유하며 transcript나 event-stream row를 복제하지 않습니다.
 - Sample에서 만든 `ConversationScreenModel` 하나가 frame의 UI-local fact를 소유합니다. Tail,
   live transcript, cursor layout, frame cache는 같은 immutable projection을 사용하며 presentation
   helper가 `NativeTuiApp`, service, clock을 다시 읽지 않습니다.
+- `Terminal::draw` 전에 terminal transaction이 owned `InlineShellFrameModel` 하나를 완성합니다.
+  그 안의 `InlineInspectionFrameModel` variant가 활성 overlay의 view, widget-local state,
+  geometry에 따른 scroll 결정, feedback 비교 기준을 소유합니다. Capture는 UI-local state만
+  읽을 수 있고 Core, application service, parallel control plane, provider I/O를 다시 조회할 수
+  없습니다.
+- Production `shell_rendering.rs`와 `shell_rendering/**`는 이 owned model만 소비합니다. Ratatui
+  `Frame` 외의 mutable reference, `NativeTuiApp`, command dispatch, service, clock에 접근할 수
+  없고 pure draw 결과로 `InlineFrameRenderReceipt` 하나를 반환합니다.
+- Terminal transaction은 draw, cursor/terminal-size 조회, draw 이후 resize snapshot 검증이 모두 성공한 뒤에만
+  receipt를 반영합니다. Exact render-attempt gate가 failed, resize-raced, stale, duplicate
+  receipt를 버리고 compare-and-apply 기준이 오래된 frame으로 최신 UI edit를 덮지 못하게 합니다.
 - 장시간 운영에 필요한 밀도를 우선하고 marketing copy를 넣지 않습니다.
 - 한국어와 wide-character prompt가 주변 layout 계약을 깨지 않아야 합니다.
 - GitHub review setup은 draw와 draw 이후 size 검증이 모두 성공할 때까지
@@ -97,13 +108,15 @@ rendering, style은 `theme.rs`, geometry는 rendering/layout, scrollback/resize�
 
 - `AkraTheme::panel_block`을 사용합니다.
 - 필요한 section은 header, summary, primary content, status, keys 순서로 둡니다.
-- Session overlay draw는 catalog 상태, workspace, 저장/편집 query, filter/page projection, stable
-  thread ID, page-local index, rename 상태, warning/key 가능 여부를 하나의 owned
-  `SessionOverlayScreenModel`로 한 번 캡처합니다. Filter, paging, selection 복구는 이때 정확히 한
-  번만 수행하며 presentation helper는 `NativeTuiApp`이나 service를 다시 읽지 않습니다.
-- List row, selected detail, warning, key copy는 같은 session screen model에서 만듭니다. Renderer는
-  owned `SessionOverlayView`를 완성한 뒤에만 Ratatui `ListState`를 동기화하며 resize나 반복
-  redraw는 session catalog I/O를 발생시키지 않습니다.
+- Draw 전 frame capture는 catalog 상태, workspace, 저장/편집 query, filter/page projection,
+  stable thread ID, page-local index, rename 상태, warning/key 가능 여부를 하나의 owned
+  `SessionOverlayScreenModel`로 한 번 캡처합니다. Filter, paging, selection 복구는 이때 정확히
+  한 번만 수행하며 presentation helper와 renderer는 `NativeTuiApp`이나 service를 다시 읽지
+  않습니다.
+- List row, selected detail, warning, key copy는 같은 session screen model에서 만듭니다. Capture는
+  owned `SessionOverlayView`와 frame-local Ratatui `ListState`를 draw 전에 완성합니다. 안정적으로
+  전달된 `InlineFrameRenderReceipt`만 list state를 compare-and-apply하며 resize나 반복 redraw는
+  session catalog I/O를 발생시키지 않습니다.
 - 이 presentation 경계는 load admission을 옮기지 않습니다. Core가 catalog 의미와 correlation
   authority이고, adapter-local `SessionState` mirror는 Core에 동등한 coalescing이 생길 때까지
   initial load/reload gate로 유지됩니다.

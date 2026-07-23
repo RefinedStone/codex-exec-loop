@@ -1,6 +1,8 @@
+use crate::application::service::planning::PlanningRuntimeProjection;
+
 use super::super::super::super::{NativeTuiApp, PlanningInitOverlayStep};
 use super::super::PlanningInitOverlayView;
-use super::existing_workspace::build_existing_workspace_overlay_view_for_app;
+use super::existing_workspace::build_existing_workspace_overlay_view_from_projection;
 use super::init_copy::{
     build_detail_selection_overlay_view, build_loading_overlay_view,
     build_manual_editor_overlay_view, build_mode_selection_overlay_view,
@@ -11,8 +13,17 @@ use super::simple_review_inputs::build_simple_review_copy;
 // planning init overlay는 여러 wizard step을 갖지만 popup renderer는 단일
 // `PlanningInitOverlayView`만 소비한다. 이 router는 shell frontend와 step-specific
 // builder 사이의 adapter로, app/UI state 중 각 step에 필요한 입력만 아래로 넘긴다.
+#[cfg(test)]
 pub(super) fn build_planning_init_overlay_view_for_app(
     app: &NativeTuiApp,
+) -> PlanningInitOverlayView {
+    let runtime_projection = app.planning_runtime_projection_snapshot();
+    build_planning_init_overlay_view_from_projection(app, &runtime_projection)
+}
+
+pub(crate) fn build_planning_init_overlay_view_from_projection(
+    app: &NativeTuiApp,
+    runtime_projection: &PlanningRuntimeProjection,
 ) -> PlanningInitOverlayView {
     // 이 state는 planning service domain state가 아니라 modal-local cursor와 선택값이다.
     // 따라서 mode/detail selection builder에는 app 전체 대신 이 projection만 전달한다.
@@ -26,7 +37,10 @@ pub(super) fn build_planning_init_overlay_view_for_app(
         // 기존 planning artifact 감지는 runtime projection과 workspace path를 함께 읽는다.
         // 이 단계만 app-level copy builder를 거쳐야 guard 화면의 상태 문구가 최신이다.
         PlanningInitOverlayStep::ExistingWorkspace => {
-            build_existing_workspace_overlay_view_for_app(app)
+            build_existing_workspace_overlay_view_from_projection(
+                &app.planning_workspace_directory(),
+                runtime_projection,
+            )
         }
         // mode selection은 고정 선택지와 현재 highlight만 필요하다. app을 넘기지 않아
         // 순수 copy builder가 planning runtime state에 새 의존성을 만들지 못하게 한다.

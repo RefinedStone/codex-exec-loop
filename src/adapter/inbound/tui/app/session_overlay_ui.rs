@@ -258,6 +258,7 @@ impl SessionOverlayUiState {
         self.search_query_editor.buffer = self.browser_state.search_query.clone();
     }
 
+    #[cfg(test)]
     pub fn sync_selected_session(&mut self, selected_session_index: Option<usize>) {
         // `ListState::select(Some(_))`는 offset을 보존하고, `None`은 offset까지 0으로
         // 비운다. 오버레이 상세 선택과 ratatui 위젯 상태가 같은 규칙을 공유하게 둔다.

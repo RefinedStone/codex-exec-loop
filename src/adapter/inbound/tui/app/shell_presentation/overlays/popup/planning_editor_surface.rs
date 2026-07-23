@@ -1,4 +1,4 @@
-use super::super::super::super::NativeTuiApp;
+use super::super::super::super::PlanningDraftEditorUiState;
 use super::super::PlanningDraftEditorOverlayView;
 use super::editor_copy::{
     build_planning_draft_editor_header_lines, build_planning_draft_editor_key_lines,
@@ -9,21 +9,17 @@ use super::projection::build_planning_draft_editor_projection;
 use super::runtime::interpret_planning_draft_editor_runtime_state;
 use super::session::collect_planning_draft_editor_session_view;
 
-// Manual planning editor surface is the last presentation assembly step before ratatui rendering.
-// It reads app state without mutation, joins session/runtime/projection/copy helpers, and returns one frame-stable DTO.
-pub(super) fn build_planning_draft_editor_overlay_view_for_app(
-    // The shell app is only used as the owner of planning draft editor UI state; editor control stays elsewhere.
-    app: &NativeTuiApp,
-    // Layout-owned height flows into projection so scroll and cursor math use the same viewport as the renderer.
+pub(crate) fn build_planning_draft_editor_overlay_view_from_state(
+    editor_state: &PlanningDraftEditorUiState,
     editor_height: u16,
 ) -> Option<PlanningDraftEditorOverlayView> {
     // No session means the editor route is not actually renderable; returning None prevents a half-empty popup.
-    let session = collect_planning_draft_editor_session_view(&app.planning_draft_editor_ui_state)?;
+    let session = collect_planning_draft_editor_session_view(editor_state)?;
 
     // Runtime interpretation turns raw dirty/validation/confirmation flags into operator-facing decisions.
     // Status copy and key copy must consume the same interpretation so close-risk messaging cannot drift.
     let runtime_state = interpret_planning_draft_editor_runtime_state(
-        &app.planning_draft_editor_ui_state,
+        editor_state,
         &session.dirty_labels,
         session.validation_report,
     );

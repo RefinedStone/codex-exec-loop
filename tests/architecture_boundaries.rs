@@ -288,6 +288,7 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
         name: "Shell rendering snapshots plus targeted assertions",
         doc_marker: "| Shell rendering snapshots plus targeted assertions |",
         source_prefixes: &[
+            "src/adapter/inbound/tui/app/inline_frame_model.rs",
             "src/adapter/inbound/tui/app/shell_rendering",
             "src/adapter/inbound/tui/app/shell_layout.rs",
             "src/adapter/inbound/tui/app/shell_presentation.rs",
@@ -2986,6 +2987,466 @@ fn tui_queue_adapter_does_not_own_cancellation_authority_transaction() {
 }
 
 #[test]
+fn tui_shell_renderer_consumes_one_owned_frame_without_app_or_effects() {
+    const RENDERER_PATHS: &[&str] = &[
+        "src/adapter/inbound/tui/app/shell_rendering.rs",
+        "src/adapter/inbound/tui/app/shell_rendering",
+    ];
+
+    assert_no_semantic_references_in_paths(
+        "TUI shell renderer must not import Core, application, outbound, terminal, or I/O authority",
+        RENDERER_PATHS,
+        &[
+            "crate::application",
+            "crate::composition",
+            "crate::core",
+            "crate::adapter::outbound",
+            "crossterm",
+            "reqwest",
+            "sqlx",
+            "std::fs",
+            "std::io",
+            "std::net",
+            "std::process",
+            "std::sync",
+            "std::thread",
+            "std::time",
+            "tokio",
+        ],
+        &[],
+    );
+
+    let repo_root = repo_root();
+    let mut violations = Vec::new();
+    for path_suffix in RENDERER_PATHS {
+        for path in rust_files_for_path(&repo_root.join(path_suffix)) {
+            if is_test_only_path(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            for (line, violation) in renderer_production_boundary_violations(&source) {
+                violations.push(format!(
+                    "{}:{line}: {violation}",
+                    relative_path(&repo_root, &path)
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "TUI shell renderer must receive only owned/immutable frame data; production app, authority, glob-import, and non-Frame mutable-input violations:\n{}",
+        violations.join("\n")
+    );
+
+    let frame_model_path = repo_root.join("src/adapter/inbound/tui/app/inline_frame_model.rs");
+    assert_no_semantic_references_in_paths(
+        "inline frame capture may sample UI state but must not reacquire Core, application, control-plane, or outbound authority",
+        &["src/adapter/inbound/tui/app/inline_frame_model.rs"],
+        &[
+            "crate::composition",
+            "crate::core",
+            "crate::adapter::outbound",
+        ],
+        &[],
+    );
+    let frame_model_source =
+        fs::read_to_string(&frame_model_path).expect("owned inline frame model source should load");
+    let frame_model_syntax =
+        syn::parse_file(&frame_model_source).expect("owned inline frame model source should parse");
+    let capture_authority_references = rust_semantic_references(&frame_model_source)
+        .paths
+        .into_iter()
+        .filter(|reference| {
+            reference.split("::").any(|segment| {
+                matches!(
+                    segment,
+                    "CoreController"
+                        | "CoreRuntime"
+                        | "NativeClientRuntime"
+                        | "NativeTuiApplicationHandle"
+                ) || segment.contains("ControlPlane")
+                    || segment.ends_with("Service")
+                    || segment.ends_with("Services")
+                    || segment.ends_with("Port")
+                    || segment.ends_with("Repository")
+                    || segment.ends_with("Handle")
+                    || segment.ends_with("UseCases")
+                    || segment.ends_with("Effect")
+                    || segment.ends_with("EffectRunner")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        capture_authority_references.is_empty(),
+        "inline frame capture may carry application read DTOs but no service, port, handle, effect, Core, or control-plane authority: {capture_authority_references:?}"
+    );
+    for forbidden_field in [
+        "application",
+        "client_runtime",
+        "core_runtime",
+        "parallel_mode_control_plane",
+    ] {
+        let mut field_reads = NamedFieldAccessVisitor::new(forbidden_field);
+        field_reads.visit_file(&frame_model_syntax);
+        assert!(
+            field_reads.lines.is_empty(),
+            "inline frame capture must not reacquire `{forbidden_field}` authority: {:?}",
+            field_reads.lines
+        );
+    }
+    for forbidden_call in [
+        "build_parallel_peek_overlay_view",
+        "build_planning_init_overlay_view",
+        "build_queue_overlay_view",
+        "dispatch_client_event",
+        "dispatch_core_command",
+        "planning_runtime_projection_snapshot",
+        "poll_pending_client_event",
+        "presentation_projection",
+        "revisioned_planning_parallel_projection",
+        "snapshot",
+    ] {
+        assert!(
+            production_callable_reference_lines(&frame_model_source, forbidden_call).is_empty(),
+            "inline frame capture must not call `{forbidden_call}`; the terminal transaction supplies its sampled authority projection"
+        );
+    }
+    let capture_source =
+        top_level_function_source(&frame_model_source, "capture_inline_shell_frame_model");
+    for sampled_builder in [
+        "build_parallel_peek_overlay_view_from_snapshot",
+        "build_planning_init_overlay_view_from_projection",
+        "build_queue_overlay_view_from_projection",
+    ] {
+        assert_eq!(
+            production_callable_reference_lines(&capture_source, sampled_builder).len(),
+            1,
+            "inline frame capture must use one sampled `{sampled_builder}` call"
+        );
+    }
+    for (sampled_field, expected_reads) in [
+        ("projection.sampled_parallel_supervisor", 1usize),
+        ("projection.sampled_planning_runtime_projection", 2usize),
+    ] {
+        assert_eq!(
+            capture_source.matches(sampled_field).count(),
+            expected_reads,
+            "overlay builders must consume the transaction-owned `{sampled_field}` sample"
+        );
+    }
+    for type_name in [
+        "InlineShellFrameModel",
+        "InlineInspectionFrameModel",
+        "InlineFrameRenderReceipt",
+    ] {
+        let item = frame_model_syntax
+            .items
+            .iter()
+            .find(|item| match item {
+                syn::Item::Struct(item) => item.ident == type_name,
+                syn::Item::Enum(item) => item.ident == type_name,
+                _ => false,
+            })
+            .unwrap_or_else(|| panic!("inline frame boundary must define {type_name}"));
+        let generics = match item {
+            syn::Item::Struct(item) => &item.generics,
+            syn::Item::Enum(item) => &item.generics,
+            _ => unreachable!("matched only owned frame structs/enums"),
+        };
+        assert!(
+            generics.params.is_empty(),
+            "{type_name} must be owned and must not carry a borrowed lifetime"
+        );
+    }
+    for documentation_path in [
+        "docs/design/07-tui-layered-architecture-and-aesthetic-contract.md",
+        "docs/ko/reference/tui-contract.md",
+        "docs/reference/architecture.md",
+        "docs/ko/reference/architecture.md",
+        "docs/validation/terminal-ui-testing-methodology.md",
+        "docs/validation/tui-coverage-matrix.md",
+    ] {
+        let documentation = fs::read_to_string(repo_root.join(documentation_path))
+            .unwrap_or_else(|error| panic!("{documentation_path} should load: {error}"));
+        for contract_name in [
+            "InlineShellFrameModel",
+            "InlineInspectionFrameModel",
+            "InlineFrameRenderReceipt",
+        ] {
+            assert!(
+                documentation.contains(contract_name),
+                "{documentation_path} must document the owned frame contract `{contract_name}`"
+            );
+        }
+    }
+
+    let capture = top_level_function(&frame_model_syntax, "capture_inline_shell_frame_model");
+    assert_eq!(
+        capture.sig.inputs.len(),
+        4,
+        "frame capture must receive app, frontend mode, area, and the sampled conversation projection"
+    );
+    let capture_inputs = capture.sig.inputs.iter().collect::<Vec<_>>();
+    assert!(
+        matches!(
+            capture_inputs[0],
+            syn::FnArg::Typed(argument)
+                if matches!(
+                    argument.ty.as_ref(),
+                    syn::Type::Reference(reference)
+                        if reference.mutability.is_none()
+                            && is_named_path_type(reference.elem.as_ref(), "NativeTuiApp")
+                )
+        ),
+        "frame capture must receive NativeTuiApp through an immutable reference"
+    );
+    assert!(
+        matches!(
+            &capture.sig.output,
+            syn::ReturnType::Type(_, ty) if is_named_path_type(ty, "InlineShellFrameModel")
+        ),
+        "frame capture must return InlineShellFrameModel"
+    );
+    let apply = top_level_function(&frame_model_syntax, "apply_inline_frame_render_receipt");
+    assert_eq!(
+        apply.sig.inputs.len(),
+        2,
+        "receipt application must receive only app and the delivered frame receipt"
+    );
+
+    let rendering_path = repo_root.join("src/adapter/inbound/tui/app/shell_rendering.rs");
+    let rendering_source =
+        fs::read_to_string(&rendering_path).expect("shell rendering source should load");
+    let rendering_syntax =
+        syn::parse_file(&rendering_source).expect("shell rendering source should parse");
+    let draw = top_level_function(&rendering_syntax, "draw_projected");
+    assert_eq!(
+        draw.sig.inputs.len(),
+        3,
+        "draw_projected must receive only Frame, ShellFrontendMode, and InlineShellFrameModel"
+    );
+    let draw_inputs = draw.sig.inputs.iter().collect::<Vec<_>>();
+    assert!(
+        matches!(
+            draw_inputs[0],
+            syn::FnArg::Typed(argument)
+                if matches!(
+                    argument.ty.as_ref(),
+                    syn::Type::Reference(reference)
+                        if reference.mutability.is_some()
+                            && is_renderer_frame_type(&reference.elem)
+                )
+        ),
+        "draw_projected first input must be &mut Frame"
+    );
+    for (index, expected_type) in [
+        (1usize, "ShellFrontendMode"),
+        (2usize, "InlineShellFrameModel"),
+    ] {
+        assert!(
+            matches!(
+                draw_inputs[index],
+                syn::FnArg::Typed(argument)
+                    if is_named_path_type(&argument.ty, expected_type)
+            ),
+            "draw_projected input {index} must be {expected_type}"
+        );
+    }
+    assert!(
+        matches!(
+            &draw.sig.output,
+            syn::ReturnType::Type(_, ty) if is_named_path_type(ty, "InlineFrameRenderReceipt")
+        ),
+        "draw_projected must return InlineFrameRenderReceipt"
+    );
+
+    let terminal_source = fs::read_to_string(
+        repo_root.join("src/adapter/inbound/tui/app/inline_terminal_adapter.rs"),
+    )
+    .expect("inline terminal adapter source should load");
+    let terminal_function = top_level_function_source(&terminal_source, "draw_inline_frame");
+    let draw_lines = production_callable_reference_lines(&terminal_function, "draw_projected");
+    let stable_lines =
+        production_callable_reference_lines(&terminal_function, "matches_resize_snapshot");
+    let commit_lines =
+        production_callable_reference_lines(&terminal_function, "commit_frame_render_receipt");
+    assert_eq!(
+        draw_lines.len(),
+        1,
+        "one terminal frame must invoke the pure renderer exactly once"
+    );
+    assert_eq!(
+        commit_lines.len(),
+        1,
+        "one stable terminal frame must commit its render receipt exactly once"
+    );
+    assert!(
+        stable_lines
+            .iter()
+            .any(|stable_line| draw_lines[0] < *stable_line && *stable_line < commit_lines[0]),
+        "render receipt must apply only after the post-draw resize snapshot remains stable"
+    );
+    assert!(
+        production_callable_reference_lines(
+            &terminal_function,
+            "apply_inline_frame_render_receipt"
+        )
+        .is_empty(),
+        "draw_inline_frame must commit through the attempt-aware receipt gate"
+    );
+    let commit_receipt =
+        top_level_impl_method_source(&terminal_source, "commit_frame_render_receipt");
+    assert_eq!(
+        production_callable_reference_lines(&commit_receipt, "apply_inline_frame_render_receipt")
+            .len(),
+        1,
+        "the attempt-aware commit gate must apply one delivered render receipt"
+    );
+    for required in [
+        "pending.attempt != current_attempt",
+        "pending.attempt <= last_committed",
+        "if !apply_inline_frame_render_receipt(app, pending.receipt)",
+    ] {
+        assert!(
+            commit_receipt.contains(required),
+            "the render receipt gate is missing required fail-closed behavior: {required}"
+        );
+    }
+    let receipt_apply_index = commit_receipt
+        .find("if !apply_inline_frame_render_receipt(app, pending.receipt)")
+        .expect("receipt application must remain fail-closed");
+    let commit_index = commit_receipt
+        .find("last_committed_frame_render_attempt = Some(pending.attempt)")
+        .expect("successful receipt application must record its attempt");
+    assert!(
+        receipt_apply_index < commit_index,
+        "the render attempt must be recorded only after atomic receipt application succeeds"
+    );
+
+    let terminal_syntax =
+        syn::parse_file(&terminal_source).expect("inline terminal adapter source should parse");
+    let terminal_draw = top_level_function(&terminal_syntax, "draw_inline_frame");
+    let mut closure_references = TerminalDrawClosureReferenceVisitor::default();
+    closure_references.visit_block(&terminal_draw.block);
+    assert_eq!(
+        closure_references.references.len(),
+        1,
+        "draw_inline_frame must have one Terminal::draw closure"
+    );
+    for forbidden in ["NativeTuiApp", "app_mut", "runtime"] {
+        assert!(
+            !closure_references.references[0]
+                .iter()
+                .any(|reference| reference.split("::").any(|segment| segment == forbidden)),
+            "Terminal::draw closure must not access `{forbidden}`; it consumes only the owned frame model"
+        );
+    }
+}
+
+#[test]
+fn tui_owned_frame_capture_keeps_app_projection_wrappers_test_only() {
+    let repo_root = repo_root();
+    for (path, function_name) in [
+        (
+            "src/adapter/inbound/tui/app/shell_presentation.rs",
+            "build_queue_overlay_view",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/overlays/popup/parallel_peek.rs",
+            "build_parallel_peek_overlay_view",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning.rs",
+            "build_planning_init_overlay_view",
+        ),
+        (
+            "src/adapter/inbound/tui/app/shell_presentation/overlays/popup/planning_init_router.rs",
+            "build_planning_init_overlay_view_for_app",
+        ),
+    ] {
+        let source = fs::read_to_string(repo_root.join(path))
+            .unwrap_or_else(|error| panic!("{path} should load: {error}"));
+        let syntax =
+            syn::parse_file(&source).unwrap_or_else(|error| panic!("{path} should parse: {error}"));
+        let production_definitions = syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Fn(function)
+                    if function.sig.ident == function_name
+                        && !attributes_are_test_only(&function.attrs) =>
+                {
+                    Some(function.sig.ident.to_string())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            production_definitions.is_empty(),
+            "{path} must not compile the app-based `{function_name}` wrapper in production"
+        );
+    }
+
+    let queue_source =
+        fs::read_to_string(repo_root.join("src/adapter/inbound/tui/app/queue_overlay_ui.rs"))
+            .expect("queue overlay UI source should load");
+    let queue_syntax =
+        syn::parse_file(&queue_source).expect("queue overlay UI source should parse");
+    let production_queue_screen_model_wrappers = queue_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(item) if !attributes_are_test_only(&item.attrs) => Some(item),
+            _ => None,
+        })
+        .flat_map(|item| item.items.iter())
+        .filter(|item| {
+            matches!(
+                item,
+                syn::ImplItem::Fn(function)
+                    if function.sig.ident == "queue_overlay_screen_model"
+                        && !attributes_are_test_only(&function.attrs)
+            )
+        })
+        .count();
+    assert_eq!(
+        production_queue_screen_model_wrappers, 0,
+        "the queue app-based screen-model wrapper must stay test-only"
+    );
+
+    let shell_core_source = fs::read_to_string(
+        repo_root.join("src/adapter/inbound/tui/app/shell_presentation/shell_core.rs"),
+    )
+    .expect("conversation screen-model source should load");
+    let from_app_with_sample =
+        top_level_impl_method_source(&shell_core_source, "from_app_with_sample");
+    assert!(
+        production_callable_reference_lines(&from_app_with_sample, "queue_receipt_undo_task_count")
+            .is_empty(),
+        "ConversationScreenModel must not reread parallel mode through the raw queue receipt helper"
+    );
+    assert_eq!(
+        production_callable_reference_lines(
+            &from_app_with_sample,
+            "queue_receipt_undo_task_count_for_parallel_mode"
+        )
+        .len(),
+        1,
+        "ConversationScreenModel must derive queue receipt copy from the sampled parallel-mode fact"
+    );
+    let compact_from_app = from_app_with_sample
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_from_app
+            .contains("queue_receipt_undo_task_count_for_parallel_mode(parallel_mode_enabled)"),
+        "the sampled queue receipt helper must receive the transaction-owned parallel-mode value"
+    );
+}
+
+#[test]
 fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
     assert_no_forbidden_references_in_paths(
         "TUI conversation tail must consume ConversationScreenModel without app, service, I/O, or clock access",
@@ -3078,10 +3539,8 @@ fn tui_conversation_tail_reads_one_immutable_screen_model_without_effects() {
         "frame cache must accept the immutable frame projection instead of NativeTuiApp"
     );
     assert!(
-        terminal_source.contains(
-            "draw_projected(\n                frame,\n                app,\n                ShellFrontendMode::InlineMainBuffer,\n                frame_projection,"
-        ),
-        "the transaction must draw the same frame projection used by cache comparison"
+        terminal_source.contains("capture_inline_shell_frame_model("),
+        "the terminal transaction must materialize one owned frame before drawing"
     );
 
     let syntax =
@@ -3224,7 +3683,7 @@ fn tui_turn_steer_confirmation_draws_one_owned_screen_model() {
 }
 
 #[test]
-fn tui_session_overlay_reads_one_immutable_screen_model_per_draw() {
+fn tui_session_overlay_is_captured_once_before_pure_draw() {
     let model_source = fs::read_to_string(
         repo_root().join("src/adapter/inbound/tui/app/session_overlay_screen_model.rs"),
     )
@@ -3330,42 +3789,57 @@ fn tui_session_overlay_reads_one_immutable_screen_model_per_draw() {
         "session popup assembly must not reread NativeTuiApp"
     );
 
-    let rendering_source = fs::read_to_string(
-        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
-    )
-    .expect("inline inspection source should load");
-    let draw = top_level_function_source(&rendering_source, "draw_inline_session_inspection");
-    let compact_draw = draw
+    let frame_model_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
+            .expect("inline frame-model source should load");
+    let capture =
+        top_level_function_source(&frame_model_source, "capture_inline_shell_frame_model");
+    let compact_capture = capture
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert_eq!(
-        compact_draw
+        compact_capture
             .matches("SessionOverlayScreenModel::capture(app)")
             .count(),
         1,
-        "one session draw must capture one immutable screen model"
+        "one frame capture must materialize one immutable session screen model"
     );
     assert_eq!(
-        compact_draw
+        compact_capture
             .matches("build_session_overlay_view(&screen_model)")
             .count(),
         1,
-        "one session draw must build every overlay section from the same screen model"
+        "one frame capture must build every session section from the same screen model"
     );
-    let capture_index = compact_draw
+    let capture_index = compact_capture
         .find("SessionOverlayScreenModel::capture(app)")
-        .expect("session draw should capture a screen model");
-    let view_index = compact_draw
+        .expect("frame capture should capture a session screen model");
+    let view_index = compact_capture
         .find("build_session_overlay_view(&screen_model)")
-        .expect("session draw should build an owned overlay view");
-    let list_state_index = compact_draw
-        .find("draw_inline_session_list_panel(")
-        .expect("session draw should synchronize and render the list panel");
+        .expect("frame capture should build an owned session overlay view");
+    let list_state_index = compact_capture
+        .find("list_state.select(")
+        .expect("frame capture should prepare the owned Ratatui list state");
     assert!(
         capture_index < view_index && view_index < list_state_index,
-        "session draw must finish its immutable projection before mutating Ratatui ListState"
+        "frame capture must finish the immutable session projection before preparing local ListState"
     );
+
+    let rendering_source = fs::read_to_string(
+        repo_root().join("src/adapter/inbound/tui/app/shell_rendering/inline_inspection.rs"),
+    )
+    .expect("inline inspection source should load");
+    for forbidden in [
+        "SessionOverlayScreenModel::capture",
+        "build_session_overlay_view",
+        "NativeTuiApp",
+    ] {
+        assert!(
+            !rendering_source.contains(forbidden),
+            "session renderer must consume the owned frame model without recapturing `{forbidden}`"
+        );
+    }
 }
 
 #[test]
@@ -3599,19 +4073,26 @@ fn tui_parallel_frame_uses_one_control_plane_and_event_projection_sample() {
         );
     }
 
-    let rendering_source =
-        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
-            .expect("shell rendering source should load");
+    let frame_model_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/inline_frame_model.rs"))
+            .expect("owned frame model source should load");
     for required in [
         "supersession_overlay_view: Option<Box<SupersessionOverlayView>>",
-        "inline_inspection::parallel_event_stream_visible_rows(view, layout[0])",
         "parallel frame projection must own the supervisor view",
     ] {
         assert!(
-            rendering_source.contains(required),
-            "Supersession row planning and drawing must consume one owned view: {required}"
+            frame_model_source.contains(required),
+            "owned frame capture must materialize one supersession view: {required}"
         );
     }
+    let rendering_source =
+        fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_rendering.rs"))
+            .expect("shell rendering source should load");
+    assert!(
+        rendering_source
+            .contains("inline_inspection::parallel_event_stream_visible_rows(view, layout[0])"),
+        "Supersession row planning and drawing must consume the owned view"
+    );
 
     let runtime_source =
         fs::read_to_string(repo_root().join("src/adapter/inbound/tui/app/shell_runtime.rs"))
@@ -6102,6 +6583,66 @@ fn test_only() {
     assert!(!production.contains("PlanningServices"));
 }
 
+#[test]
+fn renderer_boundary_scan_ignores_fixtures_and_rejects_production_escape_hatches() {
+    let fixture_only = r#"
+        use ratatui::Frame;
+
+        const EXAMPLE: &str = "NativeTuiApp client_runtime snapshot";
+
+        fn draw_owned(frame: &mut Frame<'_>, model: InlineShellFrameModel) {
+            // NativeTuiApp and AppSnapshot are architecture examples only.
+            render(frame, model);
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            fn legacy_fixture(frame: &mut Frame<'_>, app: &mut NativeTuiApp) {
+                app.client_runtime.snapshot();
+                render(frame, app);
+            }
+        }
+    "#;
+    assert!(
+        renderer_production_boundary_violations(fixture_only).is_empty(),
+        "comments, literals, and cfg(test) fixtures must not create renderer violations"
+    );
+
+    let production_escape_hatches = r#"
+        use super::*;
+
+        #[cfg_attr(test, allow(dead_code))]
+        fn draw_live(
+            frame: &mut Frame<'_>,
+            app: &mut NativeTuiApp,
+            state: &mut SessionOverlayUiState,
+        ) {
+            app.client_runtime.snapshot();
+            render(frame, state);
+        }
+    "#;
+    let violations = renderer_production_boundary_violations(production_escape_hatches)
+        .into_iter()
+        .map(|(_, violation)| violation)
+        .collect::<Vec<_>>();
+    for expected in [
+        "glob import",
+        "NativeTuiApp",
+        "mutable reference other than &mut Frame",
+        "client_runtime",
+        "snapshot",
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "renderer boundary scan must catch `{expected}`: {violations:?}"
+        );
+    }
+}
+
 fn assert_tui_test_entrypoint_has_coverage(repo_root: &Path, surface_name: &str, entrypoint: &str) {
     let path = repo_root.join(entrypoint);
     assert!(
@@ -6841,6 +7382,30 @@ impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         self.references.paths.push(call.method.to_string());
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[derive(Default)]
+struct TerminalDrawClosureReferenceVisitor {
+    references: Vec<Vec<String>>,
+}
+
+impl<'ast> Visit<'ast> for TerminalDrawClosureReferenceVisitor {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "draw" {
+            for argument in &call.args {
+                let syn::Expr::Closure(closure) = argument else {
+                    continue;
+                };
+                let mut visitor = RustSemanticReferenceVisitor::default();
+                visitor.visit_expr(&closure.body);
+                expand_semantic_alias_paths(&mut visitor.references.paths, &visitor.aliases);
+                visitor.references.paths.sort();
+                visitor.references.paths.dedup();
+                self.references.push(visitor.references.paths);
+            }
+        }
         visit::visit_expr_method_call(self, call);
     }
 }
@@ -7603,6 +8168,283 @@ fn collect_named_macro_token_lines(
             TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
         }
     }
+}
+
+fn renderer_production_boundary_violations(source: &str) -> Vec<(usize, String)> {
+    let syntax = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("renderer architecture source must parse as Rust: {error}"));
+    let mut visitor = RendererProductionBoundaryVisitor::default();
+    visitor.visit_file(&syntax);
+    visitor
+        .violations
+        .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    visitor.violations.dedup();
+    visitor.violations
+}
+
+#[derive(Default)]
+struct RendererProductionBoundaryVisitor {
+    violations: Vec<(usize, String)>,
+}
+
+impl RendererProductionBoundaryVisitor {
+    fn record(&mut self, line: usize, message: impl Into<String>) {
+        self.violations.push((line, message.into()));
+    }
+
+    fn inspect_signature(&mut self, signature: &syn::Signature) {
+        for input in &signature.inputs {
+            match input {
+                syn::FnArg::Receiver(receiver)
+                    if receiver.reference.is_some() && receiver.mutability.is_some() =>
+                {
+                    self.record(
+                        receiver.span().start().line,
+                        format!(
+                            "{} accepts mutable self; renderer state must stay local to the call",
+                            signature.ident
+                        ),
+                    );
+                }
+                syn::FnArg::Typed(argument) => {
+                    let mut mutable_inputs = RendererMutableInputVisitor {
+                        function_name: signature.ident.to_string(),
+                        violations: &mut self.violations,
+                    };
+                    mutable_inputs.visit_type(&argument.ty);
+                }
+                syn::FnArg::Receiver(_) => {}
+            }
+        }
+    }
+
+    fn inspect_use_tree(&mut self, tree: &syn::UseTree) {
+        match tree {
+            syn::UseTree::Path(path) => {
+                self.inspect_identifier(&path.ident);
+                self.inspect_use_tree(&path.tree);
+            }
+            syn::UseTree::Name(name) => self.inspect_identifier(&name.ident),
+            syn::UseTree::Rename(rename) => {
+                self.inspect_identifier(&rename.ident);
+                self.inspect_identifier(&rename.rename);
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.inspect_use_tree(item);
+                }
+            }
+            syn::UseTree::Glob(glob) => self.record(
+                glob.star_token.span.start().line,
+                "production renderer imports must be explicit; glob import found",
+            ),
+        }
+    }
+
+    fn inspect_identifier(&mut self, identifier: &syn::Ident) {
+        let identifier_text = identifier.to_string();
+        if renderer_identifier_is_forbidden(&identifier_text) {
+            self.record(
+                identifier.span().start().line,
+                format!("renderer depends on forbidden authority/effect type `{identifier_text}`"),
+            );
+        }
+    }
+
+    fn inspect_macro_tokens(&mut self, tokens: &TokenStream) {
+        for token in tokens.clone() {
+            match token {
+                TokenTree::Ident(identifier) => {
+                    let identifier_text = identifier.to_string();
+                    if renderer_identifier_is_forbidden(&identifier_text)
+                        || renderer_callable_is_forbidden(&identifier_text)
+                        || renderer_field_is_forbidden(&identifier_text)
+                    {
+                        self.record(
+                            identifier.span().start().line,
+                            format!(
+                                "renderer macro references forbidden authority/effect identifier `{identifier_text}`"
+                            ),
+                        );
+                    }
+                }
+                TokenTree::Group(group) => self.inspect_macro_tokens(&group.stream()),
+                TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for RendererProductionBoundaryVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if item_is_test_only(item) {
+            return;
+        }
+        match item {
+            syn::Item::Fn(function) => self.inspect_signature(&function.sig),
+            syn::Item::Use(item_use) => self.inspect_use_tree(&item_use.tree),
+            _ => {}
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        if let syn::ImplItem::Fn(function) = item {
+            self.inspect_signature(&function.sig);
+        }
+        visit::visit_impl_item(self, item);
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if trait_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        if let syn::TraitItem::Fn(function) = item {
+            self.inspect_signature(&function.sig);
+        }
+        visit::visit_trait_item(self, item);
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        if foreign_item_attributes(item).is_some_and(attributes_are_test_only) {
+            return;
+        }
+        visit::visit_foreign_item(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        for segment in &path.segments {
+            self.inspect_identifier(&segment.ident);
+        }
+        visit::visit_path(self, path);
+    }
+
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if let syn::Member::Named(identifier) = &field.member {
+            let identifier_text = identifier.to_string();
+            if renderer_field_is_forbidden(&identifier_text) {
+                self.record(
+                    identifier.span().start().line,
+                    format!("renderer reads forbidden authority field `{identifier_text}`"),
+                );
+            }
+        }
+        visit::visit_expr_field(self, field);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let method = call.method.to_string();
+        if renderer_callable_is_forbidden(&method) {
+            self.record(
+                call.method.span().start().line,
+                format!("renderer calls forbidden authority/effect method `{method}`"),
+            );
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.inspect_macro_tokens(&mac.tokens);
+        visit::visit_macro(self, mac);
+    }
+}
+
+struct RendererMutableInputVisitor<'a> {
+    function_name: String,
+    violations: &'a mut Vec<(usize, String)>,
+}
+
+impl<'ast> Visit<'ast> for RendererMutableInputVisitor<'_> {
+    fn visit_type_reference(&mut self, reference: &'ast syn::TypeReference) {
+        if reference.mutability.is_some() && !is_renderer_frame_type(&reference.elem) {
+            self.violations.push((
+                reference.span().start().line,
+                format!(
+                    "{} accepts a mutable reference other than &mut Frame",
+                    self.function_name
+                ),
+            ));
+        }
+        visit::visit_type_reference(self, reference);
+    }
+}
+
+fn is_renderer_frame_type(ty: &syn::Type) -> bool {
+    matches!(
+        ty,
+        syn::Type::Path(type_path)
+            if type_path.qself.is_none()
+                && type_path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "Frame")
+    )
+}
+
+fn renderer_identifier_is_forbidden(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "NativeTuiApp"
+            | "NativeTuiApplicationHandle"
+            | "NativeClientRuntime"
+            | "AppState"
+            | "AppSnapshot"
+            | "AppCommand"
+            | "AppEvent"
+            | "CoreController"
+            | "CoreDispatchOutcome"
+            | "CoreInput"
+            | "CoreRuntime"
+            | "SystemTime"
+            | "Instant"
+            | "Cell"
+            | "RefCell"
+            | "Mutex"
+            | "RwLock"
+            | "File"
+            | "OpenOptions"
+            | "Command"
+            | "Terminal"
+            | "TcpListener"
+            | "TcpStream"
+            | "UdpSocket"
+    ) || identifier.contains("ControlPlane")
+        || identifier.ends_with("Service")
+        || identifier.ends_with("Port")
+        || identifier.ends_with("Repository")
+        || identifier.ends_with("Handle")
+        || identifier.ends_with("Runtime")
+        || identifier.ends_with("Snapshot")
+}
+
+fn renderer_field_is_forbidden(field: &str) -> bool {
+    matches!(
+        field,
+        "application" | "client_runtime" | "core_runtime" | "parallel_mode_control_plane"
+    )
+}
+
+fn renderer_callable_is_forbidden(callable: &str) -> bool {
+    matches!(
+        callable,
+        "block_on"
+            | "dispatch_client_event"
+            | "dispatch_core_command"
+            | "lock"
+            | "planning_runtime_projection_snapshot"
+            | "poll_pending_client_event"
+            | "presentation_projection"
+            | "recv"
+            | "revisioned_planning_parallel_projection"
+            | "snapshot"
+            | "spawn"
+            | "spawn_blocking"
+            | "try_recv"
+    )
 }
 
 type MethodCallLocation = (String, usize);
