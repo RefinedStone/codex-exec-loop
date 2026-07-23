@@ -14,8 +14,9 @@ use super::{
     PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
     PlanningSimpleDraftPromotionSnapshot, PlanningSimpleDraftStageSnapshot,
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationCorrelation,
-    PlanningWorkspaceResetSnapshot, ReviewCenterLoadCorrelation, SessionCatalogLoadCorrelation,
-    SessionRenameAdmission, SessionRenameCorrelation, StartupCheckCorrelation,
+    PlanningWorkspaceResetSnapshot, PostTurnEvaluationCorrelation, ReviewCenterLoadCorrelation,
+    SessionCatalogLoadCorrelation, SessionRenameAdmission, SessionRenameCorrelation,
+    StartupCheckCorrelation,
 };
 use super::{DirectionsMaintenanceLoadCorrelation, DirectionsMaintenanceSummarySnapshot};
 use super::{
@@ -160,7 +161,10 @@ pub enum CoreEffectCompletion {
         result: Result<Box<GithubPullRequestPollResult>, String>,
     },
     ManualPromptPrepared(Box<ManualPromptOutcome>),
-    PostTurnEvaluationCompleted(Box<PostTurnExecution>),
+    PostTurnEvaluationCompleted {
+        correlation: PostTurnEvaluationCorrelation,
+        execution: Box<PostTurnExecution>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

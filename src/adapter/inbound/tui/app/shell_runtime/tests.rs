@@ -32,8 +32,8 @@ use crate::application::service::post_turn_evaluation as application_post_turn;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::core::app::{
-    AppEvent, CoreInput, QueueAuthorityLoadCorrelation, QueueAuthorityLoadError,
-    StartupReadySnapshot, TurnStreamEvent,
+    AppEvent, CoreInput, PostTurnEvaluationCorrelation, QueueAuthorityLoadCorrelation,
+    QueueAuthorityLoadError, StartupReadySnapshot, TurnStreamEvent,
 };
 use crate::domain::conversation::{
     ConversationMessage, ConversationMessageKind, ConversationSnapshot,
@@ -706,22 +706,21 @@ fn create_temp_git_repo(prefix: &str) -> String {
 }
 
 fn post_turn_evaluation_completed_message(
-    thread_id: impl Into<String>,
-    completed_turn_id: impl Into<String>,
-    runtime_projection_workspace_directory: impl Into<String>,
+    correlation: PostTurnEvaluationCorrelation,
     runtime_projection: PlanningRuntimeProjection,
     evaluation: PostTurnEvaluationOutcome,
     planning_worker_panel_state: PlanningWorkerPanelState,
 ) -> BackgroundMessage {
-    BackgroundMessage::PostTurnEvaluationCompleted(Box::new(
-        application_post_turn::PostTurnEvaluationExecution {
-            thread_id: thread_id.into(),
-            completed_turn_id: completed_turn_id.into(),
-            runtime_projection_workspace_directory: runtime_projection_workspace_directory.into(),
+    BackgroundMessage::PostTurnEvaluationCompleted {
+        execution: Box::new(application_post_turn::PostTurnEvaluationExecution {
+            thread_id: correlation.thread_id.clone(),
+            completed_turn_id: correlation.completed_turn_id.clone(),
+            runtime_projection_workspace_directory: correlation.turn_workspace_directory.clone(),
             evaluation: application_post_turn_evaluation_outcome(runtime_projection, evaluation),
             planning_worker_panel_state,
-        },
-    ))
+        }),
+        correlation,
+    }
 }
 
 fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id: &str) {
@@ -772,11 +771,21 @@ fn mark_core_turn_completed(runtime: &mut ShellRuntime, thread_id: &str, turn_id
         });
 }
 
-fn arm_core_post_turn_evaluation(runtime: &mut ShellRuntime, thread_id: &str, turn_id: &str) {
+fn arm_core_post_turn_evaluation(
+    runtime: &mut ShellRuntime,
+    thread_id: &str,
+    turn_id: &str,
+) -> PostTurnEvaluationCorrelation {
+    let workspace_directory = runtime.app().planning_workspace_directory();
     runtime
         .app_mut()
         .core_runtime
-        .begin_test_post_turn_evaluation(thread_id, turn_id);
+        .begin_test_post_turn_evaluation(
+            thread_id,
+            turn_id,
+            &workspace_directory,
+            &workspace_directory,
+        )
 }
 
 fn application_post_turn_evaluation_outcome(
@@ -1416,14 +1425,19 @@ fn stale_post_turn_evaluation_background_message_is_ignored() {
     runtime
         .app_mut()
         .sync_core_planning_runtime_projection(expected_projection.clone());
+    let stale_correlation = PostTurnEvaluationCorrelation::new(
+        1,
+        "thread-1",
+        "turn-1",
+        workspace_directory,
+        "/tmp/workspace",
+    );
 
     runtime
         .app
         .tx
         .send(post_turn_evaluation_completed_message(
-            "thread-1",
-            "turn-1",
-            workspace_directory,
+            stale_correlation,
             PlanningRuntimeProjection::invalid("stale projection".to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
@@ -1476,7 +1490,7 @@ fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
-    arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
+    let correlation = arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
     let expected_worker_state = PlanningWorkerPanelState {
         status: PlanningWorkerStatus::RepairFailed,
         last_operation_label: Some("repair projection".to_string()),
@@ -1488,15 +1502,11 @@ fn accepted_post_turn_evaluation_preserves_exact_domain_worker_state() {
         last_response: Some("worker response".to_string()),
         last_host_detail: Some("host detail".to_string()),
     };
-    let workspace_directory = runtime.app().planning_workspace_directory();
-
     runtime
         .app
         .tx
         .send(post_turn_evaluation_completed_message(
-            "thread-1",
-            "turn-1",
-            workspace_directory,
+            correlation,
             PlanningRuntimeProjection::invalid("blocking projection".to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),
@@ -1555,12 +1565,10 @@ fn duplicate_post_turn_evaluation_for_same_turn_is_ignored() {
     conversation.thread_id = "thread-1".to_string();
     conversation.turn_activity.last_completed_turn_id = Some("turn-1".to_string());
     mark_core_turn_completed(&mut runtime, "thread-1", "turn-1");
-    arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
+    let correlation = arm_core_post_turn_evaluation(&mut runtime, "thread-1", "turn-1");
     let build_message = |notice: &str| {
         post_turn_evaluation_completed_message(
-            "thread-1",
-            "turn-1",
-            workspace_directory.clone(),
+            correlation.clone(),
             PlanningRuntimeProjection::invalid(notice.to_string()),
             PostTurnEvaluationOutcome {
                 provenance: PostTurnEvaluationProvenance::new("turn-1".to_string()),

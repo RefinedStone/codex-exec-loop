@@ -95,8 +95,17 @@ must still apply every outcome event in order.
 Post-turn evaluation also enters Core before changing the planning-worker panel. The command
 is admitted only for the latest confirmed completed terminal with no active turn, no already
 applied evaluation, and no exact evaluation already in flight. Stale, wrong, and duplicate starts
-emit neither an event nor an effect; completion must match the exact in-flight thread/turn lease.
-After admission, the command
+emit neither an event nor an effect. Core assigns a monotonic correlation over generation, thread,
+completed turn, turn workspace, and planning workspace; the effect and completion carry that same
+correlation. Only the active correlation may settle, so delayed or duplicate A→B→A completions
+cannot clear a newer lease; leaving the admitted conversation/turn lifecycle permanently prunes that
+lease even when no intermediate evaluation starts, and a conversation-switch intent cancels it
+immediately even if the load must be deferred. Core also checks the execution's outer identity,
+nested provenance, optional queue-mutation receipt, and output workspace. Composition converts
+malformed worker output into one correlated, redacted failure execution without mutating the shared
+continuation gate before Core admission. The continuation gate keeps shared lifecycle generation
+separate from request-local worker validity, so a stale timeout cannot cancel a newer request that
+captured the same lifecycle generation. After admission, the command
 preserves the complete prior state for an explicit settlement pause, otherwise selects
 `RepairRunning` for a protected planning-file change, preserves the complete state for an empty
 queue with stop policy, and selects `RefreshRunning` for every remaining case. Core emits that

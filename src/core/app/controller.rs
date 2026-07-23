@@ -12,8 +12,8 @@ use super::{
     ManualPromptPreparationAdmission, ManualPromptPreparationIntent, ParallelModeProjection,
     ParallelPeekLoadCorrelation, PlanningEditorMutationRequest,
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationIntent,
-    PlanningWorkspaceOperationKind, QueueAuthorityLoadCorrelation, QueueMutationCorrelation,
-    ReviewCenterLoadCorrelation, RevisionedPlanningParallelProjection,
+    PlanningWorkspaceOperationKind, PostTurnEvaluationCorrelation, QueueAuthorityLoadCorrelation,
+    QueueMutationCorrelation, ReviewCenterLoadCorrelation, RevisionedPlanningParallelProjection,
     SessionCatalogLoadCorrelation, SessionRenameAcceptedSnapshot, SessionRenameAdmission,
     SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
     StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
@@ -23,7 +23,8 @@ use crate::domain::conversation_item_lifecycle::ConversationItemLifecycleProject
 use crate::domain::github_review::{GithubPullRequestPollState, GithubPullRequestTarget};
 use crate::domain::planning::{
     ExecutionSnapshot, ManualPromptCorrelation, ManualPromptRequest, PlanningWorkerPanelState,
-    PlanningWorkerStatus, PostTurnRequest, QueueIdlePolicy, RuntimeWorkspaceStatus,
+    PlanningWorkerStatus, PostTurnContinuationPermit, PostTurnRequest, QueueIdlePolicy,
+    RuntimeWorkspaceStatus,
 };
 use std::sync::Arc;
 
@@ -67,6 +68,12 @@ struct ActiveManualPromptPreparation {
 }
 
 #[derive(Debug, Clone)]
+struct ActivePostTurnEvaluation {
+    correlation: PostTurnEvaluationCorrelation,
+    continuation_permit: PostTurnContinuationPermit,
+}
+
+#[derive(Debug, Clone)]
 pub(in crate::core) struct CoreController {
     state: AppState,
     turn_stream_state: TurnStreamState,
@@ -97,7 +104,8 @@ pub(in crate::core) struct CoreController {
     in_flight_manual_prompt_preparation: Option<ActiveManualPromptPreparation>,
     next_turn_submission_generation: u64,
     active_turn_submission: Option<TurnSubmissionCorrelation>,
-    in_flight_post_turn_evaluation: Option<(String, String)>,
+    next_post_turn_evaluation_generation: u64,
+    in_flight_post_turn_evaluation: Option<ActivePostTurnEvaluation>,
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     next_stop_request_generation: u64,
     active_stop_request: Option<ActiveStopRequest>,
@@ -147,6 +155,7 @@ impl CoreController {
             in_flight_manual_prompt_preparation: None,
             next_turn_submission_generation: 1,
             active_turn_submission: None,
+            next_post_turn_evaluation_generation: 1,
             in_flight_post_turn_evaluation: None,
             approval_review_persistence: ApprovalReviewPersistenceCoordinator::new(),
             next_stop_request_generation: 1,
@@ -254,6 +263,7 @@ impl CoreController {
                 thread_id,
                 fallback_workspace_directory,
             }) => {
+                self.cancel_active_post_turn_evaluation();
                 let mut stop_effects = Vec::new();
                 self.invalidate_stop_request_for_lifecycle(&mut stop_effects);
                 if self.stop_request_settlement_pending() {
@@ -287,6 +297,7 @@ impl CoreController {
                 self.start_conversation_load(thread_id, fallback_workspace_directory)
             }
             CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
+                self.cancel_active_post_turn_evaluation();
                 let cancelled_refresh = self.planning_runtime_refresh.cancel();
                 self.deferred_conversation_load = None;
                 self.in_flight_conversation_load = None;
@@ -744,27 +755,29 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::EvaluatePostTurn(mut request)) => {
-                if self.in_flight_post_turn_evaluation.as_ref().is_some_and(
-                    |(thread_id, turn_id)| {
-                        !self
-                            .turn_stream_state
-                            .can_start_post_turn_evaluation(thread_id, turn_id)
-                    },
-                ) {
-                    self.in_flight_post_turn_evaluation = None;
-                }
-                let identity = (
-                    request.context.thread_id.clone(),
-                    request.completed_turn_id.clone(),
-                );
+                self.prune_post_turn_evaluation_for_lifecycle();
                 if self.in_flight_post_turn_evaluation.is_some()
-                    || !self
-                        .turn_stream_state
-                        .can_start_post_turn_evaluation(&identity.0, &identity.1)
+                    || !self.turn_stream_state.can_start_post_turn_evaluation(
+                        &request.context.thread_id,
+                        &request.completed_turn_id,
+                    )
                 {
                     return self.unchanged_outcome();
                 }
-                self.in_flight_post_turn_evaluation = Some(identity);
+                let correlation = PostTurnEvaluationCorrelation::new(
+                    take_generation(
+                        &mut self.next_post_turn_evaluation_generation,
+                        "post-turn evaluation",
+                    ),
+                    request.context.thread_id.clone(),
+                    request.completed_turn_id.clone(),
+                    request.workspace_directory.clone(),
+                    request.context.planning_workspace_directory.clone(),
+                );
+                self.in_flight_post_turn_evaluation = Some(ActivePostTurnEvaluation {
+                    correlation: correlation.clone(),
+                    continuation_permit: request.continuation_permit.clone(),
+                });
                 let planning_worker_panel_state =
                     post_turn_worker_panel_start_state(request.as_ref());
                 request.planning_worker_panel_state = planning_worker_panel_state.clone();
@@ -772,7 +785,10 @@ impl CoreController {
                     events: vec![AppEvent::PostTurnEvaluationStarted(
                         planning_worker_panel_state,
                     )],
-                    effects: vec![CoreEffect::EvaluatePostTurn(request)],
+                    effects: vec![CoreEffect::EvaluatePostTurn {
+                        correlation,
+                        request,
+                    }],
                     snapshot: self.shared_snapshot(),
                 }
             }
@@ -890,6 +906,7 @@ impl CoreController {
                         item_lifecycle,
                     );
                 }
+                self.prune_post_turn_evaluation_for_lifecycle();
                 self.conversation_changed_outcome(Some(correlation), effects)
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::ParallelPeekConversationLoaded {
@@ -1446,14 +1463,14 @@ impl CoreController {
                     snapshot,
                 }
             }
-            CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted(
+            CoreInput::EffectCompleted(CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation,
                 execution,
-            )) => {
-                if !self.in_flight_post_turn_evaluation.as_ref().is_some_and(
-                    |(thread_id, turn_id)| {
-                        thread_id == &execution.thread_id && turn_id == &execution.completed_turn_id
-                    },
-                ) {
+            }) => {
+                if self.active_post_turn_evaluation_correlation() != Some(&correlation) {
+                    return self.unchanged_outcome();
+                }
+                if !correlation.matches_execution(execution.as_ref()) {
                     return self.unchanged_outcome();
                 }
                 self.in_flight_post_turn_evaluation = None;
@@ -1712,6 +1729,7 @@ impl CoreController {
         thread_id: String,
         fallback_workspace_directory: String,
     ) -> CoreDispatchOutcome {
+        self.cancel_active_post_turn_evaluation();
         if self.stop_request_settlement_pending() {
             self.deferred_conversation_load = Some((thread_id, fallback_workspace_directory));
             let mut effects = Vec::new();
@@ -1737,6 +1755,7 @@ impl CoreController {
         self.in_flight_conversation_load = Some(correlation.clone());
         self.state.mark_conversation_loading();
         self.turn_stream_state = TurnStreamState::new();
+        self.prune_post_turn_evaluation_for_lifecycle();
         let mut outcome = self.conversation_changed_outcome(
             Some(correlation.clone()),
             vec![CoreEffect::LoadConversation {
@@ -1797,7 +1816,35 @@ impl CoreController {
         self.approval_review_persistence
             .begin_conversation_turn(correlation);
         self.turn_stream_state.begin_submission();
+        self.prune_post_turn_evaluation_for_lifecycle();
         correlation
+    }
+
+    fn prune_post_turn_evaluation_for_lifecycle(&mut self) {
+        let should_prune = self
+            .in_flight_post_turn_evaluation
+            .as_ref()
+            .is_some_and(|active| {
+                !self.turn_stream_state.can_start_post_turn_evaluation(
+                    &active.correlation.thread_id,
+                    &active.correlation.completed_turn_id,
+                )
+            });
+        if should_prune {
+            self.cancel_active_post_turn_evaluation();
+        }
+    }
+
+    fn cancel_active_post_turn_evaluation(&mut self) {
+        if let Some(active) = self.in_flight_post_turn_evaluation.take() {
+            active.continuation_permit.invalidate_if_current();
+        }
+    }
+
+    fn active_post_turn_evaluation_correlation(&self) -> Option<&PostTurnEvaluationCorrelation> {
+        self.in_flight_post_turn_evaluation
+            .as_ref()
+            .map(|active| &active.correlation)
     }
 
     fn turn_steer_unavailable_outcome(&self) -> CoreDispatchOutcome {
@@ -1905,6 +1952,7 @@ impl CoreController {
         } else if turn_started {
             self.schedule_stop_synchronization_after_turn_started(&mut effects);
         }
+        self.prune_post_turn_evaluation_for_lifecycle();
         if self
             .active_approval_decision
             .as_ref()
@@ -1996,7 +2044,9 @@ impl CoreController {
         &mut self,
         thread_id: &str,
         completed_turn_id: &str,
-    ) {
+        turn_workspace_directory: &str,
+        planning_workspace_directory: &str,
+    ) -> PostTurnEvaluationCorrelation {
         assert!(
             self.in_flight_post_turn_evaluation.is_none(),
             "test post-turn evaluation must not supersede an active lease"
@@ -2006,8 +2056,22 @@ impl CoreController {
                 .can_start_post_turn_evaluation(thread_id, completed_turn_id),
             "test post-turn evaluation must target the latest confirmed completed turn"
         );
-        self.in_flight_post_turn_evaluation =
-            Some((thread_id.to_string(), completed_turn_id.to_string()));
+        let correlation = PostTurnEvaluationCorrelation::new(
+            take_generation(
+                &mut self.next_post_turn_evaluation_generation,
+                "post-turn evaluation",
+            ),
+            thread_id,
+            completed_turn_id,
+            turn_workspace_directory,
+            planning_workspace_directory,
+        );
+        self.in_flight_post_turn_evaluation = Some(ActivePostTurnEvaluation {
+            correlation: correlation.clone(),
+            continuation_permit: crate::domain::planning::PostTurnContinuationGate::default()
+                .capture(),
+        });
+        correlation
     }
 
     #[cfg(test)]
@@ -2016,11 +2080,12 @@ impl CoreController {
         thread_id: &str,
         completed_turn_id: &str,
     ) -> bool {
-        self.in_flight_post_turn_evaluation.as_ref().is_some_and(
-            |(active_thread_id, active_turn_id)| {
-                active_thread_id == thread_id && active_turn_id == completed_turn_id
-            },
-        )
+        self.in_flight_post_turn_evaluation
+            .as_ref()
+            .is_some_and(|active| {
+                active.correlation.thread_id == thread_id
+                    && active.correlation.completed_turn_id == completed_turn_id
+            })
     }
 
     fn unchanged_outcome(&self) -> CoreDispatchOutcome {
@@ -2318,12 +2383,32 @@ mod tests {
 
     fn post_turn_completion(
         workspace_directory: &str,
+        execution: Box<
+            crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution,
+        >,
+    ) -> CoreEffectCompletion {
+        let correlation = PostTurnEvaluationCorrelation::new(
+            1,
+            execution.thread_id.clone(),
+            execution.completed_turn_id.clone(),
+            workspace_directory,
+            workspace_directory,
+        );
+        post_turn_completion_for(correlation, workspace_directory, execution)
+    }
+
+    fn post_turn_completion_for(
+        correlation: PostTurnEvaluationCorrelation,
+        workspace_directory: &str,
         mut execution: Box<
             crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution,
         >,
     ) -> CoreEffectCompletion {
         execution.runtime_projection_workspace_directory = workspace_directory.to_string();
-        CoreEffectCompletion::PostTurnEvaluationCompleted(execution)
+        CoreEffectCompletion::PostTurnEvaluationCompleted {
+            correlation,
+            execution,
+        }
     }
 
     fn empty_queue_authority_snapshot() -> QueueAuthoritySnapshot {
@@ -4016,6 +4101,50 @@ mod tests {
             [CoreEffect::LoadConversation { correlation, .. }]
                 if correlation.requested_thread_id == "thread-2"
         ));
+    }
+
+    #[test]
+    fn deferred_conversation_load_cancels_active_post_turn_authority_immediately() {
+        let mut controller = CoreController::new();
+        let continuation_gate = PostTurnContinuationGate::default();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let mut request = post_turn_request(
+            RuntimeProjection::invalid("refresh required"),
+            Vec::new(),
+            false,
+            PlanningWorkerPanelState::default(),
+        );
+        request.continuation_permit = continuation_gate.capture();
+        let stale_permit = request.continuation_permit.clone();
+        let started = controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(
+            Box::new(request),
+        )));
+        let stale_correlation = post_turn_effect_correlation(&started);
+
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            SessionRenameRequest::new("thread-2", "Renamed"),
+        )));
+        let deferred = controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-2".to_string(),
+            fallback_workspace_directory: "/tmp/workspace".to_string(),
+        }));
+
+        assert!(deferred.effects.is_empty());
+        assert!(controller.in_flight_post_turn_evaluation.is_none());
+        assert!(
+            !stale_permit.is_current(),
+            "the conversation intent must revoke old worker authority before its load can start"
+        );
+        assert!(continuation_gate.capture().is_current());
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: stale_correlation,
+                execution: Box::new(sample_post_turn_execution()),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert!(stale.effects.is_empty());
     }
 
     #[test]
@@ -7449,9 +7578,26 @@ mod tests {
                 vec![AppEvent::PostTurnEvaluationStarted(expected.clone())],
                 "{label} must publish the full computed state first"
             );
-            let [CoreEffect::EvaluatePostTurn(effect_request)] = outcome.effects.as_slice() else {
+            let [
+                CoreEffect::EvaluatePostTurn {
+                    correlation,
+                    request: effect_request,
+                },
+            ] = outcome.effects.as_slice()
+            else {
                 panic!("{label} must dispatch exactly one post-turn effect");
             };
+            assert_eq!(
+                correlation,
+                &PostTurnEvaluationCorrelation::new(
+                    1,
+                    "thread-1",
+                    "turn-1",
+                    "/tmp/workspace",
+                    "/tmp/workspace",
+                ),
+                "{label} must correlate the full admitted target"
+            );
             assert_eq!(
                 effect_request.planning_worker_panel_state, expected,
                 "{label} event and effect request must carry the same full state"
@@ -7491,7 +7637,7 @@ mod tests {
         ));
         assert!(matches!(
             accepted.effects.as_slice(),
-            [CoreEffect::EvaluatePostTurn(_)]
+            [CoreEffect::EvaluatePostTurn { .. }]
         ));
 
         let duplicate = start_post_turn_evaluation(&mut controller, "turn-1");
@@ -7504,9 +7650,16 @@ mod tests {
             post_turn_completion("/tmp/workspace", Box::new(wrong_completion)),
         ));
         assert!(wrong_completion.events.is_empty());
+        let expected_correlation = PostTurnEvaluationCorrelation::new(
+            1,
+            "thread-1",
+            "turn-1",
+            "/tmp/workspace",
+            "/tmp/workspace",
+        );
         assert_eq!(
-            controller.in_flight_post_turn_evaluation,
-            Some(("thread-1".to_string(), "turn-1".to_string())),
+            controller.active_post_turn_evaluation_correlation(),
+            Some(&expected_correlation),
             "a mismatched completion must leave the exact lease active"
         );
 
@@ -7525,6 +7678,270 @@ mod tests {
     }
 
     #[test]
+    fn post_turn_completion_requires_latest_exact_correlation_once_across_aba() {
+        let mut controller = CoreController::new();
+
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let first = start_post_turn_evaluation_for(
+            &mut controller,
+            "thread-1",
+            "turn-1",
+            "/tmp/turn",
+            "/tmp/planning",
+        );
+        let first_correlation = post_turn_effect_correlation(&first);
+
+        apply_completed_turn(&mut controller, "thread-2", "turn-2");
+        let second = start_post_turn_evaluation_for(
+            &mut controller,
+            "thread-2",
+            "turn-2",
+            "/tmp/turn",
+            "/tmp/planning",
+        );
+        let second_correlation = post_turn_effect_correlation(&second);
+
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let current = start_post_turn_evaluation_for(
+            &mut controller,
+            "thread-1",
+            "turn-1",
+            "/tmp/turn",
+            "/tmp/planning",
+        );
+        let current_correlation = post_turn_effect_correlation(&current);
+        assert_eq!(
+            (
+                first_correlation.generation,
+                second_correlation.generation,
+                current_correlation.generation,
+            ),
+            (1, 2, 3)
+        );
+
+        for (label, stale_correlation, execution) in [
+            (
+                "old A",
+                first_correlation,
+                sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/turn"),
+            ),
+            (
+                "intermediate B",
+                second_correlation,
+                sample_post_turn_execution_for("thread-2", "turn-2", "/tmp/turn"),
+            ),
+        ] {
+            let stale = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation: stale_correlation,
+                    execution: Box::new(execution),
+                },
+            ));
+            assert!(
+                stale.events.is_empty() && stale.effects.is_empty(),
+                "{label} completion must be ignored"
+            );
+            assert_eq!(
+                controller.active_post_turn_evaluation_correlation(),
+                Some(&current_correlation),
+                "{label} completion must not clear the current A lease"
+            );
+        }
+
+        let exact = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: current_correlation.clone(),
+                execution: Box::new(sample_post_turn_execution_for(
+                    "thread-1",
+                    "turn-1",
+                    "/tmp/planning",
+                )),
+            },
+        ));
+        assert!(matches!(
+            exact.events.as_slice(),
+            [AppEvent::PostTurnEvaluationCompleted(_)]
+        ));
+        assert!(controller.in_flight_post_turn_evaluation.is_none());
+
+        let duplicate = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: current_correlation,
+                execution: Box::new(sample_post_turn_execution_for(
+                    "thread-1",
+                    "turn-1",
+                    "/tmp/planning",
+                )),
+            },
+        ));
+        assert!(duplicate.events.is_empty());
+        assert!(duplicate.effects.is_empty());
+    }
+
+    #[test]
+    fn lifecycle_only_aba_prunes_the_old_post_turn_lease_before_completion() {
+        let mut controller = CoreController::new();
+        let continuation_gate = PostTurnContinuationGate::default();
+
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let mut first_request = post_turn_request(
+            RuntimeProjection::invalid("refresh required"),
+            Vec::new(),
+            false,
+            PlanningWorkerPanelState::default(),
+        );
+        first_request.context.planning_workspace_directory = "/tmp/planning".to_string();
+        first_request.workspace_directory = "/tmp/turn".to_string();
+        first_request.continuation_permit = continuation_gate.capture();
+        let first_permit = first_request.continuation_permit.clone();
+        let first = controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(
+            Box::new(first_request),
+        )));
+        let first_correlation = post_turn_effect_correlation(&first);
+
+        apply_completed_turn(&mut controller, "thread-2", "turn-2");
+        assert!(
+            controller.in_flight_post_turn_evaluation.is_none(),
+            "leaving the admitted lifecycle must permanently prune its lease"
+        );
+        assert!(!first_permit.is_current());
+        assert!(
+            first_permit.with_current(|| ()).is_none(),
+            "the pruned worker must lose authority to make later background commits"
+        );
+        let current_permit = continuation_gate.capture();
+        assert!(
+            current_permit.is_current(),
+            "pruning A must not advance the shared lifecycle generation for a newer request"
+        );
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+
+        let stale = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: first_correlation,
+                execution: Box::new(sample_post_turn_execution_for(
+                    "thread-1",
+                    "turn-1",
+                    "/tmp/turn",
+                )),
+            },
+        ));
+        assert!(stale.events.is_empty());
+        assert!(stale.effects.is_empty());
+        assert!(controller.in_flight_post_turn_evaluation.is_none());
+
+        let mut current_request = post_turn_request(
+            RuntimeProjection::invalid("refresh required"),
+            Vec::new(),
+            false,
+            PlanningWorkerPanelState::default(),
+        );
+        current_request.context.planning_workspace_directory = "/tmp/planning".to_string();
+        current_request.workspace_directory = "/tmp/turn".to_string();
+        current_request.continuation_permit = current_permit;
+        let current = controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(
+            Box::new(current_request),
+        )));
+        let current_correlation = post_turn_effect_correlation(&current);
+        assert_eq!(current_correlation.generation, 2);
+        let exact = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation: current_correlation,
+                execution: Box::new(sample_post_turn_execution_for(
+                    "thread-1",
+                    "turn-1",
+                    "/tmp/planning",
+                )),
+            },
+        ));
+        assert!(matches!(
+            exact.events.as_slice(),
+            [AppEvent::PostTurnEvaluationCompleted(_)]
+        ));
+    }
+
+    #[test]
+    fn forged_post_turn_payload_cannot_settle_the_exact_lease() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let started = start_post_turn_evaluation_for(
+            &mut controller,
+            "thread-1",
+            "turn-1",
+            "/tmp/turn",
+            "/tmp/planning",
+        );
+        let correlation = post_turn_effect_correlation(&started);
+        let unchanged_revision = started.snapshot.revision;
+
+        let mut wrong_thread = sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/turn");
+        wrong_thread.thread_id = "forged-thread".to_string();
+        let mut wrong_turn = sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/turn");
+        wrong_turn.completed_turn_id = "forged-turn".to_string();
+        let wrong_workspace = sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/forged");
+        let mut wrong_provenance =
+            sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/turn");
+        wrong_provenance.evaluation.provenance.completed_turn_id = "forged-turn".to_string();
+        let mut wrong_receipt = sample_post_turn_execution_for("thread-1", "turn-1", "/tmp/turn");
+        wrong_receipt.evaluation.provenance.queue_mutation_receipt =
+            Some(crate::domain::planning::PlanningQueueMutationReceipt {
+                completed_turn_id: "forged-turn".to_string(),
+                planning_revision: 1,
+                entries: Vec::new(),
+            });
+
+        for (label, execution) in [
+            ("thread", wrong_thread),
+            ("turn", wrong_turn),
+            ("workspace", wrong_workspace),
+            ("provenance", wrong_provenance),
+            ("receipt", wrong_receipt),
+        ] {
+            let forged = controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation: correlation.clone(),
+                    execution: Box::new(execution),
+                },
+            ));
+            assert!(
+                forged.events.is_empty() && forged.effects.is_empty(),
+                "forged {label} payload must not publish"
+            );
+            assert_eq!(forged.snapshot.revision, unchanged_revision);
+            assert_eq!(
+                controller.active_post_turn_evaluation_correlation(),
+                Some(&correlation),
+                "forged {label} payload must leave the exact lease active"
+            );
+        }
+
+        let exact = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PostTurnEvaluationCompleted {
+                correlation,
+                execution: Box::new(sample_post_turn_execution_for(
+                    "thread-1",
+                    "turn-1",
+                    "/tmp/planning",
+                )),
+            },
+        ));
+        assert!(matches!(
+            exact.events.as_slice(),
+            [AppEvent::PostTurnEvaluationCompleted(_)]
+        ));
+        assert!(controller.in_flight_post_turn_evaluation.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "post-turn evaluation generation exhausted")]
+    fn post_turn_evaluation_generation_exhaustion_fails_before_admission() {
+        let mut controller = CoreController::new();
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.next_post_turn_evaluation_generation = u64::MAX;
+        let _ = start_post_turn_evaluation(&mut controller, "turn-1");
+    }
+
+    #[test]
     fn post_turn_lease_is_pruned_or_settled_after_lifecycle_supersession() {
         let mut pruned = CoreController::new();
         apply_completed_turn(&mut pruned, "thread-1", "turn-1");
@@ -7540,9 +7957,16 @@ mod tests {
             next.events.as_slice(),
             [AppEvent::PostTurnEvaluationStarted(_)]
         ));
+        let expected_correlation = PostTurnEvaluationCorrelation::new(
+            2,
+            "thread-1",
+            "turn-2",
+            "/tmp/workspace",
+            "/tmp/workspace",
+        );
         assert_eq!(
-            pruned.in_flight_post_turn_evaluation,
-            Some(("thread-1".to_string(), "turn-2".to_string()))
+            pruned.active_post_turn_evaluation_correlation(),
+            Some(&expected_correlation)
         );
 
         let mut settled = CoreController::new();
@@ -7729,11 +8153,14 @@ mod tests {
             root_projection.clone(),
         ));
         apply_completed_turn(&mut controller, "thread-1", "turn-1");
-        assert!(
-            !start_post_turn_evaluation(&mut controller, "turn-1")
-                .effects
-                .is_empty()
+        let started = start_post_turn_evaluation_for(
+            &mut controller,
+            "thread-1",
+            "turn-1",
+            "/tmp/slot",
+            "/tmp/root",
         );
+        let post_turn_correlation = post_turn_effect_correlation(&started);
         controller.handle_input(CoreInput::Command(AppCommand::RefreshPlanningRuntime {
             workspace_directory: "/tmp/root".to_string(),
         }));
@@ -7741,7 +8168,7 @@ mod tests {
         execution.runtime_projection_workspace_directory = "/tmp/slot".to_string();
 
         let slot_completion = controller.handle_input(CoreInput::EffectCompleted(
-            post_turn_completion("/tmp/slot", execution.clone()),
+            post_turn_completion_for(post_turn_correlation, "/tmp/slot", execution.clone()),
         ));
 
         assert_eq!(
@@ -8382,16 +8809,44 @@ mod tests {
         controller: &mut CoreController,
         completed_turn_id: &str,
     ) -> CoreDispatchOutcome {
+        start_post_turn_evaluation_for(
+            controller,
+            "thread-1",
+            completed_turn_id,
+            "/tmp/workspace",
+            "/tmp/workspace",
+        )
+    }
+
+    fn start_post_turn_evaluation_for(
+        controller: &mut CoreController,
+        thread_id: &str,
+        completed_turn_id: &str,
+        turn_workspace_directory: &str,
+        planning_workspace_directory: &str,
+    ) -> CoreDispatchOutcome {
         let mut request = post_turn_request(
             RuntimeProjection::invalid("refresh required"),
             Vec::new(),
             false,
             PlanningWorkerPanelState::default(),
         );
+        request.context.thread_id = thread_id.to_string();
+        request.context.planning_workspace_directory = planning_workspace_directory.to_string();
+        request.workspace_directory = turn_workspace_directory.to_string();
         request.completed_turn_id = completed_turn_id.to_string();
         controller.handle_input(CoreInput::Command(AppCommand::EvaluatePostTurn(Box::new(
             request,
         ))))
+    }
+
+    fn post_turn_effect_correlation(
+        outcome: &CoreDispatchOutcome,
+    ) -> PostTurnEvaluationCorrelation {
+        let [CoreEffect::EvaluatePostTurn { correlation, .. }] = outcome.effects.as_slice() else {
+            panic!("test post-turn admission must dispatch one correlated effect");
+        };
+        correlation.clone()
     }
 
     fn submit_test_turn(
@@ -8455,5 +8910,19 @@ mod tests {
             },
             planning_worker_panel_state: PlanningWorkerPanelState::default(),
         }
+    }
+
+    fn sample_post_turn_execution_for(
+        thread_id: &str,
+        completed_turn_id: &str,
+        runtime_projection_workspace_directory: &str,
+    ) -> crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution {
+        let mut execution = sample_post_turn_execution();
+        execution.thread_id = thread_id.to_string();
+        execution.completed_turn_id = completed_turn_id.to_string();
+        execution.runtime_projection_workspace_directory =
+            runtime_projection_workspace_directory.to_string();
+        execution.evaluation.provenance.completed_turn_id = completed_turn_id.to_string();
+        execution
     }
 }

@@ -74,7 +74,10 @@ pub(super) enum BackgroundMessage {
     InvalidateParallelModeSupervisorSnapshot,
     ParallelModeControlPlaneEvent(Box<ParallelModeControlPlaneBackgroundEvent>),
     #[cfg(test)]
-    PostTurnEvaluationCompleted(Box<PostTurnEvaluationExecution>),
+    PostTurnEvaluationCompleted {
+        correlation: crate::core::app::PostTurnEvaluationCorrelation,
+        execution: Box<PostTurnEvaluationExecution>,
+    },
 }
 
 #[derive(Clone)]

@@ -543,9 +543,10 @@ impl PostTurnRequest {
 }
 
 /*
- * A post-turn request captures one automation generation. Operator policy changes and
- * conversation/workspace supersession advance the shared gate, so an older request can
- * still reconcile local planning state but cannot launch a new hidden Codex worker.
+ * A post-turn request captures one automation generation plus a request-local validity token.
+ * Operator policy changes and conversation/workspace supersession advance the shared gate, so
+ * every older request loses continuation authority. A worker timeout invalidates only clones of
+ * its own request token and cannot cancel a newer request captured in the same shared generation.
  */
 #[derive(Clone, Default)]
 pub struct PostTurnContinuationGate {
@@ -561,6 +562,7 @@ impl PostTurnContinuationGate {
             generation: self.generation.clone(),
             commit_serialization: self.commit_serialization.clone(),
             observed_generation: self.generation.load(Ordering::SeqCst),
+            request_valid: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -580,6 +582,7 @@ pub struct PostTurnContinuationPermit {
     generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     commit_serialization: std::sync::Arc<std::sync::Mutex<()>>,
     observed_generation: u64,
+    request_valid: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PostTurnContinuationPermit {
@@ -587,6 +590,7 @@ impl PostTurnContinuationPermit {
         use std::sync::atomic::Ordering;
 
         self.generation.load(Ordering::SeqCst) == self.observed_generation
+            && self.request_valid.load(Ordering::SeqCst)
     }
 
     pub fn invalidate_if_current(&self) -> bool {
@@ -596,14 +600,11 @@ impl PostTurnContinuationPermit {
             .commit_serialization
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.generation
-            .compare_exchange(
-                self.observed_generation,
-                self.observed_generation.saturating_add(1),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
+        self.generation.load(Ordering::SeqCst) == self.observed_generation
+            && self
+                .request_valid
+                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
     }
 
     pub fn with_current<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
@@ -616,7 +617,9 @@ impl PostTurnContinuationPermit {
             .commit_serialization
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (self.generation.load(Ordering::SeqCst) == self.observed_generation).then(operation)
+        (self.generation.load(Ordering::SeqCst) == self.observed_generation
+            && self.request_valid.load(Ordering::SeqCst))
+        .then(operation)
     }
 }
 
@@ -634,6 +637,7 @@ impl PartialEq for PostTurnContinuationPermit {
     fn eq(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.generation, &other.generation)
             && self.observed_generation == other.observed_generation
+            && std::sync::Arc::ptr_eq(&self.request_valid, &other.request_valid)
     }
 }
 
@@ -894,11 +898,22 @@ mod tests {
     fn continuation_permit_timeout_invalidation_is_atomic_and_idempotent() {
         let gate = PostTurnContinuationGate::default();
         let permit = gate.capture();
-        let sibling = permit.clone();
+        let permit_clone = permit.clone();
+        let newer_request = gate.capture();
 
+        assert_eq!(permit, permit_clone);
+        assert_ne!(permit, newer_request);
         assert!(permit.invalidate_if_current());
-        assert!(!sibling.invalidate_if_current());
+        assert!(!permit_clone.invalidate_if_current());
         assert!(!permit.is_current());
+        assert!(permit_clone.with_current(|| ()).is_none());
+        assert!(
+            newer_request.is_current(),
+            "one worker timeout must not invalidate another request captured from the same gate"
+        );
+        assert_eq!(newer_request.with_current(|| 7), Some(7));
+        gate.advance();
+        assert!(newer_request.with_current(|| ()).is_none());
         assert!(gate.capture().is_current());
     }
 

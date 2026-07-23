@@ -4189,6 +4189,110 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
 }
 
 #[test]
+fn post_turn_evaluation_uses_one_core_owned_exact_correlation() {
+    let request =
+        fs::read_to_string("src/core/app/request.rs").expect("Core request source should load");
+    for required in [
+        "pub struct PostTurnEvaluationCorrelation",
+        "pub generation: u64",
+        "pub thread_id: String",
+        "pub completed_turn_id: String",
+        "pub turn_workspace_directory: String",
+        "pub planning_workspace_directory: String",
+        "pub fn matches_execution",
+        "execution.evaluation.provenance.completed_turn_id",
+        "queue_mutation_receipt",
+    ] {
+        assert!(
+            request.contains(required),
+            "post-turn exact correlation contract is missing: {required}"
+        );
+    }
+
+    let effect =
+        fs::read_to_string("src/core/app/effect.rs").expect("Core effect source should load");
+    let event = fs::read_to_string("src/core/app/event.rs").expect("Core event source should load");
+    assert!(
+        effect.contains("EvaluatePostTurn {")
+            && effect.contains("correlation: PostTurnEvaluationCorrelation")
+            && effect.contains("request: Box<PostTurnRequest>"),
+        "post-turn effect must carry the Core-owned correlation beside the domain request"
+    );
+    assert!(
+        event.contains("PostTurnEvaluationCompleted {")
+            && event.contains("correlation: PostTurnEvaluationCorrelation")
+            && event.contains("execution: Box<PostTurnExecution>"),
+        "post-turn completion must return the same Core-owned correlation"
+    );
+
+    let controller = fs::read_to_string("src/core/app/controller.rs")
+        .expect("Core controller source should load");
+    let production_controller = production_source_before_inline_tests(&controller);
+    assert!(
+        production_controller.contains("struct ActivePostTurnEvaluation")
+            && production_controller.contains("correlation: PostTurnEvaluationCorrelation")
+            && production_controller.contains("continuation_permit: PostTurnContinuationPermit")
+            && production_controller
+                .contains("in_flight_post_turn_evaluation: Option<ActivePostTurnEvaluation>")
+            && production_controller.contains("next_post_turn_evaluation_generation: u64")
+            && production_controller.contains(
+                "if self.active_post_turn_evaluation_correlation() != Some(&correlation)"
+            )
+            && production_controller
+                .contains("if !correlation.matches_execution(execution.as_ref())")
+            && production_controller.contains("fn prune_post_turn_evaluation_for_lifecycle")
+            && production_controller.contains("fn cancel_active_post_turn_evaluation")
+            && production_controller.contains("active.continuation_permit.invalidate_if_current()")
+            && !production_controller
+                .contains("in_flight_post_turn_evaluation: Option<(String, String)>"),
+        "Core must bind exact post-turn correlation and worker authority in one lifecycle-pruned active lease"
+    );
+    for behavior_test in [
+        "fn post_turn_completion_requires_latest_exact_correlation_once_across_aba()",
+        "fn lifecycle_only_aba_prunes_the_old_post_turn_lease_before_completion()",
+        "fn deferred_conversation_load_cancels_active_post_turn_authority_immediately()",
+        "fn forged_post_turn_payload_cannot_settle_the_exact_lease()",
+        "fn post_turn_evaluation_generation_exhaustion_fails_before_admission()",
+    ] {
+        assert!(
+            controller.contains(behavior_test),
+            "Core post-turn correlation behavior proof is missing: {behavior_test}"
+        );
+    }
+
+    let runner = fs::read_to_string("src/composition/core_effect_runner.rs")
+        .expect("Core effect runner source should load");
+    let production_runner = production_source_before_inline_tests(&runner);
+    assert!(
+        production_runner.contains("correlation: correlation.clone()")
+            && production_runner.contains(
+                "post_turn_evaluation_completion(correlation, &fallback_request, execution)"
+            )
+            && production_runner
+                .contains("\"post-turn evaluation worker returned a mismatched target\"",)
+            && production_runner.contains("request.continuation_permit.invalidate_if_current()"),
+        "normal, malformed, and panic post-turn worker outcomes must preserve exact correlation and settle safely"
+    );
+    assert!(
+        runner.contains(
+            "fn mismatched_post_turn_execution_becomes_one_correlated_safe_failure_with_local_revoke()",
+        ),
+        "composition must prove malformed post-turn output becomes one correlated safe failure without invalidating a newer permit"
+    );
+
+    let planning_contracts = fs::read_to_string("src/domain/planning/runtime_contracts.rs")
+        .expect("planning runtime contracts should load");
+    assert!(
+        planning_contracts.contains("request_valid: std::sync::Arc<std::sync::atomic::AtomicBool>")
+            && planning_contracts.contains("&& self.request_valid.load(Ordering::SeqCst)")
+            && planning_contracts
+                .contains("std::sync::Arc::ptr_eq(&self.request_valid, &other.request_valid)")
+            && planning_contracts.contains("newer_request.is_current()"),
+        "worker failure must invalidate only its request-local permit, not a newer request in the shared gate generation"
+    );
+}
+
+#[test]
 fn outbound_adapters_do_not_depend_on_inbound_adapters() {
     // Static guard: outbound adapters implement ports and should never depend on inbound transport/UI code.
     assert_no_forbidden_references(BoundaryRule {

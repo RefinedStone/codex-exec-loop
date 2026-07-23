@@ -422,15 +422,13 @@ impl NativeFlowHarness {
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
         mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
-        arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
+        let correlation = arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
             .tx
             .send(post_turn_evaluation_completed_message(
-                "thread-1",
-                turn_id,
-                self.workspace_dir.clone(),
+                correlation,
                 planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
@@ -469,15 +467,13 @@ impl NativeFlowHarness {
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
         mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
-        arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
+        let correlation = arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
             .tx
             .send(post_turn_evaluation_completed_message(
-                "thread-1",
-                turn_id,
-                self.workspace_dir.clone(),
+                correlation,
                 planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string())
@@ -510,15 +506,13 @@ impl NativeFlowHarness {
         conversation.thread_id = "thread-1".to_string();
         conversation.turn_activity.last_completed_turn_id = Some(turn_id.to_string());
         mark_core_turn_completed(&mut self.runtime, "thread-1", turn_id);
-        arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
+        let correlation = arm_core_post_turn_evaluation(&mut self.runtime, "thread-1", turn_id);
 
         self.runtime
             .app
             .tx
             .send(post_turn_evaluation_completed_message(
-                "thread-1",
-                turn_id,
-                self.workspace_dir.clone(),
+                correlation,
                 planning_projection,
                 PostTurnEvaluationOutcome {
                     provenance: PostTurnEvaluationProvenance::new(turn_id.to_string()),
