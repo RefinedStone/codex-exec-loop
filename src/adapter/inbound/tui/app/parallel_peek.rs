@@ -9,7 +9,7 @@ impl NativeTuiApp {
         let active_agents = self.active_parallel_peek_entries();
         let active_agent_count = active_agents.len();
         self.parallel_peek_overlay_ui_state
-            .sync_selection(&active_agents);
+            .select_initial_agent(&active_agents);
         self.dispatch_shell_chrome(ShellChromeEvent::ParallelPeekOverlayShown);
 
         let status_text = if argument.is_some() {
@@ -135,7 +135,8 @@ impl NativeTuiApp {
     ) {
         let Some(entry) = self.selected_parallel_peek_entry(active_agents) else {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
-                status_text: "parallel peek: no active agent is selected".to_string(),
+                status_text: "parallel peek: selected lease changed; choose an active agent again"
+                    .to_string(),
             });
             return;
         };
@@ -200,11 +201,9 @@ impl NativeTuiApp {
         &self,
         active_agents: &[ParallelModeAgentRosterEntry],
     ) -> Option<ParallelModeAgentRosterEntry> {
-        active_agents
-            .get(
-                self.parallel_peek_overlay_ui_state
-                    .selected_agent_index(active_agents),
-            )
-            .cloned()
+        let selected_agent_index = self
+            .parallel_peek_overlay_ui_state
+            .selected_agent_index(active_agents)?;
+        active_agents.get(selected_agent_index).cloned()
     }
 }

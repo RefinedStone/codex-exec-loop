@@ -20,7 +20,8 @@ pub(crate) fn build_parallel_peek_overlay_view(app: &NativeTuiApp) -> ParallelPe
     let header_lines = build_header_lines(step, active_agents.len(), preview);
     let agent_lines = build_agent_lines(&active_agents, selected_index);
     let conversation_lines = build_conversation_lines(step, preview);
-    let status_lines = build_status_lines(step, active_agents.len(), preview);
+    let status_lines =
+        build_status_lines(step, active_agents.len(), selected_index.is_some(), preview);
     let key_lines = build_key_lines(step);
 
     ParallelPeekOverlayView {
@@ -62,7 +63,7 @@ fn build_header_lines(
 
 fn build_agent_lines(
     active_agents: &[ParallelModeAgentRosterEntry],
-    selected_index: usize,
+    selected_index: Option<usize>,
 ) -> Vec<Line<'static>> {
     if active_agents.is_empty() {
         return vec![
@@ -70,11 +71,13 @@ fn build_agent_lines(
             Line::from("Run `:parallel` or wait for the pool to lease a slot."),
         ];
     }
-    let selected_index = selected_index.min(active_agents.len().saturating_sub(1));
-
     let mut lines = Vec::new();
     for (index, entry) in active_agents.iter().enumerate() {
-        let prefix = if index == selected_index { ">" } else { " " };
+        let prefix = if Some(index) == selected_index {
+            ">"
+        } else {
+            " "
+        };
         let thread_label = if entry.thread_id.is_some() {
             "thread ok"
         } else {
@@ -126,11 +129,15 @@ fn build_conversation_lines(
 fn build_status_lines(
     step: ParallelPeekOverlayStep,
     active_agent_count: usize,
+    selection_is_current: bool,
     preview: Option<&ParallelPeekConversationPreview>,
 ) -> Vec<Line<'static>> {
     match step {
         ParallelPeekOverlayStep::AgentList if active_agent_count == 0 => vec![Line::from(
             "Waiting for a leased or running parallel agent before peek can open a conversation.",
+        )],
+        ParallelPeekOverlayStep::AgentList if !selection_is_current => vec![Line::from(
+            "Selected lease changed; press Up/Down to choose a current active lease.",
         )],
         ParallelPeekOverlayStep::AgentList => vec![Line::from(format!(
             "{active_agent_count} active parallel agent(s) ready for peek"
@@ -265,14 +272,20 @@ mod tests {
     }
 
     #[test]
-    fn agent_lines_clamp_stale_selection_to_the_surviving_roster() {
+    fn agent_lines_only_mark_an_exact_resolved_selection() {
         let active_agents = vec![
             active_agent("agent-1", "slot-1"),
             active_agent("agent-2", "slot-2"),
         ];
 
-        let lines = build_agent_lines(&active_agents, 2);
+        let unresolved_lines = build_agent_lines(&active_agents, None);
+        assert!(
+            unresolved_lines
+                .iter()
+                .all(|line| !line.to_string().starts_with('>'))
+        );
 
-        assert!(lines[1].to_string().starts_with("> 2. agent-2"));
+        let selected_lines = build_agent_lines(&active_agents, Some(1));
+        assert!(selected_lines[1].to_string().starts_with("> 2. agent-2"));
     }
 }
