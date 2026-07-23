@@ -746,6 +746,32 @@ mod global_runtime_notice_tests {
     }
 
     #[test]
+    fn ordinary_runtime_notice_enters_client_runtime_and_projects_once() {
+        let mut app = test_native_tui_app();
+        let workspace_directory = app.planning_workspace_directory();
+        let notice = "parallel worker completed".to_string();
+
+        app.apply_parallel_mode_control_plane_presentation_events(vec![
+            ParallelModeControlPlanePresentationEvent::ConversationRuntimeNotice {
+                workspace_directory,
+                notice: notice.clone(),
+            },
+        ]);
+
+        let ConversationState::Ready(conversation) = &app.conversation_state else {
+            panic!("runtime notice must preserve the ready conversation");
+        };
+        assert_eq!(
+            conversation
+                .runtime_notices
+                .iter()
+                .filter(|candidate| *candidate == &notice)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn cleanup_notice_arriving_while_loading_or_failed_surfaces_and_clears_when_ready() {
         for (operation_id, initial_state) in [
             (7, ConversationState::Loading),
