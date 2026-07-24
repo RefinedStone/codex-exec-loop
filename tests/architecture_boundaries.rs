@@ -2078,6 +2078,45 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
         is_named_path_type(&session_feature.ty, "SessionFeatureReducer"),
         "session_feature must be the typed session reducer"
     );
+    let guarded_rename_stream = controller_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "guarded_session_rename_stream")
+        })
+        .expect("CoreController must retain the explicit session-rename/turn-stream bridge");
+    assert!(
+        matches!(
+            &guarded_rename_stream.ty,
+            syn::Type::Path(option)
+                if option.qself.is_none()
+                    && option.path.segments.last().is_some_and(|segment| {
+                        segment.ident == "Option"
+                            && matches!(
+                                &segment.arguments,
+                                syn::PathArguments::AngleBracketed(arguments)
+                                    if matches!(
+                                        arguments.args.iter().collect::<Vec<_>>().as_slice(),
+                                        [syn::GenericArgument::Type(syn::Type::Tuple(tuple))]
+                                            if matches!(
+                                                tuple.elems.iter().collect::<Vec<_>>().as_slice(),
+                                                [turn_submission, session_rename]
+                                                    if is_named_path_type(
+                                                        turn_submission,
+                                                        "TurnSubmissionCorrelation",
+                                                    ) && is_named_path_type(
+                                                        session_rename,
+                                                        "SessionRenameCorrelation",
+                                                    )
+                                            )
+                                    )
+                            )
+                    })
+        ),
+        "the only root session bridge must remain exactly Option<(TurnSubmissionCorrelation, SessionRenameCorrelation)>"
+    );
     for field in &controller_fields {
         let field_name = field
             .ident
@@ -2163,6 +2202,18 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
             "CoreController must call session reducer operation {required_reduction} exactly once in production"
         );
     }
+    let catalog_admission =
+        top_level_impl_method_source(&controller_source, "admit_session_catalog_load");
+    let compact_catalog_admission = rust_code_without_comments_and_literals(&catalog_admission)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact_catalog_admission.contains(
+            "letreduction={letsnapshot=self.shared_snapshot();self.session_feature.reduce_catalog_load(intent,&snapshot.session_catalog)};matchreduction"
+        ),
+        "catalog admission must drop its read snapshot before AppState copy-on-write mutation"
+    );
     let reduce_catalog_load = inherent_impl_methods(
         &reducer_syntax,
         "SessionFeatureReducer",

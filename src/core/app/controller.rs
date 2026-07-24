@@ -1595,11 +1595,12 @@ impl CoreController {
         &mut self,
         intent: SessionCatalogLoadIntent,
     ) -> CoreDispatchOutcome {
-        let snapshot = self.shared_snapshot();
-        match self
-            .session_feature
-            .reduce_catalog_load(intent, &snapshot.session_catalog)
-        {
+        let reduction = {
+            let snapshot = self.shared_snapshot();
+            self.session_feature
+                .reduce_catalog_load(intent, &snapshot.session_catalog)
+        };
+        match reduction {
             SessionCatalogLoadReduction::Unchanged | SessionCatalogLoadReduction::Deferred => {
                 self.unchanged_outcome()
             }
