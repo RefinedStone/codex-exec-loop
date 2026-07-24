@@ -19,6 +19,7 @@ pub mod queue;
 pub mod request;
 pub mod review_center;
 pub mod session;
+mod session_reducer;
 pub mod snapshot;
 pub mod startup;
 mod state;
