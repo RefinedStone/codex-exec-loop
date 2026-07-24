@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+#[cfg(test)]
+use super::NativeTuiParallelModeBinding;
 use super::github_polling::GithubReviewPollingBootstrap;
 use super::shell_frontend::ShellFrontend;
 use super::shell_runtime::ShellRuntime;
-use super::{NativeTuiApp, NativeTuiParallelModeBinding, ShellChromeEvent};
+use super::{NativeTuiApp, ShellChromeEvent};
 use crate::composition::production;
 
 // shell_entrypoint owns terminal bootstrap only. Production service wiring lives
@@ -19,15 +21,9 @@ pub fn run() -> Result<()> {
 }
 
 fn build_default_app() -> NativeTuiApp {
-    let services = production::build_native_tui_application_services();
-    let parallel_mode_binding =
-        NativeTuiParallelModeBinding::from_composition(services.parallel_mode_control_plane);
     let github_review_polling = GithubReviewPollingBootstrap::from_environment();
     NativeTuiApp::new_with_github_review_polling(
-        services.startup_service,
-        services.session_service,
-        services.conversation_service,
-        parallel_mode_binding,
+        production::build_native_tui_application(),
         github_review_polling,
     )
 }

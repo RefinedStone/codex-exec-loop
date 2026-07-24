@@ -8,26 +8,29 @@
 뜻이며 command의 실행 순서를 뜻하지 않습니다.
 
 ```text
-adapter/inbound/tui -> core + application services/contracts/projections + composition wiring + domain
+adapter/inbound/tui -> core + application contracts/projections + opaque composition facade + domain
 adapter/inbound/{cli,admin_api,telegram_bot} -> application -> domain
 application -> outbound ports
 adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
 
-TUI 행은 현재 남아 있는 과도기 의존성을 숨기지 않고 표현합니다. Application service/projection과
-composition wiring 의존성 제거는 뒤의 state/effect 경계 작업이며, 이 의존성이 adapter에 Core 내부
-mutable state 접근 권한을 주지는 않습니다.
+TUI 행은 현재 남아 있는 과도기 projection 의존성을 숨기지 않고 표현합니다. Production bootstrap은
+raw application service를 받지 않습니다. Composition이 service를 소비해 하나의 opaque native
+application object를 만들고, adapter는 여기에 event sink를 bind해 `NativeClientRuntime`, typed
+`ParallelModeControlPlaneHandle`, immutable runtime-control truth만 받습니다.
 
 Client command loop의 **런타임 실행 흐름**은 의도적으로 왕복합니다.
 
 ```text
 TUI intent
+  -> composition/NativeClientRuntime::dispatch_client_event(CoreInput)
   -> core reducer
   -> CoreEffect
   -> composition/CoreEffectRunner
   -> application use case / outbound port
-  -> CoreInput completion
+  -> bounded CoreInput mailbox
+  -> composition/NativeClientRuntime::poll_pending_client_event
   -> core reducer
   -> snapshot/event
   -> TUI projection
@@ -64,10 +67,20 @@ process-local TUI runtime을 채택할 필요가 없습니다.
 - `AppEvent`: 외부에 유용한 전이
 - `AppSnapshot`/projection: adapter가 읽는 view model
 
-Mutable client-runtime state는 `CoreRuntime`만 구동합니다. Adapter는 typed input을 dispatch하고
-owned snapshot/projection만 읽어야 하며 `CoreController`, `AppState`, `TurnStreamState`를 직접
-생성하거나 변경하면 안 됩니다. Effect executor는 작업을 수행하고 completion을 반환할 수 있지만
-runtime state의 소유자도 writer도 아닙니다.
+Composition만 bounded mailbox, `CoreEffectRunner`, `CoreRuntime` driver를 조립합니다. TUI는
+`dispatch_client_event`로 typed input을 전달하고 owned snapshot/projection만 읽으며 raw runtime
+parts를 생성하거나 service를 직접 호출하지 않습니다. Worker의 success/failure/panic completion은
+모두 bounded mailbox를 거쳐 `poll_pending_client_event`로 같은 reducer에 재진입합니다.
+
+모든 `CoreEffect` variant는 exhaustive dispatch arm 하나와 구조적으로 대응합니다. Typed local
+invalidation 두 개를 제외한 arm은 audited completion worker 하나, 즉시 `EffectCompleted`, 또는
+별도 검증된 turn-terminal worker 중 하나를 반드시 사용합니다. Architecture test는 enum, match arm,
+launcher, runtime trait 위임을 Rust AST로 검사하므로 completion 없는 새 arm, wildcard, 조건부
+launcher, TUI 직접 worker 추가는 `cargo test`에서 실패합니다.
+
+Mutable client-runtime state는 `CoreRuntime`만 구동합니다. Adapter는 `CoreController`, `AppState`,
+`TurnStreamState`를 직접 생성하거나 변경하면 안 됩니다. Effect executor는 작업을 수행하고
+completion을 반환할 수 있지만 runtime state의 소유자도 writer도 아닙니다.
 
 시작, session load, conversation 선택, turn 제출, stream reduction, 완료, post-turn 평가가 이 흐름을
 사용합니다. Parallel mutation은 application 소유이며 `ParallelModeControlPlaneHandle`로 진입합니다.

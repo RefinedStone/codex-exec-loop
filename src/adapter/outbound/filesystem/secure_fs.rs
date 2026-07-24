@@ -1329,11 +1329,12 @@ mod platform {
         use std::sync::mpsc;
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+        #[cfg(target_os = "linux")]
+        use super::MUTATION_LOCK_RELATIVE;
         use super::{
-            MUTATION_LOCK_RELATIVE, acquire_workspace_mutation_lock,
-            acquire_workspace_mutation_lock_with_timeout, classify_readdir_result,
-            compare_and_swap_optional_file, install_before_atomic_replace_hook,
-            open_workspace_root, read_tree, write_file_atomic,
+            acquire_workspace_mutation_lock, acquire_workspace_mutation_lock_with_timeout,
+            classify_readdir_result, compare_and_swap_optional_file,
+            install_before_atomic_replace_hook, open_workspace_root, read_tree, write_file_atomic,
         };
 
         fn workspace(name: &str) -> std::path::PathBuf {
