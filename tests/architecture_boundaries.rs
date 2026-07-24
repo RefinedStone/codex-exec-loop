@@ -478,6 +478,7 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
             "src/core/app/planning_workspace.rs",
             "PlanningWorkspaceOperationCoordinator",
         ),
+        ("src/core/app/session_reducer.rs", "SessionFeatureReducer"),
     ] {
         let source = fs::read_to_string(path).unwrap();
         assert!(
@@ -491,6 +492,7 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
         "use approval::ApprovalReviewPersistenceCoordinator",
         "use planning_runtime::PlanningRuntimeCoordinator",
         "use planning_workspace::PlanningWorkspaceOperationCoordinator",
+        "use session_reducer::SessionFeatureReducer",
     ] {
         assert!(
             !app_module.contains(forbidden_reexport),
@@ -2021,17 +2023,20 @@ fn session_catalog_load_contract_keeps_admission_and_identity_in_core() {
 
     let controller_source = fs::read_to_string("src/core/app/controller.rs")
         .expect("core controller source should load");
-    let controller_syntax =
-        syn::parse_file(&controller_source).expect("core controller source should parse");
-    let deferred_catalog_load = named_struct_fields(&controller_syntax, "CoreController")
-        .into_iter()
-        .find(|field| {
-            field
-                .ident
-                .as_ref()
-                .is_some_and(|ident| ident == "deferred_session_catalog_load")
-        })
-        .expect("CoreController must retain deferred catalog intent");
+    let session_reducer_source = fs::read_to_string("src/core/app/session_reducer.rs")
+        .expect("session feature reducer source should load");
+    let session_reducer_syntax =
+        syn::parse_file(&session_reducer_source).expect("session feature reducer should parse");
+    let deferred_catalog_load =
+        named_struct_fields(&session_reducer_syntax, "SessionFeatureReducer")
+            .into_iter()
+            .find(|field| {
+                field
+                    .ident
+                    .as_ref()
+                    .is_some_and(|ident| ident == "deferred_catalog_load")
+            })
+            .expect("SessionFeatureReducer must retain deferred catalog intent");
     assert!(
         is_single_generic_named_type(
             &deferred_catalog_load.ty,
@@ -2050,6 +2055,200 @@ fn session_catalog_load_contract_keeps_admission_and_identity_in_core() {
         compact_deferred_reads.contains("self.admit_session_catalog_load(intent)")
             && !compact_deferred_reads.contains("self.start_session_catalog_load("),
         "deferred catalog work must re-enter common Core admission instead of bypassing it"
+    );
+}
+
+#[test]
+fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
+    let controller_source = fs::read_to_string("src/core/app/controller.rs")
+        .expect("core controller source should load");
+    let controller_syntax =
+        syn::parse_file(&controller_source).expect("core controller source should parse");
+    let controller_fields = named_struct_fields(&controller_syntax, "CoreController");
+    let session_feature = controller_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "session_feature")
+        })
+        .expect("CoreController must own one SessionFeatureReducer slice");
+    assert!(
+        is_named_path_type(&session_feature.ty, "SessionFeatureReducer"),
+        "session_feature must be the typed session reducer"
+    );
+    for field in &controller_fields {
+        let field_name = field
+            .ident
+            .as_ref()
+            .expect("CoreController field should be named")
+            .to_string();
+        if matches!(
+            field_name.as_str(),
+            "session_feature" | "guarded_session_rename_stream"
+        ) {
+            continue;
+        }
+        assert!(
+            !field_name.contains("session"),
+            "CoreController session state must live in session_feature; unexpected field: {field_name}"
+        );
+        for forbidden_type in [
+            "SessionCatalogLoadCorrelation",
+            "SessionCatalogLoadIntent",
+            "SessionRenameCorrelation",
+        ] {
+            assert!(
+                !type_mentions_named_path(&field.ty, forbidden_type),
+                "CoreController field {field_name} must not hide session authority type {forbidden_type}"
+            );
+        }
+    }
+
+    let reducer_source = fs::read_to_string("src/core/app/session_reducer.rs")
+        .expect("session feature reducer source should load");
+    let reducer_syntax =
+        syn::parse_file(&reducer_source).expect("session feature reducer should parse");
+    let reducer_fields = named_struct_fields(&reducer_syntax, "SessionFeatureReducer")
+        .into_iter()
+        .map(|field| {
+            field
+                .ident
+                .as_ref()
+                .expect("session reducer field should be named")
+                .to_string()
+        })
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        reducer_fields,
+        HashSet::from([
+            "next_catalog_load_generation".to_string(),
+            "active_catalog_load".to_string(),
+            "next_rename_generation".to_string(),
+            "active_rename".to_string(),
+            "deferred_catalog_load".to_string(),
+        ]),
+        "SessionFeatureReducer must remain a cohesive session-only lifecycle slice"
+    );
+    for forbidden_dependency in [
+        "AppState",
+        "TurnStreamState",
+        "CoreDispatchOutcome",
+        "CoreEffect",
+        "AppEvent",
+    ] {
+        assert!(
+            !reducer_source.contains(forbidden_dependency),
+            "session reducer must return typed reductions instead of mutating another feature: {forbidden_dependency}"
+        );
+    }
+    let production_calls = top_level_impl_method_calls(&controller_source);
+    for required_reduction in [
+        "reduce_catalog_load",
+        "reduce_rename",
+        "accept_catalog_completion",
+        "accept_rename_completion",
+        "active_rename_matches_thread",
+        "take_deferred_catalog_load",
+        "has_active_rename",
+    ] {
+        let call_count = production_calls
+            .iter()
+            .flat_map(|(_, calls, _)| calls)
+            .filter(|(called, _)| called == required_reduction)
+            .count();
+        assert_eq!(
+            call_count, 1,
+            "CoreController must call session reducer operation {required_reduction} exactly once in production"
+        );
+    }
+    let reduce_catalog_load = inherent_impl_methods(
+        &reducer_syntax,
+        "SessionFeatureReducer",
+        "reduce_catalog_load",
+    );
+    let [reduce_catalog_load] = reduce_catalog_load.as_slice() else {
+        panic!("SessionFeatureReducer must define one reduce_catalog_load method");
+    };
+    let reduction_inputs = reduce_catalog_load
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|argument| match argument {
+            syn::FnArg::Receiver(_) => None,
+            syn::FnArg::Typed(argument) => Some(argument),
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(
+            reduction_inputs.as_slice(),
+            [intent, current_catalog]
+                if is_named_path_type(&intent.ty, "SessionCatalogLoadIntent")
+                    && matches!(
+                        current_catalog.ty.as_ref(),
+                        syn::Type::Reference(reference)
+                            if reference.mutability.is_none()
+                                && is_named_path_type(
+                                    reference.elem.as_ref(),
+                                    "SessionCatalogSnapshot",
+                                )
+                    )
+        ),
+        "catalog admission policy must receive the typed intent and read-only catalog slice"
+    );
+
+    let production_controller = production_lines(&controller_source)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let compact_controller = rust_code_without_comments_and_literals(&production_controller)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for forbidden_constructor in [
+        "SessionCatalogLoadCorrelation::new(",
+        "SessionRenameCorrelation::new(",
+    ] {
+        assert!(
+            !compact_controller.contains(forbidden_constructor),
+            "only SessionFeatureReducer may mint session correlations: {forbidden_constructor}"
+        );
+    }
+    let handle_input = top_level_impl_method_source(&controller_source, "handle_input");
+    let compact_handle_input = rust_code_without_comments_and_literals(&handle_input)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for (acceptance_gate, state_mutation) in [
+        (
+            "accept_catalog_completion(&correlation)",
+            "state.apply_session_catalog_result(result)",
+        ),
+        (
+            "accept_rename_completion(&correlation)",
+            "state.apply_session_rename(&correlation.request)",
+        ),
+    ] {
+        let gate_position = compact_handle_input
+            .find(acceptance_gate)
+            .unwrap_or_else(|| panic!("missing session completion gate: {acceptance_gate}"));
+        let mutation_position = compact_handle_input
+            .find(state_mutation)
+            .unwrap_or_else(|| panic!("missing gated session state mutation: {state_mutation}"));
+        assert!(
+            gate_position < mutation_position,
+            "session completion gate {acceptance_gate} must run before {state_mutation}"
+        );
+    }
+    let app_module =
+        fs::read_to_string("src/core/app/mod.rs").expect("core app module source should load");
+    assert!(
+        app_module.contains("mod session_reducer;")
+            && !app_module.contains("pub mod session_reducer;")
+            && !app_module.contains("pub use session_reducer"),
+        "the mutable session reducer must remain private to core/app"
     );
 }
 
@@ -8195,6 +8394,35 @@ fn is_named_path_type(ty: &syn::Type, expected_name: &str) -> bool {
                         && matches!(segment.arguments, syn::PathArguments::None)
                 })
     )
+}
+
+fn type_mentions_named_path(ty: &syn::Type, expected_name: &str) -> bool {
+    struct NamedTypeVisitor<'a> {
+        expected_name: &'a str,
+        found: bool,
+    }
+
+    impl<'ast> Visit<'ast> for NamedTypeVisitor<'_> {
+        fn visit_type_path(&mut self, type_path: &'ast syn::TypePath) {
+            if type_path
+                .path
+                .segments
+                .iter()
+                .any(|segment| segment.ident == self.expected_name)
+            {
+                self.found = true;
+                return;
+            }
+            visit::visit_type_path(self, type_path);
+        }
+    }
+
+    let mut visitor = NamedTypeVisitor {
+        expected_name,
+        found: false,
+    };
+    visitor.visit_type(ty);
+    visitor.found
 }
 
 fn is_single_generic_named_type(ty: &syn::Type, outer_name: &str, inner_name: &str) -> bool {

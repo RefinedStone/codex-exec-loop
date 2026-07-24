@@ -2,6 +2,7 @@ use super::approval::ApprovalReviewPersistenceCoordinator;
 use super::github_review_polling_target_is_valid;
 use super::planning_runtime::PlanningRuntimeCoordinator;
 use super::planning_workspace::PlanningWorkspaceOperationCoordinator;
+use super::session_reducer::{SessionCatalogLoadReduction, SessionFeatureReducer};
 use super::state::AppState;
 use super::{
     AppCommand, AppEvent, AppSnapshot, ApprovalDecisionAdmission, ApprovalDecisionCorrelation,
@@ -14,8 +15,7 @@ use super::{
     PlanningWorkspaceOperationAdmission, PlanningWorkspaceOperationIntent,
     PlanningWorkspaceOperationKind, PostTurnEvaluationCorrelation, QueueAuthorityLoadCorrelation,
     QueueMutationCorrelation, ReviewCenterLoadCorrelation, RevisionedPlanningParallelProjection,
-    SessionCatalogLoadCorrelation, SessionCatalogLoadIntent, SessionCatalogLoadMode,
-    SessionCatalogSnapshot, SessionRenameAcceptedSnapshot, SessionRenameAdmission,
+    SessionCatalogLoadIntent, SessionRenameAcceptedSnapshot, SessionRenameAdmission,
     SessionRenameCorrelation, StartupCheckCorrelation, StopRequestAdmission, StopRequestAttempt,
     StopRequestCorrelation, TurnSteerAdmission, TurnSteerCorrelation, TurnStreamEvent,
     TurnStreamState, TurnStreamUpdate, TurnSubmissionAdmission, TurnSubmissionCorrelation,
@@ -80,12 +80,8 @@ pub(in crate::core) struct CoreController {
     turn_stream_state: TurnStreamState,
     next_startup_check_generation: u64,
     in_flight_startup_check: Option<StartupCheckCorrelation>,
-    next_session_catalog_load_generation: u64,
-    in_flight_session_catalog_load: Option<SessionCatalogLoadCorrelation>,
-    next_session_rename_generation: u64,
-    in_flight_session_rename: Option<SessionRenameCorrelation>,
+    session_feature: SessionFeatureReducer,
     guarded_session_rename_stream: Option<(TurnSubmissionCorrelation, SessionRenameCorrelation)>,
-    deferred_session_catalog_load: Option<SessionCatalogLoadIntent>,
     next_conversation_load_generation: u64,
     in_flight_conversation_load: Option<ConversationLoadCorrelation>,
     deferred_conversation_load: Option<(String, String)>,
@@ -132,12 +128,8 @@ impl CoreController {
             turn_stream_state: TurnStreamState::new(),
             next_startup_check_generation: 1,
             in_flight_startup_check: None,
-            next_session_catalog_load_generation: 1,
-            in_flight_session_catalog_load: None,
-            next_session_rename_generation: 1,
-            in_flight_session_rename: None,
+            session_feature: SessionFeatureReducer::new(),
             guarded_session_rename_stream: None,
-            deferred_session_catalog_load: None,
             next_conversation_load_generation: 1,
             in_flight_conversation_load: None,
             deferred_conversation_load: None,
@@ -221,37 +213,26 @@ impl CoreController {
                 self.admit_session_catalog_load(intent)
             }
             CoreInput::Command(AppCommand::RenameSession(request)) => {
-                if let Some(active_correlation) = self.in_flight_session_rename.clone() {
-                    return self.session_rename_rejected_outcome(
-                        SessionRenameAdmission::RejectedActive { active_correlation },
-                    );
-                }
-                if let Some(active_correlation) = self.in_flight_session_catalog_load.clone() {
-                    return self.session_rename_rejected_outcome(
-                        SessionRenameAdmission::RejectedCatalogLoading { active_correlation },
-                    );
-                }
-                if let Some(active_correlation) = self
+                let conversation_load_blocker = self
                     .in_flight_conversation_load
                     .clone()
-                    .filter(|load| load.requested_thread_id == request.thread_id)
-                {
-                    return self.session_rename_rejected_outcome(
-                        SessionRenameAdmission::RejectedConversationLoading { active_correlation },
-                    );
-                }
-                let correlation = SessionRenameCorrelation::new(
-                    take_generation(&mut self.next_session_rename_generation, "session rename"),
-                    request,
-                );
-                self.in_flight_session_rename = Some(correlation.clone());
-                CoreDispatchOutcome {
-                    events: vec![AppEvent::SessionRenameAdmissionResolved(
-                        SessionRenameAdmission::Accepted {
+                    .filter(|load| load.requested_thread_id == request.thread_id);
+                let admission = self
+                    .session_feature
+                    .reduce_rename(request, conversation_load_blocker);
+                let effects = match &admission {
+                    SessionRenameAdmission::Accepted { correlation } => {
+                        vec![CoreEffect::RenameSession {
                             correlation: correlation.clone(),
-                        },
-                    )],
-                    effects: vec![CoreEffect::RenameSession { correlation }],
+                        }]
+                    }
+                    SessionRenameAdmission::RejectedActive { .. }
+                    | SessionRenameAdmission::RejectedCatalogLoading { .. }
+                    | SessionRenameAdmission::RejectedConversationLoading { .. } => Vec::new(),
+                };
+                CoreDispatchOutcome {
+                    events: vec![AppEvent::SessionRenameAdmissionResolved(admission)],
+                    effects,
                     snapshot: self.shared_snapshot(),
                 }
             }
@@ -276,9 +257,8 @@ impl CoreController {
                     return outcome;
                 }
                 if self
-                    .in_flight_session_rename
-                    .as_ref()
-                    .is_some_and(|rename| rename.request.thread_id == thread_id)
+                    .session_feature
+                    .active_rename_matches_thread(&thread_id)
                 {
                     self.deferred_conversation_load =
                         Some((thread_id, fallback_workspace_directory));
@@ -807,10 +787,9 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.in_flight_session_catalog_load.as_ref() != Some(&correlation) {
+                if !self.session_feature.accept_catalog_completion(&correlation) {
                     return self.unchanged_outcome();
                 }
-                self.in_flight_session_catalog_load = None;
                 self.state.apply_session_catalog_result(result);
                 self.session_catalog_changed_outcome(Vec::new())
             }
@@ -818,10 +797,9 @@ impl CoreController {
                 correlation,
                 result,
             }) => {
-                if self.in_flight_session_rename.as_ref() != Some(&correlation) {
+                if !self.session_feature.accept_rename_completion(&correlation) {
                     return self.unchanged_outcome();
                 }
-                self.in_flight_session_rename = None;
                 let result = result.map(|()| {
                     self.state.apply_session_rename(&correlation.request);
                     if self
@@ -1617,45 +1595,21 @@ impl CoreController {
         &mut self,
         intent: SessionCatalogLoadIntent,
     ) -> CoreDispatchOutcome {
-        let has_active_load = self.in_flight_session_catalog_load.is_some();
-        if self
-            .in_flight_session_catalog_load
-            .as_ref()
-            .is_some_and(|active| active.matches_target(&intent))
+        let snapshot = self.shared_snapshot();
+        match self
+            .session_feature
+            .reduce_catalog_load(intent, &snapshot.session_catalog)
         {
-            return self.unchanged_outcome();
+            SessionCatalogLoadReduction::Unchanged | SessionCatalogLoadReduction::Deferred => {
+                self.unchanged_outcome()
+            }
+            SessionCatalogLoadReduction::Started { correlation } => {
+                self.state.mark_session_catalog_loading();
+                self.session_catalog_changed_outcome(vec![CoreEffect::LoadSessionCatalog {
+                    correlation,
+                }])
+            }
         }
-        if intent.mode == SessionCatalogLoadMode::EnsureLoaded
-            && !has_active_load
-            && !matches!(
-                &self.shared_snapshot().session_catalog,
-                SessionCatalogSnapshot::Idle
-            )
-        {
-            return self.unchanged_outcome();
-        }
-        if self.in_flight_session_rename.is_some() {
-            self.deferred_session_catalog_load = Some(intent);
-            return self.unchanged_outcome();
-        }
-        self.start_session_catalog_load(intent)
-    }
-
-    fn start_session_catalog_load(
-        &mut self,
-        intent: SessionCatalogLoadIntent,
-    ) -> CoreDispatchOutcome {
-        let correlation = SessionCatalogLoadCorrelation::new(
-            take_generation(
-                &mut self.next_session_catalog_load_generation,
-                "session catalog load",
-            ),
-            intent.limit,
-            intent.workspace_directory,
-        );
-        self.in_flight_session_catalog_load = Some(correlation.clone());
-        self.state.mark_session_catalog_loading();
-        self.session_catalog_changed_outcome(vec![CoreEffect::LoadSessionCatalog { correlation }])
     }
 
     fn begin_planning_workspace_operation(
@@ -1806,12 +1760,12 @@ impl CoreController {
         events: &mut Vec<AppEvent>,
         effects: &mut Vec<CoreEffect>,
     ) {
-        if let Some(intent) = self.deferred_session_catalog_load.take() {
+        if let Some(intent) = self.session_feature.take_deferred_catalog_load() {
             let outcome = self.admit_session_catalog_load(intent);
             events.extend(outcome.events);
             effects.extend(outcome.effects);
         }
-        if self.in_flight_session_rename.is_none()
+        if !self.session_feature.has_active_rename()
             && !self.stop_request_settlement_pending()
             && let Some((thread_id, fallback_workspace_directory)) =
                 self.deferred_conversation_load.take()
@@ -2157,17 +2111,6 @@ impl CoreController {
         }
     }
 
-    fn session_rename_rejected_outcome(
-        &self,
-        admission: SessionRenameAdmission,
-    ) -> CoreDispatchOutcome {
-        CoreDispatchOutcome {
-            events: vec![AppEvent::SessionRenameAdmissionResolved(admission)],
-            effects: Vec::new(),
-            snapshot: self.shared_snapshot(),
-        }
-    }
-
     fn conversation_changed_outcome(
         &self,
         correlation: Option<ConversationLoadCorrelation>,
@@ -2250,7 +2193,8 @@ mod tests {
         PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, QueueAuthorityLoadError,
         QueueAuthoritySnapshot, QueueMutationCommitSnapshot, QueueMutationIntent,
         QueueMutationKind, QueueMutationResult, QueueMutationTarget, ReviewCenterSnapshot,
-        SessionCatalogReadySnapshot, SessionCatalogSnapshot, TurnSubmissionRequest,
+        SessionCatalogLoadCorrelation, SessionCatalogReadySnapshot, SessionCatalogSnapshot,
+        TurnSubmissionRequest,
     };
     use crate::core::app::{
         StartupAttachmentSnapshot, StartupDiagnosticSnapshot, StartupReadySnapshot,
@@ -3814,8 +3758,8 @@ mod tests {
             }]
         );
         assert_eq!(
-            controller.in_flight_session_catalog_load,
-            Some(session_catalog_correlation(2, 10, "/tmp/workspace-b"))
+            controller.session_feature.active_catalog_load_for_test(),
+            Some(&session_catalog_correlation(2, 10, "/tmp/workspace-b"))
         );
     }
 
@@ -4129,7 +4073,10 @@ mod tests {
             },
         ));
         assert!(stale.events.is_empty());
-        assert_eq!(controller.in_flight_session_rename.as_ref(), Some(&second));
+        assert_eq!(
+            controller.session_feature.active_rename_for_test(),
+            Some(&second)
+        );
 
         let accepted = controller.handle_input(CoreInput::EffectCompleted(
             CoreEffectCompletion::SessionRenamed {
@@ -4238,7 +4185,7 @@ mod tests {
             catalog.handle_input(ensure_session_catalog_command(20, "/tmp/ignored"));
         assert!(skipped_ensure.events.is_empty());
         assert!(skipped_ensure.effects.is_empty());
-        assert!(catalog.deferred_session_catalog_load.is_none());
+        assert!(!catalog.session_feature.has_deferred_catalog_load_for_test());
 
         let deferred = catalog.handle_input(refresh_session_catalog_command(10, "/tmp/first"));
         assert!(deferred.events.is_empty());
@@ -4322,6 +4269,67 @@ mod tests {
             allowed.effects.as_slice(),
             [CoreEffect::LoadConversation { correlation, .. }]
                 if correlation.requested_thread_id == "thread-2"
+        ));
+    }
+
+    #[test]
+    fn session_rename_resumes_deferred_catalog_before_same_thread_conversation() {
+        let mut controller = CoreController::new();
+        load_test_session_catalog(&mut controller);
+        let rename = session_rename_correlation(1, "thread-beta", "Beta renamed");
+        controller.handle_input(CoreInput::Command(AppCommand::RenameSession(
+            rename.request.clone(),
+        )));
+        controller.handle_input(refresh_session_catalog_command(20, "/tmp/latest"));
+        controller.handle_input(CoreInput::Command(AppCommand::LoadConversation {
+            thread_id: "thread-beta".to_string(),
+            fallback_workspace_directory: "/tmp/fallback".to_string(),
+        }));
+
+        let resumed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionRenamed {
+                correlation: rename.clone(),
+                result: Ok(()),
+            },
+        ));
+
+        assert!(matches!(
+            resumed.events.as_slice(),
+            [
+                AppEvent::SessionRenameCompleted {
+                    correlation,
+                    result: Ok(_),
+                },
+                AppEvent::SessionCatalogChanged(SessionCatalogSnapshot::Loading),
+                AppEvent::ConversationChanged {
+                    correlation: Some(ConversationLoadCorrelation {
+                        generation: 1,
+                        requested_thread_id,
+                    }),
+                    snapshot: ConversationSnapshot::Loading,
+                },
+            ] if correlation == &rename && requested_thread_id == "thread-beta"
+        ));
+        assert!(matches!(
+            resumed.effects.as_slice(),
+            [
+                CoreEffect::LoadSessionCatalog {
+                    correlation: SessionCatalogLoadCorrelation {
+                        generation: 2,
+                        limit: 20,
+                        workspace_directory,
+                    },
+                },
+                CoreEffect::LoadConversation {
+                    correlation: ConversationLoadCorrelation {
+                        generation: 1,
+                        requested_thread_id,
+                    },
+                    fallback_workspace_directory,
+                },
+            ] if workspace_directory == "/tmp/latest"
+                && requested_thread_id == "thread-beta"
+                && fallback_workspace_directory == "/tmp/fallback"
         ));
     }
 
@@ -6786,8 +6794,8 @@ mod tests {
             assert!(stale.events.is_empty());
             assert!(stale.effects.is_empty());
             assert_eq!(
-                controller.in_flight_session_catalog_load,
-                Some(session_catalog_correlation(3, 10, "/tmp/workspace-a"))
+                controller.session_feature.active_catalog_load_for_test(),
+                Some(&session_catalog_correlation(3, 10, "/tmp/workspace-a"))
             );
             assert_eq!(
                 stale.snapshot.session_catalog,
