@@ -2,18 +2,27 @@ use std::sync::mpsc;
 
 #[cfg(test)]
 use crate::application::service::conversation_runtime_event::ConversationStreamEvent;
+#[cfg(test)]
 use crate::application::service::conversation_service::ConversationService;
+#[cfg(test)]
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
 use crate::application::service::parallel_mode::control_plane::{
-    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
-    ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
+    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneEventSink,
+    ParallelModeControlPlaneHandle,
 };
+#[cfg(test)]
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
+#[cfg(test)]
 use crate::application::service::planning::PlanningServices;
 #[cfg(test)]
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationExecution;
+#[cfg(test)]
 use crate::application::service::session_service::SessionService;
+#[cfg(test)]
 use crate::application::service::startup_service::StartupService;
-use crate::composition::native_client_runtime::NativeClientRuntime;
+use crate::composition::native_client_runtime::{
+    NativeClientRuntime, NativeTuiApplicationComposition,
+};
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
 #[cfg(test)]
@@ -52,10 +61,10 @@ use super::{
 // producer deadlock.
 pub(super) const TUI_BACKGROUND_CHANNEL_CAPACITY: usize = 256;
 
-/* NativeTuiApp is assembled as reducer-owned state plus outbound service handles.
- * Runtime files keep pure reducers away from threads and ports: reducers return
- * effects, this module turns those effects into background messages, and
- * ShellRuntime later drains those messages back into reducers.
+/* NativeTuiApp is assembled as reducer-owned state plus composition-owned runtime
+ * facades. Runtime files keep pure reducers away from threads and raw services:
+ * reducers return effects, typed runtime/control-plane handles execute them, and
+ * ShellRuntime later drains their messages back into reducers.
  */
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -1522,6 +1531,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct NativeTuiParallelModeBinding {
     parallel_turns: ParallelModeTurnService,
     planning_feature: PlanningServices,
@@ -1530,6 +1540,7 @@ pub(crate) struct NativeTuiParallelModeBinding {
     runtime_channels: NativeTuiAppRuntimeChannels,
 }
 
+#[cfg(test)]
 impl NativeTuiParallelModeBinding {
     pub(crate) fn from_composition(
         composition: ParallelModeControlPlaneComposition,
@@ -1554,29 +1565,43 @@ impl NativeTuiApp {
         conversation_service: ConversationService,
         parallel_mode_binding: NativeTuiParallelModeBinding,
     ) -> Self {
-        Self::new_with_github_review_polling(
+        let turn_control_truth = conversation_service.runtime_control_truth();
+        let NativeTuiParallelModeBinding {
+            parallel_turns,
+            planning_feature,
+            parallel_mode_control_plane,
+            runtime_channels,
+        } = parallel_mode_binding;
+        let client_runtime = NativeClientRuntime::new_for_test(
             startup_service,
             session_service,
             conversation_service,
-            parallel_mode_binding,
+            planning_feature,
+            parallel_turns,
+        );
+        Self::new_with_bound_application(
+            client_runtime,
+            parallel_mode_control_plane,
+            runtime_channels,
+            turn_control_truth,
             GithubReviewPollingBootstrap::disabled(),
         )
     }
 
     pub(super) fn new_with_github_review_polling(
-        startup_service: StartupService,
-        session_service: SessionService,
-        conversation_service: ConversationService,
-        parallel_mode_binding: NativeTuiParallelModeBinding,
+        application: NativeTuiApplicationComposition,
         github_review_polling: GithubReviewPollingBootstrap,
     ) -> Self {
-        Self::new_with_github_review_polling_and_client_runtime(
-            startup_service,
-            session_service,
-            conversation_service,
-            parallel_mode_binding,
+        let runtime_channels = NativeTuiAppRuntimeChannels::new();
+        let application = application.bind_event_sink(runtime_channels.parallel_mode_event_sink());
+        let (client_runtime, parallel_mode_control_plane, turn_control_truth) =
+            application.into_parts();
+        Self::new_with_bound_application(
+            client_runtime,
+            parallel_mode_control_plane,
+            runtime_channels,
+            turn_control_truth,
             github_review_polling,
-            NativeClientRuntime::new,
         )
     }
 
@@ -1598,60 +1623,42 @@ impl NativeTuiApp {
             + Sync
             + 'static,
     ) -> Self {
-        Self::new_with_github_review_polling_and_client_runtime(
-            startup_service,
-            session_service,
-            conversation_service,
-            parallel_mode_binding,
-            github_review_polling,
-            |startup_service,
-             session_service,
-             conversation_service,
-             planning_feature,
-             parallel_turns| {
-                NativeClientRuntime::new_with_github_review_polling_setup_loader(
-                    startup_service,
-                    session_service,
-                    conversation_service,
-                    planning_feature,
-                    parallel_turns,
-                    loader,
-                )
-            },
-        )
-    }
-
-    fn new_with_github_review_polling_and_client_runtime(
-        startup_service: StartupService,
-        session_service: SessionService,
-        conversation_service: ConversationService,
-        parallel_mode_binding: NativeTuiParallelModeBinding,
-        github_review_polling: GithubReviewPollingBootstrap,
-        build_client_runtime: impl FnOnce(
-            StartupService,
-            SessionService,
-            ConversationService,
-            PlanningServices,
-            ParallelModeTurnService,
-        ) -> NativeClientRuntime,
-    ) -> Self {
-        let GithubReviewPollingBootstrap {
-            state: github_review_polling_state,
-        } = github_review_polling;
+        let turn_control_truth = conversation_service.runtime_control_truth();
         let NativeTuiParallelModeBinding {
             parallel_turns,
             planning_feature,
             parallel_mode_control_plane,
             runtime_channels,
         } = parallel_mode_binding;
-        let client_runtime = build_client_runtime(
-            startup_service.clone(),
-            session_service.clone(),
-            conversation_service.clone(),
-            planning_feature.clone(),
-            parallel_turns.clone(),
+        let client_runtime = NativeClientRuntime::new_with_github_review_polling_setup_loader(
+            startup_service,
+            session_service,
+            conversation_service,
+            planning_feature,
+            parallel_turns,
+            loader,
         );
-        let turn_control_truth = conversation_service.runtime_control_truth();
+        Self::new_with_bound_application(
+            client_runtime,
+            parallel_mode_control_plane,
+            runtime_channels,
+            turn_control_truth,
+            github_review_polling,
+        )
+    }
+
+    fn new_with_bound_application(
+        client_runtime: NativeClientRuntime,
+        parallel_mode_control_plane: ParallelModeControlPlaneHandle<
+            TuiParallelModeControlPlaneEventSink,
+        >,
+        runtime_channels: NativeTuiAppRuntimeChannels,
+        turn_control_truth: crate::domain::conversation::ConversationRuntimeControlTruth,
+        github_review_polling: GithubReviewPollingBootstrap,
+    ) -> Self {
+        let GithubReviewPollingBootstrap {
+            state: github_review_polling_state,
+        } = github_review_polling;
 
         // The first draft is tied to the process working directory so startup can
         // render planning/runtime context before any session is selected.

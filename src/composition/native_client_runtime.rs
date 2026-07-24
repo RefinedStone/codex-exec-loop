@@ -1,6 +1,10 @@
 use crate::application::service::conversation_service::ConversationService;
 #[cfg(test)]
 use crate::application::service::github_review_poller_service::GithubReviewPollerService;
+use crate::application::service::parallel_mode::control_plane::{
+    ParallelModeControlPlaneComposition, ParallelModeControlPlaneEventSink,
+    ParallelModeControlPlaneHandle,
+};
 use crate::application::service::parallel_mode::turn::ParallelModeTurnService;
 use crate::application::service::planning::PlanningServices;
 use crate::application::service::post_turn_evaluation::PostTurnEvaluationService;
@@ -16,6 +20,7 @@ use crate::core::app::{
     GithubReviewPollingSetupRequest, PostTurnEvaluationCorrelation, TurnSubmissionCorrelation,
 };
 use crate::core::runtime::{CoreRuntime, core_input_channel};
+use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 
@@ -29,8 +34,83 @@ pub(crate) struct NativeClientRuntime {
     runtime: CoreRuntime<CoreEffectRunner>,
 }
 
+/*
+ * Production service wiring is consumed here, before the inbound TUI boundary.
+ * The TUI can bind its event sink and receive only the runtime facade, the
+ * application-owned control-plane handle, and immutable capability truth.
+ */
+pub(crate) struct NativeTuiApplicationComposition {
+    client_runtime: NativeClientRuntime,
+    parallel_control_plane: ParallelModeControlPlaneComposition,
+    turn_control_truth: ConversationRuntimeControlTruth,
+}
+
+pub(crate) struct BoundNativeTuiApplication<S>
+where
+    S: ParallelModeControlPlaneEventSink,
+{
+    client_runtime: NativeClientRuntime,
+    parallel_control_plane: ParallelModeControlPlaneHandle<S>,
+    turn_control_truth: ConversationRuntimeControlTruth,
+}
+
+impl NativeTuiApplicationComposition {
+    pub(in crate::composition) fn from_services(
+        startup_service: StartupService,
+        session_service: SessionService,
+        conversation_service: ConversationService,
+        parallel_control_plane: ParallelModeControlPlaneComposition,
+    ) -> Self {
+        let turn_control_truth = conversation_service.runtime_control_truth();
+        let planning_feature = parallel_control_plane.planning().clone();
+        let parallel_mode_turn_service = parallel_control_plane.parallel_mode_turn_service();
+        let client_runtime = NativeClientRuntime::new(
+            startup_service,
+            session_service,
+            conversation_service,
+            planning_feature,
+            parallel_mode_turn_service,
+        );
+        Self {
+            client_runtime,
+            parallel_control_plane,
+            turn_control_truth,
+        }
+    }
+
+    pub(crate) fn bind_event_sink<S>(self, event_sink: S) -> BoundNativeTuiApplication<S>
+    where
+        S: ParallelModeControlPlaneEventSink,
+    {
+        BoundNativeTuiApplication {
+            client_runtime: self.client_runtime,
+            parallel_control_plane: self.parallel_control_plane.bind_event_sink(event_sink),
+            turn_control_truth: self.turn_control_truth,
+        }
+    }
+}
+
+impl<S> BoundNativeTuiApplication<S>
+where
+    S: ParallelModeControlPlaneEventSink,
+{
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        NativeClientRuntime,
+        ParallelModeControlPlaneHandle<S>,
+        ConversationRuntimeControlTruth,
+    ) {
+        (
+            self.client_runtime,
+            self.parallel_control_plane,
+            self.turn_control_truth,
+        )
+    }
+}
+
 impl NativeClientRuntime {
-    pub(crate) fn new(
+    fn new(
         startup_service: StartupService,
         session_service: SessionService,
         conversation_service: ConversationService,
@@ -44,6 +124,23 @@ impl NativeClientRuntime {
             planning_feature,
             parallel_mode_turn_service,
             |runner| runner,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        startup_service: StartupService,
+        session_service: SessionService,
+        conversation_service: ConversationService,
+        planning_feature: PlanningServices,
+        parallel_mode_turn_service: ParallelModeTurnService,
+    ) -> Self {
+        Self::new(
+            startup_service,
+            session_service,
+            conversation_service,
+            planning_feature,
+            parallel_mode_turn_service,
         )
     }
 

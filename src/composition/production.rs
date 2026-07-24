@@ -42,6 +42,7 @@ use crate::application::service::planning::{
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
+use crate::composition::native_client_runtime::NativeTuiApplicationComposition;
 use crate::domain::github_review::GithubPullRequestTarget;
 
 const APP_SERVER_CLIENT_NAME: &str = "codex-exec-loop-native";
@@ -61,15 +62,6 @@ pub(crate) struct ProductionTelegramApplication {
     pub(crate) parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
     pub(crate) telegram_update_ledger_port: Arc<dyn TelegramUpdateLedgerPort>,
     pub(crate) telegram_global_runner_lease_port: Arc<dyn TelegramGlobalRunnerLeasePort>,
-    #[allow(dead_code)]
-    pub(crate) review_center_read_service: ReviewCenterReadService,
-}
-
-pub(crate) struct ProductionNativeTuiApplicationServices {
-    pub(crate) startup_service: StartupService,
-    pub(crate) session_service: SessionService,
-    pub(crate) conversation_service: ConversationService,
-    pub(crate) parallel_mode_control_plane: ParallelModeControlPlaneComposition,
     #[allow(dead_code)]
     pub(crate) review_center_read_service: ReviewCenterReadService,
 }
@@ -194,7 +186,7 @@ pub(crate) fn resolve_active_planning_workspace_root(workspace_dir: &str) -> Pat
     SqlitePlanningAuthorityAdapter::resolve_active_workspace_root(workspace_dir)
 }
 
-pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiApplicationServices {
+pub(crate) fn build_native_tui_application() -> NativeTuiApplicationComposition {
     let workspace_dir = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| ".".to_string());
@@ -219,13 +211,12 @@ pub(crate) fn build_native_tui_application_services() -> ProductionNativeTuiAppl
         ports.parallel_agent_worker_port,
         parallel_agent_profile_service,
     );
-    ProductionNativeTuiApplicationServices {
+    NativeTuiApplicationComposition::from_services(
         startup_service,
         session_service,
         conversation_service,
-        review_center_read_service,
         parallel_mode_control_plane,
-    }
+    )
 }
 
 fn native_tui_prompt_log_maintenance_mode(
@@ -521,15 +512,7 @@ mod tests {
             );
         assert!(telegram_snapshot.events.visible_count() <= 1);
 
-        let tui = build_native_tui_application_services();
-        assert!(
-            !tui.parallel_mode_control_plane
-                .planning()
-                .runtime
-                .load_runtime_projection_or_invalid(&workspace_dir)
-                .preview_status_label()
-                .is_empty()
-        );
+        let _tui = build_native_tui_application();
     }
 
     #[cfg(windows)]

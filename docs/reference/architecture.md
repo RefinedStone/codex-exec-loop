@@ -8,16 +8,17 @@ The arrows below are **compile-time source dependencies** (`A -> B` means A impo
 owned by B). They are not the order in which a command executes:
 
 ```text
-adapter/inbound/tui -> core + application services/contracts/projections + composition wiring + domain
+adapter/inbound/tui -> core + application contracts/projections + opaque composition facade + domain
 adapter/inbound/{cli,admin_api,telegram_bot} -> application -> domain
 application -> outbound ports
 adapter/outbound -> application ports + domain
 composition -> core + application + adapter/outbound
 ```
 
-The TUI line records the shipped transitional imports honestly. Removing its remaining application
-service/projection and composition-wiring dependencies belongs to the later state/effect boundary
-work; it does not grant the adapter access to mutable Core internals.
+The TUI line records the shipped transitional projection imports honestly. Production bootstrap
+does not receive raw application services: composition consumes them while constructing one opaque
+native application object. The adapter can bind that object only to its event sink and receive a
+`NativeClientRuntime`, typed `ParallelModeControlPlaneHandle`, and immutable runtime-control truth.
 
 The client command loop has a different, intentionally round-trip **runtime flow**:
 
@@ -75,6 +76,12 @@ construct those runtime parts or call the raw driver. UI-originated inputs remai
 adapter can bind an accepted admission before applying an immediate outcome. Worker success,
 failure, and panic completions return through the bounded mailbox and re-enter the same exhaustive
 Core reducer through `poll_pending_client_event`.
+
+Every `CoreEffect` variant is structurally paired with one exhaustive dispatch arm. Except for the
+two typed local invalidations, an arm must enter exactly one audited completion worker, emit an
+immediate `EffectCompleted` input, or use the separately audited turn-terminal worker. Architecture
+tests parse the enum, dispatch match, launcher, and runtime trait delegation as Rust syntax, so a
+new completion-less arm, wildcard, conditional launcher, or direct TUI worker fails `cargo test`.
 
 Only `CoreRuntime` drives mutable client-runtime state. Adapters must not construct or mutate
 `CoreController`, `AppState`, or `TurnStreamState` directly. Effect executors may perform work and

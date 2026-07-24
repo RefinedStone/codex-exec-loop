@@ -96,49 +96,6 @@ const PARALLEL_CONTROL_PLANE_BYPASS_DEBTS: &[PatternDebtRule] = &[
     },
 ];
 
-const TUI_RAW_APPLICATION_SERVICE_DEBTS: &[PatternDebtRule] = &[
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app.rs",
-        pattern: "startup_service: StartupService,",
-        reason: "NativeTuiApp still owns a raw startup application service instead of an application-facing handle.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app.rs",
-        pattern: "session_service: SessionService,",
-        reason: "NativeTuiApp still owns a raw session application service instead of an application-facing handle.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app.rs",
-        pattern: "conversation_service: ConversationService,",
-        reason: "NativeTuiApp still owns a raw conversation application service instead of an application-facing handle.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app.rs",
-        pattern: "parallel_mode_service: ParallelModeService,",
-        reason: "NativeTuiApp still owns a raw parallel application service instead of an application-facing handle.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app.rs",
-        pattern: "planning: PlanningServices,",
-        reason: "NativeTuiApp still owns raw planning services instead of a narrow application-facing handle.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app/app_runtime.rs",
-        pattern: "parallel_mode_service: ParallelModeService,",
-        reason: "TUI runtime dependencies still carry raw parallel service wiring.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app/app_runtime.rs",
-        pattern: "planning: PlanningServices,",
-        reason: "TUI runtime dependencies still carry raw planning service wiring.",
-    },
-    PatternDebtRule {
-        path_suffix: "src/adapter/inbound/tui/app/turn_submission_runtime/post_turn_execution.rs",
-        pattern: "planning: PlanningServices,",
-        reason: "TUI post-turn execution still owns raw planning service wiring.",
-    },
-];
-
 const TUI_POST_TURN_PLANNING_BRIDGE_FORBIDDEN_PATTERNS: &[&str] = &[
     "PlanningLedgerRepairRequest",
     "PlanningOfficialCompletionRefreshRequest",
@@ -1350,6 +1307,92 @@ fn core_effect_workers_share_one_redacted_panic_totality_boundary() {
 }
 
 #[test]
+fn core_effect_dispatch_is_ast_exhaustive_and_completion_total() {
+    let effect_source =
+        fs::read_to_string("src/core/app/effect.rs").expect("CoreEffect source should load");
+    let runner_source = fs::read_to_string("src/composition/core_effect_runner.rs")
+        .expect("CoreEffectRunner source should load");
+    let turn_submission_source = fs::read_to_string("src/composition/core_turn_submission.rs")
+        .expect("turn submission worker source should load");
+
+    verify_core_effect_totality_contract(&effect_source, &runner_source, &turn_submission_source)
+        .unwrap_or_else(|error| panic!("CoreEffect totality contract violated: {error}"));
+}
+
+#[test]
+fn core_effect_totality_analyzer_rejects_dispatch_and_sink_bypasses() {
+    let effect_source =
+        fs::read_to_string("src/core/app/effect.rs").expect("CoreEffect source should load");
+    let runner_source = fs::read_to_string("src/composition/core_effect_runner.rs")
+        .expect("CoreEffectRunner source should load");
+    let turn_submission_source = fs::read_to_string("src/composition/core_turn_submission.rs")
+        .expect("turn submission worker source should load");
+    let reject_runner = |source: String, expected| {
+        assert_core_effect_totality_rejects(
+            &effect_source,
+            &source,
+            &turn_submission_source,
+            expected,
+        );
+    };
+
+    assert_core_effect_totality_rejects(
+        &effect_source.replacen(
+            "pub enum CoreEffect {",
+            "pub enum CoreEffect {\n    Unsettled,",
+            1,
+        ),
+        &runner_source,
+        &turn_submission_source,
+        "enum variants must exactly match",
+    );
+    reject_runner(
+        runner_source.replacen("CoreEffect::RunStartupChecks { correlation } =>", "_ =>", 1),
+        "one exact CoreEffect variant",
+    );
+    reject_runner(
+        runner_source.replacen(
+            "CoreEffect::RunStartupChecks { correlation } =>",
+            "CoreEffect::RunStartupChecks { correlation } if true =>",
+            1,
+        ),
+        "must not use a match guard",
+    );
+    reject_runner(
+        runner_source.replacen(
+            "self.spawn_startup_checks(correlation);",
+            "if true { self.spawn_startup_checks(correlation); }",
+            1,
+        ),
+        "one unconditional top-level launcher",
+    );
+    reject_runner(
+        runner_source.replacen(
+            "self.spawn_startup_checks(correlation);",
+            "self.startup_service.run_checks(\".\");\n                self.spawn_startup_checks(correlation);",
+            1,
+        ),
+        "exact audited dispatch shape",
+    );
+    reject_runner(
+        runner_source.replacen(
+            "spawn_effect_completion_worker(input_sender, panic_completion, move || {",
+            "run_unsettled_worker(input_sender, panic_completion, move || {",
+            1,
+        ),
+        "one audited top-level sink",
+    );
+    reject_runner(
+        runner_source.replacen(
+            "CoreEffectRunner::run_effect(self, effect)",
+            "self.run_effect(effect)",
+            1,
+        ),
+        "must delegate exactly",
+    );
+}
+
+#[test]
 fn manual_prompt_and_stop_provider_io_never_run_inline_in_core_effect_dispatch() {
     let runner = fs::read_to_string("src/composition/core_effect_runner.rs")
         .expect("core effect runner source should load");
@@ -1681,7 +1724,7 @@ fn native_tui_prompt_log_maintenance_runs_only_inside_the_startup_worker() {
     let production = fs::read_to_string("src/composition/production.rs")
         .expect("production composition source should load");
     let native_builder_calls =
-        reachable_callable_expression_names(&production, "build_native_tui_application_services");
+        reachable_callable_expression_names(&production, "build_native_tui_application");
     for forbidden in FORBIDDEN_SYNCHRONOUS_MAINTENANCE_CALLS {
         assert!(
             !native_builder_calls.iter().any(|call| call == forbidden),
@@ -5839,14 +5882,124 @@ fn outbound_port_modules_follow_port_naming_contract() {
 }
 
 #[test]
-fn temporary_tui_raw_application_services_have_been_wrapped() {
-    // Static guard: R8 behavior tests cover TUI flow, but raw service fields in TUI state are a structural leak.
-    let debts = collect_pattern_debts(TUI_RAW_APPLICATION_SERVICE_DEBTS);
+fn production_tui_receives_only_opaque_runtime_capabilities() {
+    let repo_root = repo_root();
+    let mut violations = Vec::new();
+    for path in rust_files_under(&repo_root.join("src/adapter/inbound/tui")) {
+        if is_test_only_path(&path) {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        for reference in forbidden_tui_runtime_capability_references(&source) {
+            violations.push(format!("{}: {reference}", relative_path(&repo_root, &path)));
+        }
+    }
 
     assert!(
-        debts.is_empty(),
-        "temporary TUI service-wiring debt remains. TUI production state should hold UI state, projection cache, and narrow typed runtime/control-plane handles only:\n{}",
-        format_temporary_debts(&debts)
+        violations.is_empty(),
+        "production TUI must not receive raw services, ports, repositories, workers, process/thread capabilities, or outbound adapters:\n{}",
+        violations.join("\n")
+    );
+
+    let shell_entrypoint = fs::read_to_string("src/adapter/inbound/tui/app/shell_entrypoint.rs")
+        .expect("native shell entrypoint should load");
+    let shell_references = rust_semantic_references(&shell_entrypoint);
+    assert!(
+        shell_references
+            .paths
+            .iter()
+            .any(|path| path.ends_with("production::build_native_tui_application"))
+            && shell_references
+                .paths
+                .iter()
+                .any(|path| path.ends_with("NativeTuiApp::new_with_github_review_polling")),
+        "production shell must receive one opaque native application composition"
+    );
+
+    let composition_source = fs::read_to_string("src/composition/native_client_runtime.rs")
+        .expect("native client composition should load");
+    let composition_syntax =
+        syn::parse_file(&composition_source).expect("native client composition must parse as Rust");
+    for struct_name in [
+        "NativeTuiApplicationComposition",
+        "BoundNativeTuiApplication",
+    ] {
+        assert!(
+            named_struct_fields(&composition_syntax, struct_name)
+                .iter()
+                .all(|field| matches!(field.vis, syn::Visibility::Inherited)),
+            "{struct_name} must keep its raw capabilities private"
+        );
+    }
+
+    let from_services = inherent_impl_methods(
+        &composition_syntax,
+        "NativeTuiApplicationComposition",
+        "from_services",
+    );
+    assert_eq!(
+        from_services.len(),
+        1,
+        "native TUI composition must define one from_services constructor"
+    );
+    assert!(
+        matches!(
+            &from_services[0].vis,
+            syn::Visibility::Restricted(visibility)
+                if path_is_simple(&visibility.path, &["crate", "composition"])
+        ),
+        "raw-service construction must be visible only inside crate::composition"
+    );
+}
+
+#[test]
+fn tui_runtime_capability_guard_ignores_fixtures_and_rejects_real_escapes() {
+    let harmless = r#"
+        fn production(app: NativeClientRuntime) {
+            let _ = "ConversationService std::thread::spawn";
+            app.snapshot();
+        }
+
+        #[cfg(test)]
+        fn fixture(service: ConversationService) {
+            std::thread::spawn(move || service.run());
+        }
+    "#;
+    assert!(
+        forbidden_tui_runtime_capability_references(harmless).is_empty(),
+        "comments, literals, and cfg(test) fixtures must not trigger the production guard"
+    );
+
+    let raw_service = "fn production(service: ConversationService) { service.run(); }";
+    assert!(
+        forbidden_tui_runtime_capability_references(raw_service)
+            .iter()
+            .any(|path| path.ends_with("ConversationService"))
+    );
+
+    let raw_worker = "fn production() { std::thread::spawn(|| mutate_provider()); }";
+    assert!(
+        forbidden_tui_runtime_capability_references(raw_worker)
+            .iter()
+            .any(|path| path.starts_with("std::thread"))
+    );
+
+    let inferred_raw_service = "fn production() { let _ = production::build_planning_services(); }";
+    assert!(
+        forbidden_tui_runtime_capability_references(inferred_raw_service)
+            .iter()
+            .any(|path| path.ends_with("production::build_planning_services")),
+        "return-type inference must not hide a raw production service builder"
+    );
+
+    let forged_completion =
+        "fn production(completion: Value) { CoreInput::EffectCompleted(completion); }";
+    assert!(
+        forbidden_tui_runtime_capability_references(forged_completion)
+            .iter()
+            .any(|path| path.ends_with("CoreInput::EffectCompleted")),
+        "production TUI must not forge effect completions"
     );
 }
 
@@ -7298,6 +7451,43 @@ fn rust_semantic_references(source: &str) -> RustSemanticReferences {
     visitor.references
 }
 
+fn forbidden_tui_runtime_capability_references(source: &str) -> Vec<String> {
+    rust_semantic_references(source)
+        .paths
+        .into_iter()
+        .filter(|reference| {
+            let identifier = reference.rsplit("::").next().unwrap_or(reference);
+            matches!(
+                identifier,
+                "CoreEffectRunner"
+                    | "CoreEffectCompletion"
+                    | "CoreRuntime"
+                    | "NativeTuiParallelModeBinding"
+                    | "ParallelModeControlPlaneComposition"
+            ) || identifier.ends_with("Service")
+                || identifier.ends_with("Services")
+                || identifier.ends_with("Port")
+                || identifier.ends_with("Repository")
+                || identifier.ends_with("_service")
+                || identifier.ends_with("_services")
+                || identifier.ends_with("_port")
+                || identifier.ends_with("_repository")
+                || reference.ends_with("CoreInput::EffectCompleted")
+                || (reference.contains("production::build_")
+                    && !reference.ends_with("production::build_native_tui_application"))
+                || reference == "crate::adapter::outbound"
+                || reference.starts_with("crate::adapter::outbound::")
+                || reference == "std::process"
+                || reference.starts_with("std::process::")
+                || reference == "std::thread"
+                || reference.starts_with("std::thread::")
+                || reference == "tokio::spawn"
+                || reference == "tokio::task"
+                || reference.starts_with("tokio::task::")
+        })
+        .collect()
+}
+
 fn expand_semantic_alias_paths(paths: &mut Vec<String>, aliases: &[(String, String)]) {
     for _ in 0..=aliases.len() {
         let mut additions = Vec::new();
@@ -7337,6 +7527,13 @@ impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
             return;
         }
         visit::visit_item(self, item);
+    }
+
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        if attributes_are_test_only(&arm.attrs) {
+            return;
+        }
+        visit::visit_arm(self, arm);
     }
 
     fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
@@ -7831,6 +8028,36 @@ fn named_struct_fields<'a>(syntax: &'a syn::File, struct_name: &str) -> Vec<&'a 
         panic!("{struct_name} should use named fields");
     };
     fields.named.iter().collect()
+}
+
+fn inherent_impl_methods<'a>(
+    syntax: &'a syn::File,
+    type_name: &str,
+    method_name: &str,
+) -> Vec<&'a syn::ImplItemFn> {
+    syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(item)
+                if item.trait_.is_none()
+                    && !attributes_are_test_only(&item.attrs)
+                    && type_is_simple_path(item.self_ty.as_ref(), &[type_name]) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .flat_map(|item| item.items.iter())
+        .filter_map(|item| match item {
+            syn::ImplItem::Fn(method)
+                if method.sig.ident == method_name && !attributes_are_test_only(&method.attrs) =>
+            {
+                Some(method)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn top_level_function<'a>(syntax: &'a syn::File, function_name: &str) -> &'a syn::ItemFn {
@@ -8445,6 +8672,1105 @@ fn renderer_callable_is_forbidden(callable: &str) -> bool {
             | "spawn_blocking"
             | "try_recv"
     )
+}
+
+const CORE_EFFECT_LAUNCH_CONTRACTS: &[(&str, &str, &str)] = &[
+    (
+        "RunStartupChecks",
+        "spawn_startup_checks",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadSessionCatalog",
+        "spawn_session_catalog_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "RenameSession",
+        "spawn_session_rename",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadConversation",
+        "spawn_conversation_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadParallelPeekConversation",
+        "spawn_parallel_peek_conversation_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadReviewCenter",
+        "spawn_review_center_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadQueueAuthority",
+        "spawn_queue_authority_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadDirectionsMaintenance",
+        "spawn_directions_maintenance_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadPlanningRuntime",
+        "spawn_planning_runtime_projection_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "ResetPlanningWorkspace",
+        "spawn_planning_workspace_reset",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "StageSimplePlanningDraft",
+        "spawn_simple_planning_draft_stage",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "StagePlanningEditor",
+        "spawn_planning_editor_stage",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "MutatePlanningEditor",
+        "spawn_planning_editor_mutation",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "LoadSimplePlanningEditor",
+        "spawn_simple_planning_editor_load",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "PromoteSimplePlanningDraft",
+        "spawn_simple_planning_draft_promotion",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "ExecuteQueueMutation",
+        "spawn_queue_mutation",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "SetupGithubReviewPolling",
+        "spawn_github_review_polling_setup",
+        "spawn_effect_completion_worker_with_recovery",
+    ),
+    (
+        "PollGithubReview",
+        "spawn_github_review_poll",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "PrepareManualPrompt",
+        "spawn_manual_prompt_preparation",
+        "spawn_effect_completion_worker_with_recovery",
+    ),
+    (
+        "SubmitApprovalDecision",
+        "spawn_approval_decision_submission",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "PersistApprovalReview",
+        "spawn_approval_review_persistence",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "SubmitTurn",
+        "spawn_turn_submission",
+        "core_turn_submission::spawn_turn_submission_worker",
+    ),
+    (
+        "RequestStopAllSessions",
+        "spawn_stop_request_attempt",
+        "spawn_effect_completion_worker_with_recovery",
+    ),
+    (
+        "SteerTurn",
+        "spawn_turn_steer",
+        "spawn_effect_completion_worker",
+    ),
+    (
+        "EvaluatePostTurn",
+        "spawn_post_turn_evaluation",
+        "spawn_effect_completion_worker_with_recovery",
+    ),
+];
+
+const CORE_EFFECT_INVALIDATION_CONTRACTS: &[(&str, &str)] = &[
+    ("CancelManualPromptPreparation", "manual_prompt_workers"),
+    ("InvalidateStopRequest", "stop_request_workers"),
+];
+
+fn verify_core_effect_totality_contract(
+    effect_source: &str,
+    runner_source: &str,
+    turn_submission_source: &str,
+) -> Result<(), String> {
+    let effect_syntax = syn::parse_file(effect_source)
+        .map_err(|error| format!("CoreEffect source must parse as Rust: {error}"))?;
+    let runner_syntax = syn::parse_file(runner_source)
+        .map_err(|error| format!("CoreEffectRunner source must parse as Rust: {error}"))?;
+    let turn_submission_syntax = syn::parse_file(turn_submission_source)
+        .map_err(|error| format!("turn submission source must parse as Rust: {error}"))?;
+
+    let core_effect_enums = effect_syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Enum(item)
+                if item.ident == "CoreEffect" && !attributes_are_test_only(&item.attrs) =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if core_effect_enums.len() != 1 {
+        return Err(format!(
+            "expected one production CoreEffect enum, found {}",
+            core_effect_enums.len()
+        ));
+    }
+    let enum_variants = core_effect_enums[0]
+        .variants
+        .iter()
+        .map(|variant| variant.ident.to_string())
+        .collect::<HashSet<_>>();
+
+    let mut launch_contracts = HashMap::new();
+    for &(variant, launcher, sink) in CORE_EFFECT_LAUNCH_CONTRACTS {
+        if launch_contracts
+            .insert(variant.to_string(), (launcher, sink))
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate launch contract for CoreEffect::{}",
+                variant
+            ));
+        }
+    }
+    let mut invalidation_contracts = HashMap::new();
+    for &(variant, worker_registry) in CORE_EFFECT_INVALIDATION_CONTRACTS {
+        if invalidation_contracts
+            .insert(variant.to_string(), worker_registry)
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate invalidation contract for CoreEffect::{}",
+                variant
+            ));
+        }
+    }
+    if launch_contracts
+        .keys()
+        .any(|variant| invalidation_contracts.contains_key(variant))
+    {
+        return Err("a CoreEffect variant cannot be both launched and invalidated".to_string());
+    }
+    let expected_variants = launch_contracts
+        .keys()
+        .chain(invalidation_contracts.keys())
+        .cloned()
+        .collect::<HashSet<_>>();
+    if enum_variants != expected_variants {
+        return Err(format!(
+            "CoreEffect enum variants must exactly match the audited totality contracts ({})",
+            core_effect_set_difference(&enum_variants, &expected_variants)
+        ));
+    }
+
+    let run_effect = find_core_effect_runner_method(&runner_syntax, None, "run_effect", true)?;
+    verify_core_effect_executor_signature(run_effect)?;
+    let dispatch_match = match run_effect.block.stmts.as_slice() {
+        [syn::Stmt::Expr(syn::Expr::Match(dispatch), None)]
+            if expression_is_simple_path(dispatch.expr.as_ref(), &["effect"]) =>
+        {
+            dispatch
+        }
+        _ => {
+            return Err(
+                "CoreEffectRunner::run_effect must contain exactly one `match effect` expression"
+                    .to_string(),
+            );
+        }
+    };
+
+    let mut dispatch_arms = HashMap::new();
+    for arm in &dispatch_match.arms {
+        if arm.guard.is_some() {
+            return Err(format!(
+                "CoreEffect dispatch arm at line {} must not use a match guard",
+                arm.span().start().line
+            ));
+        }
+        let variant = exact_core_effect_pattern_variant(&arm.pat).map_err(|error| {
+            format!(
+                "CoreEffect dispatch arm at line {} must use one exact CoreEffect variant pattern: {error}",
+                arm.pat.span().start().line
+            )
+        })?;
+        if dispatch_arms.insert(variant.clone(), arm).is_some() {
+            return Err(format!(
+                "CoreEffect::{variant} must have exactly one dispatch arm"
+            ));
+        }
+    }
+    let dispatched_variants = dispatch_arms.keys().cloned().collect::<HashSet<_>>();
+    if dispatched_variants != enum_variants {
+        return Err(format!(
+            "CoreEffect match arms must exactly match the enum ({})",
+            core_effect_set_difference(&dispatched_variants, &enum_variants)
+        ));
+    }
+
+    for (variant, arm) in dispatch_arms {
+        let syn::Expr::Block(body) = arm.body.as_ref() else {
+            return Err(format!(
+                "CoreEffect::{variant} dispatch must use an explicit block"
+            ));
+        };
+        if let Some(contract) = invalidation_contracts.get(&variant) {
+            verify_core_effect_invalidation_arm(&variant, &body.block, contract)?;
+        } else {
+            let contract = launch_contracts
+                .get(&variant)
+                .ok_or_else(|| format!("missing launch contract for CoreEffect::{variant}"))?;
+            verify_core_effect_launch_arm(&variant, &body.block, contract.0)?;
+        }
+    }
+
+    for &(launcher_name, sink) in launch_contracts.values() {
+        let launcher = find_core_effect_runner_method(&runner_syntax, None, launcher_name, false)?;
+        verify_core_effect_launcher(launcher, launcher_name, sink)?;
+    }
+
+    let turn_submission_worker =
+        find_production_function(&turn_submission_syntax, "spawn_turn_submission_worker")?;
+    verify_unconditional_worker_sink(
+        "core_turn_submission::spawn_turn_submission_worker",
+        &turn_submission_worker.block,
+        &["spawn_worker_with_panic_fallback"],
+        false,
+    )?;
+
+    let trait_run_effect = find_core_effect_runner_method(
+        &runner_syntax,
+        Some("CoreEffectExecutor"),
+        "run_effect",
+        false,
+    )?;
+    verify_core_effect_executor_signature(trait_run_effect)?;
+    verify_exact_core_effect_trait_delegate(trait_run_effect)?;
+
+    Ok(())
+}
+
+fn assert_core_effect_totality_rejects(
+    effect_source: &str,
+    runner_source: &str,
+    turn_submission_source: &str,
+    expected_error: &str,
+) {
+    let error =
+        verify_core_effect_totality_contract(effect_source, runner_source, turn_submission_source)
+            .expect_err("mutated CoreEffect contract must be rejected");
+    assert!(
+        error.contains(expected_error),
+        "unexpected CoreEffect analyzer failure; expected `{expected_error}`, got `{error}`"
+    );
+}
+
+fn core_effect_set_difference(actual: &HashSet<String>, expected: &HashSet<String>) -> String {
+    let mut unexpected = actual.difference(expected).cloned().collect::<Vec<_>>();
+    let mut missing = expected.difference(actual).cloned().collect::<Vec<_>>();
+    unexpected.sort();
+    missing.sort();
+    format!("unexpected={unexpected:?}, missing={missing:?}")
+}
+
+fn find_core_effect_runner_method<'a>(
+    syntax: &'a syn::File,
+    trait_name: Option<&str>,
+    method_name: &str,
+    require_public: bool,
+) -> Result<&'a syn::ImplItemFn, String> {
+    let methods = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(item)
+                if !attributes_are_test_only(&item.attrs)
+                    && type_is_simple_path(item.self_ty.as_ref(), &["CoreEffectRunner"])
+                    && match (trait_name, item.trait_.as_ref()) {
+                        (None, None) => true,
+                        (Some(expected), Some((_, path, _))) => path_is_simple(path, &[expected]),
+                        _ => false,
+                    } =>
+            {
+                Some(item)
+            }
+            _ => None,
+        })
+        .flat_map(|item| item.items.iter())
+        .filter_map(|item| match item {
+            syn::ImplItem::Fn(method)
+                if !attributes_are_test_only(&method.attrs)
+                    && method.sig.ident == method_name
+                    && (!require_public || matches!(method.vis, syn::Visibility::Public(_))) =>
+            {
+                Some(method)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if methods.len() != 1 {
+        let owner = trait_name.unwrap_or("CoreEffectRunner");
+        return Err(format!(
+            "expected one production {owner}::{method_name} method, found {}",
+            methods.len()
+        ));
+    }
+    Ok(methods[0])
+}
+
+fn find_production_function<'a>(
+    syntax: &'a syn::File,
+    function_name: &str,
+) -> Result<&'a syn::ItemFn, String> {
+    let functions = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function)
+                if !attributes_are_test_only(&function.attrs)
+                    && function.sig.ident == function_name =>
+            {
+                Some(function)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if functions.len() != 1 {
+        return Err(format!(
+            "expected one production {function_name} function, found {}",
+            functions.len()
+        ));
+    }
+    Ok(functions[0])
+}
+
+fn verify_core_effect_executor_signature(method: &syn::ImplItemFn) -> Result<(), String> {
+    let mut inputs = method.sig.inputs.iter();
+    let Some(syn::FnArg::Receiver(receiver)) = inputs.next() else {
+        return Err("run_effect must receive &self first".to_string());
+    };
+    if receiver.reference.is_none() || receiver.mutability.is_some() {
+        return Err("run_effect must receive immutable &self".to_string());
+    }
+    let Some(syn::FnArg::Typed(effect)) = inputs.next() else {
+        return Err("run_effect must receive effect: CoreEffect second".to_string());
+    };
+    if inputs.next().is_some()
+        || !matches!(
+            effect.pat.as_ref(),
+            syn::Pat::Ident(ident)
+                if ident.ident == "effect"
+                    && ident.by_ref.is_none()
+                    && ident.mutability.is_none()
+                    && ident.subpat.is_none()
+        )
+        || !type_is_simple_path(effect.ty.as_ref(), &["CoreEffect"])
+    {
+        return Err("run_effect signature must be (&self, effect: CoreEffect)".to_string());
+    }
+    if !type_is_option_of(&method.sig.output, "CoreInput") {
+        return Err("run_effect must return Option<CoreInput>".to_string());
+    }
+    Ok(())
+}
+
+fn type_is_option_of(output: &syn::ReturnType, inner_type: &str) -> bool {
+    let syn::ReturnType::Type(_, ty) = output else {
+        return false;
+    };
+    let syn::Type::Path(option) = ty.as_ref() else {
+        return false;
+    };
+    if option.qself.is_some()
+        || option.path.leading_colon.is_some()
+        || option.path.segments.len() != 1
+    {
+        return false;
+    }
+    let segment = &option.path.segments[0];
+    if segment.ident != "Option" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    matches!(
+        arguments.args.iter().collect::<Vec<_>>().as_slice(),
+        [syn::GenericArgument::Type(inner)] if type_is_simple_path(inner, &[inner_type])
+    )
+}
+
+fn type_is_simple_path(ty: &syn::Type, segments: &[&str]) -> bool {
+    matches!(
+        ty,
+        syn::Type::Path(path) if path.qself.is_none() && path_is_simple(&path.path, segments)
+    )
+}
+
+fn path_is_simple(path: &syn::Path, expected: &[&str]) -> bool {
+    path.leading_colon.is_none()
+        && path.segments.len() == expected.len()
+        && path
+            .segments
+            .iter()
+            .zip(expected)
+            .all(|(segment, expected)| {
+                segment.ident == *expected && matches!(segment.arguments, syn::PathArguments::None)
+            })
+}
+
+fn expression_is_simple_path(expression: &syn::Expr, expected: &[&str]) -> bool {
+    matches!(
+        expression,
+        syn::Expr::Path(path) if path.qself.is_none() && path_is_simple(&path.path, expected)
+    )
+}
+
+fn exact_core_effect_pattern_variant(pattern: &syn::Pat) -> Result<String, &'static str> {
+    let path = match pattern {
+        syn::Pat::Struct(pattern) => &pattern.path,
+        syn::Pat::TupleStruct(pattern) => &pattern.path,
+        syn::Pat::Path(pattern) if pattern.qself.is_none() => &pattern.path,
+        syn::Pat::Or(_) => return Err("or-patterns are forbidden"),
+        syn::Pat::Wild(_) => return Err("wildcard patterns are forbidden"),
+        _ => return Err("only struct, tuple-struct, or unit variant patterns are allowed"),
+    };
+    if path.leading_colon.is_some() || path.segments.len() != 2 {
+        return Err("the pattern path must be exactly CoreEffect::<Variant>");
+    }
+    let mut segments = path.segments.iter();
+    let core_effect = segments.next().expect("path length checked");
+    let variant = segments.next().expect("path length checked");
+    if core_effect.ident != "CoreEffect"
+        || !matches!(core_effect.arguments, syn::PathArguments::None)
+        || !matches!(variant.arguments, syn::PathArguments::None)
+    {
+        return Err("the pattern path must be exactly CoreEffect::<Variant>");
+    }
+    Ok(variant.ident.to_string())
+}
+
+fn verify_core_effect_invalidation_arm(
+    variant: &str,
+    body: &syn::Block,
+    worker_registry: &str,
+) -> Result<(), String> {
+    let [invalidate_statement, none_statement] = body.stmts.as_slice() else {
+        return Err(format!(
+            "CoreEffect::{variant} must contain exact invalidate + None statements"
+        ));
+    };
+    let syn::Stmt::Expr(syn::Expr::MethodCall(invalidate), Some(_)) = invalidate_statement else {
+        return Err(format!(
+            "CoreEffect::{variant} must call its worker-registry invalidate method directly"
+        ));
+    };
+    if invalidate.method != "invalidate"
+        || !expression_is_self_field(invalidate.receiver.as_ref(), worker_registry)
+        || !matches!(
+            invalidate.args.iter().collect::<Vec<_>>().as_slice(),
+            [argument] if expression_is_field_path(argument, "correlation", "generation")
+        )
+    {
+        return Err(format!(
+            "CoreEffect::{variant} must call self.{}.invalidate(correlation.generation) exactly",
+            worker_registry
+        ));
+    }
+    if !statement_is_final_none(none_statement) {
+        return Err(format!("CoreEffect::{variant} must end with None"));
+    }
+    let mut audit = CoreEffectDispatchVisitor::default();
+    audit.visit_block(body);
+    if !audit.spawn_calls.is_empty()
+        || !audit.returns.is_empty()
+        || audit.try_count != 0
+        || audit.effect_completed_calls != 0
+    {
+        return Err(format!(
+            "CoreEffect::{variant} invalidation must not launch, return, fail, or complete"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_core_effect_launch_arm(
+    variant: &str,
+    body: &syn::Block,
+    launcher: &str,
+) -> Result<(), String> {
+    if !body.stmts.last().is_some_and(statement_is_final_none) {
+        return Err(format!("CoreEffect::{variant} must end with None"));
+    }
+
+    let direct_launchers = body
+        .stmts
+        .iter()
+        .filter_map(direct_self_spawn_statement)
+        .collect::<Vec<_>>();
+    if direct_launchers.len() != 1 || direct_launchers[0] != launcher {
+        return Err(format!(
+            "CoreEffect::{variant} must have one unconditional top-level launcher `self.{}(...)`; found {direct_launchers:?}",
+            launcher
+        ));
+    }
+    verify_core_effect_dispatch_shape(variant, body, launcher)?;
+
+    let mut audit = CoreEffectDispatchVisitor::default();
+    audit.visit_block(body);
+    if audit.spawn_calls.len() != 1 || audit.spawn_calls[0] != launcher {
+        return Err(format!(
+            "CoreEffect::{variant} must call only its audited launcher `self.{}(...)`; found {:?}",
+            launcher, audit.spawn_calls
+        ));
+    }
+    if audit.try_count != 0 {
+        return Err(format!(
+            "CoreEffect::{variant} dispatch must not use ? before settlement"
+        ));
+    }
+
+    if variant == "PollGithubReview" {
+        if audit.returns.as_slice() != [CoreEffectReturnKind::EffectCompletedSome]
+            || audit.effect_completed_calls != 1
+            || body
+                .stmts
+                .iter()
+                .filter(|statement| statement_is_exact_early_effect_completion(statement))
+                .count()
+                != 1
+        {
+            return Err(
+                "CoreEffect::PollGithubReview may only use one exact early Some(CoreInput::EffectCompleted(...)) from a top-level let-else"
+                    .to_string(),
+            );
+        }
+    } else {
+        if !audit.returns.is_empty() {
+            return Err(format!(
+                "CoreEffect::{variant} must not return from dispatch; completion must re-enter through the worker sink"
+            ));
+        }
+        if audit.effect_completed_calls != 0 {
+            return Err(format!(
+                "CoreEffect::{variant} must not construct inline CoreInput::EffectCompleted"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_core_effect_dispatch_shape(
+    variant: &str,
+    body: &syn::Block,
+    launcher: &str,
+) -> Result<(), String> {
+    let shape_is_exact = match (variant, body.stmts.as_slice()) {
+        ("SetupGithubReviewPolling", [setup_statement, launch_statement, none_statement]) => {
+            statement_is_exact_github_review_setup_begin(setup_statement)
+                && statement_is_exact_launcher(launch_statement, launcher)
+                && statement_is_final_none(none_statement)
+        }
+        ("PollGithubReview", [lookup_statement, launch_statement, none_statement]) => {
+            statement_is_exact_github_poll_service_lookup(lookup_statement)
+                && statement_is_exact_launcher(launch_statement, launcher)
+                && statement_is_final_none(none_statement)
+        }
+        ("PrepareManualPrompt", [register_statement, launch_statement, none_statement]) => {
+            statement_is_exact_worker_registration(
+                register_statement,
+                "manual_prompt_workers",
+                "request",
+                &["correlation", "generation"],
+            ) && statement_is_exact_launcher(launch_statement, launcher)
+                && statement_is_final_none(none_statement)
+        }
+        ("RequestStopAllSessions", [register_statement, launch_statement, none_statement]) => {
+            statement_is_exact_worker_registration(
+                register_statement,
+                "stop_request_workers",
+                "correlation",
+                &["generation"],
+            ) && statement_is_exact_launcher(launch_statement, launcher)
+                && statement_is_final_none(none_statement)
+        }
+        (_, [launch_statement, none_statement]) => {
+            statement_is_exact_launcher(launch_statement, launcher)
+                && statement_is_final_none(none_statement)
+        }
+        _ => false,
+    };
+    if !shape_is_exact {
+        return Err(format!(
+            "CoreEffect::{variant} must use its exact audited dispatch shape before completion"
+        ));
+    }
+    Ok(())
+}
+
+fn statement_is_exact_launcher(statement: &syn::Stmt, launcher: &str) -> bool {
+    direct_self_spawn_statement(statement).as_deref() == Some(launcher)
+}
+
+fn statement_is_exact_github_review_setup_begin(statement: &syn::Stmt) -> bool {
+    let syn::Stmt::Expr(syn::Expr::MethodCall(begin), Some(_)) = statement else {
+        return false;
+    };
+    begin.method == "begin"
+        && expression_is_self_field(begin.receiver.as_ref(), "github_review_polling_services")
+        && matches!(
+            begin.args.iter().collect::<Vec<_>>().as_slice(),
+            [syn::Expr::MethodCall(clone)]
+                if clone.method == "clone"
+                    && clone.args.is_empty()
+                    && expression_is_simple_path(clone.receiver.as_ref(), &["correlation"])
+        )
+}
+
+fn statement_is_exact_worker_registration(
+    statement: &syn::Stmt,
+    worker_registry: &str,
+    correlation_base: &str,
+    correlation_fields: &[&str],
+) -> bool {
+    let syn::Stmt::Local(local) = statement else {
+        return false;
+    };
+    if !matches!(
+        &local.pat,
+        syn::Pat::Ident(permit)
+            if permit.ident == "permit"
+                && permit.by_ref.is_none()
+                && permit.mutability.is_none()
+                && permit.subpat.is_none()
+    ) {
+        return false;
+    }
+    let Some(initializer) = &local.init else {
+        return false;
+    };
+    if initializer.diverge.is_some() {
+        return false;
+    }
+    let syn::Expr::MethodCall(register) = initializer.expr.as_ref() else {
+        return false;
+    };
+    register.method == "register"
+        && expression_is_self_field(register.receiver.as_ref(), worker_registry)
+        && matches!(
+            register.args.iter().collect::<Vec<_>>().as_slice(),
+            [generation]
+                if expression_is_field_chain(
+                    generation,
+                    correlation_base,
+                    correlation_fields,
+                )
+        )
+}
+
+fn statement_is_exact_github_poll_service_lookup(statement: &syn::Stmt) -> bool {
+    let syn::Stmt::Local(local) = statement else {
+        return false;
+    };
+    if !matches!(
+        &local.pat,
+        syn::Pat::TupleStruct(some)
+            if path_is_simple(&some.path, &["Some"])
+                && matches!(
+                    some.elems.iter().collect::<Vec<_>>().as_slice(),
+                    [syn::Pat::Ident(service)]
+                        if service.ident == "service"
+                            && service.by_ref.is_none()
+                            && service.mutability.is_none()
+                            && service.subpat.is_none()
+                )
+    ) {
+        return false;
+    }
+    let Some(initializer) = &local.init else {
+        return false;
+    };
+    let syn::Expr::MethodCall(service_for) = initializer.expr.as_ref() else {
+        return false;
+    };
+    service_for.method == "service_for"
+        && expression_is_self_field(
+            service_for.receiver.as_ref(),
+            "github_review_polling_services",
+        )
+        && matches!(
+            service_for.args.iter().collect::<Vec<_>>().as_slice(),
+            [syn::Expr::Reference(reference)]
+                if reference.mutability.is_none()
+                    && expression_is_simple_path(
+                        reference.expr.as_ref(),
+                        &["setup_correlation"],
+                    )
+        )
+        && statement_is_exact_early_effect_completion(statement)
+}
+
+fn direct_self_spawn_statement(statement: &syn::Stmt) -> Option<String> {
+    let syn::Stmt::Expr(syn::Expr::MethodCall(call), Some(_)) = statement else {
+        return None;
+    };
+    if !expression_is_simple_path(call.receiver.as_ref(), &["self"])
+        || !call.method.to_string().starts_with("spawn_")
+    {
+        return None;
+    }
+    Some(call.method.to_string())
+}
+
+fn statement_is_final_none(statement: &syn::Stmt) -> bool {
+    matches!(
+        statement,
+        syn::Stmt::Expr(expression, None)
+            if expression_is_simple_path(expression, &["None"])
+    )
+}
+
+fn expression_is_self_field(expression: &syn::Expr, expected_field: &str) -> bool {
+    matches!(
+        expression,
+        syn::Expr::Field(field)
+            if expression_is_simple_path(field.base.as_ref(), &["self"])
+                && matches!(&field.member, syn::Member::Named(member) if member == expected_field)
+    )
+}
+
+fn expression_is_field_path(
+    expression: &syn::Expr,
+    expected_base: &str,
+    expected_field: &str,
+) -> bool {
+    matches!(
+        expression,
+        syn::Expr::Field(field)
+            if expression_is_simple_path(field.base.as_ref(), &[expected_base])
+                && matches!(&field.member, syn::Member::Named(member) if member == expected_field)
+    )
+}
+
+fn expression_is_field_chain(
+    expression: &syn::Expr,
+    expected_base: &str,
+    expected_fields: &[&str],
+) -> bool {
+    let Some((expected_field, parent_fields)) = expected_fields.split_last() else {
+        return expression_is_simple_path(expression, &[expected_base]);
+    };
+    matches!(
+        expression,
+        syn::Expr::Field(field)
+            if matches!(&field.member, syn::Member::Named(member) if member == *expected_field)
+                && expression_is_field_chain(
+                    field.base.as_ref(),
+                    expected_base,
+                    parent_fields,
+                )
+    )
+}
+
+fn statement_is_exact_early_effect_completion(statement: &syn::Stmt) -> bool {
+    let syn::Stmt::Local(local) = statement else {
+        return false;
+    };
+    let Some(initializer) = &local.init else {
+        return false;
+    };
+    let Some((_, diverge)) = &initializer.diverge else {
+        return false;
+    };
+    let syn::Expr::Block(diverge) = diverge.as_ref() else {
+        return false;
+    };
+    matches!(
+        diverge.block.stmts.as_slice(),
+        [syn::Stmt::Expr(syn::Expr::Return(return_expression), Some(_))]
+            if return_expression.expr.as_deref().is_some_and(expression_is_effect_completed_some)
+    )
+}
+
+fn expression_is_effect_completed_some(expression: &syn::Expr) -> bool {
+    let syn::Expr::Call(some) = expression else {
+        return false;
+    };
+    if !expression_is_simple_path(some.func.as_ref(), &["Some"]) || some.args.len() != 1 {
+        return false;
+    }
+    let Some(syn::Expr::Call(completed)) = some.args.first() else {
+        return false;
+    };
+    expression_is_simple_path(completed.func.as_ref(), &["CoreInput", "EffectCompleted"])
+        && completed.args.len() == 1
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CoreEffectReturnKind {
+    None,
+    EffectCompletedSome,
+    Other,
+}
+
+#[derive(Default)]
+struct CoreEffectDispatchVisitor {
+    spawn_calls: Vec<String>,
+    returns: Vec<CoreEffectReturnKind>,
+    try_count: usize,
+    effect_completed_calls: usize,
+}
+
+impl<'ast> Visit<'ast> for CoreEffectDispatchVisitor {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = call.func.as_ref() {
+            if let Some(last) = path.path.segments.last() {
+                let name = last.ident.to_string();
+                if worker_launch_name(&name) {
+                    self.spawn_calls.push(name);
+                }
+            }
+            if path.qself.is_none() && path_is_simple(&path.path, &["CoreInput", "EffectCompleted"])
+            {
+                self.effect_completed_calls += 1;
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let name = call.method.to_string();
+        if worker_launch_name(&name) {
+            self.spawn_calls.push(name);
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        self.returns.push(match expression.expr.as_deref() {
+            Some(value) if expression_is_simple_path(value, &["None"]) => {
+                CoreEffectReturnKind::None
+            }
+            Some(value) if expression_is_effect_completed_some(value) => {
+                CoreEffectReturnKind::EffectCompletedSome
+            }
+            _ => CoreEffectReturnKind::Other,
+        });
+        visit::visit_expr_return(self, expression);
+    }
+
+    fn visit_expr_try(&mut self, expression: &'ast syn::ExprTry) {
+        self.try_count += 1;
+        visit::visit_expr_try(self, expression);
+    }
+}
+
+fn worker_launch_name(name: &str) -> bool {
+    name == "spawn" || name.starts_with("spawn_")
+}
+
+fn verify_core_effect_launcher(
+    method: &syn::ImplItemFn,
+    launcher: &str,
+    sink: &str,
+) -> Result<(), String> {
+    if !matches!(method.sig.output, syn::ReturnType::Default) {
+        return Err(format!("CoreEffect launcher {launcher} must return unit"));
+    }
+    let expected_path = sink.split("::").collect::<Vec<_>>();
+    verify_unconditional_worker_sink(
+        launcher,
+        &method.block,
+        &expected_path,
+        sink != "core_turn_submission::spawn_turn_submission_worker",
+    )
+}
+
+fn verify_unconditional_worker_sink(
+    owner: &str,
+    body: &syn::Block,
+    expected_path: &[&str],
+    forbid_direct_completion: bool,
+) -> Result<(), String> {
+    let direct_sinks = body
+        .stmts
+        .iter()
+        .filter_map(direct_function_call_statement_path)
+        .filter(|path| {
+            path.len() == expected_path.len()
+                && path
+                    .iter()
+                    .zip(expected_path)
+                    .all(|(actual, expected)| actual == expected)
+        })
+        .count();
+
+    let mut launch_audit = WorkerSinkVisitor::default();
+    launch_audit.visit_block(body);
+    let expected_path_text = expected_path.join("::");
+    if direct_sinks != 1
+        || launch_audit.launch_calls.len() != 1
+        || launch_audit.launch_calls[0] != expected_path_text
+    {
+        return Err(format!(
+            "{owner} must call one audited top-level sink `{expected_path_text}(...)`; found direct={direct_sinks}, all={:?}",
+            launch_audit.launch_calls
+        ));
+    }
+    if forbid_direct_completion
+        && (launch_audit.send_calls != 0 || launch_audit.effect_completed_calls != 0)
+    {
+        return Err(format!(
+            "{owner} must not publish around its exactly-once completion sink"
+        ));
+    }
+
+    let mut bypass_audit = OuterWorkerBypassVisitor::default();
+    bypass_audit.visit_block(body);
+    if bypass_audit.return_count != 0 || bypass_audit.try_count != 0 {
+        return Err(format!(
+            "{owner} must reach its top-level worker sink unconditionally (return={}, ?={})",
+            bypass_audit.return_count, bypass_audit.try_count
+        ));
+    }
+    Ok(())
+}
+
+fn direct_function_call_statement_path(statement: &syn::Stmt) -> Option<Vec<String>> {
+    let syn::Stmt::Expr(syn::Expr::Call(call), Some(_)) = statement else {
+        return None;
+    };
+    let syn::Expr::Path(path) = call.func.as_ref() else {
+        return None;
+    };
+    if path.qself.is_some()
+        || path.path.leading_colon.is_some()
+        || path
+            .path
+            .segments
+            .iter()
+            .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+    {
+        return None;
+    }
+    Some(
+        path.path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect(),
+    )
+}
+
+#[derive(Default)]
+struct WorkerSinkVisitor {
+    launch_calls: Vec<String>,
+    send_calls: usize,
+    effect_completed_calls: usize,
+}
+
+impl<'ast> Visit<'ast> for WorkerSinkVisitor {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = call.func.as_ref() {
+            let path_text = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            if path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| worker_launch_name(&segment.ident.to_string()))
+            {
+                self.launch_calls.push(path_text);
+            }
+            if path.qself.is_none() && path_is_simple(&path.path, &["CoreInput", "EffectCompleted"])
+            {
+                self.effect_completed_calls += 1;
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let name = call.method.to_string();
+        if worker_launch_name(&name) {
+            self.launch_calls.push(format!("<method>::{name}"));
+        }
+        if name == "send" {
+            self.send_calls += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[derive(Default)]
+struct OuterWorkerBypassVisitor {
+    return_count: usize,
+    try_count: usize,
+}
+
+impl<'ast> Visit<'ast> for OuterWorkerBypassVisitor {
+    fn visit_expr_closure(&mut self, _expression: &'ast syn::ExprClosure) {}
+
+    fn visit_expr_async(&mut self, _expression: &'ast syn::ExprAsync) {}
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        self.return_count += 1;
+        visit::visit_expr_return(self, expression);
+    }
+
+    fn visit_expr_try(&mut self, expression: &'ast syn::ExprTry) {
+        self.try_count += 1;
+        visit::visit_expr_try(self, expression);
+    }
+}
+
+fn verify_exact_core_effect_trait_delegate(method: &syn::ImplItemFn) -> Result<(), String> {
+    let [syn::Stmt::Expr(syn::Expr::Call(delegate), None)] = method.block.stmts.as_slice() else {
+        return Err(
+            "CoreEffectExecutor::run_effect must delegate exactly with one tail expression"
+                .to_string(),
+        );
+    };
+    if !expression_is_simple_path(delegate.func.as_ref(), &["CoreEffectRunner", "run_effect"])
+        || !matches!(
+            delegate.args.iter().collect::<Vec<_>>().as_slice(),
+            [receiver, effect]
+                if expression_is_simple_path(receiver, &["self"])
+                    && expression_is_simple_path(effect, &["effect"])
+        )
+    {
+        return Err(
+            "CoreEffectExecutor::run_effect must delegate exactly to CoreEffectRunner::run_effect(self, effect)"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 type MethodCallLocation = (String, usize);

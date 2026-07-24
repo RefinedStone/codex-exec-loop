@@ -174,6 +174,7 @@ mod view_selection_overlay_ui;
 // app module root. Keeping them here makes the dependency graph explicit: app
 // slices consume reducer events/effects and presentation types without reaching
 // around to unrelated files.
+#[cfg(test)]
 pub(super) use app_runtime::NativeTuiParallelModeBinding;
 use app_runtime::{BackgroundMessage, TuiParallelModeControlPlaneEventSink};
 use auto_follow_controls::{AutoFollowControlEvent, reduce_auto_follow_controls};

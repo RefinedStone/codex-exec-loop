@@ -258,8 +258,9 @@ fn make_test_runtime_with_session_port(session_port: Arc<dyn SessionCatalogPort>
 fn native_tui_app_keeps_parallel_control_plane_behind_narrow_control_plane_handle() {
     /*
      * This guards the architecture boundary from regressing back to a TUI-owned
-     * controller. The app stores only the typed control-plane handle; app_runtime
-     * performs the TUI event-sink binding from the shared composition.
+     * controller. Production app construction receives one opaque composition,
+     * then stores only the client runtime and typed control-plane handle. The raw
+     * service binding remains available solely to test fixtures.
      */
     const APP_RS: &str = include_str!("../../app.rs");
     const APP_RUNTIME_RS: &str = include_str!("../app_runtime.rs");
@@ -270,8 +271,11 @@ fn native_tui_app_keeps_parallel_control_plane_behind_narrow_control_plane_handl
     assert!(
         !APP_RS.contains("ParallelModeControlPlaneService<TuiParallelModeControlPlaneEventSink>")
     );
-    assert!(APP_RUNTIME_RS.contains("NativeTuiParallelModeBinding"));
-    assert!(APP_RUNTIME_RS.contains("from_composition"));
+    assert!(APP_RUNTIME_RS.contains("application: NativeTuiApplicationComposition"));
+    assert!(APP_RUNTIME_RS.contains("application.bind_event_sink("));
+    assert!(
+        APP_RUNTIME_RS.contains("#[cfg(test)]\npub(crate) struct NativeTuiParallelModeBinding")
+    );
 }
 
 #[test]
