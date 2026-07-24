@@ -478,6 +478,10 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
             "src/core/app/planning_workspace.rs",
             "PlanningWorkspaceOperationCoordinator",
         ),
+        (
+            "src/core/app/conversation_turn_reducer.rs",
+            "ConversationTurnFeatureReducer",
+        ),
         ("src/core/app/session_reducer.rs", "SessionFeatureReducer"),
     ] {
         let source = fs::read_to_string(path).unwrap();
@@ -490,6 +494,7 @@ fn client_runtime_state_mutation_stays_behind_the_runtime_driver() {
     }
     for forbidden_reexport in [
         "use approval::ApprovalReviewPersistenceCoordinator",
+        "use conversation_turn_reducer::ConversationTurnFeatureReducer",
         "use planning_runtime::PlanningRuntimeCoordinator",
         "use planning_workspace::PlanningWorkspaceOperationCoordinator",
         "use session_reducer::SessionFeatureReducer",
@@ -2078,44 +2083,14 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
         is_named_path_type(&session_feature.ty, "SessionFeatureReducer"),
         "session_feature must be the typed session reducer"
     );
-    let guarded_rename_stream = controller_fields
-        .iter()
-        .find(|field| {
+    assert!(
+        controller_fields.iter().all(|field| {
             field
                 .ident
                 .as_ref()
-                .is_some_and(|ident| ident == "guarded_session_rename_stream")
-        })
-        .expect("CoreController must retain the explicit session-rename/turn-stream bridge");
-    assert!(
-        matches!(
-            &guarded_rename_stream.ty,
-            syn::Type::Path(option)
-                if option.qself.is_none()
-                    && option.path.segments.last().is_some_and(|segment| {
-                        segment.ident == "Option"
-                            && matches!(
-                                &segment.arguments,
-                                syn::PathArguments::AngleBracketed(arguments)
-                                    if matches!(
-                                        arguments.args.iter().collect::<Vec<_>>().as_slice(),
-                                        [syn::GenericArgument::Type(syn::Type::Tuple(tuple))]
-                                            if matches!(
-                                                tuple.elems.iter().collect::<Vec<_>>().as_slice(),
-                                                [turn_submission, session_rename]
-                                                    if is_named_path_type(
-                                                        turn_submission,
-                                                        "TurnSubmissionCorrelation",
-                                                    ) && is_named_path_type(
-                                                        session_rename,
-                                                        "SessionRenameCorrelation",
-                                                    )
-                                            )
-                                    )
-                            )
-                    })
-        ),
-        "the only root session bridge must remain exactly Option<(TurnSubmissionCorrelation, SessionRenameCorrelation)>"
+                .is_none_or(|ident| ident != "guarded_session_rename_stream")
+        }),
+        "the session-rename/turn-stream bridge belongs to the conversation-turn reducer"
     );
     for field in &controller_fields {
         let field_name = field
@@ -2123,10 +2098,7 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
             .as_ref()
             .expect("CoreController field should be named")
             .to_string();
-        if matches!(
-            field_name.as_str(),
-            "session_feature" | "guarded_session_rename_stream"
-        ) {
+        if field_name == "session_feature" {
             continue;
         }
         assert!(
@@ -2300,6 +2272,331 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
             && !app_module.contains("pub mod session_reducer;")
             && !app_module.contains("pub use session_reducer"),
         "the mutable session reducer must remain private to core/app"
+    );
+}
+
+#[test]
+fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() {
+    let controller_source = fs::read_to_string("src/core/app/controller.rs")
+        .expect("core controller source should load");
+    let controller_syntax =
+        syn::parse_file(&controller_source).expect("core controller source should parse");
+    let controller_fields = named_struct_fields(&controller_syntax, "CoreController");
+    let conversation_turn = controller_fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == "conversation_turn")
+        })
+        .expect("CoreController must own one ConversationTurnFeatureReducer slice");
+    assert!(
+        is_named_path_type(&conversation_turn.ty, "ConversationTurnFeatureReducer"),
+        "conversation_turn must be the typed conversation/turn reducer"
+    );
+
+    let raw_root_fields = [
+        "turn_stream_state",
+        "guarded_session_rename_stream",
+        "next_conversation_load_generation",
+        "in_flight_conversation_load",
+        "deferred_conversation_load",
+        "next_turn_submission_generation",
+        "active_turn_submission",
+        "next_post_turn_evaluation_generation",
+        "in_flight_post_turn_evaluation",
+        "next_stop_request_generation",
+        "active_stop_request",
+        "next_turn_steer_generation",
+        "active_turn_steer",
+        "next_approval_decision_generation",
+        "active_approval_decision",
+    ];
+    for field in &controller_fields {
+        let field_name = field
+            .ident
+            .as_ref()
+            .expect("CoreController field should be named")
+            .to_string();
+        assert!(
+            field_name == "conversation_turn" || !raw_root_fields.contains(&field_name.as_str()),
+            "conversation/turn authority must live in conversation_turn; unexpected root field: {field_name}"
+        );
+        if field_name == "conversation_turn" {
+            continue;
+        }
+        for forbidden_type in [
+            "TurnStreamState",
+            "ConversationLoadCorrelation",
+            "TurnSubmissionCorrelation",
+            "StopRequestCorrelation",
+            "TurnSteerCorrelation",
+            "ApprovalDecisionCorrelation",
+            "PostTurnEvaluationCorrelation",
+            "ActiveStopRequest",
+            "ActiveTurnSteer",
+            "ActiveApprovalDecision",
+            "ActivePostTurnEvaluation",
+        ] {
+            assert!(
+                !type_mentions_named_path(&field.ty, forbidden_type),
+                "CoreController field {field_name} must not hide conversation/turn authority type {forbidden_type}"
+            );
+        }
+    }
+
+    let reducer_source = fs::read_to_string("src/core/app/conversation_turn_reducer.rs")
+        .expect("conversation/turn feature reducer source should load");
+    let reducer_syntax =
+        syn::parse_file(&reducer_source).expect("conversation/turn reducer should parse");
+    let reducer_fields = named_struct_fields(&reducer_syntax, "ConversationTurnFeatureReducer")
+        .into_iter()
+        .map(|field| {
+            field
+                .ident
+                .as_ref()
+                .expect("conversation/turn reducer field should be named")
+                .to_string()
+        })
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        reducer_fields,
+        raw_root_fields
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>(),
+        "ConversationTurnFeatureReducer must remain one cohesive correlated lifecycle slice"
+    );
+    let production_reducer = production_source_before_inline_tests(&reducer_source);
+    for forbidden_dependency in [
+        "AppState",
+        "PlanningRuntimeCoordinator",
+        "SessionFeatureReducer",
+        "CoreController",
+        "CoreDispatchOutcome",
+        "CoreEffect",
+        "AppEvent",
+        "NativeTuiApp",
+        "crate::adapter",
+        "crate::application",
+    ] {
+        assert!(
+            !production_reducer.contains(forbidden_dependency),
+            "conversation/turn reducer must return typed reductions instead of mutating another feature: {forbidden_dependency}"
+        );
+    }
+    for item in &reducer_syntax.items {
+        let syn::Item::Impl(item_impl) = item else {
+            continue;
+        };
+        if type_is_simple_path(
+            item_impl.self_ty.as_ref(),
+            &["ConversationTurnFeatureReducer"],
+        ) && item_impl.trait_.as_ref().is_some_and(|(_, path, _)| {
+            path.segments
+                .last()
+                .is_some_and(|segment| segment.ident == "DerefMut")
+        }) {
+            panic!("ConversationTurnFeatureReducer must not expose state through DerefMut");
+        }
+        if item_impl.trait_.is_some()
+            || !type_is_simple_path(
+                item_impl.self_ty.as_ref(),
+                &["ConversationTurnFeatureReducer"],
+            )
+        {
+            continue;
+        }
+        for item in &item_impl.items {
+            let syn::ImplItem::Fn(method) = item else {
+                continue;
+            };
+            if matches!(method.vis, syn::Visibility::Inherited) {
+                continue;
+            }
+            let signature_mentions_stream_state = method.sig.inputs.iter().any(|argument| {
+                matches!(
+                    argument,
+                    syn::FnArg::Typed(argument)
+                        if type_mentions_named_path(argument.ty.as_ref(), "TurnStreamState")
+                )
+            }) || matches!(
+                &method.sig.output,
+                syn::ReturnType::Type(_, ty)
+                    if type_mentions_named_path(ty.as_ref(), "TurnStreamState")
+            );
+            assert!(
+                !signature_mentions_stream_state,
+                "public reducer method {} must expose typed transitions, not raw TurnStreamState",
+                method.sig.ident
+            );
+        }
+    }
+
+    let production_controller = production_source_before_inline_tests(&controller_source);
+    let production_controller_syntax = syn::parse_file(&production_controller)
+        .expect("production Core controller source should parse");
+    for item in &production_controller_syntax.items {
+        let syn::Item::Struct(item_struct) = item else {
+            continue;
+        };
+        let syn::Fields::Named(fields) = &item_struct.fields else {
+            continue;
+        };
+        for field in &fields.named {
+            if item_struct.ident == "CoreController"
+                && field
+                    .ident
+                    .as_ref()
+                    .is_some_and(|ident| ident == "conversation_turn")
+            {
+                continue;
+            }
+            for forbidden_type in [
+                "TurnStreamState",
+                "ConversationLoadCorrelation",
+                "TurnSubmissionCorrelation",
+                "StopRequestCorrelation",
+                "TurnSteerCorrelation",
+                "ApprovalDecisionCorrelation",
+                "PostTurnEvaluationCorrelation",
+                "ActiveStopRequest",
+                "ActiveTurnSteer",
+                "ActiveApprovalDecision",
+                "ActivePostTurnEvaluation",
+            ] {
+                assert!(
+                    !type_mentions_named_path(&field.ty, forbidden_type),
+                    "production controller struct {} must not hide lifecycle authority type {forbidden_type}",
+                    item_struct.ident
+                );
+            }
+        }
+    }
+    let compact_controller = rust_code_without_comments_and_literals(&production_controller)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for forbidden_constructor in [
+        "ConversationLoadCorrelation::new(",
+        "TurnSubmissionCorrelation::new(",
+        "StopRequestCorrelation::new(",
+        "TurnSteerCorrelation::new(",
+        "ApprovalDecisionCorrelation::new(",
+        "PostTurnEvaluationCorrelation::new(",
+    ] {
+        assert!(
+            !compact_controller.contains(forbidden_constructor),
+            "only ConversationTurnFeatureReducer may mint lifecycle correlations: {forbidden_constructor}"
+        );
+    }
+    struct LifecycleStructLiteralVisitor {
+        forbidden: HashSet<&'static str>,
+        found: Vec<String>,
+    }
+    impl<'ast> Visit<'ast> for LifecycleStructLiteralVisitor {
+        fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+            if expression
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| self.forbidden.contains(segment.ident.to_string().as_str()))
+            {
+                self.found.push(
+                    expression
+                        .path
+                        .segments
+                        .iter()
+                        .map(|segment| segment.ident.to_string())
+                        .collect::<Vec<_>>()
+                        .join("::"),
+                );
+            }
+            visit::visit_expr_struct(self, expression);
+        }
+    }
+    let mut lifecycle_literals = LifecycleStructLiteralVisitor {
+        forbidden: HashSet::from([
+            "ConversationLoadCorrelation",
+            "TurnSubmissionCorrelation",
+            "StopRequestCorrelation",
+            "TurnSteerCorrelation",
+            "ApprovalDecisionCorrelation",
+            "PostTurnEvaluationCorrelation",
+        ]),
+        found: Vec::new(),
+    };
+    lifecycle_literals.visit_file(&production_controller_syntax);
+    assert!(
+        lifecycle_literals.found.is_empty(),
+        "CoreController must not mint lifecycle correlations through struct literals: {:?}",
+        lifecycle_literals.found
+    );
+
+    let production_calls = top_level_impl_method_calls(&controller_source);
+    for required_reduction in [
+        "admit_conversation_load",
+        "reduce_conversation_invalidation",
+        "complete_conversation_load",
+        "admit_turn_submission",
+        "admit_stop_request",
+        "complete_stop_request",
+        "admit_turn_steer",
+        "complete_turn_steer",
+        "admit_approval_decision",
+        "complete_approval_decision",
+        "admit_post_turn_evaluation",
+        "complete_post_turn_evaluation",
+        "apply_correlated_turn_stream_event",
+        "reduce_session_rename_projection",
+    ] {
+        let call_count = production_calls
+            .iter()
+            .flat_map(|(_, calls, _)| calls)
+            .filter(|(called, _)| called == required_reduction)
+            .count();
+        assert_eq!(
+            call_count, 1,
+            "CoreController must route major lifecycle operation {required_reduction} through the feature reducer exactly once"
+        );
+    }
+    let handle_input = top_level_impl_method_source(&controller_source, "handle_input");
+    let compact_handle_input = rust_code_without_comments_and_literals(&handle_input)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for (acceptance_gate, root_mutation) in [
+        (
+            "complete_conversation_load(&correlation,loaded_stream_identity)",
+            "state.apply_conversation_result(result)",
+        ),
+        (
+            "complete_post_turn_evaluation(&correlation,execution.as_ref())",
+            "planning_worker_panel_history_seed=execution.planning_worker_panel_state.clone()",
+        ),
+    ] {
+        let gate_position = compact_handle_input
+            .find(acceptance_gate)
+            .unwrap_or_else(|| {
+                panic!("missing conversation/turn completion gate: {acceptance_gate}")
+            });
+        let mutation_position = compact_handle_input
+            .find(root_mutation)
+            .unwrap_or_else(|| panic!("missing gated root mutation: {root_mutation}"));
+        assert!(
+            gate_position < mutation_position,
+            "feature reducer completion gate {acceptance_gate} must run before {root_mutation}"
+        );
+    }
+
+    let app_module =
+        fs::read_to_string("src/core/app/mod.rs").expect("core app module source should load");
+    assert!(
+        app_module.contains("mod conversation_turn_reducer;")
+            && !app_module.contains("pub mod conversation_turn_reducer;")
+            && !app_module.contains("pub use conversation_turn_reducer"),
+        "the mutable conversation/turn reducer must remain private to core/app"
     );
 }
 
@@ -5853,6 +6150,8 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
     }
 
     let core_controller = fs::read_to_string("src/core/app/controller.rs").unwrap();
+    let conversation_turn_reducer =
+        fs::read_to_string("src/core/app/conversation_turn_reducer.rs").unwrap();
     let core_event = fs::read_to_string("src/core/app/event.rs").unwrap();
     let core_runtime = fs::read_to_string("src/core/runtime/driver.rs").unwrap();
     let tui_runtime = fs::read_to_string("src/adapter/inbound/tui/app/app_runtime.rs").unwrap();
@@ -5904,25 +6203,37 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
             ),
         "Core admission must overwrite the effect request with the state derived from Core history"
     );
-    let exact_correlation_guard = compact_handle_input
-        .find("ifself.active_post_turn_evaluation_correlation()!=Some(&correlation)")
-        .expect("Core must reject a completion outside the active post-turn correlation");
-    let exact_execution_guard = compact_handle_input
-        .find("if!correlation.matches_execution(execution.as_ref())")
-        .expect("Core must reject a completion with mismatched execution identity");
-    let accepted_turn_guard = compact_handle_input
-        .find("accept_post_turn_evaluation_completion(execution.as_ref())")
-        .expect("Core must let turn authority accept the exact completion");
+    let accepted_reducer_settlement = compact_handle_input
+        .find("conversation_turn.complete_post_turn_evaluation(&correlation,execution.as_ref())")
+        .expect("Core must delegate exact post-turn settlement to the feature reducer");
     let history_seed_commit = compact_handle_input
         .find(
             "self.planning_worker_panel_history_seed=execution.planning_worker_panel_state.clone()",
         )
         .expect("Core must retain the accepted completion as the next history seed");
     assert!(
-        exact_correlation_guard < exact_execution_guard
-            && exact_execution_guard < accepted_turn_guard
-            && accepted_turn_guard < history_seed_commit,
-        "Core history may change only after correlation, execution identity, and turn acceptance"
+        accepted_reducer_settlement < history_seed_commit,
+        "Core history may change only after the feature reducer accepts exact settlement"
+    );
+    let post_turn_settlement =
+        top_level_impl_method_source(&conversation_turn_reducer, "complete_post_turn_evaluation");
+    let compact_post_turn_settlement = post_turn_settlement
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let exact_correlation_guard = compact_post_turn_settlement
+        .find("active_post_turn_evaluation_correlation()!=Some(correlation)")
+        .expect("feature reducer must reject a completion outside the exact active lease");
+    let exact_execution_guard = compact_post_turn_settlement
+        .find("!correlation.matches_execution(execution)")
+        .expect("feature reducer must reject a mismatched execution identity");
+    let accepted_turn_guard = compact_post_turn_settlement
+        .find("accept_post_turn_evaluation_completion(execution)")
+        .expect("feature reducer must let turn authority accept exact completion");
+    assert!(
+        exact_correlation_guard < accepted_turn_guard
+            && exact_execution_guard < accepted_turn_guard,
+        "turn acceptance must follow exact correlation and execution identity gates"
     );
 
     let reset_history_seed =
@@ -5941,9 +6252,10 @@ fn tui_post_turn_execution_uses_planning_post_turn_facade() {
         &core_controller,
         "reset_planning_worker_panel_history_seed",
     );
-    assert!(
-        reset_call_lines.len() >= 3,
-        "Core must reset planning-worker history for invalidation and conversation-load lifecycle paths; calls: {reset_call_lines:?}"
+    assert_eq!(
+        reset_call_lines.len(),
+        2,
+        "Core must reset planning-worker history exactly once for invalidation and once for common conversation-load admission; calls: {reset_call_lines:?}"
     );
 
     for required in [
@@ -6015,25 +6327,28 @@ fn post_turn_evaluation_uses_one_core_owned_exact_correlation() {
 
     let controller = fs::read_to_string("src/core/app/controller.rs")
         .expect("Core controller source should load");
+    let reducer = fs::read_to_string("src/core/app/conversation_turn_reducer.rs")
+        .expect("conversation/turn reducer source should load");
     let production_controller = production_source_before_inline_tests(&controller);
+    let production_reducer = production_source_before_inline_tests(&reducer);
     assert!(
-        production_controller.contains("struct ActivePostTurnEvaluation")
-            && production_controller.contains("correlation: PostTurnEvaluationCorrelation")
-            && production_controller.contains("continuation_permit: PostTurnContinuationPermit")
-            && production_controller
+        production_reducer.contains("struct ActivePostTurnEvaluation")
+            && production_reducer.contains("correlation: PostTurnEvaluationCorrelation")
+            && production_reducer.contains("continuation_permit: PostTurnContinuationPermit")
+            && production_reducer
                 .contains("in_flight_post_turn_evaluation: Option<ActivePostTurnEvaluation>")
-            && production_controller.contains("next_post_turn_evaluation_generation: u64")
-            && production_controller.contains(
-                "if self.active_post_turn_evaluation_correlation() != Some(&correlation)"
-            )
-            && production_controller
-                .contains("if !correlation.matches_execution(execution.as_ref())")
-            && production_controller.contains("fn prune_post_turn_evaluation_for_lifecycle")
-            && production_controller.contains("fn cancel_active_post_turn_evaluation")
-            && production_controller.contains("active.continuation_permit.invalidate_if_current()")
-            && !production_controller
-                .contains("in_flight_post_turn_evaluation: Option<(String, String)>"),
-        "Core must bind exact post-turn correlation and worker authority in one lifecycle-pruned active lease"
+            && production_reducer.contains("next_post_turn_evaluation_generation: u64")
+            && production_reducer
+                .contains("if self.active_post_turn_evaluation_correlation() != Some(correlation)")
+            && production_reducer.contains("|| !correlation.matches_execution(execution)")
+            && production_reducer.contains("fn prune_post_turn_evaluation_for_lifecycle")
+            && production_reducer.contains("fn cancel_active_post_turn_evaluation")
+            && production_reducer.contains("active.continuation_permit.invalidate_if_current()")
+            && !production_reducer
+                .contains("in_flight_post_turn_evaluation: Option<(String, String)>")
+            && production_controller.contains("conversation_turn: ConversationTurnFeatureReducer")
+            && !production_controller.contains("in_flight_post_turn_evaluation:"),
+        "ConversationTurnFeatureReducer must bind exact post-turn correlation and worker authority in one lifecycle-pruned active lease"
     );
     for behavior_test in [
         "fn post_turn_completion_requires_latest_exact_correlation_once_across_aba()",

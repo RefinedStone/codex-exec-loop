@@ -451,7 +451,8 @@ fn post_turn_completion_payload_is_not_stashed_in_tui_pending_queue() {
     assert!(SHELL_RUNTIME_RS.contains("PostTurnEvaluationCompleted"));
     assert!(SHELL_RUNTIME_RS.contains("CoreEffectCompletion::PostTurnEvaluationCompleted"));
     assert!(
-        CORE_CONTROLLER_RS.contains("accept_post_turn_evaluation_completion(execution.as_ref())")
+        CORE_CONTROLLER_RS
+            .contains("complete_post_turn_evaluation(&correlation, execution.as_ref())")
     );
 }
 
