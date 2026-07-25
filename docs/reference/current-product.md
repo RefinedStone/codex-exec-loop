@@ -133,6 +133,13 @@ distributor head, queue state, and withheld-dispatch reason.
 `:peek` opens a read-only active-agent conversation preview; switching agents or overlays prevents
 late results from replacing the latest preview or the interactive conversation.
 
+The local Admin graphic dashboard keeps those facts passive, but its harness controls are real
+application commands. CSRF-protected browser actions can enable the automation epoch, request the
+next accepted task, refresh the supervisor projection, or disable the loop through one persistent
+`ParallelModeControlPlaneHandle`. The HTTP adapter drains typed background completions back into
+that handle before reporting control state; it does not call Git, GitHub, pool, or distributor
+adapters directly.
+
 ## Recovery and Limits
 
 - Invalid or conflicting planning updates pause continuation and preserve review evidence.

@@ -1,6 +1,9 @@
 use crate::application::port::outbound::app_server_prompt_log_port::AppServerPromptLogPort;
 use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
-use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneComposition;
+use crate::application::service::parallel_mode::control_plane::{
+    ParallelModeControlPlaneBackgroundEvent, ParallelModeControlPlaneComposition,
+    ParallelModeControlPlaneEventSink, ParallelModeControlPlaneHandle,
+};
 use crate::application::service::planning::{PlanningAdminFacadeService, PlanningResetTarget};
 use crate::application::service::review_center::ReviewCenterReadService;
 use crate::composition::production;
@@ -14,7 +17,7 @@ use axum::routing::{get, post};
 use axum_extra::extract::CookieJar;
 use std::io::IsTerminal;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
 
 /*
  * admin_api는 planning administration을 로컬 HTTP surface로 노출하는 inbound adapter다.
@@ -50,11 +53,49 @@ struct AdminAppState {
      */
     facade: Arc<PlanningAdminFacadeService>,
     parallel_mode_control_plane: Arc<ParallelModeControlPlaneComposition>,
+    parallel_control_runtime: AdminParallelControlRuntime,
     parallel_agent_profile_service: ParallelAgentProfileService,
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     review_center_read_service: ReviewCenterReadService,
     graphic: AdminGraphicConfig,
     security: AdminSecurityConfig,
+}
+
+#[derive(Clone)]
+struct AdminParallelControlEventSink {
+    tx: mpsc::Sender<ParallelModeControlPlaneBackgroundEvent>,
+}
+
+impl ParallelModeControlPlaneEventSink for AdminParallelControlEventSink {
+    fn send_control_plane_event(&self, event: ParallelModeControlPlaneBackgroundEvent) {
+        let _ = self.tx.send(event);
+    }
+}
+
+#[derive(Clone)]
+struct AdminParallelControlRuntime {
+    handle: ParallelModeControlPlaneHandle<AdminParallelControlEventSink>,
+    pending_events: Arc<Mutex<mpsc::Receiver<ParallelModeControlPlaneBackgroundEvent>>>,
+}
+
+impl AdminParallelControlRuntime {
+    fn new(composition: &ParallelModeControlPlaneComposition) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            handle: composition.bind_event_sink(AdminParallelControlEventSink { tx }),
+            pending_events: Arc::new(Mutex::new(rx)),
+        }
+    }
+
+    fn drain_pending_events(&self) {
+        let receiver = self
+            .pending_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while let Ok(event) = receiver.try_recv() {
+            let _ = self.handle.handle_background_event(event);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -189,9 +230,12 @@ fn build_admin_state(workspace_dir: String, security: AdminSecurityConfig) -> Ad
      * production composition root에서 같은 graph로 받아 page/API handler가 동일 facade를 공유하게 한다.
      */
     let application = production::build_admin_application(workspace_dir);
+    let parallel_control_runtime =
+        AdminParallelControlRuntime::new(application.parallel_mode_control_plane.as_ref());
     AdminAppState {
         facade: application.facade,
         parallel_mode_control_plane: application.parallel_mode_control_plane,
+        parallel_control_runtime,
         parallel_agent_profile_service: application.parallel_agent_profile_service,
         app_server_prompt_log_port: application.app_server_prompt_log_port,
         review_center_read_service: application.review_center_read_service,
@@ -417,6 +461,10 @@ fn build_router(state: AdminAppState) -> Router {
             get(api::akra_distributor_api),
         )
         .route("/api/admin/akra/events", get(api::akra_events_api))
+        .route(
+            "/api/admin/akra/control",
+            get(api::akra_control_api).post(api::mutate_akra_control_api),
+        )
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state,

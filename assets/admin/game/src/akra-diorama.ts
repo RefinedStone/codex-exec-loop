@@ -104,9 +104,19 @@ interface AgentUnit {
   group: PixiContainer;
   sprite: PixiSprite | null;
   marker: PixiGraphics;
+  homePoint: Point;
   point: Point;
+  motionPhase: number;
+  archetype: ArchetypeKey;
   resolvedAtlasFrameIndex: number | null;
   poseFallback: boolean;
+}
+
+interface SignalPacket {
+  unit: AgentUnit;
+  graphic: PixiGraphics;
+  target: Point;
+  phase: number;
 }
 
 interface StructureSpec {
@@ -129,8 +139,8 @@ interface SceneInspection {
   actorCount: number;
   characterCount: number;
   standbyCount: number;
-  packetCount: 0;
-  semanticMotionCount: 0;
+  packetCount: number;
+  semanticMotionCount: number;
   renderCount: number;
   actors: Array<{
     actorId: string;
@@ -188,37 +198,29 @@ const AGENT_SHADOW_WIDTH = 26.35;
 const AGENT_SHADOW_HEIGHT = 6.8;
 const AGENT_MARKER_WIDTH = 21.25;
 const AGENT_MARKER_HEIGHT = 5.95;
-const MAP_WIDTH = 1671;
-const MAP_HEIGHT = 941;
+const MAP_WIDTH = 1672;
+const MAP_HEIGHT = 940;
 
 const SLOT_SEATS: Point[] = [
-  { x: 450, y: 420 },
-  { x: 640, y: 345 },
-  { x: 500, y: 615 },
-  { x: 760, y: 565 },
-  { x: 1030, y: 570 },
+  { x: 742, y: 332 },
+  { x: 742, y: 502 },
+  { x: 742, y: 675 },
+  { x: 610, y: 565 },
+  { x: 900, y: 565 },
 ];
 
 const STANDBY_LOUNGE_POINTS: Point[] = [
-  { x: 685, y: 790 },
-  { x: 805, y: 790 },
-  { x: 925, y: 790 },
+  { x: 225, y: 785 },
+  { x: 320, y: 800 },
+  { x: 405, y: 770 },
 ];
 
-const STRUCTURE_SPECS: StructureSpec[] = [
-  { key: "fdDesk1", x: 470, y: 405, scale: 0.62 },
-  { key: "fdDesk2", x: 660, y: 330, scale: 0.62 },
-  { key: "fdDesk3", x: 505, y: 600, scale: 0.62 },
-  { key: "fdDesk4", x: 785, y: 548, scale: 0.6 },
-  { key: "fdDesk5", x: 1048, y: 555, scale: 0.58 },
-  { key: "fdBossDesk", x: 840, y: 260, scale: 0.58 },
-  { key: "fdDistributorDesk", x: 1075, y: 315, scale: 0.62 },
-  { key: "fdEventLogTower", x: 1332, y: 520, scale: 0.82 },
-  { key: "fdSofa", x: 805, y: 760, scale: 0.62 },
-  { key: "fdPlant", x: 615, y: 505, scale: 0.7 },
-  { key: "fdPlant", x: 925, y: 485, scale: 0.7 },
-  { key: "fdPlant", x: 1185, y: 620, scale: 0.7 },
-];
+// The v2 ImageGen map already contains furniture. Pixi owns only live semantic overlays.
+const STRUCTURE_SPECS: StructureSpec[] = [];
+
+const REVIEW_STATION: Point = { x: 310, y: 245 };
+const DELIVERY_STATION: Point = { x: 1295, y: 505 };
+const CLEANUP_STATION: Point = { x: 1370, y: 765 };
 
 const NEUTRAL_FRAME_MANIFEST: Record<VisualState, { facing: Facing; frameIndex: number }> = {
   idle: { facing: "down", frameIndex: 0 },
@@ -338,10 +340,12 @@ declare global {
 
     const root = boardEl.closest<HTMLElement>("[data-admin-graphic]");
     const structureLayer = new PIXI.Container();
+    const packetLayer = new PIXI.Container();
     const agentLayer = new PIXI.Container();
     structureLayer.sortableChildren = true;
+    packetLayer.sortableChildren = true;
     agentLayer.sortableChildren = true;
-    app.stage.addChild(structureLayer, agentLayer);
+    app.stage.addChild(structureLayer, packetLayer, agentLayer);
 
     const statusPalette: Record<StatusSeverity, number> = {
       normal: 0x35d07f,
@@ -355,10 +359,13 @@ declare global {
     let textures: Partial<Record<AssetKey, PixiTexture>> = {};
     let agentFrameSets: Partial<Record<ArchetypeKey, AgentFrameSet>> = {};
     let agentUnits: AgentUnit[] = [];
+    let signalPackets: SignalPacket[] = [];
     let structureSprites: StructureSprite[] = [];
     let resizeObserver: ResizeObserver | null = null;
     let renderRequestId = 0;
+    let animationRequestId = 0;
     let renderCount = 0;
+    let lastAnimationTime = 0;
     let lastLayoutWidth = 0;
     let lastLayoutHeight = 0;
     let ready = false;
@@ -372,8 +379,10 @@ declare global {
       container.dataset.sceneActorCount = String(activeUnits.length);
       container.dataset.sceneCharacterCount = String(agentUnits.length);
       container.dataset.sceneStandbyCount = String(standbyUnits.length);
-      container.dataset.scenePacketCount = "0";
-      container.dataset.sceneSemanticMotionCount = "0";
+      container.dataset.scenePacketCount = String(signalPackets.length);
+      container.dataset.sceneSemanticMotionCount = String(
+        reducedMotion ? 0 : agentUnits.filter((unit) => unit.visualState !== "idle").length
+      );
       container.dataset.sceneRenderCount = String(renderCount);
       container.dataset.sceneActorSignature = JSON.stringify(
         activeUnits.map((unit) => ({
@@ -409,6 +418,36 @@ declare global {
     const boardVisualScale = (): number => {
       const { width, height } = boardSize();
       return Math.min(width / MAP_WIDTH, height / MAP_HEIGHT) || 1;
+    };
+
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+    const lerp = (from: number, to: number, progress: number): number =>
+      from + (to - from) * progress;
+
+    const pointBetween = (from: Point, to: Point, progress: number): Point => ({
+      x: lerp(from.x, to.x, progress),
+      y: lerp(from.y, to.y, progress),
+    });
+
+    const motionTargetFor = (unit: AgentUnit): Point => {
+      if (unit.visualState === "awaiting_review") return REVIEW_STATION;
+      if (unit.visualState === "delivering") return DELIVERY_STATION;
+      if (unit.visualState === "cleanup") return CLEANUP_STATION;
+      return unit.homePoint;
+    };
+
+    const semanticProgress = (unit: AgentUnit, elapsedSeconds: number): number => {
+      const wave = (Math.sin(elapsedSeconds * 1.35 + unit.motionPhase) + 1) / 2;
+      if (unit.visualState === "starting") return Math.min((elapsedSeconds * 0.22 + unit.motionPhase) % 1, 1);
+      if (
+        unit.visualState === "awaiting_review"
+        || unit.visualState === "delivering"
+        || unit.visualState === "cleanup"
+      ) {
+        return 0.12 + wave * 0.22;
+      }
+      return 0;
     };
 
     const clamp = (value: number, min: number, max: number): number =>
@@ -662,7 +701,10 @@ declare global {
         group,
         sprite,
         marker,
+        homePoint: point,
         point,
+        motionPhase: [...characterId].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 17,
+        archetype,
         resolvedAtlasFrameIndex,
         poseFallback,
       };
@@ -681,7 +723,8 @@ declare global {
 
     const syncAgentUnits = (): void => {
       for (const unit of agentUnits) {
-        unit.point = pointFor(unit.node);
+        unit.homePoint = pointFor(unit.node);
+        unit.point = unit.homePoint;
         const point = designToBoardPoint(unit.point);
         unit.group.x = point.x;
         unit.group.y = point.y;
@@ -694,6 +737,74 @@ declare global {
           unit.presenceKind
         );
       }
+    };
+
+    const rebuildSignalPackets = (): void => {
+      for (const child of packetLayer.removeChildren()) child.destroy({ children: true });
+      signalPackets = agentUnits
+        .filter(
+          (unit) =>
+            unit.presenceKind === "active"
+            && ["awaiting_review", "delivering", "cleanup"].includes(unit.visualState)
+        )
+        .map((unit, index) => {
+          const color = statusPalette[parseSeverity(unit.node)] || statusPalette.info;
+          const graphic = new PIXI.Graphics();
+          graphic.beginFill(color, 0.9);
+          graphic.drawPolygon([0, -5, 7, 0, 0, 5, -7, 0]);
+          graphic.endFill();
+          graphic.zIndex = 9_000 + index;
+          packetLayer.addChild(graphic);
+          return {
+            unit,
+            graphic,
+            target: motionTargetFor(unit),
+            phase: index / Math.max(agentUnits.length, 1),
+          };
+        });
+    };
+
+    const animateScene = (timestamp: number): void => {
+      animationRequestId = window.requestAnimationFrame(animateScene);
+      if (!ready || reducedMotion || timestamp - lastAnimationTime < 66) return;
+      lastAnimationTime = timestamp;
+      const movingUnits = agentUnits.filter((unit) => unit.visualState !== "idle");
+      if (movingUnits.length === 0 && signalPackets.length === 0) return;
+      const elapsedSeconds = timestamp / 1000;
+      for (const unit of movingUnits) {
+        const target = motionTargetFor(unit);
+        const progress = semanticProgress(unit, elapsedSeconds);
+        const designPoint = pointBetween(unit.homePoint, target, progress);
+        const workingBob = unit.visualState === "working"
+          ? Math.sin(elapsedSeconds * 5 + unit.motionPhase) * 2.4
+          : 0;
+        const blockedJitter = unit.visualState === "blocked"
+          ? Math.sin(elapsedSeconds * 10 + unit.motionPhase) * 1.8
+          : 0;
+        unit.point = {
+          x: designPoint.x + blockedJitter,
+          y: designPoint.y + workingBob,
+        };
+        const boardPoint = designToBoardPoint(unit.point);
+        unit.group.x = boardPoint.x;
+        unit.group.y = boardPoint.y;
+        unit.group.zIndex = boardPoint.y;
+        if (unit.sprite && unit.pose === "neutral" && unit.visualState === "working") {
+          const frames = agentFrameSets[unit.archetype]?.down || [];
+          const frameIndex = Math.floor(elapsedSeconds * 4 + unit.motionPhase) % Math.max(frames.length, 1);
+          if (frames[frameIndex]) unit.sprite.texture = frames[frameIndex];
+        }
+      }
+      for (const packet of signalPackets) {
+        const travel = (elapsedSeconds * 0.34 + packet.phase) % 1;
+        const designPoint = pointBetween(packet.unit.homePoint, packet.target, travel);
+        const boardPoint = designToBoardPoint(designPoint);
+        packet.graphic.x = boardPoint.x;
+        packet.graphic.y = boardPoint.y;
+        packet.graphic.alpha = 0.35 + Math.sin(travel * Math.PI) * 0.65;
+        packet.graphic.scale.set(clamp(boardVisualScale(), 0.62, 1.1));
+      }
+      requestSceneRender();
     };
 
     const syncLayout = (force = false): void => {
@@ -722,6 +833,7 @@ declare global {
             .map(makeAgentUnit)
             .filter((unit): unit is AgentUnit => unit !== null)
         : [];
+      rebuildSignalPackets();
       syncInspectionDataset();
       syncLayout(true);
     };
@@ -736,8 +848,10 @@ declare global {
         actorCount: activeUnits.length,
         characterCount: agentUnits.length,
         standbyCount: standbyUnits.length,
-        packetCount: 0,
-        semanticMotionCount: 0,
+        packetCount: signalPackets.length,
+        semanticMotionCount: reducedMotion
+          ? 0
+          : agentUnits.filter((unit) => unit.visualState !== "idle").length,
         renderCount,
         actors: activeUnits.map((unit) => ({
           actorId: unit.actorId,
@@ -797,6 +911,7 @@ declare global {
       window.removeEventListener("resize", onResize);
       resizeObserver?.disconnect();
       if (renderRequestId) window.cancelAnimationFrame(renderRequestId);
+      if (animationRequestId) window.cancelAnimationFrame(animationRequestId);
       app.destroy(true, { children: true, texture: false, baseTexture: false });
       delete container.dataset.akraDioramaMounted;
       if (activeHandle?.app === app) activeHandle = null;
@@ -808,6 +923,7 @@ declare global {
       ready = true;
       syncInspectionDataset();
       requestSceneRender();
+      animationRequestId = window.requestAnimationFrame(animateScene);
       window.addEventListener("akra:scene-rendered", rebuildAgentUnits);
       window.addEventListener("resize", onResize);
       if (typeof ResizeObserver !== "undefined") {
