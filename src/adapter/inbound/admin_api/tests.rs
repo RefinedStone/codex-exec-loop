@@ -1510,7 +1510,6 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
 
     for asset_name in [
         "akra-operations-studio-v2.png",
-        "final-draft-map-sprite.png",
         "gamebaljeonguk_atlas_64x96.png",
         "gamebaljeonguk_atlas_128x192.png",
         "sprite_fd_desk_1.png",

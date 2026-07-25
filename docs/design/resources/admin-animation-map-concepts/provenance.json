@@ -16,7 +16,7 @@
     "prompt_record": "PROMPTS.md"
   },
   "source_reference": {
-    "path": "assets/admin/graphics/final-draft-map-sprite.png",
+    "path": "docs/design/resources/admin-animation-map-concepts/final-draft-map-sprite.png",
     "role": "Edit target and immutable style/perspective reference",
     "license": "No standalone license record found; this derivative generation and public push to the same repository were explicitly authorized by the repository owner",
     "rights_status": "Confirmed by repository owner for this public repository-scoped design review; no downstream reuse license asserted",

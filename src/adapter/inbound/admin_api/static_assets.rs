@@ -17,11 +17,6 @@ macro_rules! bundled_asset {
 }
 
 bundled_asset!(
-    FINAL_DRAFT_MAP_SPRITE,
-    FINAL_DRAFT_MAP_SPRITE_ETAG,
-    "../../../../assets/admin/graphics/final-draft-map-sprite.png"
-);
-bundled_asset!(
     AKRA_OPERATIONS_STUDIO_V2,
     AKRA_OPERATIONS_STUDIO_V2_ETAG,
     "../../../../assets/admin/graphics/akra-operations-studio-v2.png"
@@ -162,7 +157,6 @@ pub(super) async fn admin_graphic_asset(
     Path(asset_name): Path<String>,
 ) -> std::result::Result<Response, StatusCode> {
     let (bytes, etag) = match asset_name.as_str() {
-        "final-draft-map-sprite.png" => (FINAL_DRAFT_MAP_SPRITE, &FINAL_DRAFT_MAP_SPRITE_ETAG),
         "akra-operations-studio-v2.png" => {
             (AKRA_OPERATIONS_STUDIO_V2, &AKRA_OPERATIONS_STUDIO_V2_ETAG)
         }
