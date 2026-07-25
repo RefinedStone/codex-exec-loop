@@ -49,7 +49,7 @@ http://127.0.0.1:18446/docs/design/resources/admin-animation-map-concepts/index.
 
 ## 런타임 승격 주의
 
-생성 이미지에는 비교를 위해 가구가 포함되어 있습니다. 생성 결과의 좌석·소파 수량은 런타임 계약이 아닙니다. 현재 런타임은 배경 위에 가구와 캐릭터를 Pixi로 별도 합성하므로, 이미지만 `assets/admin/graphics/final-draft-map-sprite.png`로 교체하면 가구가 중복됩니다.
+생성 이미지에는 비교를 위해 가구가 포함되어 있습니다. 생성 결과의 좌석·소파 수량은 런타임 계약이 아닙니다. 이 문서가 설명하는 이전 배경은 `docs/design/resources/admin-animation-map-concepts/final-draft-map-sprite.png`에 비교 자료로 보존되어 있으며, 현재 런타임은 별도의 운영 스튜디오 배경과 Pixi 캐릭터 합성을 사용합니다.
 
 최종안 선택 뒤 별도 작업 단위에서 다음을 함께 정리해야 합니다.
 

@@ -4,7 +4,6 @@
   "policy": "Every tracked PNG in this directory is embedded by the admin API and consumed by the dashboard template or diorama TypeScript. Source and reference artwork must live outside this directory with its own provenance.",
   "runtime_assets": [
     "akra-operations-studio-v2.png",
-    "final-draft-map-sprite.png",
     "gamebaljeonguk_atlas_128x192.png",
     "gamebaljeonguk_atlas_64x96.png",
     "sprite_fd_boss_desk.png",
