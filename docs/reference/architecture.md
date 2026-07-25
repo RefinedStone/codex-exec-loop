@@ -54,6 +54,12 @@ while composition interprets it with application services.
 Mapping stays in adapters. Policy stays in domain or application services. Add a port only for a
 real outbound boundary.
 
+The Admin server owns one process-lifetime parallel control-plane handle in addition to its passive
+dashboard composition. Browser control requests map only to typed enable, dispatch, refresh, and
+disable commands. Effect completions return through an adapter-owned bounded channel and are
+drained through the same handle, so HTTP polling never becomes a second pool or delivery policy
+implementation.
+
 ## Core Runtime
 
 `src/core` is the framework-free **Client Runtime** outside the business hexagon, at its inbound

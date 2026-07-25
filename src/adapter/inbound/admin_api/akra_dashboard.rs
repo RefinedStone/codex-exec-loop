@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use crate::git_subprocess;
 
 const DASHBOARD_EVENT_LIMIT: usize = 20;
-const ADMIN_RUNTIME_MODE_LABEL: &str = "read-only projection";
+const ADMIN_RUNTIME_MODE_LABEL: &str = "controlled projection";
 const STANDBY_CHARACTER_LIMIT: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
@@ -500,7 +500,7 @@ pub(super) fn build_akra_dashboard_view(
             readiness: readiness_label,
             readiness_notice: readiness_notice(&readiness).to_string(),
             blocked_action: blocked_action(&readiness, &pool).to_string(),
-            purpose_label: "read-only 운영 관제".to_string(),
+            purpose_label: "운영 관제 · 하네스 제어".to_string(),
             gamification_policy: "MVP는 XP/코인/영구 레벨을 저장하지 않습니다.".to_string(),
             domain_mapping_note: "요원=Agent, 작업=Task, 워크트리 풀=Pool Slot, 분배관=Distributor"
                 .to_string(),
@@ -616,9 +616,14 @@ fn map_agents(
     supervisor: &ParallelModeSupervisorSnapshot,
     agent_profiles: &ParallelAgentProfileConfig,
 ) -> AgentRosterView {
+    let empty_state = if supervisor.roster.entries.is_empty() {
+        "자동 루프가 꺼져 있습니다. 시작하면 승인된 작업이 빈 슬롯에 투입됩니다.".to_string()
+    } else {
+        supervisor.roster.empty_state.clone()
+    };
     AgentRosterView {
         active_count: supervisor.roster.active_count(),
-        empty_state: supervisor.roster.empty_state.clone(),
+        empty_state,
         entries: supervisor
             .roster
             .entries
@@ -1251,7 +1256,7 @@ fn map_metrics(
         active_agent_count: agents.active_count,
         waiting_task_count: distributor.queue_depth,
         blocked_slot_count: pool.summary.blocked,
-        source_label: "derived from read-only supervisor snapshot".to_string(),
+        source_label: "derived from authoritative supervisor snapshot".to_string(),
         mock_metric_note: "success_rate, today_throughput, test_success_rate, error_rate are uncollected and rendered as 미집계".to_string(),
         badges,
     }
@@ -1282,7 +1287,7 @@ fn map_campaign(
             queue_depth = distributor.queue_depth
         )
     } else {
-        "진행 중인 병렬 시도는 없고 read-only 관제 대기 중".to_string()
+        "진행 중인 병렬 시도는 없고 브라우저 제어 대기 중".to_string()
     };
 
     CampaignView {
@@ -1564,7 +1569,7 @@ fn blocked_action(readiness: &ParallelModeReadinessSnapshot, pool: &PoolBoardVie
     } else if readiness.readiness == ParallelModeReadinessState::Repairing {
         "capability 복구가 끝나고 readiness가 ready로 수렴하는지 확인하세요."
     } else {
-        "운영 액션 없이 read-only 관제 중입니다."
+        "브라우저 하네스 제어를 대기 중입니다."
     }
 }
 
@@ -1769,7 +1774,7 @@ mod tests {
 
     #[test]
     fn admin_mode_label_does_not_claim_the_separate_tui_runtime_is_enabled() {
-        assert_eq!(ADMIN_RUNTIME_MODE_LABEL, "read-only projection");
+        assert_eq!(ADMIN_RUNTIME_MODE_LABEL, "controlled projection");
         assert_eq!(planning_revision_label(Some(17)), "rev 17");
         assert_eq!(planning_revision_label(None), "미집계");
     }

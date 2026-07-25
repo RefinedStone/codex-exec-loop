@@ -5,6 +5,8 @@
   const pollIntervalMs = Number(root.dataset.pollIntervalMs || "10000");
   const dashboardUrl = "/api/admin/akra/dashboard";
   const eventsUrl = "/api/admin/akra/events";
+  const controlUrl = "/api/admin/akra/control";
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
 
   const setText = (selector, value) => {
     for (const node of root.querySelectorAll(selector)) {
@@ -346,7 +348,7 @@
     const source = document.createElement("span");
     source.dataset.detailType = "refresh";
     source.dataset.detailTitle = "Refresh";
-    source.dataset.detailSubtitle = "read-only admin snapshot refresh";
+    source.dataset.detailSubtitle = "authoritative admin snapshot refresh";
     source.dataset.detailState = snapshotState === "ok" && eventsState === "ok" ? "완료" : "부분 실패";
     source.dataset.detailSeverity = snapshotState === "ok" && eventsState === "ok" ? "normal" : "warning";
     source.dataset.detailSnapshot = snapshotState;
@@ -936,11 +938,82 @@
     }
   };
 
+  const loopControlStatus = root.querySelector("[data-loop-control-status]");
+  let loopControlRequest = null;
+
+  const renderLoopControl = (control, busy = false) => {
+    const modeEnabled = Boolean(control?.modeEnabled);
+    const controlBusy = busy || Boolean(control?.controlEffectInFlight);
+    for (const button of root.querySelectorAll("[data-loop-command]")) {
+      const action = button.dataset.loopCommand;
+      button.disabled = controlBusy
+        || (action === "disable" && !modeEnabled)
+        || (action === "dispatch" && controlBusy);
+      button.setAttribute("aria-pressed", String(action === "enable" && modeEnabled));
+    }
+    if (loopControlStatus) {
+      const epoch = control?.currentEpochId == null ? "epoch 없음" : `epoch ${control.currentEpochId}`;
+      const withheld = optionalText(control?.lastDispatchWithheldReason, "");
+      loopControlStatus.textContent = controlBusy
+        ? "제어 명령 처리 중…"
+        : `${modeEnabled ? "자동 루프 가동" : "자동 루프 정지"} · ${epoch}${withheld ? ` · 보류: ${withheld}` : ""}`;
+    }
+    root.dataset.loopMode = modeEnabled ? "enabled" : "disabled";
+  };
+
+  const fetchLoopControl = () =>
+    fetch(controlUrl, { headers: { "Accept": "application/json" } })
+      .then((response) => {
+        if (!response.ok) throw new Error(`control ${response.status}`);
+        return response.json();
+      })
+      .then((control) => {
+        renderLoopControl(control);
+        return control;
+      });
+
+  const runLoopCommand = (action) => {
+    if (loopControlRequest) return loopControlRequest;
+    renderLoopControl(null, true);
+    loopControlRequest = fetch(controlUrl, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+      },
+      body: JSON.stringify({ action }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`control ${response.status}`);
+        return response.json();
+      })
+      .then((control) => {
+        renderLoopControl(control);
+        if (loopControlStatus) loopControlStatus.textContent = control.message;
+        return Promise.allSettled([pollDashboard(), pollEvents()]).then(() => control);
+      })
+      .catch((error) => {
+        renderLoopControl(null);
+        if (loopControlStatus) loopControlStatus.textContent = `제어 실패 · ${error.message}`;
+      })
+      .finally(() => {
+        loopControlRequest = null;
+      });
+    return loopControlRequest;
+  };
+
   initializeDetailControls();
 
   root.addEventListener("click", (event) => {
     if (event.target.closest("[data-detail-close]")) {
       closeDetailDrawer();
+      return;
+    }
+
+    const loopControl = event.target.closest("[data-loop-command]");
+    if (loopControl) {
+      runLoopCommand(loopControl.dataset.loopCommand);
       return;
     }
 
@@ -1015,6 +1088,9 @@
     pollStatus.classList.toggle("is-error", pollState.snapshot === "error");
   };
   renderPollStatus();
+  fetchLoopControl().catch((error) => {
+    if (loopControlStatus) loopControlStatus.textContent = `제어 상태 확인 실패 · ${error.message}`;
+  });
 
   let dashboardRequest = null;
   let eventsRequest = null;
@@ -1084,5 +1160,6 @@
   window.setInterval(() => {
     pollDashboard();
     pollEvents();
+    fetchLoopControl().catch(() => {});
   }, Math.max(pollIntervalMs, 5000));
 })();

@@ -27,7 +27,7 @@ admin_shell_js="${output_dir}/admin-shell.js"
 dashboard_js="${output_dir}/akra-dashboard.js"
 font_regular="${output_dir}/Galmuri11.woff2"
 font_bold="${output_dir}/Galmuri11-Bold.woff2"
-final_draft_map_asset="${output_dir}/final-draft-map-sprite.png"
+operations_studio_asset="${output_dir}/akra-operations-studio-v2.png"
 final_draft_desk_asset="${output_dir}/sprite_fd_desk_1.png"
 final_draft_tower_asset="${output_dir}/sprite_fd_event_log_tower.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
@@ -285,7 +285,7 @@ authenticated_curl -fsS "${base_url}/admin/assets/scripts/admin-shell.js" >"${ad
 authenticated_curl -fsS "${base_url}/admin/assets/scripts/akra-dashboard.js" >"${dashboard_js}"
 authenticated_curl -fsS "${base_url}/admin/assets/fonts/Galmuri11.woff2" >"${font_regular}"
 authenticated_curl -fsS "${base_url}/admin/assets/fonts/Galmuri11-Bold.woff2" >"${font_bold}"
-authenticated_curl -fsS "${base_url}/admin/assets/graphics/final-draft-map-sprite.png" >"${final_draft_map_asset}"
+authenticated_curl -fsS "${base_url}/admin/assets/graphics/akra-operations-studio-v2.png" >"${operations_studio_asset}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/sprite_fd_desk_1.png" >"${final_draft_desk_asset}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/sprite_fd_event_log_tower.png" >"${final_draft_tower_asset}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
@@ -344,7 +344,7 @@ for token in \
   'gamebaljeonguk_atlas_64x96.png' \
   'background-image: var(--agent-sprite-sheet)' \
   'background: var(--office-bg-image) 0 0 / 100% 100% no-repeat' \
-  'final-draft-map-sprite.png' \
+  'akra-operations-studio-v2.png' \
   'office-map-image' \
   'max-width: 1784px' \
   'max-width: 1280px' \
@@ -546,8 +546,8 @@ for token in \
   require_contains "${events_error_json}" "${token}"
 done
 
-cmp -s assets/admin/graphics/final-draft-map-sprite.png "${final_draft_map_asset}" || {
-  echo "served final draft map asset does not match workspace asset" >&2
+cmp -s assets/admin/graphics/akra-operations-studio-v2.png "${operations_studio_asset}" || {
+  echo "served operations studio asset does not match workspace asset" >&2
   exit 1
 }
 cmp -s assets/admin/graphics/sprite_fd_desk_1.png "${final_draft_desk_asset}" || {

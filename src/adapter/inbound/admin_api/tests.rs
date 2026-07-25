@@ -1240,6 +1240,7 @@ async fn admin_akra_json_snapshot_routes_render_read_only_views() {
         "/api/admin/akra/agents",
         "/api/admin/akra/distributor",
         "/api/admin/akra/events?limit=1",
+        "/api/admin/akra/control",
     ] {
         let response = router
             .clone()
@@ -1307,6 +1308,46 @@ async fn admin_akra_json_snapshot_routes_render_read_only_views() {
 }
 
 #[tokio::test]
+async fn admin_akra_control_route_requires_csrf_and_returns_typed_projection() {
+    let workspace = TempAdminWorkspace::new("akra-control");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token, _) = bootstrap_admin_html_session(&router).await;
+
+    let rejected = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/admin/akra/control",
+            json!({ "action": "disable" }),
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .expect("control request without CSRF should be served");
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+
+    let accepted = router
+        .oneshot(json_request(
+            Method::POST,
+            "/api/admin/akra/control",
+            json!({ "action": "disable" }),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("typed control request should be served");
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let body = json_body(accepted).await;
+    assert_eq!(body["modeEnabled"], false);
+    assert_eq!(body["controlEffectInFlight"], false);
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|value| value.contains("정지"))
+    );
+}
+
+#[tokio::test]
 async fn admin_html_page_routes_render_live_templates() {
     let workspace = TempAdminWorkspace::new("html-pages");
     let router = admin_test_router(&workspace);
@@ -1370,10 +1411,8 @@ async fn admin_html_page_routes_render_live_templates() {
             );
             assert!(body.contains(r#"<body class="akra-graphic akra-dashboard-page">"#));
             assert!(body.contains(r#"<aside class="sidebar" lang="ko">"#));
-            assert!(body.contains(
-                r#"class="akra-game"
-  lang="ko""#
-            ));
+            assert!(body.contains(r#"class="akra-game""#));
+            assert!(body.contains(r#"lang="ko""#));
             assert!(body.contains(r#"<a href="/admin/akra" class="active" aria-current="page">"#));
             assert!(body.contains("href=\"/admin/akra/directions\""));
             assert!(body.contains("href=\"/admin/akra/tasks\""));
@@ -1470,6 +1509,7 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
     let router = admin_test_router(&workspace);
 
     for asset_name in [
+        "akra-operations-studio-v2.png",
         "final-draft-map-sprite.png",
         "gamebaljeonguk_atlas_64x96.png",
         "gamebaljeonguk_atlas_128x192.png",
@@ -1678,7 +1718,7 @@ async fn bundled_admin_assets_revalidate_with_content_etag_and_empty_304() {
     let router = admin_test_router(&workspace);
 
     for asset_path in [
-        "/admin/assets/graphics/final-draft-map-sprite.png",
+        "/admin/assets/graphics/akra-operations-studio-v2.png",
         "/admin/assets/game/akra-diorama.js",
         "/admin/assets/scripts/admin-shell.js",
         "/admin/assets/fonts/Galmuri11.woff2",
@@ -2419,9 +2459,8 @@ fn admin_shell_exposes_sidebar_navigation_and_dashboard_routes() {
     ));
     assert!(APP_SERVER_PROMPTS_TEMPLATE.contains("App-server prompt I/O"));
     assert!(APP_SERVER_PROMPTS_TEMPLATE.contains("Developer Instructions"));
-    assert!(ADMIN_MOD.contains(
-        ".route(\n            \"/admin/app-server-prompts\",\n            get(pages::app_server_prompts_page),\n        )"
-    ));
+    assert!(ADMIN_MOD.contains("\"/admin/app-server-prompts\""));
+    assert!(ADMIN_MOD.contains("get(pages::app_server_prompts_page)"));
     assert!(BASE_TEMPLATE.contains("/admin/assets/scripts/admin-shell.js"));
     assert!(!BASE_TEMPLATE.contains("<script>"));
     assert!(ADMIN_SHELL_JS.contains("akraHashTabRoutes"));
@@ -2591,7 +2630,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "background-size: 384px 504px",
         "avatar-Artificer",
         "agentAvatarClass",
-        "final-draft-map-sprite.png",
+        "akra-operations-studio-v2.png",
         "office-map-image",
         "background: var(--office-bg-image) 0 0 / 100% 100% no-repeat",
         "class=\"scene-object boss-seat\"",
@@ -2901,7 +2940,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "background-image: var(--agent-sprite-sheet)",
         "background-size: 384px 504px",
         "background-position: -288px 0",
-        "final-draft-map-sprite.png",
+        "akra-operations-studio-v2.png",
         "office-map-image",
         "max-width: 1784px",
         "max-width: 1280px",
@@ -2976,9 +3015,11 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "createText(\"strong\", \"\", slotDisplayLabel)",
         "createText(\"small\", \"slot-state\", slotStateLabel)",
         "class=\"admin-detail-drawer\"",
-        "pool reconcile, distributor tick, queue mutation은 호출하지 않습니다.",
-        "MAP_WIDTH = 1671",
-        "MAP_HEIGHT = 941",
+        "data-loop-command=\"enable\"",
+        "data-loop-command=\"dispatch\"",
+        "data-loop-command=\"disable\"",
+        "MAP_WIDTH = 1672",
+        "MAP_HEIGHT = 940",
         "STRUCTURE_SPECS",
         "designToBoardPoint",
         "lastLayoutWidth",
@@ -3006,20 +3047,18 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         );
     }
 
-    for removed_motion in [
-        "app.ticker.add",
-        "chooseRoamPoint",
-        "updateRoamMotion",
-        "applyWalkFrame",
-        "makePacket",
-        "drawDashedLine",
-        "akra:mission-pulse",
-        "pulseStage",
+    for semantic_motion in [
+        "motionTargetFor",
+        "semanticProgress",
+        "rebuildSignalPackets",
+        "animateScene",
+        "prefers-reduced-motion",
+        "sceneSemanticMotionCount",
+        "scenePacketCount",
     ] {
         assert!(
-            !AKRA_DIORAMA_TS.contains(removed_motion)
-                && !AKRA_DASHBOARD_JS.contains(removed_motion),
-            "truthful static scene should remove continuous motion token {removed_motion}"
+            AKRA_DIORAMA_TS.contains(semantic_motion),
+            "truthful dynamic scene should keep semantic motion token {semantic_motion}"
         );
     }
 
@@ -3031,7 +3070,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "Last Updated",
         "길드 성과",
         "운영 지표",
-        "read-only 운영 관제",
+        "운영 관제 · 하네스 제어",
         "게임화 정책",
         "도메인 매핑",
         "blocked-copy",
@@ -3108,7 +3147,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/admin/akra/directions",
         "/admin/tasks",
         "admin-tasks.html",
-        "/admin/assets/graphics/final-draft-map-sprite.png",
+        "/admin/assets/graphics/akra-operations-studio-v2.png",
         "/admin/assets/graphics/sprite_fd_desk_1.png",
         "/admin/assets/graphics/sprite_fd_event_log_tower.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
@@ -3129,7 +3168,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "\"campaign\"",
         "\"laneCards\"",
         "\"intelCards\"",
-        "served final draft map asset does not match workspace asset",
+        "served operations studio asset does not match workspace asset",
         "served final draft desk sprite asset does not match workspace asset",
         "served final draft event tower sprite asset does not match workspace asset",
         "served gamebaljeonguk agent atlas does not match workspace asset",
@@ -3169,7 +3208,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     );
 
     for token in [
-        "../../../../assets/admin/graphics/final-draft-map-sprite.png",
+        "../../../../assets/admin/graphics/akra-operations-studio-v2.png",
         "../../../../assets/admin/graphics/sprite_fd_desk_1.png",
         "../../../../assets/admin/graphics/sprite_fd_event_log_tower.png",
         "../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png",
@@ -3219,11 +3258,10 @@ fn akra_dashboard_reads_planning_queue_through_admin_facade_projection() {
 }
 
 #[test]
-fn akra_parallel_admin_surface_is_read_only_snapshot_projection() {
+fn akra_parallel_admin_surface_reuses_typed_control_plane_for_browser_commands() {
     /*
-     * Admin Akra routes inspect parallel mode through the application
-     * control-plane composition; they do not provide a second manual
-     * tick/mutation surface beside CLI/TUI.
+     * Admin Akra reads passive snapshots and sends browser commands through the
+     * same typed application control plane used by the native surface.
      */
     assert!(
         AKRA_DASHBOARD_RS.contains("inspect_dashboard_snapshot_from_projection"),
@@ -3233,22 +3271,20 @@ fn akra_parallel_admin_surface_is_read_only_snapshot_projection() {
         AKRA_DASHBOARD_RS.contains("build_runtime_events_snapshot"),
         "admin event feed should render through the control-plane read surface"
     );
-    for forbidden in [
-        "run_orchestrator_tick",
-        "process_distributor_queue",
-        "ParallelModeService",
-        "ParallelModeControlPlaneCommand",
-        "ParallelModeControlPlaneEvent",
+    for command in [
+        "ParallelModeControlPlaneCommand::Enable",
+        "ParallelModeControlPlaneCommand::RequestDispatch",
+        "ParallelModeControlPlaneCommand::InspectSupervisor",
+        "ParallelModeControlPlaneCommand::Disable",
     ] {
         assert!(
-            !AKRA_DASHBOARD_RS.contains(forbidden),
-            "admin dashboard should not issue parallel control-plane commands: {forbidden}"
-        );
-        assert!(
-            !ADMIN_API.contains(forbidden),
-            "admin API routes should not issue parallel control-plane commands: {forbidden}"
+            ADMIN_API.contains(command),
+            "admin API should reuse typed control-plane command {command}"
         );
     }
+    assert!(ADMIN_MOD.contains("\"/api/admin/akra/control\""));
+    assert!(!AKRA_DASHBOARD_RS.contains("ParallelModeService"));
+    assert!(!ADMIN_API.contains("process_distributor_queue"));
 }
 
 #[test]

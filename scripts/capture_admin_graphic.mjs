@@ -185,18 +185,29 @@ try {
         throw new Error(`${label} WebGL canvas is blank: ${JSON.stringify(frame)}`);
       }
     }
-    if (firstFrame.checksum !== secondFrame.checksum) {
-      throw new Error(
-        `${label} static WebGL canvas changed without a typed transition: ${JSON.stringify({ firstFrame, secondFrame, firstScene, secondScene })}`,
-      );
-    }
     for (const scene of [firstScene, secondScene]) {
-      if (!scene || scene.packetCount !== 0 || scene.semanticMotionCount !== 0) {
-        throw new Error(`${label} scene reported unowned motion: ${JSON.stringify(scene)}`);
+      if (!scene || scene.packetCount < 0 || scene.semanticMotionCount < 0) {
+        throw new Error(`${label} scene reported invalid semantic motion: ${JSON.stringify(scene)}`);
       }
     }
-    if (firstScene.renderCount !== secondScene.renderCount) {
-      throw new Error(`${label} static scene rendered continuously without a state change`);
+    const semanticMotion = Math.max(
+      firstScene.semanticMotionCount,
+      secondScene.semanticMotionCount,
+    );
+    if (semanticMotion === 0) {
+      if (
+        firstFrame.checksum !== secondFrame.checksum
+        || firstScene.renderCount !== secondScene.renderCount
+      ) {
+        throw new Error(`${label} idle scene rendered continuously without a state change`);
+      }
+    } else if (
+      firstFrame.checksum === secondFrame.checksum
+      || firstScene.renderCount >= secondScene.renderCount
+    ) {
+      throw new Error(
+        `${label} typed worker motion did not advance: ${JSON.stringify({ firstFrame, secondFrame, firstScene, secondScene })}`,
+      );
     }
     const actorParity = await page.evaluate(() => {
       const dom = [...document.querySelectorAll(".desk[data-actor-id]")].map((node) => ({

@@ -1,6 +1,6 @@
 use super::forms::{
-    CreateDraftRequest, DraftPromoteApiResponse, EditorQuery, OverviewApiResponse, ResetRequest,
-    SaveDraftRequest,
+    AkraControlRequest, CreateDraftRequest, DraftPromoteApiResponse, EditorQuery,
+    OverviewApiResponse, ResetRequest, SaveDraftRequest,
 };
 use super::{
     AdminAppState, ensure_csrf_cookie, internal_server_error, parse_reset_target,
@@ -9,11 +9,13 @@ use super::{
 use crate::adapter::inbound::admin_api::akra_dashboard::{
     EventFeedView, RuntimeEventView, build_akra_dashboard_view, build_akra_events_view,
 };
+use crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneCommand;
 use crate::application::service::planning::{
     PlanningAdminDirectionDeleteRequest, PlanningAdminDirectionMutationRequest,
     PlanningAdminDraftLoadRequest, PlanningAdminDraftMutationRequest,
     PlanningAdminTaskDeleteRequest, PlanningAdminTaskMutationRequest,
 };
+use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -46,6 +48,92 @@ pub(super) struct AkraEventsApiResponse {
 pub(super) struct AdminFriendlyErrorResponse {
     pub error: String,
     pub operator_message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AkraControlApiResponse {
+    pub mode_enabled: bool,
+    pub control_effect_in_flight: bool,
+    pub current_epoch_id: Option<u64>,
+    pub last_dispatch_withheld_reason: Option<String>,
+    pub message: String,
+}
+
+fn akra_control_response(state: &AdminAppState, message: impl Into<String>) -> Response {
+    state.parallel_control_runtime.drain_pending_events();
+    let projection = state
+        .parallel_control_runtime
+        .handle
+        .presentation_projection();
+    let epoch = state.parallel_control_runtime.handle.epoch_snapshot();
+    Json(AkraControlApiResponse {
+        mode_enabled: projection.mode_enabled,
+        control_effect_in_flight: projection.control_effect_in_flight,
+        current_epoch_id: epoch.current_epoch_id,
+        last_dispatch_withheld_reason: projection.last_dispatch_withheld_reason,
+        message: message.into(),
+    })
+    .into_response()
+}
+
+pub(super) async fn akra_control_api(
+    State(state): State<AdminAppState>,
+) -> std::result::Result<Response, StatusCode> {
+    Ok(akra_control_response(
+        &state,
+        "control projection refreshed",
+    ))
+}
+
+pub(super) async fn mutate_akra_control_api(
+    State(state): State<AdminAppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(request): Json<AkraControlRequest>,
+) -> std::result::Result<Response, StatusCode> {
+    verify_header_csrf(&jar, &headers)?;
+    state.parallel_control_runtime.drain_pending_events();
+    let workspace_directory = state.facade.workspace_dir().to_string();
+    let handle = &state.parallel_control_runtime.handle;
+    let message = match request.action.trim() {
+        "enable" => {
+            let _ = handle.handle_command(ParallelModeControlPlaneCommand::Enable {
+                workspace_directory,
+            });
+            "자동 루프 시작을 요청했습니다."
+        }
+        "dispatch" => {
+            if handle.mode_enabled() {
+                let _ = handle.handle_command(ParallelModeControlPlaneCommand::RequestDispatch {
+                    workspace_directory,
+                    trigger: ParallelModeAutomationTrigger::TaskIntakeAfterEpoch,
+                });
+                "승인된 다음 작업 투입을 요청했습니다."
+            } else {
+                let _ = handle.handle_command(ParallelModeControlPlaneCommand::Enable {
+                    workspace_directory,
+                });
+                "루프가 꺼져 있어 시작 요청으로 전환했습니다."
+            }
+        }
+        "refresh" => {
+            let _ = handle.handle_command(ParallelModeControlPlaneCommand::InspectSupervisor {
+                workspace_directory,
+                reconcile_pool: handle.mode_enabled(),
+                show_status: false,
+            });
+            "관제 투영 동기화를 요청했습니다."
+        }
+        "disable" => {
+            let _ = handle.handle_command(ParallelModeControlPlaneCommand::Disable {
+                workspace_directory,
+            });
+            "자동 루프 정지를 요청했습니다."
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    Ok(akra_control_response(&state, message))
 }
 
 pub(super) async fn summary_api(
