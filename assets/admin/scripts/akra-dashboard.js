@@ -5,6 +5,7 @@
   const pollIntervalMs = Number(root.dataset.pollIntervalMs || "10000");
   const dashboardUrl = "/api/admin/akra/dashboard";
   const eventsUrl = "/api/admin/akra/events";
+  const streamUrl = "/api/admin/akra/stream";
   const controlUrl = "/api/admin/akra/control";
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
 
@@ -944,6 +945,7 @@
   const renderLoopControl = (control, busy = false) => {
     const modeEnabled = Boolean(control?.modeEnabled);
     const controlBusy = busy || Boolean(control?.controlEffectInFlight);
+    const latestCommand = control?.latestCommand || null;
     for (const button of root.querySelectorAll("[data-loop-command]")) {
       const action = button.dataset.loopCommand;
       button.disabled = controlBusy
@@ -958,7 +960,20 @@
         ? "제어 명령 처리 중…"
         : `${modeEnabled ? "자동 루프 가동" : "자동 루프 정지"} · ${epoch}${withheld ? ` · 보류: ${withheld}` : ""}`;
     }
+    if (loopControlStatus && !controlBusy && latestCommand) {
+      const commandStateLabels = {
+        accepted: "접수됨",
+        running: "처리 중",
+        completed: "완료",
+        blocked: "보류"
+      };
+      const commandState = commandStateLabels[latestCommand.state] || latestCommand.state;
+      loopControlStatus.textContent =
+        `${latestCommand.action} · ${commandState} · ${optionalText(latestCommand.message)}`;
+    }
     root.dataset.loopMode = modeEnabled ? "enabled" : "disabled";
+    root.dataset.latestCommandId = latestCommand?.commandId || "";
+    root.dataset.latestCommandState = latestCommand?.state || "";
   };
 
   const fetchLoopControl = () =>
@@ -1094,7 +1109,13 @@
   pollStatus.setAttribute("aria-atomic", "true");
   root.querySelector(".stage-hud")?.appendChild(pollStatus);
 
-  const pollState = { snapshot: "live", events: "live", snapshotError: "", eventsError: "" };
+  const pollState = {
+    snapshot: "live",
+    events: "live",
+    stream: "connecting",
+    snapshotError: "",
+    eventsError: ""
+  };
   const renderPollStatus = () => {
     const snapshotLabel = pollState.snapshot === "error"
       ? `stale snapshot${pollState.snapshotError ? `: ${pollState.snapshotError}` : ""}`
@@ -1102,7 +1123,12 @@
     const eventsLabel = pollState.events === "error"
       ? `stale events${pollState.eventsError ? `: ${pollState.eventsError}` : ""}`
       : "live events";
-    const nextText = `${snapshotLabel} · ${eventsLabel}`;
+    const streamLabel = pollState.stream === "live"
+      ? "realtime stream"
+      : pollState.stream === "unsupported"
+        ? "polling fallback"
+        : "stream reconnecting";
+    const nextText = `${streamLabel} · ${snapshotLabel} · ${eventsLabel}`;
     if (pollStatus.textContent !== nextText) pollStatus.textContent = nextText;
     const stale = pollState.snapshot === "error" || pollState.events === "error";
     pollStatus.classList.toggle("is-stale", stale);
@@ -1115,6 +1141,7 @@
 
   let dashboardRequest = null;
   let eventsRequest = null;
+  let lastDashboardPollAt = 0;
 
   const pollDashboard = () => {
     if (dashboardRequest) return dashboardRequest;
@@ -1124,6 +1151,7 @@
         if (!response.ok) throw new Error(`dashboard ${response.status}`);
         const dashboard = await response.json();
         updateDashboard(dashboard);
+        lastDashboardPollAt = Date.now();
         pollState.snapshot = "live";
         pollState.snapshotError = "";
         renderPollStatus();
@@ -1140,28 +1168,37 @@
     return dashboardRequest;
   };
 
-  const pollEvents = () => {
+  const applyEventsPayload = (payload) => {
+    if (Array.isArray(payload.events)) {
+      if (payload.feed?.incremental) {
+        prependEventRows(payload.events);
+      } else {
+        replaceEventRows(payload.events);
+      }
+    }
+    const newest = payload.feed?.newestSequence;
+    if (Number.isFinite(newest)) root.dataset.latestEventSequence = String(newest);
+    if (Number.isFinite(payload.feed?.eventCursor) && !Number.isFinite(newest)) {
+      root.dataset.latestEventSequence = String(payload.feed.eventCursor);
+    }
+    if (Number.isFinite(payload.feed?.totalEventCount) && !payload.feed?.incremental) {
+      root.dataset.eventTotalCount = String(payload.feed.totalEventCount);
+    }
+    setEventStatus();
+  };
+
+  const pollEvents = ({ reset = false } = {}) => {
     if (eventsRequest) return eventsRequest;
     eventsRequest = (async () => {
       const latest = Number(root.dataset.latestEventSequence || "0");
-      const url = latest > 0 ? `${eventsUrl}?afterSequence=${latest}&limit=50` : `${eventsUrl}?limit=50`;
+      const url = !reset && latest > 0
+        ? `${eventsUrl}?afterSequence=${latest}&limit=50`
+        : `${eventsUrl}?limit=50`;
       try {
         const response = await fetch(url, { headers: { "Accept": "application/json" } });
         if (!response.ok) throw new Error(`events ${response.status}`);
         const payload = await response.json();
-        if (Array.isArray(payload.events)) {
-          if (payload.feed?.incremental) {
-            prependEventRows(payload.events);
-          } else {
-            replaceEventRows(payload.events);
-          }
-        }
-        const newest = payload.feed?.newestSequence;
-        if (Number.isFinite(newest)) root.dataset.latestEventSequence = String(newest);
-        if (Number.isFinite(payload.feed?.totalEventCount) && !payload.feed?.incremental) {
-          root.dataset.eventTotalCount = String(payload.feed.totalEventCount);
-        }
-        setEventStatus();
+        applyEventsPayload(payload);
         pollState.events = "live";
         pollState.eventsError = "";
         renderPollStatus();
@@ -1178,11 +1215,64 @@
     return eventsRequest;
   };
 
+  let realtimeSource = null;
+  let lastRealtimeFrameAt = 0;
+
+  const setRealtimeState = (state) => {
+    pollState.stream = state;
+    root.dataset.realtimeState = state;
+    renderPollStatus();
+  };
+
+  const applyRealtimeFrame = (frame) => {
+    if (!frame || frame.schemaVersion !== 1) return;
+    lastRealtimeFrameAt = Date.now();
+    setRealtimeState("live");
+    applyEventsPayload(frame);
+    if (frame.control) renderLoopControl(frame.control);
+    if (frame.cursorResetRequired) {
+      pollEvents({ reset: true });
+    }
+    if (frame.refreshDashboard) {
+      pollDashboard();
+    }
+  };
+
+  const connectRealtimeStream = () => {
+    if (!("EventSource" in window)) {
+      setRealtimeState("unsupported");
+      return;
+    }
+    const latest = Number(root.dataset.latestEventSequence || "0");
+    realtimeSource = new EventSource(`${streamUrl}?afterSequence=${Math.max(latest, 0)}`);
+    realtimeSource.addEventListener("open", () => setRealtimeState("live"));
+    realtimeSource.addEventListener("update", (event) => {
+      try {
+        applyRealtimeFrame(JSON.parse(event.data));
+      } catch (error) {
+        pollState.events = "error";
+        pollState.eventsError = `stream payload: ${error.message}`;
+        renderPollStatus();
+      }
+    });
+    realtimeSource.addEventListener("error", () => setRealtimeState("reconnecting"));
+    window.addEventListener("beforeunload", () => realtimeSource?.close(), { once: true });
+  };
+
   window.setInterval(() => {
-    pollDashboard();
-    pollEvents();
-    fetchLoopControl().catch(() => {});
+    const streamHealthy =
+      pollState.stream === "live" && Date.now() - lastRealtimeFrameAt < 15_000;
+    if (!streamHealthy) {
+      pollDashboard();
+      pollEvents();
+      fetchLoopControl().catch(() => {});
+      return;
+    }
+    if (Date.now() - lastDashboardPollAt >= Math.max(pollIntervalMs * 6, 30_000)) {
+      pollDashboard();
+    }
   }, Math.max(pollIntervalMs, 5000));
   pollDashboard();
   pollEvents();
+  connectRealtimeStream();
 })();

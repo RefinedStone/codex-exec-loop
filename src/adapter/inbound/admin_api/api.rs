@@ -2,6 +2,7 @@ use super::forms::{
     AkraControlRequest, CreateDraftRequest, DraftPromoteApiResponse, EditorQuery,
     OverviewApiResponse, ResetRequest, SaveDraftRequest,
 };
+use super::realtime::AkraCommandView;
 use super::{
     AdminAppState, ensure_csrf_cookie, internal_server_error, parse_reset_target,
     verify_draft_name_path, verify_header_csrf,
@@ -18,9 +19,15 @@ use crate::application::service::planning::{
 use crate::domain::parallel_mode::ParallelModeAutomationTrigger;
 use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::time::Duration;
+use tokio_stream::Stream;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::IntervalStream;
 
 /*
  * api.rs는 planning admin inbound adapter의 JSON half다.
@@ -33,6 +40,12 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub(super) struct AkraEventsQuery {
     pub limit: Option<usize>,
+    pub after_sequence: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AkraStreamQuery {
     pub after_sequence: Option<i64>,
 }
 
@@ -50,31 +63,53 @@ pub(super) struct AdminFriendlyErrorResponse {
     pub operator_message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AkraControlApiResponse {
     pub mode_enabled: bool,
     pub control_effect_in_flight: bool,
     pub current_epoch_id: Option<u64>,
     pub last_dispatch_withheld_reason: Option<String>,
+    pub latest_command: Option<AkraCommandView>,
     pub message: String,
 }
 
-fn akra_control_response(state: &AdminAppState, message: impl Into<String>) -> Response {
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AkraStreamFrame {
+    schema_version: u8,
+    reason: &'static str,
+    refresh_dashboard: bool,
+    cursor_reset_required: bool,
+    feed: EventFeedView,
+    events: Vec<RuntimeEventView>,
+    control: AkraControlApiResponse,
+    server_time: String,
+}
+
+fn akra_control_view(state: &AdminAppState, message: impl Into<String>) -> AkraControlApiResponse {
     state.parallel_control_runtime.drain_pending_events();
     let projection = state
         .parallel_control_runtime
         .handle
         .presentation_projection();
     let epoch = state.parallel_control_runtime.handle.epoch_snapshot();
-    Json(AkraControlApiResponse {
+    let latest_command = state.command_ledger.reconcile_latest(
+        projection.control_effect_in_flight,
+        projection.last_dispatch_withheld_reason.as_deref(),
+    );
+    AkraControlApiResponse {
         mode_enabled: projection.mode_enabled,
         control_effect_in_flight: projection.control_effect_in_flight,
         current_epoch_id: epoch.current_epoch_id,
         last_dispatch_withheld_reason: projection.last_dispatch_withheld_reason,
+        latest_command,
         message: message.into(),
-    })
-    .into_response()
+    }
+}
+
+fn akra_control_response(state: &AdminAppState, message: impl Into<String>) -> Response {
+    Json(akra_control_view(state, message)).into_response()
 }
 
 pub(super) async fn akra_control_api(
@@ -96,7 +131,8 @@ pub(super) async fn mutate_akra_control_api(
     state.parallel_control_runtime.drain_pending_events();
     let workspace_directory = state.facade.workspace_dir().to_string();
     let handle = &state.parallel_control_runtime.handle;
-    let message = match request.action.trim() {
+    let action = request.action.trim();
+    let message = match action {
         "enable" => {
             let _ = handle.handle_command(ParallelModeControlPlaneCommand::Enable {
                 workspace_directory,
@@ -133,7 +169,94 @@ pub(super) async fn mutate_akra_control_api(
         }
         _ => return Err(StatusCode::BAD_REQUEST),
     };
+    state.command_ledger.begin(action, message);
     Ok(akra_control_response(&state, message))
+}
+
+pub(super) async fn akra_command_api(
+    State(state): State<AdminAppState>,
+    Path(command_id): Path<String>,
+) -> std::result::Result<Response, StatusCode> {
+    let _ = akra_control_view(&state, "control projection refreshed");
+    state
+        .command_ledger
+        .get(&command_id)
+        .map(|command| Json(command).into_response())
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+pub(super) async fn akra_stream_api(
+    State(state): State<AdminAppState>,
+    Query(query): Query<AkraStreamQuery>,
+    headers: HeaderMap,
+) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    let header_cursor = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<i64>().ok());
+    let mut after_sequence = header_cursor.or(query.after_sequence);
+    let mut first_frame = true;
+    let mut last_control_signature = String::new();
+    let mut interval = tokio::time::interval(Duration::from_millis(1_500));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let stream = IntervalStream::new(interval).map(move |_| {
+        let control = akra_control_view(&state, "realtime control projection");
+        let (feed, events) = build_akra_events_view(
+            state.facade.workspace_dir(),
+            state.parallel_mode_control_plane.as_ref(),
+            50,
+            after_sequence,
+        );
+        let control_signature =
+            serde_json::to_string(&control).expect("AKRA control projection should serialize");
+        let control_changed = control_signature != last_control_signature;
+        let cursor_reset_required =
+            feed.incremental && feed.total_event_count > feed.visible_event_count;
+        let refresh_dashboard = first_frame || control_changed || !events.is_empty();
+        let reason = if first_frame {
+            "connected"
+        } else if cursor_reset_required {
+            "cursor_reset"
+        } else if !events.is_empty() {
+            "runtime_event"
+        } else if control_changed {
+            "control"
+        } else {
+            "heartbeat"
+        };
+        let event_id = feed.newest_sequence;
+        if let Some(sequence) = event_id {
+            after_sequence = Some(sequence);
+        }
+        first_frame = false;
+        last_control_signature = control_signature;
+        let frame = AkraStreamFrame {
+            schema_version: 1,
+            reason,
+            refresh_dashboard,
+            cursor_reset_required,
+            feed,
+            events,
+            control,
+            server_time: chrono::Utc::now().to_rfc3339(),
+        };
+        let mut event = Event::default()
+            .event("update")
+            .retry(Duration::from_millis(1_500))
+            .json_data(frame)
+            .expect("AKRA realtime frame should serialize");
+        if let Some(sequence) = event_id {
+            event = event.id(sequence.to_string());
+        }
+        Ok(event)
+    });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("akra-realtime"),
+    )
 }
 
 pub(super) async fn summary_api(

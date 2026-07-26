@@ -359,6 +359,7 @@ dependencies = [
  "syn 2.0.117",
  "time",
  "tokio",
+ "tokio-stream",
  "toml",
  "toml_edit",
  "tower",
