@@ -247,6 +247,7 @@ const emptyInspection = (): SceneInspection => ({
         throw new Error(`AKRA game assets failed to load${reasons ? `: ${reasons}` : ""}`);
       }
 
+      atlasResult.value.source.scaleMode = "nearest";
       world = new AgentWorld(mapResult.value, atlasResult.value);
       app.stage.addChild(world.root);
       camera = new SceneCameraController({

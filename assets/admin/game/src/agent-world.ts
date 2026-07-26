@@ -535,6 +535,7 @@ export class AgentWorld {
     const sprite = new Sprite(
       resolved.texture ?? frameForFacing(this.frameSets, archetype, "down", 0)
     );
+    sprite.roundPixels = true;
     sprite.anchor.set(0.5, 1);
     sprite.scale.set(AGENT_SPRITE_SCALE);
     const shadow = new Graphics()
