@@ -12,8 +12,26 @@ native TUI, planning authority, parallel policy, or application control plane.
 - `DashboardSceneStore` validates the scene payload and publishes one immutable scene snapshot to
   the renderer. DOM `data-*` attributes remain accessibility/detail-drawer projections, not the
   Pixi scene's state transport.
-- The initial dashboard and event requests run immediately. Existing bounded polling remains the
-  refresh transport until an Admin streaming API is shipped.
+- The initial dashboard and event requests run immediately. The browser then opens
+  `/api/admin/akra/stream` and resumes from its latest durable runtime-event sequence.
+- The stream carries lightweight event, control, and invalidation frames. The dashboard snapshot
+  remains the authoritative bootstrap and reconciliation read model.
+- If `EventSource` is unavailable, disconnected, or stale, bounded dashboard/event/control polling
+  resumes automatically. A healthy stream still performs a slower snapshot reconciliation.
+
+## Realtime and command contract
+
+- Stream frames use schema version `1`, the SSE `update` event name, and a runtime-event sequence as
+  the SSE event ID when one is available. Browser reconnects can resume through `Last-Event-ID`;
+  initial connections may use `afterSequence`.
+- When more incremental events exist than fit in one frame, `cursorResetRequired` tells the browser
+  to replace its bounded event list from a fresh snapshot instead of silently presenting a gap.
+- `POST /api/admin/akra/control` continues to use the typed application control plane and CSRF
+  header. Its response now includes a bounded, process-local command record with a stable
+  `commandId` and `accepted`, `running`, `completed`, or `blocked` state.
+- `GET /api/admin/akra/commands/{commandId}` exposes the retained command result. Command tracking
+  is a browser feedback projection; durable runtime events and the planning authority remain the
+  operational source of truth.
 
 ## Renderer
 

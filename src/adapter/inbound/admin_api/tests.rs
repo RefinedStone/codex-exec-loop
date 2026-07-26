@@ -1349,6 +1349,7 @@ async fn admin_akra_control_route_requires_csrf_and_returns_typed_projection() {
     assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
 
     let accepted = router
+        .clone()
         .oneshot(json_request(
             Method::POST,
             "/api/admin/akra/control",
@@ -1362,10 +1363,60 @@ async fn admin_akra_control_route_requires_csrf_and_returns_typed_projection() {
     let body = json_body(accepted).await;
     assert_eq!(body["modeEnabled"], false);
     assert_eq!(body["controlEffectInFlight"], false);
+    assert_eq!(body["latestCommand"]["action"], "disable");
+    assert_eq!(body["latestCommand"]["state"], "completed");
+    let command_id = body["latestCommand"]["commandId"]
+        .as_str()
+        .expect("control response should expose a command id");
     assert!(
         body["message"]
             .as_str()
             .is_some_and(|value| value.contains("정지"))
+    );
+    let command = router
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri(format!("/api/admin/akra/commands/{command_id}"))
+                .body(Body::empty())
+                .expect("command status request should build"),
+        )
+        .await
+        .expect("command status request should be served");
+    assert_eq!(command.status(), StatusCode::OK);
+    let command = json_body(command).await;
+    assert_eq!(command["commandId"], command_id);
+    assert_eq!(command["state"], "completed");
+}
+
+#[tokio::test]
+async fn admin_akra_realtime_stream_is_authenticated_sse_with_resume_cursor() {
+    let workspace = TempAdminWorkspace::new("akra-realtime-stream");
+    let router = admin_test_router(&workspace);
+
+    let response = router
+        .oneshot(
+            admin_request_builder()
+                .method(Method::GET)
+                .uri("/api/admin/akra/stream?afterSequence=0")
+                .header("last-event-id", "0")
+                .body(Body::empty())
+                .expect("realtime stream request should build"),
+        )
+        .await
+        .expect("realtime stream request should be served");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"))
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("no-store, max-age=0"))
     );
 }
 
@@ -2682,6 +2733,10 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "stale snapshot",
         "pollState",
         "pollEvents",
+        "new EventSource",
+        "cursorResetRequired",
+        "polling fallback",
+        "latestCommand",
         "/admin/assets/game/akra-diorama.js",
         "/admin/assets/scripts/admin-shell.js",
         "/admin/assets/scripts/akra-dashboard.js",
@@ -2738,6 +2793,8 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "\"/api/admin/akra/agents\"",
         "\"/api/admin/akra/distributor\"",
         "\"/api/admin/akra/events\"",
+        "\"/api/admin/akra/stream\"",
+        "\"/api/admin/akra/commands/{command_id}\"",
         "\"/admin/assets/graphics/{asset_name}\"",
         "\"/admin/assets/game/{asset_name}\"",
         "\"/admin/assets/scripts/{asset_name}\"",

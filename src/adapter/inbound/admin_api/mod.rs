@@ -32,6 +32,7 @@ mod api;
 mod forms;
 mod helpers;
 mod pages;
+mod realtime;
 mod security;
 mod static_assets;
 #[cfg(test)]
@@ -58,6 +59,7 @@ struct AdminAppState {
     app_server_prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     review_center_read_service: ReviewCenterReadService,
     graphic: AdminGraphicConfig,
+    command_ledger: realtime::AdminCommandLedger,
     security: AdminSecurityConfig,
 }
 
@@ -240,6 +242,7 @@ fn build_admin_state(workspace_dir: String, security: AdminSecurityConfig) -> Ad
         app_server_prompt_log_port: application.app_server_prompt_log_port,
         review_center_read_service: application.review_center_read_service,
         graphic: AdminGraphicConfig::from_env(),
+        command_ledger: realtime::AdminCommandLedger::default(),
         security,
     }
 }
@@ -461,9 +464,14 @@ fn build_router(state: AdminAppState) -> Router {
             get(api::akra_distributor_api),
         )
         .route("/api/admin/akra/events", get(api::akra_events_api))
+        .route("/api/admin/akra/stream", get(api::akra_stream_api))
         .route(
             "/api/admin/akra/control",
             get(api::akra_control_api).post(api::mutate_akra_control_api),
+        )
+        .route(
+            "/api/admin/akra/commands/{command_id}",
+            get(api::akra_command_api),
         )
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
