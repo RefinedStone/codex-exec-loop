@@ -1,6 +1,8 @@
 # Gamebaljeonguk Sprite Pack
 
 Source: processed from the provided image only. No character redraw/regeneration was applied.
+The white-background matte is decontaminated only on pixels touching transparent space,
+preserving white clothing, speech bubbles, and interior details.
 
 ## Files
 - gamebaljeonguk_original_transparent.png
@@ -38,6 +40,13 @@ Import the atlas as Texture2D/SpriteFrames.
 Slice by:
 - H: 128, V: 192 for the large atlas.
 Disable filtering for sharper pixel art.
+
+## AKRA admin maintenance
+Run from assets/admin/game:
+- npm run sprites:clean
+  - Decontaminates newly introduced white-matte edge pixels and refreshes previews.
+- npm run sprites:check
+  - Verifies that runtime and archived atlases match and no cleanup is pending.
 
 ## RPG Maker MV/MZ
 Use the files beginning with "$" as single-character sheets.
