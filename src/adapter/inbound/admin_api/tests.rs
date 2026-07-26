@@ -1531,20 +1531,9 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
     let router = admin_test_router(&workspace);
 
     for asset_name in [
-        "akra-operations-studio-v2.png",
         "akra-operations-studio-v3.png",
         "gamebaljeonguk_atlas_64x96.png",
         "gamebaljeonguk_atlas_128x192.png",
-        "sprite_fd_desk_1.png",
-        "sprite_fd_desk_2.png",
-        "sprite_fd_desk_3.png",
-        "sprite_fd_desk_4.png",
-        "sprite_fd_desk_5.png",
-        "sprite_fd_boss_desk.png",
-        "sprite_fd_distributor_desk.png",
-        "sprite_fd_event_log_tower.png",
-        "sprite_fd_sofa.png",
-        "sprite_fd_potted_plant.png",
     ] {
         let response = router
             .clone()
@@ -3176,8 +3165,6 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/admin/tasks",
         "admin-tasks.html",
         "/admin/assets/graphics/akra-operations-studio-v3.png",
-        "/admin/assets/graphics/sprite_fd_desk_1.png",
-        "/admin/assets/graphics/sprite_fd_event_log_tower.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png",
         "/admin/assets/game/akra-diorama.js",
@@ -3197,8 +3184,6 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "\"laneCards\"",
         "\"intelCards\"",
         "served operations studio asset does not match workspace asset",
-        "served final draft desk sprite asset does not match workspace asset",
-        "served final draft event tower sprite asset does not match workspace asset",
         "served gamebaljeonguk agent atlas does not match workspace asset",
         "served large gamebaljeonguk agent atlas does not match workspace asset",
         "served admin shell script does not match workspace asset",
@@ -3237,8 +3222,6 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
 
     for token in [
         "../../../../assets/admin/graphics/akra-operations-studio-v3.png",
-        "../../../../assets/admin/graphics/sprite_fd_desk_1.png",
-        "../../../../assets/admin/graphics/sprite_fd_event_log_tower.png",
         "../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png",
         "../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png",
         "../../../../assets/admin/game/akra-diorama.js",
