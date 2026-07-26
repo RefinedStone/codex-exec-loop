@@ -22,6 +22,11 @@ bundled_asset!(
     "../../../../assets/admin/graphics/akra-operations-studio-v2.png"
 );
 bundled_asset!(
+    AKRA_OPERATIONS_STUDIO_V3,
+    AKRA_OPERATIONS_STUDIO_V3_ETAG,
+    "../../../../assets/admin/graphics/akra-operations-studio-v3.png"
+);
+bundled_asset!(
     GAMEBALJEONGUK_ATLAS_64X96,
     GAMEBALJEONGUK_ATLAS_64X96_ETAG,
     "../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png"
@@ -159,6 +164,9 @@ pub(super) async fn admin_graphic_asset(
     let (bytes, etag) = match asset_name.as_str() {
         "akra-operations-studio-v2.png" => {
             (AKRA_OPERATIONS_STUDIO_V2, &AKRA_OPERATIONS_STUDIO_V2_ETAG)
+        }
+        "akra-operations-studio-v3.png" => {
+            (AKRA_OPERATIONS_STUDIO_V3, &AKRA_OPERATIONS_STUDIO_V3_ETAG)
         }
         "gamebaljeonguk_atlas_64x96.png" => {
             (GAMEBALJEONGUK_ATLAS_64X96, &GAMEBALJEONGUK_ATLAS_64X96_ETAG)

@@ -140,6 +140,10 @@ next accepted task, refresh the supervisor projection, or disable the loop throu
 that handle before reporting control state; it does not call Git, GitHub, pool, or distributor
 adapters directly.
 
+The `/admin/akra` game projection uses a PixiJS 8 world over the same dashboard snapshot. Its
+validated frontend store, semantic camera zoom, worker movement, furniture occlusion, and scene
+selection remain presentation-only; see [Admin Game Frontend](admin-game-frontend.md).
+
 ## Recovery and Limits
 
 - Invalid or conflicting planning updates pause continuation and preserve review evidence.

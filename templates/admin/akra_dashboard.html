@@ -14,7 +14,7 @@
     --game-yellow: #f5c84b;
     --game-red: #ff6b6b;
     --game-violet: #9d7cff;
-    --office-bg-image: url("/admin/assets/graphics/akra-operations-studio-v2.png");
+    --office-bg-image: url("/admin/assets/graphics/akra-operations-studio-v3.png");
     --agent-sprite-sheet: url("/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png");
     min-height: calc(100vh - 44px);
     color: var(--game-ink);
@@ -178,7 +178,9 @@
     position: absolute;
     inset: 0;
     z-index: 2;
-    pointer-events: none;
+    overflow: hidden;
+    pointer-events: auto;
+    touch-action: none;
   }
   .office-board canvas {
     position: absolute;
@@ -186,6 +188,12 @@
     width: 100% !important;
     height: 100% !important;
     image-rendering: pixelated;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+  .office-board canvas:active {
+    cursor: grabbing;
   }
   .office-board::before {
     content: "";
@@ -1096,7 +1104,7 @@
   .office-board {
     width: 100%;
     min-height: 0;
-    aspect-ratio: 1671 / 941;
+    aspect-ratio: 1672 / 941;
     height: auto;
     padding: 0;
     border: 1px solid rgba(0, 205, 255, 0.35);
@@ -1112,6 +1120,15 @@
     height: 100%;
     object-fit: fill;
     pointer-events: none;
+    transition: opacity 160ms ease-out;
+  }
+  .office-board.is-pixi-ready .office-map-image {
+    opacity: 0;
+  }
+  .office-board.is-pixi-ready > .scene-object,
+  .office-board.is-pixi-ready > .scene-standby-presence {
+    opacity: 0;
+    pointer-events: none;
   }
   .office-board::before {
     background: none;
@@ -1123,6 +1140,57 @@
   }
   .office-board #pixi-diorama {
     z-index: 2;
+  }
+  .scene-camera-controls {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    z-index: 8;
+    display: grid;
+    grid-template-columns: 34px minmax(58px, auto) 34px;
+    gap: 4px;
+    padding: 5px;
+    border: 1px solid rgba(93, 169, 255, 0.44);
+    border-radius: 6px;
+    background: rgba(3, 13, 25, 0.84);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.34);
+    backdrop-filter: blur(5px);
+  }
+  .scene-camera-controls button {
+    appearance: none;
+    min-width: 0;
+    height: 30px;
+    padding: 0 8px;
+    border: 1px solid rgba(152, 171, 196, 0.36);
+    border-radius: 4px;
+    color: var(--game-ink);
+    background: rgba(17, 38, 64, 0.92);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .scene-camera-controls button:hover,
+  .scene-camera-controls button:focus-visible {
+    border-color: rgba(53, 208, 127, 0.72);
+    color: #dffff0;
+    outline: none;
+  }
+  .scene-camera-controls [data-scene-zoom-readout] {
+    color: var(--game-green);
+    font-variant-numeric: tabular-nums;
+  }
+  .scene-camera-hint {
+    position: absolute;
+    right: 16px;
+    bottom: 58px;
+    z-index: 7;
+    padding: 4px 7px;
+    border-radius: 4px;
+    color: rgba(222, 236, 255, 0.78);
+    background: rgba(3, 13, 25, 0.62);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    pointer-events: none;
   }
   .stage-hud {
     left: 18px;
@@ -1354,7 +1422,7 @@
       grid-template-columns: 1fr;
     }
     .office-board {
-      aspect-ratio: 1671 / 941;
+      aspect-ratio: 1672 / 941;
       padding: 0;
     }
     .room,
@@ -1407,6 +1475,13 @@
     .scene-actor-row small { grid-column: 1; }
     .scene-actor-row span { grid-column: 2; grid-row: 1 / span 2; }
     .scene-actor-row small { color: var(--game-muted); }
+    .scene-camera-controls {
+      right: 8px;
+      bottom: 8px;
+      transform: scale(0.92);
+      transform-origin: right bottom;
+    }
+    .scene-camera-hint { display: none; }
     .admin-detail-drawer {
       right: 14px;
       bottom: 14px;
@@ -1539,8 +1614,14 @@
 
     <div class="board-row">
       <div class="office-board" id="agents" aria-label="AKRA isometric office board">
-        <img class="office-map-image" src="/admin/assets/graphics/akra-operations-studio-v2.png" alt="" aria-hidden="true">
+        <img class="office-map-image" src="/admin/assets/graphics/akra-operations-studio-v3.png" alt="" aria-hidden="true">
         <div id="pixi-diorama" aria-hidden="true"></div>
+        <div class="scene-camera-controls" aria-label="오피스 맵 확대와 축소">
+          <button type="button" data-scene-zoom-out aria-label="맵 축소" title="맵 축소">−</button>
+          <button type="button" data-scene-zoom-reset data-scene-zoom-readout aria-label="맵 전체 보기" title="맵 전체 보기">100%</button>
+          <button type="button" data-scene-zoom-in aria-label="맵 확대" title="맵 확대">+</button>
+        </div>
+        <small class="scene-camera-hint" aria-hidden="true">DRAG · WHEEL/PINCH</small>
         <div class="stage-hud" aria-label="Mission flow">
           <span>MISSION FLOW</span>
           <strong>{{ dashboard.campaign.active_lane_count }} lanes</strong>

@@ -684,7 +684,6 @@
     );
     renderSceneDiagnostics(scene.diagnostics);
     root.dataset.sceneSignature = nextSignature;
-    window.dispatchEvent(new CustomEvent("akra:scene-rendered", { detail: { scene } }));
   };
 
   const syncStageHud = (dashboard) => {
@@ -871,6 +870,7 @@
     renderPipeline(dashboard.distributor);
     initializeDetailControls();
     syncSelectedDetail();
+    window.AkraAdminGame?.applyDashboard?.(dashboard);
     window.dispatchEvent(new CustomEvent("akra:dashboard-rendered", { detail: { dashboard } }));
   };
 
@@ -1066,6 +1066,27 @@
     }
   });
 
+  window.addEventListener("akra:scene-selection-requested", (event) => {
+    const detail = event.detail || {};
+    if (detail.kind === "actor" && detail.actorId) {
+      const source = [...root.querySelectorAll("[data-actor-id][data-detail-type]")]
+        .find((node) => node.dataset.actorId === detail.actorId);
+      if (source) openDetailDrawer(source);
+      return;
+    }
+    if (detail.kind !== "poi") return;
+    const selectors = {
+      director: ".office-board .boss-seat",
+      review: "#campaign [data-detail-type]",
+      pipeline: ".office-board .distributor-desk",
+      events: ".office-board .event-board",
+      standby: ".office-board .rest-area"
+    };
+    const selector = selectors[detail.detailTarget];
+    const source = selector ? root.querySelector(selector) : null;
+    if (source) openDetailDrawer(source);
+  });
+
   const pollStatus = document.createElement("small");
   pollStatus.className = "poll-status";
   pollStatus.setAttribute("role", "status");
@@ -1162,4 +1183,6 @@
     pollEvents();
     fetchLoopControl().catch(() => {});
   }, Math.max(pollIntervalMs, 5000));
+  pollDashboard();
+  pollEvents();
 })();
