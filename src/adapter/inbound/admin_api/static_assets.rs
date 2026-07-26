@@ -17,11 +17,6 @@ macro_rules! bundled_asset {
 }
 
 bundled_asset!(
-    AKRA_OPERATIONS_STUDIO_V2,
-    AKRA_OPERATIONS_STUDIO_V2_ETAG,
-    "../../../../assets/admin/graphics/akra-operations-studio-v2.png"
-);
-bundled_asset!(
     AKRA_OPERATIONS_STUDIO_V3,
     AKRA_OPERATIONS_STUDIO_V3_ETAG,
     "../../../../assets/admin/graphics/akra-operations-studio-v3.png"
@@ -37,57 +32,6 @@ bundled_asset!(
     "../../../../assets/admin/graphics/gamebaljeonguk_atlas_128x192.png"
 );
 
-// Individual isometric sprites for PixiJS diorama
-bundled_asset!(
-    SPRITE_FD_DESK_1,
-    SPRITE_FD_DESK_1_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_desk_1.png"
-);
-bundled_asset!(
-    SPRITE_FD_DESK_2,
-    SPRITE_FD_DESK_2_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_desk_2.png"
-);
-bundled_asset!(
-    SPRITE_FD_DESK_3,
-    SPRITE_FD_DESK_3_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_desk_3.png"
-);
-bundled_asset!(
-    SPRITE_FD_DESK_4,
-    SPRITE_FD_DESK_4_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_desk_4.png"
-);
-bundled_asset!(
-    SPRITE_FD_DESK_5,
-    SPRITE_FD_DESK_5_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_desk_5.png"
-);
-bundled_asset!(
-    SPRITE_FD_BOSS_DESK,
-    SPRITE_FD_BOSS_DESK_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_boss_desk.png"
-);
-bundled_asset!(
-    SPRITE_FD_DISTRIBUTOR_DESK,
-    SPRITE_FD_DISTRIBUTOR_DESK_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_distributor_desk.png"
-);
-bundled_asset!(
-    SPRITE_FD_EVENT_LOG_TOWER,
-    SPRITE_FD_EVENT_LOG_TOWER_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_event_log_tower.png"
-);
-bundled_asset!(
-    SPRITE_FD_SOFA,
-    SPRITE_FD_SOFA_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_sofa.png"
-);
-bundled_asset!(
-    SPRITE_FD_POTTED_PLANT,
-    SPRITE_FD_POTTED_PLANT_ETAG,
-    "../../../../assets/admin/graphics/sprite_fd_potted_plant.png"
-);
 bundled_asset!(
     AKRA_DIORAMA_JS,
     AKRA_DIORAMA_JS_ETAG,
@@ -162,9 +106,6 @@ pub(super) async fn admin_graphic_asset(
     Path(asset_name): Path<String>,
 ) -> std::result::Result<Response, StatusCode> {
     let (bytes, etag) = match asset_name.as_str() {
-        "akra-operations-studio-v2.png" => {
-            (AKRA_OPERATIONS_STUDIO_V2, &AKRA_OPERATIONS_STUDIO_V2_ETAG)
-        }
         "akra-operations-studio-v3.png" => {
             (AKRA_OPERATIONS_STUDIO_V3, &AKRA_OPERATIONS_STUDIO_V3_ETAG)
         }
@@ -175,20 +116,6 @@ pub(super) async fn admin_graphic_asset(
             GAMEBALJEONGUK_ATLAS_128X192,
             &GAMEBALJEONGUK_ATLAS_128X192_ETAG,
         ),
-        "sprite_fd_desk_1.png" => (SPRITE_FD_DESK_1, &SPRITE_FD_DESK_1_ETAG),
-        "sprite_fd_desk_2.png" => (SPRITE_FD_DESK_2, &SPRITE_FD_DESK_2_ETAG),
-        "sprite_fd_desk_3.png" => (SPRITE_FD_DESK_3, &SPRITE_FD_DESK_3_ETAG),
-        "sprite_fd_desk_4.png" => (SPRITE_FD_DESK_4, &SPRITE_FD_DESK_4_ETAG),
-        "sprite_fd_desk_5.png" => (SPRITE_FD_DESK_5, &SPRITE_FD_DESK_5_ETAG),
-        "sprite_fd_boss_desk.png" => (SPRITE_FD_BOSS_DESK, &SPRITE_FD_BOSS_DESK_ETAG),
-        "sprite_fd_distributor_desk.png" => {
-            (SPRITE_FD_DISTRIBUTOR_DESK, &SPRITE_FD_DISTRIBUTOR_DESK_ETAG)
-        }
-        "sprite_fd_event_log_tower.png" => {
-            (SPRITE_FD_EVENT_LOG_TOWER, &SPRITE_FD_EVENT_LOG_TOWER_ETAG)
-        }
-        "sprite_fd_sofa.png" => (SPRITE_FD_SOFA, &SPRITE_FD_SOFA_ETAG),
-        "sprite_fd_potted_plant.png" => (SPRITE_FD_POTTED_PLANT, &SPRITE_FD_POTTED_PLANT_ETAG),
         _ => return Err(StatusCode::NOT_FOUND),
     };
 

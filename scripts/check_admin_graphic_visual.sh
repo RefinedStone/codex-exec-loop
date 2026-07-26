@@ -28,8 +28,6 @@ dashboard_js="${output_dir}/akra-dashboard.js"
 font_regular="${output_dir}/Galmuri11.woff2"
 font_bold="${output_dir}/Galmuri11-Bold.woff2"
 operations_studio_asset="${output_dir}/akra-operations-studio-v3.png"
-final_draft_desk_asset="${output_dir}/sprite_fd_desk_1.png"
-final_draft_tower_asset="${output_dir}/sprite_fd_event_log_tower.png"
 agent_atlas_asset="${output_dir}/gamebaljeonguk_atlas_64x96.png"
 agent_atlas_large_asset="${output_dir}/gamebaljeonguk_atlas_128x192.png"
 screenshot_path="${output_dir}/admin-graphic.png"
@@ -286,8 +284,6 @@ authenticated_curl -fsS "${base_url}/admin/assets/scripts/akra-dashboard.js" >"$
 authenticated_curl -fsS "${base_url}/admin/assets/fonts/Galmuri11.woff2" >"${font_regular}"
 authenticated_curl -fsS "${base_url}/admin/assets/fonts/Galmuri11-Bold.woff2" >"${font_bold}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/akra-operations-studio-v3.png" >"${operations_studio_asset}"
-authenticated_curl -fsS "${base_url}/admin/assets/graphics/sprite_fd_desk_1.png" >"${final_draft_desk_asset}"
-authenticated_curl -fsS "${base_url}/admin/assets/graphics/sprite_fd_event_log_tower.png" >"${final_draft_tower_asset}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png" >"${agent_atlas_asset}"
 authenticated_curl -fsS "${base_url}/admin/assets/graphics/gamebaljeonguk_atlas_128x192.png" >"${agent_atlas_large_asset}"
 events_error_status="$(authenticated_curl -sS -o "${events_error_json}" -w "%{http_code}" "${base_url}/api/admin/akra/events?limit=201")"
@@ -546,14 +542,6 @@ done
 
 cmp -s assets/admin/graphics/akra-operations-studio-v3.png "${operations_studio_asset}" || {
   echo "served operations studio asset does not match workspace asset" >&2
-  exit 1
-}
-cmp -s assets/admin/graphics/sprite_fd_desk_1.png "${final_draft_desk_asset}" || {
-  echo "served final draft desk sprite asset does not match workspace asset" >&2
-  exit 1
-}
-cmp -s assets/admin/graphics/sprite_fd_event_log_tower.png "${final_draft_tower_asset}" || {
-  echo "served final draft event tower sprite asset does not match workspace asset" >&2
   exit 1
 }
 cmp -s assets/admin/graphics/gamebaljeonguk_atlas_64x96.png "${agent_atlas_asset}" || {
