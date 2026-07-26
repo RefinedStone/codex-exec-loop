@@ -76,6 +76,14 @@ const GAMEBALJEONGUK_SPRITE_METADATA: &str = include_str!(
 );
 const AKRA_DIORAMA_JS: &str = include_str!("../../../../assets/admin/game/akra-diorama.js");
 const AKRA_DIORAMA_TS: &str = include_str!("../../../../assets/admin/game/src/akra-diorama.ts");
+const AKRA_AGENT_WORLD_TS: &str = include_str!("../../../../assets/admin/game/src/agent-world.ts");
+const AKRA_AGENT_ATLAS_TS: &str = include_str!("../../../../assets/admin/game/src/agent-atlas.ts");
+const AKRA_CAMERA_CONTROLLER_TS: &str =
+    include_str!("../../../../assets/admin/game/src/camera-controller.ts");
+const AKRA_GAME_TYPES_TS: &str = include_str!("../../../../assets/admin/game/src/game-types.ts");
+const AKRA_SCENE_CONFIG_TS: &str =
+    include_str!("../../../../assets/admin/game/src/scene-config.ts");
+const AKRA_SCENE_STORE_TS: &str = include_str!("../../../../assets/admin/game/src/scene-store.ts");
 const ADMIN_SHELL_JS: &str = include_str!("../../../../assets/admin/scripts/admin-shell.js");
 const AKRA_DASHBOARD_JS: &str = include_str!("../../../../assets/admin/scripts/akra-dashboard.js");
 const ADMIN_GAME_PACKAGE_JSON: &str = include_str!("../../../../assets/admin/game/package.json");
@@ -93,6 +101,20 @@ const BUNDLED_ASSET_CACHE_CONTROL: &str = "private, no-cache";
 
 fn source_contains(source: &str, needle: &str) -> bool {
     source.contains(needle) || source.replace("\r\n", "\n").contains(needle)
+}
+
+fn admin_game_source_contains(needle: &str) -> bool {
+    [
+        AKRA_DIORAMA_TS,
+        AKRA_AGENT_WORLD_TS,
+        AKRA_AGENT_ATLAS_TS,
+        AKRA_CAMERA_CONTROLLER_TS,
+        AKRA_GAME_TYPES_TS,
+        AKRA_SCENE_CONFIG_TS,
+        AKRA_SCENE_STORE_TS,
+    ]
+    .iter()
+    .any(|source| source_contains(source, needle))
 }
 
 fn assert_bundled_asset_cache_headers(response: &axum::response::Response) -> HeaderValue {
@@ -1510,6 +1532,7 @@ async fn admin_graphic_asset_routes_serve_known_assets_and_reject_unknown_names(
 
     for asset_name in [
         "akra-operations-studio-v2.png",
+        "akra-operations-studio-v3.png",
         "gamebaljeonguk_atlas_64x96.png",
         "gamebaljeonguk_atlas_128x192.png",
         "sprite_fd_desk_1.png",
@@ -1603,7 +1626,8 @@ async fn admin_game_asset_route_serves_diorama_bundle_and_rejects_unknown_names(
     assert_bundled_asset_cache_headers(&response);
     let body = text_body(response).await;
     assert!(body.contains("AkraAdminGame"));
-    assert!(body.contains("sprite_fd_desk_1.png"));
+    assert!(body.contains("akra-operations-studio-v3.png"));
+    assert!(body.contains("gamebaljeonguk_atlas_128x192.png"));
     assert!(body.contains("PixiJS - The MIT License"));
     assert!(body.len() > 100_000, "PixiJS should be bundled locally");
 
@@ -1717,7 +1741,7 @@ async fn bundled_admin_assets_revalidate_with_content_etag_and_empty_304() {
     let router = admin_test_router(&workspace);
 
     for asset_path in [
-        "/admin/assets/graphics/akra-operations-studio-v2.png",
+        "/admin/assets/graphics/akra-operations-studio-v3.png",
         "/admin/assets/game/akra-diorama.js",
         "/admin/assets/scripts/admin-shell.js",
         "/admin/assets/fonts/Galmuri11.woff2",
@@ -2629,7 +2653,7 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "background-size: 384px 504px",
         "avatar-Artificer",
         "agentAvatarClass",
-        "akra-operations-studio-v2.png",
+        "akra-operations-studio-v3.png",
         "office-map-image",
         "background: var(--office-bg-image) 0 0 / 100% 100% no-repeat",
         "class=\"scene-object boss-seat\"",
@@ -2674,7 +2698,6 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
         "/admin/assets/scripts/akra-dashboard.js",
         "data-planning-revision",
         "akra:dashboard-rendered",
-        "akra:scene-rendered",
         "renderDashboardPanels",
         "dashboardSignature",
         "renderCampaign",
@@ -2740,19 +2763,21 @@ fn akra_graphic_dashboard_keeps_admin_and_snapshot_surfaces() {
     for token in [
         "mountDiorama",
         "rebuildAgentUnits",
-        "PIXI.Application",
+        "new Application()",
         "gamebaljeonguk_atlas_128x192.png",
+        "akra-operations-studio-v3.png",
         "STATIC_POSE_MANIFEST",
-        "autoStart: false",
         "Promise.allSettled",
         "inspectScene",
         "buildAgentFrameSets",
         "makeAtlasFrameByIndex",
         "STANDBY_LOUNGE_POINTS",
+        "SceneCameraController",
+        "DashboardSceneStore",
     ] {
         assert!(
-            AKRA_DIORAMA_TS.contains(token),
-            "admin game diorama source should expose {token}"
+            admin_game_source_contains(token),
+            "admin game source modules should expose {token}"
         );
     }
 }
@@ -2843,8 +2868,7 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     for token in [
         "\"build\": \"vite build --config vite.config.ts && node scripts/promote-build.mjs\"",
         "\"check\": \"tsc --noEmit --project tsconfig.json\"",
-        "\"@pixi/unsafe-eval\": \"7.4.3\"",
-        "\"pixi.js\": \"7.4.3\"",
+        "\"pixi.js\": \"^8.19.0\"",
         "\"typescript\":",
         "\"vite\":",
     ] {
@@ -2868,53 +2892,60 @@ fn akra_graphic_dashboard_game_bundle_is_vite_typescript_input() {
     }
 
     for token in [
-        "import \"@pixi/unsafe-eval\";",
-        "type StatusSeverity",
-        "interface DioramaHandle",
-        "const PIXI = PIXI_RUNTIME",
+        "import \"pixi.js/unsafe-eval\";",
+        "import { Application, Assets, Texture, type Ticker } from \"pixi.js\";",
+        "export type StatusSeverity",
+        "export interface DioramaHandle",
         "const mountDiorama = (): DioramaHandle | null",
         "window.AkraAdminGame",
-        "PIXI.Assets.load",
-        "autoStart: false",
+        "Assets.load<Texture>",
+        "preference: \"webgl\"",
         "Math.min(window.devicePixelRatio || 1, 2)",
         "Promise.allSettled",
         "requestSceneRender",
         "inspectScene",
-        "type Facing = \"down\" | \"side\" | \"up\"",
-        "interface AgentFrameSet",
-        "type VisualState",
-        "type PresenceKind",
+        "export type Facing = \"down\" | \"side\" | \"up\"",
+        "export interface AgentFrameSet",
+        "export type VisualState",
+        "export type PresenceKind",
         "const STATIC_POSE_MANIFEST",
         "STATIC_POSE_MANIFEST[archetype][pose]",
-        "const ARCHETYPE_BY_PROFILE",
+        "export const ARCHETYPE_BY_PROFILE",
         "const drawStaticMarker",
-        "const AGENT_FRAME_WIDTH = 128",
-        "const AGENT_FRAME_HEIGHT = 192",
-        "const AGENT_SPRITE_SCALE = 0.72",
-        "displayWidth: Math.round(unit.sprite?.width || 0)",
-        "displayHeight: Math.round(unit.sprite?.height || 0)",
-        "boardX: Math.round(unit.group.x)",
-        "boardY: Math.round(unit.group.y)",
-        "group.alpha = 1",
+        "export const AGENT_FRAME_WIDTH = 128",
+        "export const AGENT_FRAME_HEIGHT = 192",
+        "export const AGENT_SPRITE_SCALE = 0.72",
+        "const spriteBounds = unit.sprite.getBounds()",
+        "displayWidth: Math.round(spriteBounds.width)",
+        "displayHeight: Math.round(spriteBounds.height)",
+        "boardX: Math.round(boardPoint.x)",
+        "boardY: Math.round(boardPoint.y)",
         "gamebaljeonguk_atlas_128x192.png",
+        "akra-operations-studio-v3.png",
+        "class DashboardSceneStore",
+        "class SceneCameraController",
+        "OCCLUSION_POLYGONS",
+        "akra:scene-selection-requested",
     ] {
         assert!(
-            AKRA_DIORAMA_TS.contains(token),
-            "admin game TypeScript source should keep {token}"
+            admin_game_source_contains(token),
+            "admin game TypeScript modules should keep {token}"
         );
     }
 
-    let unsafe_eval_import = AKRA_DIORAMA_TS
-        .find("import \"@pixi/unsafe-eval\";")
-        .expect("admin game should install the strict-CSP Pixi adapter");
     let pixi_import = AKRA_DIORAMA_TS
-        .find("import * as PIXI_RUNTIME from \"pixi.js\";")
+        .find("import { Application, Assets, Texture, type Ticker } from \"pixi.js\";")
         .expect("admin game should import Pixi");
+    let strict_csp_adapter_import = AKRA_DIORAMA_TS
+        .find("import \"pixi.js/unsafe-eval\";")
+        .expect("admin game should install the Pixi 8 strict-CSP adapter");
     let renderer_initialization = AKRA_DIORAMA_TS
-        .find("new PIXI.Application")
+        .find("const app = new Application()")
         .expect("admin game should initialize the Pixi renderer");
-    assert!(unsafe_eval_import < pixi_import);
+    assert!(strict_csp_adapter_import < pixi_import);
     assert!(pixi_import < renderer_initialization);
+    assert!(!ADMIN_GAME_PACKAGE_JSON.contains("@pixi/unsafe-eval"));
+    assert!(!admin_game_source_contains("import \"@pixi/unsafe-eval\";"));
 
     for token in [
         "dist/akra-diorama.js",
@@ -2939,14 +2970,12 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "background-image: var(--agent-sprite-sheet)",
         "background-size: 384px 504px",
         "background-position: -288px 0",
-        "akra-operations-studio-v2.png",
+        "akra-operations-studio-v3.png",
         "office-map-image",
         "max-width: 1784px",
         "max-width: 1280px",
         "align-content: start",
         "grid-template-columns: 220px minmax(500px, 1280px) 260px",
-        "sprite_fd_desk_1.png",
-        "sprite_fd_event_log_tower.png",
         "background: var(--office-bg-image) 0 0 / 100% 100% no-repeat",
         "grid-template-columns: minmax(0, 1fr)",
         "overflow: auto",
@@ -3018,17 +3047,17 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "data-loop-command=\"dispatch\"",
         "data-loop-command=\"disable\"",
         "MAP_WIDTH = 1672",
-        "MAP_HEIGHT = 940",
-        "STRUCTURE_SPECS",
-        "designToBoardPoint",
-        "lastLayoutWidth",
-        "statusPalette",
+        "MAP_HEIGHT = 941",
+        "OCCLUSION_POLYGONS",
+        "SceneCameraController",
+        "DashboardSceneStore",
+        "data-scene-zoom-readout",
+        "akra:scene-selection-requested",
         "STATIC_POSE_MANIFEST",
         "STANDBY_LOUNGE_POINTS",
         "makeAtlasFrameByIndex",
         "configured_standby",
         "sceneStandbyCount",
-        "standbyRuntimeIdentityKeys",
         "standby_pose_for_avatar_class",
         "requestSceneRender",
         "Promise.allSettled",
@@ -3039,7 +3068,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
                 || BASE_TEMPLATE.contains(token)
                 || AKRA_DASHBOARD_RS.contains(token)
                 || AKRA_DIORAMA_JS.contains(token)
-                || AKRA_DIORAMA_TS.contains(token)
+                || admin_game_source_contains(token)
                 || ADMIN_SHELL_JS.contains(token)
                 || AKRA_DASHBOARD_JS.contains(token),
             "graphic visual contract should keep {token}"
@@ -3047,16 +3076,16 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     }
 
     for semantic_motion in [
-        "motionTargetFor",
-        "semanticProgress",
+        "actorTargetPoint",
+        "interpolation",
         "rebuildSignalPackets",
-        "animateScene",
+        "world.update",
         "prefers-reduced-motion",
         "sceneSemanticMotionCount",
         "scenePacketCount",
     ] {
         assert!(
-            AKRA_DIORAMA_TS.contains(semantic_motion),
+            admin_game_source_contains(semantic_motion),
             "truthful dynamic scene should keep semantic motion token {semantic_motion}"
         );
     }
@@ -3146,7 +3175,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
         "/admin/akra/directions",
         "/admin/tasks",
         "admin-tasks.html",
-        "/admin/assets/graphics/akra-operations-studio-v2.png",
+        "/admin/assets/graphics/akra-operations-studio-v3.png",
         "/admin/assets/graphics/sprite_fd_desk_1.png",
         "/admin/assets/graphics/sprite_fd_event_log_tower.png",
         "/admin/assets/graphics/gamebaljeonguk_atlas_64x96.png",
@@ -3207,7 +3236,7 @@ fn akra_graphic_dashboard_visual_contract_has_regression_guardrails() {
     );
 
     for token in [
-        "../../../../assets/admin/graphics/akra-operations-studio-v2.png",
+        "../../../../assets/admin/graphics/akra-operations-studio-v3.png",
         "../../../../assets/admin/graphics/sprite_fd_desk_1.png",
         "../../../../assets/admin/graphics/sprite_fd_event_log_tower.png",
         "../../../../assets/admin/graphics/gamebaljeonguk_atlas_64x96.png",
