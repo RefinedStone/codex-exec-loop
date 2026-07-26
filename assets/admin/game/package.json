@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build --config vite.config.ts && node scripts/promote-build.mjs",
-    "check": "tsc --noEmit --project tsconfig.json && npm run sprites:check",
+    "check": "tsc --noEmit --project tsconfig.json",
     "sprites:check": "node scripts/clean-agent-sprites.mjs --check",
     "sprites:clean": "node scripts/clean-agent-sprites.mjs --write"
   },

@@ -205,6 +205,7 @@ if [[ "${ADMIN_GAME_BUILD:-1}" != "0" ]]; then
     npm --prefix assets/admin/game ci
   fi
   npm --prefix assets/admin/game run check
+  npm --prefix assets/admin/game run sprites:check
   npm --prefix assets/admin/game run build
 fi
 
