@@ -79,9 +79,22 @@ invalidation 두 개를 제외한 arm은 audited completion worker 하나, 즉�
 launcher, runtime trait 위임을 Rust AST로 검사하므로 completion 없는 새 arm, wildcard, 조건부
 launcher, TUI 직접 worker 추가는 `cargo test`에서 실패합니다.
 
+Application 소유 parallel control plane의 7개 effect에도 같은 totality 규칙을 적용합니다. 모든
+effect는 shared panic-total completion sink 또는 검증된 동기 settlement 경로 중 하나로 exhaustive
+dispatch되어야 합니다. Wildcard·guarded arm, 분리된 worker, completion sink 우회는 architecture
+test에서 실패합니다.
+
 Mutable client-runtime state는 `CoreRuntime`만 구동합니다. Adapter는 `CoreController`, `AppState`,
 `TurnStreamState`를 직접 생성하거나 변경하면 안 됩니다. Effect executor는 작업을 수행하고
 completion을 반환할 수 있지만 runtime state의 소유자도 writer도 아닙니다.
+
+`CoreController`는 feature lease를 직접 쌓아두는 구조가 아니라 exhaustive root router입니다.
+Private state는 `AppState`, startup, session, conversation/turn, read-model load, planning, GitHub
+review의 7개 typed slice로 고정됩니다. Generation, active correlation, cancellation flag,
+exact-completion 검증은 각 feature reducer가 private하게 소유하고, root는 cross-feature 순서와
+승인된 결과의 `AppState` projection만 조정합니다. Rust-aware guard는 controller raw field,
+외부로 노출된 reducer authority, 금지 의존성, conversation stream authority의 silent wildcard를
+거부합니다.
 
 시작, session load, conversation 선택, turn 제출, stream reduction, 완료, post-turn 평가가 이 흐름을
 사용합니다. Parallel mutation은 application 소유이지만 같은 client-runtime facade로 진입하며
